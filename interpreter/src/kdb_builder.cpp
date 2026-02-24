@@ -628,7 +628,7 @@ bool KdbBuilder::deserializeFromFileCompressed(const std::string& filepath) {
     }
     
     hwda::kdb::KnowledgeBase kdb;
-    if (!kdb.ParseFromArray(decompressed.data(), result)) {
+    if (!kdb.ParseFromArray(decompressed.data(), static_cast<int>(result))) {
         return false;
     }
     
