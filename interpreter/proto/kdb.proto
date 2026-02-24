@@ -23,6 +23,7 @@ message SourceFile {
   string content = 3;
   repeated SourceLink signal_links = 4;
   repeated SourceLink submod_links = 5;
+  repeated SourceLink port_links = 6;
 }
 
 message SourceLocation {

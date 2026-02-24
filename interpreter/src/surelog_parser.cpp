@@ -20,7 +20,7 @@ namespace interpreter {
 class KdbBuildListener : public UHDM::VpiListener {
 public:
     KdbBuildListener(KdbBuilder& builder, std::unordered_map<std::string, uint64_t>& filePathToId)
-        : builder_(builder), filePathToId_(filePathToId), totalModules_(0), totalSignals_(0) {}
+        : builder_(builder), filePathToId_(filePathToId), totalModules_(0), totalSignals_(0), nextPortId_(1) {}
     
     void enterModule_inst(const UHDM::module_inst* object, vpiHandle handle) override {
         if (!object) return;
@@ -62,6 +62,7 @@ public:
             for (auto* port : *ports) {
                 if (!port) continue;
                 PortInfo portInfo;
+                portInfo.id = nextPortId_++;
                 portInfo.name = std::string(port->VpiName());
                 portInfo.direction = convertPortDirection(port->VpiDirection());
                 portInfo.type = SignalType::WIRE;
@@ -75,6 +76,28 @@ public:
         currentModuleStack_.push_back(moduleId);
         totalModules_++;
         
+        // Add module link
+        if (moduleInfo.declaration.fileId != 0) {
+            SourceLinkInfo link;
+            link.line = moduleInfo.declaration.line;
+            link.columnStart = moduleInfo.declaration.columnStart;
+            link.columnEnd = moduleInfo.declaration.columnEnd;
+            link.targetId = moduleId;
+            builder_.addSubmodLink(moduleInfo.declaration.fileId, link);
+        }
+        
+        // Add port links
+        for (const auto& port : moduleInfo.ports) {
+            if (port.declaration.fileId != 0) {
+                SourceLinkInfo link;
+                link.line = port.declaration.line;
+                link.columnStart = port.declaration.columnStart;
+                link.columnEnd = port.declaration.columnEnd;
+                link.targetId = port.id;
+                builder_.addPortLink(port.declaration.fileId, link);
+            }
+        }
+        
         // Process nets/signals
         auto nets = object->Nets();
         if (nets) {
@@ -86,8 +109,18 @@ public:
                 signalInfo.type = convertSignalType(net->VpiNetType());
                 signalInfo.parentModuleId = moduleId;
                 signalInfo.declaration = extractLocation(net);
-                builder_.addSignal(moduleId, signalInfo);
+                uint64_t signalId = builder_.addSignal(moduleId, signalInfo);
                 totalSignals_++;
+                
+                // Add signal link
+                if (signalInfo.declaration.fileId != 0) {
+                    SourceLinkInfo link;
+                    link.line = signalInfo.declaration.line;
+                    link.columnStart = signalInfo.declaration.columnStart;
+                    link.columnEnd = signalInfo.declaration.columnEnd;
+                    link.targetId = signalId;
+                    builder_.addSignalLink(signalInfo.declaration.fileId, link);
+                }
             }
         }
         
@@ -102,8 +135,18 @@ public:
                 signalInfo.type = SignalType::PARAMETER;
                 signalInfo.parentModuleId = moduleId;
                 signalInfo.declaration = extractLocation(param);
-                builder_.addSignal(moduleId, signalInfo);
+                uint64_t signalId = builder_.addSignal(moduleId, signalInfo);
                 totalSignals_++;
+                
+                // Add signal link for parameter
+                if (signalInfo.declaration.fileId != 0) {
+                    SourceLinkInfo link;
+                    link.line = signalInfo.declaration.line;
+                    link.columnStart = signalInfo.declaration.columnStart;
+                    link.columnEnd = signalInfo.declaration.columnEnd;
+                    link.targetId = signalId;
+                    builder_.addSignalLink(signalInfo.declaration.fileId, link);
+                }
             }
         }
     }
@@ -123,6 +166,7 @@ private:
     std::vector<uint64_t> currentModuleStack_;
     size_t totalModules_;
     size_t totalSignals_;
+    uint64_t nextPortId_;
     
     KdbSourceLocation extractLocation(const UHDM::BaseClass* obj) {
         KdbSourceLocation loc;

@@ -116,7 +116,8 @@ void printFiles(const KdbBuilder& builder) {
             std::cout << "  [" << id << "] " << file->path 
                       << " (" << file->getLineCount() << " lines, " 
                       << file->signalLinks.size() << " signal links, "
-                      << file->submodLinks.size() << " submodule links)\n";
+                      << file->submodLinks.size() << " submodule links, "
+                      << file->portLinks.size() << " port links)\n";
         }
     }
 }
@@ -656,6 +657,25 @@ int main(int argc, char* argv[]) {
     std::cout << "  Modules: " << builder.getModuleCount() << "\n";
     std::cout << "  Signals: " << builder.getTotalSignalCount() << "\n";
     std::cout << "  Files: " << builder.getFileCount() << "\n";
+    
+    std::cout << "\n=== Checking Port Links ===\n";
+    for (uint64_t id = 1; id <= builder.getFileCount(); ++id) {
+        const auto* file = builder.findFileById(id);
+        if (!file) continue;
+        
+        std::cout << "File: " << file->path << "\n";
+        std::cout << "Port links count: " << file->portLinks.size() << "\n";
+        
+        if (!file->portLinks.empty()) {
+            std::cout << "Port links details:\n";
+            for (size_t i = 0; i < file->portLinks.size(); ++i) {
+                const auto& link = file->portLinks[i];
+                std::cout << "  [" << i << "] Line: " << link.line 
+                          << ", Col: " << link.columnStart << "-" << link.columnEnd 
+                          << ", Target ID: " << link.targetId << "\n";
+            }
+        }
+    }
     
     bool anyOption = showModules || showSignals || showFiles || showHierarchy || 
                      showJson || !moduleName.empty() || !signalPattern.empty() || 

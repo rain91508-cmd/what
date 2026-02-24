@@ -94,6 +94,24 @@ bool KdbBuilder::addSubmodLink(uint64_t fileId, const SourceLinkInfo& link) {
     return true;
 }
 
+bool KdbBuilder::addPortLink(uint64_t fileId, uint32_t line, uint32_t columnStart,
+                              uint32_t columnEnd, uint64_t portId) {
+    SourceLinkInfo link;
+    link.line = line;
+    link.columnStart = columnStart;
+    link.columnEnd = columnEnd;
+    link.targetId = portId;
+    return addPortLink(fileId, link);
+}
+
+bool KdbBuilder::addPortLink(uint64_t fileId, const SourceLinkInfo& link) {
+    auto* file = const_cast<SourceFileInfo*>(findFileById(fileId));
+    if (!file) return false;
+    
+    file->portLinks.push_back(link);
+    return true;
+}
+
 std::string KdbBuilder::getSourceLine(uint64_t fileId, uint32_t line) const {
     const auto* file = findFileById(fileId);
     if (!file || line == 0 || line > file->getLineCount()) return "";
@@ -203,6 +221,16 @@ std::vector<const SourceLinkInfo*> SourceFileInfo::getSignalLinksAtLine(uint32_t
 std::vector<const SourceLinkInfo*> SourceFileInfo::getSubmodLinksAtLine(uint32_t line) const {
     std::vector<const SourceLinkInfo*> result;
     for (const auto& link : submodLinks) {
+        if (link.line == line) {
+            result.push_back(&link);
+        }
+    }
+    return result;
+}
+
+std::vector<const SourceLinkInfo*> SourceFileInfo::getPortLinksAtLine(uint32_t line) const {
+    std::vector<const SourceLinkInfo*> result;
+    for (const auto& link : portLinks) {
         if (link.line == line) {
             result.push_back(&link);
         }
@@ -475,6 +503,14 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
             protoLink->set_column_end(link.columnEnd);
             protoLink->set_target_id(link.targetId);
         }
+        
+        for (const auto& link : file->portLinks) {
+            auto* protoLink = protoFile->add_port_links();
+            protoLink->set_line(link.line);
+            protoLink->set_column_start(link.columnStart);
+            protoLink->set_column_end(link.columnEnd);
+            protoLink->set_target_id(link.targetId);
+        }
     }
     
     for (const auto& mod : modules_) {
@@ -581,6 +617,15 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
             link.columnEnd = protoLink.column_end();
             link.targetId = protoLink.target_id();
             file->submodLinks.push_back(link);
+        }
+        
+        for (const auto& protoLink : protoFile.port_links()) {
+            SourceLinkInfo link;
+            link.line = protoLink.line();
+            link.columnStart = protoLink.column_start();
+            link.columnEnd = protoLink.column_end();
+            link.targetId = protoLink.target_id();
+            file->portLinks.push_back(link);
         }
         
         nextFileId_ = std::max(nextFileId_, file->id + 1);

@@ -55,6 +55,7 @@ struct SourceFileInfo {
     std::string content;
     std::vector<SourceLinkInfo> signalLinks;
     std::vector<SourceLinkInfo> submodLinks;
+    std::vector<SourceLinkInfo> portLinks;
     
     std::string getLine(uint32_t lineNum) const;
     std::string getRange(uint32_t startLine, uint32_t startCol, 
@@ -62,6 +63,7 @@ struct SourceFileInfo {
     uint64_t getSignalAtPosition(uint32_t line, uint32_t column) const;
     std::vector<const SourceLinkInfo*> getSignalLinksAtLine(uint32_t line) const;
     std::vector<const SourceLinkInfo*> getSubmodLinksAtLine(uint32_t line) const;
+    std::vector<const SourceLinkInfo*> getPortLinksAtLine(uint32_t line) const;
     uint64_t getLineCount() const;
 };
 
@@ -143,6 +145,10 @@ public:
     bool addSubmodLink(uint64_t fileId, uint32_t line, uint32_t columnStart,
                        uint32_t columnEnd, uint64_t moduleId);
     bool addSubmodLink(uint64_t fileId, const SourceLinkInfo& link);
+    
+    bool addPortLink(uint64_t fileId, uint32_t line, uint32_t columnStart,
+                    uint32_t columnEnd, uint64_t portId);
+    bool addPortLink(uint64_t fileId, const SourceLinkInfo& link);
     
     std::string getSourceLine(uint64_t fileId, uint32_t line) const;
     std::string getSourceRange(uint64_t fileId, uint32_t startLine, uint32_t startCol,
