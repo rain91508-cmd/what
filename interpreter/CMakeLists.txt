@@ -95,7 +95,11 @@ endif()
 add_executable(hwda_interpreter src/main.cpp)
 target_link_libraries(hwda_interpreter PRIVATE hwda_interpreter_lib)
 
-install(TARGETS hwda_interpreter
+# KDB Viewer tool
+add_executable(kdb_viewer src/kdb_viewer.cpp)
+target_link_libraries(kdb_viewer PRIVATE hwda_interpreter_lib)
+
+install(TARGETS hwda_interpreter kdb_viewer
     RUNTIME DESTINATION bin
 )
 
