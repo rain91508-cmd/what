@@ -32,6 +32,7 @@ set(INTERPRETER_SOURCES
     src/kdb_serializer.cpp
     src/ast_visitor.cpp
     src/surelog_parser.cpp
+    src/surelog_interpreter.cpp
     ${PROTO_SRCS}
 )
 
@@ -42,6 +43,7 @@ set(INTERPRETER_HEADERS
     include/ast_visitor.h
     include/types.h
     include/surelog_parser.h
+    include/surelog_interpreter.h
     ${PROTO_HDRS}
 )
 
