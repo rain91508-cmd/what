@@ -93,8 +93,7 @@ void KdbSerializer::writeSourceFiles(std::vector<uint8_t>& buffer, const std::ve
     for (const auto& file : files) {
         writeUint64(buffer, file.id);
         writeString(buffer, file.path);
-        writeString(buffer, file.hash);
-        writeUint64(buffer, file.lineCount);
+        writeString(buffer, file.content);
     }
 }
 

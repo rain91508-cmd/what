@@ -421,7 +421,7 @@ int main(int argc, char* argv[]) {
     
     std::cout << "Generated KDB: " << opts.outputPath << "\n";
     std::cout << "  Modules: " << builder.getModuleCount() << "\n";
-    std::cout << "  Signals: " << builder.getSignalCount() << "\n";
+    std::cout << "  Signals: " << builder.getTotalSignalCount() << "\n";
     std::cout << "  Files: " << builder.getFileCount() << "\n";
 #ifdef USE_ZSTD
     std::cout << "  Compression: " << (opts.compressionEnabled ? "enabled" : "disabled") << "\n";

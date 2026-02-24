@@ -46,8 +46,13 @@ if(BUILD_SURELOG)
     add_subdirectory(third_party/Surelog)
 endif()
 
-add_subdirectory(server)
-add_subdirectory(interpreter)
+if(BUILD_SERVER)
+    add_subdirectory(server)
+endif()
+
+if(BUILD_INTERPRETER)
+    add_subdirectory(interpreter)
+endif()
 
 if(BUILD_TESTS)
     enable_testing()

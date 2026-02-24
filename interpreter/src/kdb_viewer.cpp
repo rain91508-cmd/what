@@ -4,6 +4,7 @@
 #include <functional>
 #include <getopt.h>
 #include <iomanip>
+#include <map>
 
 using namespace hwda::interpreter;
 
@@ -13,9 +14,13 @@ void printUsage(const char* progName) {
               << "  -m, --modules         List all modules\n"
               << "  -s, --signals         List all signals\n"
               << "  -f, --files           List all source files\n"
-              << "  -h, --hierarchy       Show design hierarchy\n"
+              << "  -h, --hierarchy       Show design hierarchy tree\n"
               << "  -M, --module <name>   Show details of a specific module\n"
               << "  -S, --signal <name>   Search for signals by name pattern\n"
+              << "  -D, --driver <name>   Show signal driver trace\n"
+              << "  -L, --load <name>     Show signal load trace\n"
+              << "  -l, --links <file>    Show signal links in source file\n"
+              << "  -S, --submods <file>  Show submodule links in source file\n"
               << "  -c, --source          Show source code for module/signal\n"
               << "  -C, --content <file>  Show content of a source file\n"
               << "  -j, --json            Output in JSON format\n"
@@ -62,6 +67,7 @@ void printModules(const KdbBuilder& builder, bool verbose) {
         
         if (verbose) {
             std::cout << "      Ports: " << module->ports.size() << "\n";
+            std::cout << "      Signals: " << module->signals.size() << "\n";
             std::cout << "      File: " << module->fileId << ", Line: " << module->declaration.line << "\n";
         }
     }
@@ -81,6 +87,22 @@ void printSignals(const KdbBuilder& builder, bool verbose) {
         if (verbose) {
             std::cout << "      Module: " << signal->parentModuleId << "\n";
             std::cout << "      Location: Line " << signal->declaration.line << "\n";
+            if (!signal->driverSignalIds.empty()) {
+                std::cout << "      Drivers: ";
+                for (size_t i = 0; i < signal->driverSignalIds.size(); ++i) {
+                    if (i > 0) std::cout << ", ";
+                    std::cout << signal->driverSignalIds[i];
+                }
+                std::cout << "\n";
+            }
+            if (!signal->loadSignalIds.empty()) {
+                std::cout << "      Loads: ";
+                for (size_t i = 0; i < signal->loadSignalIds.size(); ++i) {
+                    if (i > 0) std::cout << ", ";
+                    std::cout << signal->loadSignalIds[i];
+                }
+                std::cout << "\n";
+            }
         }
     }
 }
@@ -92,7 +114,9 @@ void printFiles(const KdbBuilder& builder) {
         const auto* file = builder.findFileById(id);
         if (file) {
             std::cout << "  [" << id << "] " << file->path 
-                      << " (" << file->lineCount << " lines)\n";
+                      << " (" << file->getLineCount() << " lines, " 
+                      << file->signalLinks.size() << " signal links, "
+                      << file->submodLinks.size() << " submodule links)\n";
         }
     }
 }
@@ -100,7 +124,6 @@ void printFiles(const KdbBuilder& builder) {
 void printSourceFileContent(const KdbBuilder& builder, const std::string& filePath) {
     const auto* file = builder.findFileByPath(filePath);
     if (!file) {
-        // Try to find by ID
         try {
             uint64_t id = std::stoull(filePath);
             file = builder.findFileById(id);
@@ -113,12 +136,165 @@ void printSourceFileContent(const KdbBuilder& builder, const std::string& filePa
     }
     
     std::cout << "\n=== Source File: " << file->path << " ===\n";
-    std::cout << "Lines: " << file->lineCount << "\n\n";
+    std::cout << "Lines: " << file->getLineCount() << "\n\n";
     
-    // Print with line numbers
-    for (uint32_t line = 1; line <= file->lineCount; ++line) {
+    for (uint32_t line = 1; line <= file->getLineCount(); ++line) {
         std::cout << std::setw(5) << std::right << line << " | " 
                   << file->getLine(line) << "\n";
+    }
+}
+
+void printSignalLinks(const KdbBuilder& builder, const std::string& filePath) {
+    const auto* file = builder.findFileByPath(filePath);
+    if (!file) {
+        try {
+            uint64_t id = std::stoull(filePath);
+            file = builder.findFileById(id);
+        } catch (...) {}
+    }
+    
+    if (!file) {
+        std::cout << "File not found: " << filePath << "\n";
+        return;
+    }
+    
+    std::cout << "\n=== Signal Links in: " << file->path << " ===\n";
+    std::cout << "Total signal links: " << file->signalLinks.size() << "\n\n";
+    
+    if (file->signalLinks.empty()) {
+        std::cout << "  (No signal links recorded)\n";
+        return;
+    }
+    
+    std::map<uint32_t, std::vector<const SourceLinkInfo*>> linksByLine;
+    for (const auto& link : file->signalLinks) {
+        linksByLine[link.line].push_back(&link);
+    }
+    
+    for (const auto& [line, links] : linksByLine) {
+        std::cout << "Line " << std::setw(4) << line << ":\n";
+        std::string sourceLine = file->getLine(line);
+        
+        for (const auto* link : links) {
+            const auto* signal = builder.findSignalById(link->targetId);
+            std::string signalName = signal ? signal->fullName : "(unknown)";
+            std::string signalType = signal ? signalTypeToString(signal->type) : "unknown";
+            
+            std::cout << "  Col " << std::setw(3) << link->columnStart 
+                      << "-" << std::setw(3) << link->columnEnd << ": ";
+            
+            if (link->columnStart > 0 && link->columnEnd <= sourceLine.length()) {
+                std::string text = sourceLine.substr(link->columnStart - 1, link->columnEnd - link->columnStart + 1);
+                std::cout << "\"" << text << "\" -> ";
+            }
+            
+            std::cout << "[" << link->targetId << "] " << signalName 
+                      << " (" << signalType << ")\n";
+        }
+    }
+}
+
+void printSubmodLinks(const KdbBuilder& builder, const std::string& filePath) {
+    const auto* file = builder.findFileByPath(filePath);
+    if (!file) {
+        try {
+            uint64_t id = std::stoull(filePath);
+            file = builder.findFileById(id);
+        } catch (...) {}
+    }
+    
+    if (!file) {
+        std::cout << "File not found: " << filePath << "\n";
+        return;
+    }
+    
+    std::cout << "\n=== Submodule Links in: " << file->path << " ===\n";
+    std::cout << "Total submodule links: " << file->submodLinks.size() << "\n\n";
+    
+    if (file->submodLinks.empty()) {
+        std::cout << "  (No submodule links recorded)\n";
+        return;
+    }
+    
+    std::map<uint32_t, std::vector<const SourceLinkInfo*>> linksByLine;
+    for (const auto& link : file->submodLinks) {
+        linksByLine[link.line].push_back(&link);
+    }
+    
+    for (const auto& [line, links] : linksByLine) {
+        std::cout << "Line " << std::setw(4) << line << ":\n";
+        std::string sourceLine = file->getLine(line);
+        
+        for (const auto* link : links) {
+            const auto* module = builder.findModuleById(link->targetId);
+            std::string moduleName = module ? module->name : "(unknown)";
+            
+            std::cout << "  Col " << std::setw(3) << link->columnStart 
+                      << "-" << std::setw(3) << link->columnEnd << ": ";
+            
+            if (link->columnStart > 0 && link->columnEnd <= sourceLine.length()) {
+                std::string text = sourceLine.substr(link->columnStart - 1, link->columnEnd - link->columnStart + 1);
+                std::cout << "\"" << text << "\" -> ";
+            }
+            
+            std::cout << "[" << link->targetId << "] " << moduleName << "\n";
+        }
+    }
+}
+
+void printSourceWithLinks(const KdbBuilder& builder, const std::string& filePath) {
+    const auto* file = builder.findFileByPath(filePath);
+    if (!file) {
+        try {
+            uint64_t id = std::stoull(filePath);
+            file = builder.findFileById(id);
+        } catch (...) {}
+    }
+    
+    if (!file) {
+        std::cout << "File not found: " << filePath << "\n";
+        return;
+    }
+    
+    std::cout << "\n=== Source File with Links: " << file->path << " ===\n\n";
+    
+    std::map<uint32_t, std::vector<const SourceLinkInfo*>> signalLinksByLine;
+    for (const auto& link : file->signalLinks) {
+        signalLinksByLine[link.line].push_back(&link);
+    }
+    
+    std::map<uint32_t, std::vector<const SourceLinkInfo*>> submodLinksByLine;
+    for (const auto& link : file->submodLinks) {
+        submodLinksByLine[link.line].push_back(&link);
+    }
+    
+    for (uint32_t line = 1; line <= file->getLineCount(); ++line) {
+        std::string sourceLine = file->getLine(line);
+        std::cout << std::setw(5) << std::right << line << " | " << sourceLine << "\n";
+        
+        auto sigIt = signalLinksByLine.find(line);
+        if (sigIt != signalLinksByLine.end()) {
+            for (const auto* link : sigIt->second) {
+                const auto* signal = builder.findSignalById(link->targetId);
+                std::string signalName = signal ? signal->fullName : "(unknown)";
+                
+                std::string indent(link->columnStart + 8, ' ');
+                std::string marker(link->columnEnd - link->columnStart + 1, '^');
+                std::cout << "       " << indent << marker << " [S:" << link->targetId << "] " << signalName << "\n";
+            }
+        }
+        
+        auto subIt = submodLinksByLine.find(line);
+        if (subIt != submodLinksByLine.end()) {
+            for (const auto* link : subIt->second) {
+                const auto* module = builder.findModuleById(link->targetId);
+                std::string moduleName = module ? module->name : "(unknown)";
+                
+                std::string indent(link->columnStart + 8, ' ');
+                std::string marker(link->columnEnd - link->columnStart + 1, '~');
+                std::cout << "       " << indent << marker << " [M:" << link->targetId << "] " << moduleName << "\n";
+            }
+        }
     }
 }
 
@@ -129,8 +305,6 @@ void printModuleWithSource(const KdbBuilder& builder, const std::string& moduleN
         return;
     }
     
-    auto allSignals = builder.getAllSignals();
-    
     std::cout << "\n=== Module: " << module->name << " ===\n";
     std::cout << "  ID: " << module->id << "\n";
     std::cout << "  Full Name: " << module->fullName << "\n";
@@ -138,13 +312,12 @@ void printModuleWithSource(const KdbBuilder& builder, const std::string& moduleN
     std::cout << "  Location: Line " << module->declaration.line 
               << ", Col " << module->declaration.columnStart << "\n";
     
-    // Show source code context
     if (module->declaration.fileId != 0) {
         const auto* file = builder.findFileById(module->declaration.fileId);
         if (file && !file->content.empty()) {
             std::cout << "\n  Source Code:\n";
             uint32_t startLine = (module->declaration.line > 3) ? module->declaration.line - 3 : 1;
-            uint32_t endLine = std::min(startLine + 10, static_cast<uint32_t>(file->lineCount));
+            uint32_t endLine = std::min(startLine + 10, static_cast<uint32_t>(file->getLineCount()));
             
             for (uint32_t line = startLine; line <= endLine; ++line) {
                 std::cout << "    ";
@@ -164,19 +337,17 @@ void printModuleWithSource(const KdbBuilder& builder, const std::string& moduleN
         std::cout << "    " << std::setw(8) << std::left 
                   << portDirectionToString(port.direction)
                   << " " << port.name;
-        if (port.isVector) {
+        if (port.msb != port.lsb) {
             std::cout << " [" << port.msb << ":" << port.lsb << "]";
         }
         std::cout << "\n";
     }
     
-    std::cout << "\n  Signals:\n";
-    for (const auto* signal : allSignals) {
-        if (signal->parentModuleId == module->id) {
-            std::cout << "    " << std::setw(10) << std::left 
-                      << signalTypeToString(signal->type)
-                      << " " << signal->name << "\n";
-        }
+    std::cout << "\n  Signals (" << module->signals.size() << "):\n";
+    for (const auto& signal : module->signals) {
+        std::cout << "    " << std::setw(10) << std::left 
+                  << signalTypeToString(signal.type)
+                  << " " << signal.name << "\n";
     }
 }
 
@@ -186,8 +357,6 @@ void printModuleDetails(const KdbBuilder& builder, const std::string& moduleName
         std::cout << "Module not found: " << moduleName << "\n";
         return;
     }
-    
-    auto allSignals = builder.getAllSignals();
     
     std::cout << "\n=== Module: " << module->name << " ===\n";
     std::cout << "  ID: " << module->id << "\n";
@@ -201,19 +370,17 @@ void printModuleDetails(const KdbBuilder& builder, const std::string& moduleName
         std::cout << "    " << std::setw(8) << std::left 
                   << portDirectionToString(port.direction)
                   << " " << port.name;
-        if (port.isVector) {
+        if (port.msb != port.lsb) {
             std::cout << " [" << port.msb << ":" << port.lsb << "]";
         }
         std::cout << "\n";
     }
     
-    std::cout << "\n  Signals:\n";
-    for (const auto* signal : allSignals) {
-        if (signal->parentModuleId == module->id) {
-            std::cout << "    " << std::setw(10) << std::left 
-                      << signalTypeToString(signal->type)
-                      << " " << signal->name << "\n";
-        }
+    std::cout << "\n  Signals (" << module->signals.size() << "):\n";
+    for (const auto& signal : module->signals) {
+        std::cout << "    " << std::setw(10) << std::left 
+                  << signalTypeToString(signal.type)
+                  << " " << signal.name << "\n";
     }
 }
 
@@ -234,22 +401,98 @@ void searchSignals(const KdbBuilder& builder, const std::string& pattern) {
     std::cout << "Found " << count << " matching signals.\n";
 }
 
-void printHierarchy(const KdbBuilder& builder) {
-    std::cout << "\n=== Design Hierarchy ===\n";
-    
-    auto modules = builder.getAllModules();
-    if (modules.empty()) {
-        std::cout << "  (No modules found)\n";
+void printSignalDriverTrace(const KdbBuilder& builder, const std::string& signalName) {
+    const auto* signal = builder.findSignalByName(signalName);
+    if (!signal) {
+        std::cout << "Signal not found: " << signalName << "\n";
         return;
     }
     
-    for (const auto* module : modules) {
-        std::cout << "  " << module->name << "\n";
-        for (const auto& port : module->ports) {
-            std::cout << "    " << portDirectionToString(port.direction) 
-                      << " " << port.name << "\n";
+    std::cout << "\n=== Driver Trace for: " << signal->fullName << " ===\n";
+    std::cout << "  Type: " << signalTypeToString(signal->type) << "\n";
+    
+    if (signal->driverSignalIds.empty()) {
+        std::cout << "  (No drivers found - this is likely a primary input or constant)\n";
+        return;
+    }
+    
+    std::cout << "  Drivers:\n";
+    for (uint64_t driverId : signal->driverSignalIds) {
+        const auto* driver = builder.findSignalById(driverId);
+        if (driver) {
+            std::cout << "    [" << driver->id << "] " << driver->fullName 
+                      << " [" << signalTypeToString(driver->type) << "]\n";
         }
     }
+}
+
+void printSignalLoadTrace(const KdbBuilder& builder, const std::string& signalName) {
+    const auto* signal = builder.findSignalByName(signalName);
+    if (!signal) {
+        std::cout << "Signal not found: " << signalName << "\n";
+        return;
+    }
+    
+    std::cout << "\n=== Load Trace for: " << signal->fullName << " ===\n";
+    std::cout << "  Type: " << signalTypeToString(signal->type) << "\n";
+    
+    if (signal->loadSignalIds.empty()) {
+        std::cout << "  (No loads found - this is likely a primary output or unused signal)\n";
+        return;
+    }
+    
+    std::cout << "  Loads:\n";
+    for (uint64_t loadId : signal->loadSignalIds) {
+        const auto* load = builder.findSignalById(loadId);
+        if (load) {
+            std::cout << "    [" << load->id << "] " << load->fullName 
+                      << " [" << signalTypeToString(load->type) << "]\n";
+        }
+    }
+}
+
+void printHierarchyTree(const KdbBuilder& builder, uint64_t moduleId, int depth) {
+    const auto* module = builder.findModuleById(moduleId);
+    if (!module) return;
+    
+    std::string indent(depth * 2, ' ');
+    std::cout << indent << module->name;
+    if (!module->fullName.empty() && module->fullName != module->name) {
+        std::cout << " (" << module->fullName << ")";
+    }
+    std::cout << "\n";
+    
+    for (const auto& port : module->ports) {
+        std::cout << indent << "  [" << portDirectionToString(port.direction) << "] " 
+                  << port.name << "\n";
+    }
+    
+    auto children = builder.getChildModules(moduleId);
+    for (const auto* child : children) {
+        printHierarchyTree(builder, child->id, depth + 1);
+    }
+}
+
+void printHierarchy(const KdbBuilder& builder) {
+    std::cout << "\n=== Design Hierarchy ===\n";
+    
+    uint64_t topId = builder.getTopModuleId();
+    if (topId == 0) {
+        auto modules = builder.getAllModules();
+        for (const auto* mod : modules) {
+            if (mod->parentModuleId == 0) {
+                topId = mod->id;
+                break;
+            }
+        }
+    }
+    
+    if (topId == 0) {
+        std::cout << "  (No top module found)\n";
+        return;
+    }
+    
+    printHierarchyTree(builder, topId, 0);
 }
 
 void printJson(const KdbBuilder& builder) {
@@ -260,7 +503,7 @@ void printJson(const KdbBuilder& builder) {
     
     std::cout << "  \"statistics\": {\n";
     std::cout << "    \"modules\": " << builder.getModuleCount() << ",\n";
-    std::cout << "    \"signals\": " << builder.getSignalCount() << ",\n";
+    std::cout << "    \"signals\": " << builder.getTotalSignalCount() << ",\n";
     std::cout << "    \"files\": " << builder.getFileCount() << "\n";
     std::cout << "  },\n";
     
@@ -270,7 +513,8 @@ void printJson(const KdbBuilder& builder) {
         if (!first) std::cout << ",\n";
         first = false;
         std::cout << "    {\"id\": " << module->id << ", \"name\": \"" << module->name 
-                  << "\", \"ports\": " << module->ports.size() << "}";
+                  << "\", \"ports\": " << module->ports.size() 
+                  << ", \"signals\": " << module->signals.size() << "}";
     }
     std::cout << "\n  ],\n";
     
@@ -297,7 +541,11 @@ int main(int argc, char* argv[]) {
     bool showSource = false;
     std::string moduleName;
     std::string signalPattern;
+    std::string driverSignal;
+    std::string loadSignal;
     std::string contentFile;
+    std::string linksFile;
+    std::string submodsFile;
     
     static struct option longOptions[] = {
         {"modules", no_argument, nullptr, 'm'},
@@ -306,6 +554,10 @@ int main(int argc, char* argv[]) {
         {"hierarchy", no_argument, nullptr, 'h'},
         {"module", required_argument, nullptr, 'M'},
         {"signal", required_argument, nullptr, 'S'},
+        {"driver", required_argument, nullptr, 'D'},
+        {"load", required_argument, nullptr, 'L'},
+        {"links", required_argument, nullptr, 'l'},
+        {"submods", required_argument, nullptr, 'b'},
         {"source", no_argument, nullptr, 'c'},
         {"content", required_argument, nullptr, 'C'},
         {"json", no_argument, nullptr, 'j'},
@@ -315,7 +567,7 @@ int main(int argc, char* argv[]) {
     };
     
     int opt;
-    while ((opt = getopt_long(argc, argv, "msfhM:S:cC:jv", longOptions, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "msfhM:S:D:L:l:b:cC:jv", longOptions, nullptr)) != -1) {
         switch (opt) {
             case 'm':
                 showModules = true;
@@ -334,6 +586,18 @@ int main(int argc, char* argv[]) {
                 break;
             case 'S':
                 signalPattern = optarg;
+                break;
+            case 'D':
+                driverSignal = optarg;
+                break;
+            case 'L':
+                loadSignal = optarg;
+                break;
+            case 'l':
+                linksFile = optarg;
+                break;
+            case 'b':
+                submodsFile = optarg;
                 break;
             case 'c':
                 showSource = true;
@@ -362,6 +626,25 @@ int main(int argc, char* argv[]) {
     
     std::string kdbFile = argv[optind];
     
+    std::ifstream input(kdbFile, std::ios::binary);
+    if (!input) {
+        std::cerr << "Error: Cannot open KDB file: " << kdbFile << "\n";
+        return 1;
+    }
+    
+    input.seekg(0, std::ios::end);
+    size_t fileSize = input.tellg();
+    input.seekg(0, std::ios::beg);
+    
+    std::cout << "Debug: File size = " << fileSize << " bytes\n";
+    
+    uint32_t magic = 0;
+    if (fileSize >= 4) {
+        input.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+        input.seekg(0, std::ios::beg);
+        std::cout << "Debug: Magic number = 0x" << std::hex << magic << std::dec << "\n";
+    }
+    
     KdbBuilder builder;
     if (!builder.deserializeFromFile(kdbFile)) {
         std::cerr << "Error: Failed to load KDB file: " << kdbFile << "\n";
@@ -371,16 +654,17 @@ int main(int argc, char* argv[]) {
     std::cout << "Loaded KDB: " << kdbFile << "\n";
     std::cout << "Statistics:\n";
     std::cout << "  Modules: " << builder.getModuleCount() << "\n";
-    std::cout << "  Signals: " << builder.getSignalCount() << "\n";
+    std::cout << "  Signals: " << builder.getTotalSignalCount() << "\n";
     std::cout << "  Files: " << builder.getFileCount() << "\n";
     
     bool anyOption = showModules || showSignals || showFiles || showHierarchy || 
                      showJson || !moduleName.empty() || !signalPattern.empty() || 
-                     showSource || !contentFile.empty();
+                     !driverSignal.empty() || !loadSignal.empty() ||
+                     showSource || !contentFile.empty() || !linksFile.empty() || !submodsFile.empty();
     
     if (!anyOption) {
         showModules = true;
-        showFiles = true;
+        showHierarchy = true;
     }
     
     if (showJson) {
@@ -390,6 +674,20 @@ int main(int argc, char* argv[]) {
     
     if (!contentFile.empty()) {
         printSourceFileContent(builder, contentFile);
+        return 0;
+    }
+    
+    if (!linksFile.empty()) {
+        if (showSource) {
+            printSourceWithLinks(builder, linksFile);
+        } else {
+            printSignalLinks(builder, linksFile);
+        }
+        return 0;
+    }
+    
+    if (!submodsFile.empty()) {
+        printSubmodLinks(builder, submodsFile);
         return 0;
     }
     
@@ -405,6 +703,8 @@ int main(int argc, char* argv[]) {
         }
     }
     if (!signalPattern.empty()) searchSignals(builder, signalPattern);
+    if (!driverSignal.empty()) printSignalDriverTrace(builder, driverSignal);
+    if (!loadSignal.empty()) printSignalLoadTrace(builder, loadSignal);
     
     return 0;
 }

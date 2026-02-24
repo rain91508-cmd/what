@@ -31,10 +31,12 @@ set(INTERPRETER_SOURCES
     src/kdb_builder.cpp
     src/kdb_serializer.cpp
     src/ast_visitor.cpp
-    src/surelog_parser.cpp
-    # src/surelog_interpreter.cpp  # TODO: Enable when API is updated
     ${PROTO_SRCS}
 )
+
+if(TARGET surelog)
+    list(APPEND INTERPRETER_SOURCES src/surelog_parser.cpp)
+endif()
 
 set(INTERPRETER_HEADERS
     include/parser.h
@@ -99,7 +101,11 @@ target_link_libraries(hwda_interpreter PRIVATE hwda_interpreter_lib)
 add_executable(kdb_viewer src/kdb_viewer.cpp)
 target_link_libraries(kdb_viewer PRIVATE hwda_interpreter_lib)
 
-install(TARGETS hwda_interpreter kdb_viewer
+# Test serialize tool
+add_executable(test_serialize ../test_serialize.cpp)
+target_link_libraries(test_serialize PRIVATE hwda_interpreter_lib)
+
+install(TARGETS hwda_interpreter kdb_viewer test_serialize
     RUNTIME DESTINATION bin
 )
 
