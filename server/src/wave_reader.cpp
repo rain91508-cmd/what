@@ -1,14 +1,17 @@
 #include "wave_reader.h"
-#include "wave_fst.h"
+// #include "wave_fst.h"  // TODO: Enable when FST library is available
 #include "wave_evcd.h"
 #include <filesystem>
+#include <algorithm>
 
 namespace hwda {
 
 std::unique_ptr<WaveReader> WaveReader::create(WaveFormat format) {
     switch (format) {
         case WaveFormat::FST:
-            return std::make_unique<WaveFst>();
+            // TODO: Enable when FST library is available
+            // return std::make_unique<WaveFst>();
+            return nullptr;
         case WaveFormat::EVCD:
             return std::make_unique<WaveEvcd>();
         default:

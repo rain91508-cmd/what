@@ -1,6 +1,5 @@
 #include "kdb_serializer.h"
 #include <fstream>
-#include <zstd.h>
 #include <iostream>
 
 namespace hwda {
@@ -47,61 +46,55 @@ void KdbSerializer::writeHeader(std::vector<uint8_t>& buffer) {
     writeUint32(buffer, 1);
 }
 
-void KdbSerializer::writeModules(std::vector<uint8_t>& buffer, const std::vector<KdbModule>& modules) {
+void KdbSerializer::writeModules(std::vector<uint8_t>& buffer, const std::vector<ModuleInfo>& modules) {
     writeUint32(buffer, static_cast<uint32_t>(modules.size()));
     
     for (const auto& mod : modules) {
         writeString(buffer, mod.name);
-        writeString(buffer, mod.filePath);
-        writeInt32(buffer, mod.startLine);
-        writeInt32(buffer, mod.endLine);
+        writeString(buffer, mod.fullName);
+        writeUint64(buffer, mod.id);
+        writeUint64(buffer, mod.fileId);
         
+        // Write ports
         writeUint32(buffer, static_cast<uint32_t>(mod.ports.size()));
         for (const auto& port : mod.ports) {
-            writeString(buffer, port);
-        }
-        
-        writeUint32(buffer, static_cast<uint32_t>(mod.parameters.size()));
-        for (const auto& param : mod.parameters) {
-            writeString(buffer, param);
+            writeString(buffer, port.name);
+            writeUint32(buffer, static_cast<uint32_t>(port.direction));
+            writeUint32(buffer, static_cast<uint32_t>(port.type));
         }
     }
 }
 
-void KdbSerializer::writeSignals(std::vector<uint8_t>& buffer, const std::vector<KdbSignal>& signals) {
+void KdbSerializer::writeSignals(std::vector<uint8_t>& buffer, const std::vector<SignalInfo>& signals) {
     writeUint32(buffer, static_cast<uint32_t>(signals.size()));
     
     for (const auto& sig : signals) {
         writeUint64(buffer, sig.id);
         writeString(buffer, sig.name);
-        writeString(buffer, sig.fullPath);
-        writeInt32(buffer, sig.bitWidth);
-        writeString(buffer, sig.type);
-        writeString(buffer, sig.direction);
-        writeString(buffer, sig.filePath);
-        writeInt32(buffer, sig.lineNumber);
+        writeString(buffer, sig.fullName);
+        writeUint32(buffer, static_cast<uint32_t>(sig.type));
+        writeUint64(buffer, sig.parentModuleId);
     }
 }
 
-void KdbSerializer::writeConnections(std::vector<uint8_t>& buffer, const std::vector<KdbConnection>& connections) {
+void KdbSerializer::writeConnections(std::vector<uint8_t>& buffer, const std::vector<ModuleInstanceInfo::PortConnection>& connections) {
     writeUint32(buffer, static_cast<uint32_t>(connections.size()));
     
     for (const auto& conn : connections) {
-        writeString(buffer, conn.driverSignal);
-        writeString(buffer, conn.loadSignal);
-        writeString(buffer, conn.driverInstance);
-        writeString(buffer, conn.loadInstance);
-        writeInt32(buffer, conn.driverLine);
-        writeInt32(buffer, conn.loadLine);
+        writeUint64(buffer, conn.portId);
+        writeString(buffer, conn.connectionExpr);
+        writeUint64(buffer, conn.connectedSignalId);
     }
 }
 
-void KdbSerializer::writeSourceFiles(std::vector<uint8_t>& buffer, const std::vector<KdbSourceFile>& files) {
+void KdbSerializer::writeSourceFiles(std::vector<uint8_t>& buffer, const std::vector<SourceFileInfo>& files) {
     writeUint32(buffer, static_cast<uint32_t>(files.size()));
     
     for (const auto& file : files) {
+        writeUint64(buffer, file.id);
         writeString(buffer, file.path);
-        writeString(buffer, file.content);
+        writeString(buffer, file.hash);
+        writeUint64(buffer, file.lineCount);
     }
 }
 
@@ -109,27 +102,31 @@ std::vector<uint8_t> KdbSerializer::serializeToBuffer(const KdbBuilder& builder)
     std::vector<uint8_t> buffer;
     
     writeHeader(buffer);
-    writeModules(buffer, builder.getModules());
-    writeSignals(buffer, builder.getSignals());
-    writeConnections(buffer, builder.getConnections());
-    writeSourceFiles(buffer, builder.getSourceFiles());
     
-    size_t const compressedSize = ZSTD_compressBound(buffer.size());
-    std::vector<uint8_t> compressed(compressedSize);
-    
-    size_t const result = ZSTD_compress(
-        compressed.data(), compressedSize,
-        buffer.data(), buffer.size(),
-        compressionLevel_
-    );
-    
-    if (ZSTD_isError(result)) {
-        std::cerr << "ZSTD compression error: " << ZSTD_getErrorName(result) << "\n";
-        return {};
+    // Get all modules and signals
+    auto modules = builder.getAllModules();
+    std::vector<ModuleInfo> moduleInfos;
+    for (const auto* mod : modules) {
+        if (mod) moduleInfos.push_back(*mod);
     }
+    writeModules(buffer, moduleInfos);
     
-    compressed.resize(result);
-    return compressed;
+    auto signals = builder.getAllSignals();
+    std::vector<SignalInfo> signalInfos;
+    for (const auto* sig : signals) {
+        if (sig) signalInfos.push_back(*sig);
+    }
+    writeSignals(buffer, signalInfos);
+    
+    // TODO: Implement connection and source file writing
+    std::vector<ModuleInstanceInfo::PortConnection> connections;
+    writeConnections(buffer, connections);
+    
+    std::vector<SourceFileInfo> sourceFiles;
+    writeSourceFiles(buffer, sourceFiles);
+    
+    // Return uncompressed buffer for now
+    return buffer;
 }
 
 bool KdbSerializer::serialize(const KdbBuilder& builder, const std::string& outputPath) {

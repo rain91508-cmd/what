@@ -1,16 +1,13 @@
 #include "surelog_parser.h"
 
-#include <surelog/API/Version.h>
-#include <surelog/CommandLine/CommandLineParser.h>
-#include <surelog/Design/Design.h>
-#include <surelog/Design/ModuleDefinition.h>
-#include <surelog/DesignCompile/SymbolTable.h>
-#include <surelog/ErrorContainer.h>
-#include <surelog/SourceManager/SourceManager.h>
-#include <surelog/Parsing/ParserAPI.h>
+#include <Surelog/API/Surelog.h>
+#include <Surelog/CommandLine/CommandLineParser.h>
+#include <Surelog/ErrorReporting/ErrorContainer.h>
+#include <Surelog/SourceCompile/SymbolTable.h>
 
+#include <uhdm/VpiListener.h>
 #include <uhdm/uhdm.h>
-#include <uhdm/serializer.h>
+#include <uhdm/vpi_user.h>
 
 #include <iostream>
 #include <fstream>
@@ -18,6 +15,153 @@
 
 namespace hwda {
 namespace interpreter {
+
+// VpiListener to build KDB
+class KdbBuildListener : public UHDM::VpiListener {
+public:
+    KdbBuildListener(KdbBuilder& builder, std::unordered_map<std::string, uint64_t>& filePathToId)
+        : builder_(builder), filePathToId_(filePathToId), totalModules_(0), totalSignals_(0) {}
+    
+    void enterModule_inst(const UHDM::module_inst* object, vpiHandle handle) override {
+        if (!object) return;
+        
+        std::string instName(object->VpiName());
+        std::string defName(object->VpiDefName());
+        std::string fullName(object->VpiFullName());
+        
+        ModuleInfo moduleInfo;
+        moduleInfo.name = defName.empty() ? instName : defName;
+        moduleInfo.fullName = fullName.empty() ? moduleInfo.name : fullName;
+        
+        // Extract location
+        moduleInfo.declaration = extractLocation(object);
+        
+        // Get file info
+        std::string filePath(object->VpiFile());
+        if (!filePath.empty()) {
+            auto it = filePathToId_.find(filePath);
+            if (it == filePathToId_.end()) {
+                moduleInfo.fileId = builder_.addSourceFile(filePath, "", 0);
+                filePathToId_[filePath] = moduleInfo.fileId;
+            } else {
+                moduleInfo.fileId = it->second;
+            }
+        }
+        
+        // Process ports
+        auto ports = object->Ports();
+        if (ports) {
+            for (auto* port : *ports) {
+                if (!port) continue;
+                PortInfo portInfo;
+                portInfo.name = std::string(port->VpiName());
+                portInfo.direction = convertPortDirection(port->VpiDirection());
+                portInfo.type = SignalType::WIRE;
+                portInfo.declaration = extractLocation(port);
+                moduleInfo.ports.push_back(portInfo);
+            }
+        }
+        
+        // Add module
+        uint64_t moduleId = builder_.addModule(moduleInfo);
+        currentModuleStack_.push_back(moduleId);
+        totalModules_++;
+        
+        // Process nets/signals
+        auto nets = object->Nets();
+        if (nets) {
+            for (auto* net : *nets) {
+                if (!net) continue;
+                SignalInfo signalInfo;
+                signalInfo.name = std::string(net->VpiName());
+                signalInfo.fullName = fullName + "." + signalInfo.name;
+                signalInfo.type = convertSignalType(net->VpiNetType());
+                signalInfo.parentModuleId = moduleId;
+                signalInfo.declaration = extractLocation(net);
+                builder_.addSignal(signalInfo);
+                totalSignals_++;
+            }
+        }
+        
+        // Process parameters
+        auto params = object->Parameters();
+        if (params) {
+            for (auto* param : *params) {
+                if (!param) continue;
+                SignalInfo signalInfo;
+                signalInfo.name = std::string(param->VpiName());
+                signalInfo.fullName = fullName + "." + signalInfo.name;
+                signalInfo.type = SignalType::PARAMETER;
+                signalInfo.parentModuleId = moduleId;
+                signalInfo.declaration = extractLocation(param);
+                builder_.addSignal(signalInfo);
+                totalSignals_++;
+            }
+        }
+    }
+    
+    void leaveModule_inst(const UHDM::module_inst* object, vpiHandle handle) override {
+        if (!currentModuleStack_.empty()) {
+            currentModuleStack_.pop_back();
+        }
+    }
+    
+    size_t getTotalModules() const { return totalModules_; }
+    size_t getTotalSignals() const { return totalSignals_; }
+    
+private:
+    KdbBuilder& builder_;
+    std::unordered_map<std::string, uint64_t>& filePathToId_;
+    std::vector<uint64_t> currentModuleStack_;
+    size_t totalModules_;
+    size_t totalSignals_;
+    
+    KdbSourceLocation extractLocation(const UHDM::BaseClass* obj) {
+        KdbSourceLocation loc;
+        loc.fileId = 0;
+        loc.line = 0;
+        loc.columnStart = 0;
+        loc.columnEnd = 0;
+        
+        if (!obj) return loc;
+        
+        std::string filePath(obj->VpiFile());
+        if (!filePath.empty()) {
+            auto it = filePathToId_.find(filePath);
+            if (it != filePathToId_.end()) {
+                loc.fileId = it->second;
+            }
+        }
+        
+        loc.line = obj->VpiLineNo();
+        loc.columnStart = obj->VpiColumnNo();
+        loc.columnEnd = loc.columnStart;
+        
+        return loc;
+    }
+    
+    SignalType convertSignalType(int32_t uhdmNetType) {
+        // UHDM v1.86 uses vpiNetType enum values
+        switch (uhdmNetType) {
+            case vpiWire: return SignalType::WIRE;
+            case vpiReg: return SignalType::REG;
+            case vpiLogicVar: return SignalType::LOGIC;
+            case vpiBitVar: return SignalType::BIT;
+            case vpiIntVar: return SignalType::INTEGER;
+            case vpiRealVar: return SignalType::REAL;
+            default: return SignalType::UNKNOWN;
+        }
+    }
+    
+    PortDirection convertPortDirection(int direction) {
+        switch (direction) {
+            case vpiInput: return PortDirection::INPUT;
+            case vpiOutput: return PortDirection::OUTPUT;
+            case vpiInout: return PortDirection::INOUT;
+            default: return PortDirection::UNKNOWN;
+        }
+    }
+};
 
 SurelogParser::SurelogParser()
     : verbose_(false)
@@ -28,19 +172,14 @@ SurelogParser::SurelogParser()
     , totalInstances_(0) {
 }
 
-SurelogParser::~SurelogParser() = default;
+SurelogParser::~SurelogParser() {
+    if (compilerHandle_) {
+        SURELOG::shutdown_compiler(static_cast<SURELOG::scompiler*>(compilerHandle_));
+    }
+}
 
 bool SurelogParser::initialize() {
-    try {
-        symbolTable_ = std::make_unique<SURELOG::SymbolTable>();
-        errorContainer_ = std::make_unique<SURELOG::ErrorContainer>(nullptr);
-        clp_ = std::make_unique<SURELOG::CommandLineParser>(
-            symbolTable_.get(), errorContainer_.get(), false);
-        return true;
-    } catch (const std::exception& e) {
-        lastError_ = std::string("Failed to initialize Surelog: ") + e.what();
-        return false;
-    }
+    return true;
 }
 
 ParseResult SurelogParser::parseFile(const std::string& filePath,
@@ -57,80 +196,79 @@ ParseResult SurelogParser::parseFiles(const std::vector<std::string>& filePaths,
     result.moduleCount = 0;
     result.signalCount = 0;
     
-    if (!initialize()) {
-        result.errorMessage = lastError_;
+    // Build command line arguments
+    std::vector<const char*> argv;
+    argv.push_back("hwda_interpreter");
+    
+    for (const auto& file : filePaths) {
+        argv.push_back(file.c_str());
+    }
+    
+    if (parseOnly_) {
+        argv.push_back("-parse");
+    } else {
+        argv.push_back("-parse");
+        argv.push_back("-elabuhdm");
+    }
+    
+    if (verbose_) {
+        argv.push_back("-verbose");
+    }
+    
+    if (debug_) {
+        argv.push_back("-debug");
+    }
+    
+    // Create Surelog objects
+    symbolTable_ = std::make_unique<SURELOG::SymbolTable>();
+    errorContainer_ = std::make_unique<SURELOG::ErrorContainer>(symbolTable_.get());
+    clp_ = std::make_unique<SURELOG::CommandLineParser>(
+        errorContainer_.get(), symbolTable_.get(), false, false);
+    
+    clp_->noPython();
+    clp_->setParse(true);
+    clp_->setCompile(true);
+    clp_->setElaborate(true);
+    clp_->setElabUhdm(true);
+    
+    bool success = clp_->parseCommandLine(argv.size(), argv.data());
+    errorContainer_->printMessages(clp_->muteStdout());
+    
+    if (!success || clp_->help()) {
+        result.errorMessage = "Failed to parse command line";
         return result;
     }
     
-    try {
-        // 设置解析选项
-        clp_->setFileList(filePaths);
-        
-        for (const auto& incPath : includePaths) {
-            clp_->addIncludePath(incPath);
-        }
-        
-        for (const auto& def : defines) {
-            clp_->addDefine(def);
-        }
-        
-        if (parseOnly_) {
-            clp_->setParseOnly(true);
-        }
-        
-        // 创建编译器
-        compiler_ = std::make_unique<SURELOG::Compiler>(
-            clp_.get(), symbolTable_.get(), errorContainer_.get());
-        
-        // 执行解析
-        bool success = compiler_->compile();
-        
-        if (!success) {
-            std::stringstream ss;
-            errorContainer_->printToStream(ss);
-            result.errorMessage = ss.str();
-            return result;
-        }
-        
-        // 获取设计对象
-        SURELOG::Design* design = compiler_->getDesign();
-        if (!design) {
-            result.errorMessage = "Failed to get design object";
-            return result;
-        }
-        
-        // 统计模块数量
-        const std::map<std::string, SURELOG::ModuleDefinition*>& modules = 
-            design->getModuleDefinitions();
-        result.moduleCount = modules.size();
-        
-        result.success = true;
-        result.parsedFiles = filePaths;
-        
-    } catch (const std::exception& e) {
-        result.errorMessage = std::string("Parse error: ") + e.what();
+    // Start compiler
+    compilerHandle_ = SURELOG::start_compiler(clp_.get());
+    vpiDesign_ = SURELOG::get_uhdm_design(static_cast<SURELOG::scompiler*>(compilerHandle_));
+    
+    if (!vpiDesign_) {
+        result.errorMessage = "Failed to get UHDM design";
+        return result;
     }
+    
+    result.success = true;
+    result.parsedFiles = filePaths;
     
     return result;
 }
 
 bool SurelogParser::buildKnowledgeBase(KdbBuilder& builder) {
-    if (!compiler_) {
-        lastError_ = "Parser not initialized";
+    if (!vpiDesign_) {
+        lastError_ = "No design loaded";
         return false;
     }
     
     try {
-        SURELOG::Design* design = compiler_->getDesign();
-        if (!design) {
-            lastError_ = "No design loaded";
-            return false;
-        }
+        // Create listener to traverse design
+        KdbBuildListener listener(builder, filePathToId_);
+        listener.listenDesigns({static_cast<vpiHandle>(vpiDesign_)});
         
-        // 处理设计
-        processDesign(design, builder);
+        totalModules_ = listener.getTotalModules();
+        totalSignals_ = listener.getTotalSignals();
         
-        // 构建索引
+        // Build indices
         builder.buildIndices();
         
         return true;
@@ -142,16 +280,6 @@ bool SurelogParser::buildKnowledgeBase(KdbBuilder& builder) {
 }
 
 UHDM::design* SurelogParser::getDesign() const {
-    if (!compiler_) {
-        return nullptr;
-    }
-    
-    SURELOG::Design* design = compiler_->getDesign();
-    if (!design) {
-        return nullptr;
-    }
-    
-    // 这里可以扩展以返回UHDM对象
     return nullptr;
 }
 
@@ -166,224 +294,59 @@ void SurelogParser::setCompileOptions(bool verbose, bool debug, bool parseOnly) 
 }
 
 void SurelogParser::processDesign(UHDM::design* design, KdbBuilder& builder) {
-    if (!design) return;
-    
-    const std::map<std::string, SURELOG::ModuleDefinition*>& modules = 
-        design->getModuleDefinitions();
-    
-    // 处理所有模块
-    for (const auto& pair : modules) {
-        SURELOG::ModuleDefinition* modDef = pair.second;
-        if (!modDef) continue;
-        
-        // 获取UHDM模块对象
-        UHDM::module* uhdmModule = modDef->getUHDMModule(-1);
-        if (uhdmModule) {
-            processModule(uhdmModule, builder, 0, "");
-        }
-    }
 }
 
 void SurelogParser::processModule(UHDM::module* uhdmModule, KdbBuilder& builder,
                                  uint64_t parentModuleId, const std::string& scope) {
-    if (!uhdmModule) return;
-    
-    ModuleInfo moduleInfo;
-    moduleInfo.name = uhdmModule->VpiName();
-    moduleInfo.fullName = scope.empty() ? moduleInfo.name : scope + "." + moduleInfo.name;
-    moduleInfo.parentModuleId = parentModuleId;
-    
-    // 提取位置信息
-    moduleInfo.declaration = extractLocation(uhdmModule);
-    
-    // 获取文件信息
-    std::string filePath = uhdmModule->VpiFile();
-    auto it = filePathToId_.find(filePath);
-    if (it == filePathToId_.end()) {
-        moduleInfo.fileId = builder.addSourceFile(filePath, "", 0);
-        filePathToId_[filePath] = moduleInfo.fileId;
-    } else {
-        moduleInfo.fileId = it->second;
-    }
-    
-    // 处理端口
-    processPorts(uhdmModule, moduleInfo, builder);
-    
-    // 处理信号
-    processSignals(uhdmModule, 0, builder, moduleInfo.fullName);
-    
-    // 处理实例
-    processInstances(uhdmModule, 0, builder, moduleInfo.fullName);
-    
-    // 添加模块
-    uint64_t moduleId = builder.addModule(moduleInfo);
-    
-    // 如果是顶层模块
-    if (parentModuleId == 0 && totalModules_ == 0) {
-        builder.setTopModule(moduleId);
-    }
-    
-    totalModules_++;
 }
 
 void SurelogParser::processPorts(UHDM::module* uhdmModule, ModuleInfo& moduleInfo,
                                 KdbBuilder& builder) {
-    if (!uhdmModule) return;
-    
-    // 遍历端口
-    for (const auto& port : uhdmModule->Ports()) {
-        if (!port) continue;
-        
-        PortInfo portInfo;
-        portInfo.name = port->VpiName();
-        
-        // 端口方向
-        std::string dir = port->VpiDirection();
-        portInfo.direction = convertPortDirection(dir);
-        
-        // 类型
-        portInfo.type = SignalType::WIRE;
-        
-        // 位宽
-        extractBitWidth(port.get(), portInfo.msb, portInfo.lsb, portInfo.isVector);
-        
-        // 位置
-        portInfo.declaration = extractLocation(port.get());
-        
-        moduleInfo.ports.push_back(portInfo);
-    }
 }
 
 void SurelogParser::processSignals(UHDM::module* uhdmModule, uint64_t moduleId,
                                    KdbBuilder& builder, const std::string& scope) {
-    if (!uhdmModule) return;
-    
-    // 遍历信号
-    for (const auto& net : uhdmModule->Nets()) {
-        if (!net) continue;
-        
-        SignalInfo signalInfo;
-        signalInfo.name = net->VpiName();
-        signalInfo.fullName = scope + "." + signalInfo.name;
-        signalInfo.parentModuleId = moduleId;
-        
-        // 类型
-        std::string type = net->VpiNetType();
-        signalInfo.type = convertSignalType(type);
-        
-        // 位宽
-        extractBitWidth(net.get(), signalInfo.msb, signalInfo.lsb, signalInfo.isVector);
-        
-        // 位置
-        signalInfo.declaration = extractLocation(net.get());
-        
-        // 添加信号
-        uint64_t signalId = builder.addSignal(signalInfo);
-        totalSignals_++;
-    }
-    
-    // 处理参数
-    for (const auto& param : uhdmModule->Parameters()) {
-        if (!param) continue;
-        
-        SignalInfo signalInfo;
-        signalInfo.name = param->VpiName();
-        signalInfo.fullName = scope + "." + signalInfo.name;
-        signalInfo.type = SignalType::PARAMETER;
-        signalInfo.parentModuleId = moduleId;
-        
-        // 位置
-        signalInfo.declaration = extractLocation(param.get());
-        
-        builder.addSignal(signalInfo);
-        totalSignals_++;
-    }
 }
 
 void SurelogParser::processInstances(UHDM::module* uhdmModule, uint64_t parentModuleId,
                                     KdbBuilder& builder, const std::string& scope) {
-    if (!uhdmModule) return;
-    
-    // 遍历模块实例
-    for (const auto& inst : uhdmModule->Instances()) {
-        if (!inst) continue;
-        
-        ModuleInstanceInfo instanceInfo;
-        instanceInfo.name = inst->VpiName();
-        instanceInfo.parentModuleId = parentModuleId;
-        
-        // 位置
-        instanceInfo.declaration = extractLocation(inst.get());
-        
-        // 获取实例化的模块定义
-        UHDM::module* instModule = inst->Module();
-        if (instModule) {
-            std::string instScope = scope + "." + instanceInfo.name;
-            
-            // 递归处理子模块
-            processModule(instModule, builder, parentModuleId, instScope);
-            totalInstances_++;
-        }
+}
+
+SignalType SurelogParser::convertSignalType(int32_t uhdmNetType) {
+    switch (uhdmNetType) {
+        case vpiWire: return SignalType::WIRE;
+        case vpiReg: return SignalType::REG;
+        case vpiLogicVar: return SignalType::LOGIC;
+        case vpiBitVar: return SignalType::BIT;
+        case vpiIntVar: return SignalType::INTEGER;
+        case vpiRealVar: return SignalType::REAL;
+        default: return SignalType::UNKNOWN;
     }
 }
 
-SignalType SurelogParser::convertSignalType(const std::string& uhdmType) {
-    if (uhdmType == "wire") return SignalType::WIRE;
-    if (uhdmType == "reg") return SignalType::REG;
-    if (uhdmType == "logic") return SignalType::LOGIC;
-    if (uhdmType == "bit") return SignalType::BIT;
-    if (uhdmType == "integer") return SignalType::INTEGER;
-    if (uhdmType == "real") return SignalType::REAL;
-    if (uhdmType == "time") return SignalType::INTEGER;
-    return SignalType::UNKNOWN;
+PortDirection SurelogParser::convertPortDirection(int direction) {
+    switch (direction) {
+        case vpiInput: return PortDirection::INPUT;
+        case vpiOutput: return PortDirection::OUTPUT;
+        case vpiInout: return PortDirection::INOUT;
+        default: return PortDirection::UNKNOWN;
+    }
 }
 
-PortDirection SurelogParser::convertPortDirection(const std::string& uhdmDirection) {
-    if (uhdmDirection == "input") return PortDirection::INPUT;
-    if (uhdmDirection == "output") return PortDirection::OUTPUT;
-    if (uhdmDirection == "inout") return PortDirection::INOUT;
-    return PortDirection::UNKNOWN;
-}
-
-SourceLocation SurelogParser::extractLocation(UHDM::any* uhdmObject) {
-    SourceLocation loc;
+KdbSourceLocation SurelogParser::extractLocation(UHDM::BaseClass* uhdmObject) {
+    KdbSourceLocation loc;
     loc.fileId = 0;
     loc.line = 0;
     loc.columnStart = 0;
     loc.columnEnd = 0;
-    
-    if (!uhdmObject) return loc;
-    
-    // 获取文件名和行号
-    std::string filePath = uhdmObject->VpiFile();
-    if (!filePath.empty()) {
-        auto it = filePathToId_.find(filePath);
-        if (it != filePathToId_.end()) {
-            loc.fileId = it->second;
-        }
-    }
-    
-    loc.line = uhdmObject->VpiLineNo();
-    loc.columnStart = uhdmObject->VpiColumnNo();
-    loc.columnEnd = loc.columnStart + uhdmObject->VpiEndLineNo();
-    
     return loc;
 }
 
-void SurelogParser::extractBitWidth(UHDM::any* uhdmObject, uint32_t& msb, 
+void SurelogParser::extractBitWidth(UHDM::BaseClass* uhdmObject, uint32_t& msb, 
                                     uint32_t& lsb, bool& isVector) {
     msb = 0;
     lsb = 0;
     isVector = false;
-    
-    if (!uhdmObject) return;
-    
-    // 尝试获取向量信息
-    UHDM::vector_* vec = uhdmObject->VpiVector();
-    if (vec) {
-        isVector = true;
-        // UHDM中的位宽表示可能需要根据具体对象类型解析
-    }
 }
 
 } // namespace interpreter

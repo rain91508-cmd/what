@@ -32,7 +32,7 @@ set(INTERPRETER_SOURCES
     src/kdb_serializer.cpp
     src/ast_visitor.cpp
     src/surelog_parser.cpp
-    src/surelog_interpreter.cpp
+    # src/surelog_interpreter.cpp  # TODO: Enable when API is updated
     ${PROTO_SRCS}
 )
 
@@ -43,7 +43,7 @@ set(INTERPRETER_HEADERS
     include/ast_visitor.h
     include/types.h
     include/surelog_parser.h
-    include/surelog_interpreter.h
+    # include/surelog_interpreter.h  # TODO: Enable when API is updated
     ${PROTO_HDRS}
 )
 
@@ -59,13 +59,26 @@ target_include_directories(hwda_interpreter_lib
         ${CMAKE_SOURCE_DIR}/third_party/Surelog/include
         ${CMAKE_SOURCE_DIR}/third_party/Surelog/third_party/UHDM/include
         ${CMAKE_SOURCE_DIR}/third_party/Surelog/third_party/UHDM
+        ${CMAKE_BINARY_DIR}/third_party/Surelog/third_party/UHDM/generated  # For UHDM generated headers
 )
 
 find_package(Zstd QUIET)
 if(Zstd_FOUND)
     target_link_libraries(hwda_interpreter_lib PUBLIC zstd::zstd)
+    target_compile_definitions(hwda_interpreter_lib PUBLIC USE_ZSTD)
+    message(STATUS "zstd found and enabled for compression")
 else()
-    message(STATUS "zstd not found, will use system version or find alternative")
+    # Try to find zstd using pkg-config or direct library search
+    find_library(ZSTD_LIBRARY NAMES zstd libzstd)
+    find_path(ZSTD_INCLUDE_DIR NAMES zstd.h)
+    if(ZSTD_LIBRARY AND ZSTD_INCLUDE_DIR)
+        target_link_libraries(hwda_interpreter_lib PUBLIC ${ZSTD_LIBRARY})
+        target_include_directories(hwda_interpreter_lib PUBLIC ${ZSTD_INCLUDE_DIR})
+        target_compile_definitions(hwda_interpreter_lib PUBLIC USE_ZSTD)
+        message(STATUS "zstd found via direct search: ${ZSTD_LIBRARY}")
+    else()
+        message(STATUS "zstd not found, compression disabled")
+    endif()
 endif()
 
 if(Protobuf_FOUND)

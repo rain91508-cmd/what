@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <unordered_map>
 
 // Surelog forward declarations
 namespace SURELOG {
@@ -129,10 +130,10 @@ private:
     PortDirection convertPortDirection(const std::string& uhdmDirection);
     
     // 源代码位置提取
-    SourceLocation extractLocation(UHDM::any* uhdmObject);
+    KdbSourceLocation extractLocation(UHDM::base* uhdmObject);
     
     // 位宽解析
-    void extractBitWidth(UHDM::any* uhdmObject, uint32_t& msb, uint32_t& lsb, bool& isVector);
+    void extractBitWidth(UHDM::base* uhdmObject, uint32_t& msb, uint32_t& lsb, bool& isVector);
     
     // Surelog核心对象
     std::unique_ptr<SURELOG::SymbolTable> symbolTable_;

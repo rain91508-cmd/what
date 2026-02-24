@@ -53,8 +53,8 @@ struct SourceFileInfo {
     uint64_t lineCount;
 };
 
-// 源代码位置
-struct SourceLocation {
+// 源代码位置 (KDB专用)
+struct KdbSourceLocation {
     uint64_t fileId;
     uint32_t line;
     uint32_t columnStart;
@@ -71,7 +71,7 @@ struct PortInfo {
     uint32_t lsb;
     bool isVector;
     uint64_t connectedSignalId;
-    SourceLocation declaration;
+    KdbSourceLocation declaration;
 };
 
 // 模块实例信息
@@ -80,7 +80,7 @@ struct ModuleInstanceInfo {
     std::string name;
     uint64_t moduleDefId;
     uint64_t parentModuleId;
-    SourceLocation declaration;
+    KdbSourceLocation declaration;
     
     struct PortConnection {
         uint64_t portId;
@@ -95,9 +95,9 @@ struct ModuleInfo {
     uint64_t id;
     std::string name;
     std::string fullName;
-    SourceLocation declaration;
-    SourceLocation definitionStart;
-    SourceLocation definitionEnd;
+    KdbSourceLocation declaration;
+    KdbSourceLocation definitionStart;
+    KdbSourceLocation definitionEnd;
     std::vector<PortInfo> ports;
     std::vector<uint64_t> signalIds;
     std::vector<ModuleInstanceInfo> instances;
@@ -115,7 +115,7 @@ struct SignalInfo {
     uint32_t msb;
     uint32_t lsb;
     bool isVector;
-    SourceLocation declaration;
+    KdbSourceLocation declaration;
     uint64_t parentModuleId;
     std::vector<uint64_t> driverSignalIds;
     std::vector<uint64_t> loadSignalIds;
@@ -169,10 +169,18 @@ public:
     // 序列化
     bool serializeToFile(const std::string& filepath) const;
     bool serializeToString(std::string* output) const;
+    bool serializeToFileCompressed(const std::string& filepath, int compressionLevel = 3) const;
     
     // 反序列化
     bool deserializeFromFile(const std::string& filepath);
     bool deserializeFromString(const std::string& data);
+    bool deserializeFromFileCompressed(const std::string& filepath);
+    
+    // 压缩设置
+    void setCompressionEnabled(bool enabled) { compressionEnabled_ = enabled; }
+    bool isCompressionEnabled() const { return compressionEnabled_; }
+    void setCompressionLevel(int level) { compressionLevel_ = level; }
+    int getCompressionLevel() const { return compressionLevel_; }
     
     // 获取统计信息
     size_t getModuleCount() const { return modules_.size(); }
@@ -201,6 +209,10 @@ private:
     uint64_t nextModuleId_;
     uint64_t nextSignalId_;
     uint64_t nextInstanceId_;
+    
+    // 压缩设置
+    bool compressionEnabled_ = true;
+    int compressionLevel_ = 3;
     
     // Protobuf序列化辅助函数
     void toProtobuf(hwda::kdb::KnowledgeBase* kdb) const;

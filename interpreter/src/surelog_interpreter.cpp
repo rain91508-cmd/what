@@ -2,15 +2,12 @@
 
 #include <Surelog/API/Surelog.h>
 #include <Surelog/CommandLine/CommandLineParser.h>
-#include <Surelog/Design/Design.h>
-#include <Surelog/Design/ModuleDefinition.h>
-#include <Surelog/DesignCompile/CompilerHarness.h>
 #include <Surelog/ErrorReporting/ErrorContainer.h>
 #include <Surelog/SourceCompile/SymbolTable.h>
 
 #include <uhdm/uhdm.h>
-#include <uhdm/ElaboratorListener.h>
-#include <uhdm/Serializer.h>
+#include <uhdm/VpiListener.h>
+#include <uhdm/vpi_user.h>
 
 #include <iostream>
 #include <sstream>
@@ -242,9 +239,12 @@ void SurelogInterpreter::processDesign(UHDM::design* design, KdbBuilder& builder
     if (!design) return;
     
     // 处理设计中的所有模块
-    for (auto* module : design->TopModules()) {
-        if (module) {
-            processModule(module, builder, 0, "");
+    auto topModules = design->TopModules();
+    if (topModules) {
+        for (auto* module : *topModules) {
+            if (module) {
+                processModule(module, builder, 0, "");
+            }
         }
     }
 }
@@ -399,8 +399,8 @@ PortDirection SurelogInterpreter::convertPortDirection(const std::string& uhdmDi
     return PortDirection::UNKNOWN;
 }
 
-SourceLocation SurelogInterpreter::extractLocation(UHDM::any* uhdmObject) {
-    SourceLocation loc;
+KdbSourceLocation SurelogInterpreter::extractLocation(UHDM::base* uhdmObject) {
+    KdbSourceLocation loc;
     loc.fileId = 0;
     loc.line = 0;
     loc.columnStart = 0;
@@ -424,7 +424,7 @@ SourceLocation SurelogInterpreter::extractLocation(UHDM::any* uhdmObject) {
     return loc;
 }
 
-void SurelogInterpreter::extractBitWidth(UHDM::any* uhdmObject, uint32_t& msb, 
+void SurelogInterpreter::extractBitWidth(UHDM::base* uhdmObject, uint32_t& msb, 
                                          uint32_t& lsb, bool& isVector) {
     msb = 0;
     lsb = 0;

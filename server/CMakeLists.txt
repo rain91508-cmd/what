@@ -6,9 +6,10 @@ set(SERVER_SOURCES
     src/main.cpp
     src/server.cpp
     src/api_handler.cpp
+    src/config.cpp
     src/kdb_loader.cpp
     src/wave_reader.cpp
-    src/wave_fst.cpp
+    # src/wave_fst.cpp  # TODO: Enable when FST library is available
     src/wave_evcd.cpp
 )
 
@@ -17,7 +18,7 @@ set(SERVER_HEADERS
     include/api_handler.h
     include/kdb_loader.h
     include/wave_reader.h
-    include/wave_fst.h
+    # include/wave_fst.h  # TODO: Enable when FST library is available
     include/wave_evcd.h
     include/types.h
     include/config.h
@@ -56,8 +57,9 @@ endif()
 if(TARGET surelog)
     target_link_libraries(hwda_server_lib PUBLIC surelog)
     target_include_directories(hwda_server_lib PUBLIC
-        ${CMAKE_SOURCE_DIR}/third_party/Surelog-1.86/include
-        ${CMAKE_SOURCE_DIR}/third_party/Surelog-1.86/third_party/UHDM/include
+        ${CMAKE_SOURCE_DIR}/third_party/Surelog/include
+        ${CMAKE_SOURCE_DIR}/third_party/Surelog/third_party/UHDM/include
+        ${CMAKE_BINARY_DIR}/third_party/Surelog/third_party/UHDM/generated
     )
     message(STATUS "Surelog linked to server")
 endif()

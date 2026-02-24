@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <unordered_map>
 
 // Surelog/UHDM forward declarations
 namespace UHDM {
@@ -13,14 +14,13 @@ namespace UHDM {
     class module;
     class net;
     class ports;
-    class any;
+    class BaseClass;  // UHDM v1.86: any is typedef of BaseClass
 }
 
 namespace SURELOG {
     class SymbolTable;
     class ErrorContainer;
     class CommandLineParser;
-    class Compiler;
 }
 
 namespace hwda {
@@ -84,20 +84,23 @@ private:
                           KdbBuilder& builder, const std::string& scope);
     
     // 类型转换辅助函数
-    SignalType convertSignalType(const std::string& uhdmType);
-    PortDirection convertPortDirection(const std::string& uhdmDirection);
+    SignalType convertSignalType(int32_t uhdmNetType);
+    PortDirection convertPortDirection(int vpiDirection);
     
     // 源代码位置提取
-    SourceLocation extractLocation(UHDM::any* uhdmObject);
+    KdbSourceLocation extractLocation(UHDM::BaseClass* uhdmObject);
     
     // 位宽解析
-    void extractBitWidth(UHDM::any* uhdmObject, uint32_t& msb, uint32_t& lsb, bool& isVector);
+    void extractBitWidth(UHDM::BaseClass* uhdmObject, uint32_t& msb, uint32_t& lsb, bool& isVector);
     
     // 内部成员
     std::unique_ptr<SURELOG::SymbolTable> symbolTable_;
     std::unique_ptr<SURELOG::ErrorContainer> errorContainer_;
     std::unique_ptr<SURELOG::CommandLineParser> clp_;
-    std::unique_ptr<SURELOG::Compiler> compiler_;
+    
+    // Surelog compiler handle (opaque pointer)
+    void* compilerHandle_ = nullptr;
+    void* vpiDesign_ = nullptr;
     
     std::string lastError_;
     std::string topModuleName_;

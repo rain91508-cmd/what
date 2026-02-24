@@ -2,7 +2,6 @@
 #include <fstream>
 #include <iostream>
 #include <algorithm>
-#include <zstd.h>
 
 namespace hwda {
 
@@ -19,28 +18,14 @@ bool KdbLoader::load(const std::string& path) {
     fileSize_ = file.tellg();
     file.seekg(0);
     
-    std::vector<uint8_t> compressedData(fileSize_);
-    file.read(reinterpret_cast<char*>(compressedData.data()), fileSize_);
+    std::vector<uint8_t> data(fileSize_);
+    file.read(reinterpret_cast<char*>(data.data()), fileSize_);
     file.close();
     
-    unsigned long long const decompressedSize = ZSTD_getFrameContentSize(compressedData.data(), fileSize_);
-    if (decompressedSize == ZSTD_CONTENTSIZE_ERROR) {
-        std::cerr << "Invalid KDB file format\n";
-        return false;
-    }
+    // TODO: Add zstd decompression when libzstd-dev is available
+    // For now, assume data is uncompressed
     
-    std::vector<uint8_t> decompressedData(decompressedSize);
-    size_t const result = ZSTD_decompress(
-        decompressedData.data(), decompressedSize,
-        compressedData.data(), fileSize_
-    );
-    
-    if (ZSTD_isError(result)) {
-        std::cerr << "Failed to decompress KDB: " << ZSTD_getErrorName(result) << "\n";
-        return false;
-    }
-    
-    if (!deserialize(decompressedData)) {
+    if (!deserialize(data)) {
         std::cerr << "Failed to deserialize KDB\n";
         return false;
     }

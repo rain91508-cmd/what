@@ -15,6 +15,9 @@ void printUsage(const char* progName) {
               << "  -I, --include <path>  Include directory\n"
               << "  -D, --define <macro>  Define macro\n"
               << "  -t, --top <module>    Top module name\n"
+              << "  -z, --compress        Enable compression (default: enabled)\n"
+              << "  -Z, --no-compress     Disable compression\n"
+              << "  -l, --compress-level  Compression level 1-19 (default: 3)\n"
               << "  -v, --verbose         Verbose output\n"
               << "  -s, --surelog         Use Surelog parser (default)\n"
               << "  -b, --builtin         Use built-in parser\n"
@@ -29,12 +32,17 @@ int main(int argc, char* argv[]) {
     std::string topModule;
     bool verbose = false;
     bool useSurelog = true;
+    bool compressionEnabled = true;
+    int compressionLevel = 3;
     
     static struct option longOptions[] = {
         {"output", required_argument, nullptr, 'o'},
         {"include", required_argument, nullptr, 'I'},
         {"define", required_argument, nullptr, 'D'},
         {"top", required_argument, nullptr, 't'},
+        {"compress", no_argument, nullptr, 'z'},
+        {"no-compress", no_argument, nullptr, 'Z'},
+        {"compress-level", required_argument, nullptr, 'l'},
         {"verbose", no_argument, nullptr, 'v'},
         {"surelog", no_argument, nullptr, 's'},
         {"builtin", no_argument, nullptr, 'b'},
@@ -43,7 +51,7 @@ int main(int argc, char* argv[]) {
     };
     
     int opt;
-    while ((opt = getopt_long(argc, argv, "o:I:D:t:vsbh", longOptions, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "o:I:D:t:zZl:vsbh", longOptions, nullptr)) != -1) {
         switch (opt) {
             case 'o':
                 outputPath = optarg;
@@ -56,6 +64,17 @@ int main(int argc, char* argv[]) {
                 break;
             case 't':
                 topModule = optarg;
+                break;
+            case 'z':
+                compressionEnabled = true;
+                break;
+            case 'Z':
+                compressionEnabled = false;
+                break;
+            case 'l':
+                compressionLevel = std::stoi(optarg);
+                if (compressionLevel < 1) compressionLevel = 1;
+                if (compressionLevel > 19) compressionLevel = 19;
                 break;
             case 'v':
                 verbose = true;
@@ -92,6 +111,8 @@ int main(int argc, char* argv[]) {
     
     KdbBuilder builder;
     builder.setProjectName("hwda_design");
+    builder.setCompressionEnabled(compressionEnabled);
+    builder.setCompressionLevel(compressionLevel);
     
     if (useSurelog) {
 #ifdef USE_SURELOG
@@ -151,6 +172,14 @@ int main(int argc, char* argv[]) {
     std::cout << "  Modules: " << builder.getModuleCount() << "\n";
     std::cout << "  Signals: " << builder.getSignalCount() << "\n";
     std::cout << "  Files: " << builder.getFileCount() << "\n";
+#ifdef USE_ZSTD
+    std::cout << "  Compression: " << (compressionEnabled ? "enabled" : "disabled") << "\n";
+    if (compressionEnabled) {
+        std::cout << "  Compression level: " << compressionLevel << "\n";
+    }
+#else
+    std::cout << "  Compression: not available (zstd not compiled in)\n";
+#endif
     
     return 0;
 }

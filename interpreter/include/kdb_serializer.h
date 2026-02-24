@@ -22,10 +22,10 @@ public:
     
 private:
     void writeHeader(std::vector<uint8_t>& buffer);
-    void writeModules(std::vector<uint8_t>& buffer, const std::vector<KdbModule>& modules);
-    void writeSignals(std::vector<uint8_t>& buffer, const std::vector<KdbSignal>& signals);
-    void writeConnections(std::vector<uint8_t>& buffer, const std::vector<KdbConnection>& connections);
-    void writeSourceFiles(std::vector<uint8_t>& buffer, const std::vector<KdbSourceFile>& files);
+    void writeModules(std::vector<uint8_t>& buffer, const std::vector<ModuleInfo>& modules);
+    void writeSignals(std::vector<uint8_t>& buffer, const std::vector<SignalInfo>& signals);
+    void writeConnections(std::vector<uint8_t>& buffer, const std::vector<ModuleInstanceInfo::PortConnection>& connections);
+    void writeSourceFiles(std::vector<uint8_t>& buffer, const std::vector<SourceFileInfo>& files);
     
     void writeString(std::vector<uint8_t>& buffer, const std::string& str);
     void writeUint32(std::vector<uint8_t>& buffer, uint32_t value);
@@ -35,6 +35,7 @@ private:
     int compressionLevel_{3};
 };
 
-}
+} // namespace interpreter
+} // namespace hwda
 
-#endif
+#endif // HWDA_INTERPRETER_KDB_SERIALIZER_H

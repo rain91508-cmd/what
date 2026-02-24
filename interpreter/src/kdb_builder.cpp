@@ -7,6 +7,10 @@
 #include <google/protobuf/util/json_util.h>
 #endif
 
+#ifdef USE_ZSTD
+#include <zstd.h>
+#endif
+
 #include <fstream>
 #include <sstream>
 #include <chrono>
@@ -463,27 +467,118 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
 }
 
 bool KdbBuilder::serializeToFile(const std::string& filepath) const {
+#ifdef USE_PROTOBUF
     hwda::kdb::KnowledgeBase kdb;
     toProtobuf(&kdb);
+    
+    std::string serialized;
+    if (!kdb.SerializeToString(&serialized)) {
+        return false;
+    }
+    
+#ifdef USE_ZSTD
+    if (compressionEnabled_) {
+        return serializeToFileCompressed(filepath, compressionLevel_);
+    }
+#endif
     
     std::ofstream output(filepath, std::ios::binary);
     if (!output) {
         return false;
     }
     
-    return kdb.SerializeToOstream(&output);
+    output.write(serialized.data(), serialized.size());
+    return true;
+#else
+    (void)filepath;
+    return false;
+#endif
 }
 
 bool KdbBuilder::serializeToString(std::string* output) const {
+#ifdef USE_PROTOBUF
     hwda::kdb::KnowledgeBase kdb;
     toProtobuf(&kdb);
     return kdb.SerializeToString(output);
+#else
+    (void)output;
+    return false;
+#endif
+}
+
+bool KdbBuilder::serializeToFileCompressed(const std::string& filepath, int compressionLevel) const {
+#ifdef USE_PROTOBUF
+#ifdef USE_ZSTD
+    hwda::kdb::KnowledgeBase kdb;
+    toProtobuf(&kdb);
+    
+    std::string serialized;
+    if (!kdb.SerializeToString(&serialized)) {
+        return false;
+    }
+    
+    size_t bound = ZSTD_compressBound(serialized.size());
+    std::vector<char> compressed(bound);
+    
+    size_t result = ZSTD_compress(compressed.data(), bound,
+                                   serialized.data(), serialized.size(),
+                                   compressionLevel);
+    
+    if (ZSTD_isError(result)) {
+        return false;
+    }
+    
+    compressed.resize(result);
+    
+    std::ofstream output(filepath, std::ios::binary);
+    if (!output) {
+        return false;
+    }
+    
+    uint32_t magic = 0x4B445743;  // "KDBZ"
+    uint32_t origSize = static_cast<uint32_t>(serialized.size());
+    output.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
+    output.write(reinterpret_cast<const char*>(&origSize), sizeof(origSize));
+    output.write(compressed.data(), compressed.size());
+    
+    return true;
+#else
+    (void)filepath;
+    (void)compressionLevel;
+    return false;
+#endif
+#else
+    (void)filepath;
+    (void)compressionLevel;
+    return false;
+#endif
 }
 
 bool KdbBuilder::deserializeFromFile(const std::string& filepath) {
+#ifdef USE_PROTOBUF
     std::ifstream input(filepath, std::ios::binary);
     if (!input) {
         return false;
+    }
+    
+    input.seekg(0, std::ios::end);
+    size_t fileSize = input.tellg();
+    input.seekg(0, std::ios::beg);
+    
+    if (fileSize < sizeof(uint32_t)) {
+        return false;
+    }
+    
+    uint32_t magic;
+    input.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+    input.seekg(0, std::ios::beg);
+    
+    if (magic == 0x4B445743) {  // "KDBZ" - compressed
+#ifdef USE_ZSTD
+        return deserializeFromFileCompressed(filepath);
+#else
+        return false;
+#endif
     }
     
     hwda::kdb::KnowledgeBase kdb;
@@ -493,9 +588,64 @@ bool KdbBuilder::deserializeFromFile(const std::string& filepath) {
     
     fromProtobuf(kdb);
     return true;
+#else
+    (void)filepath;
+    return false;
+#endif
+}
+
+bool KdbBuilder::deserializeFromFileCompressed(const std::string& filepath) {
+#ifdef USE_PROTOBUF
+#ifdef USE_ZSTD
+    std::ifstream input(filepath, std::ios::binary);
+    if (!input) {
+        return false;
+    }
+    
+    uint32_t magic;
+    uint32_t origSize;
+    input.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+    input.read(reinterpret_cast<char*>(&origSize), sizeof(origSize));
+    
+    if (magic != 0x4B445743) {
+        return false;
+    }
+    
+    input.seekg(0, std::ios::end);
+    size_t fileSize = input.tellg();
+    size_t compressedSize = fileSize - sizeof(magic) - sizeof(origSize);
+    input.seekg(sizeof(magic) + sizeof(origSize), std::ios::beg);
+    
+    std::vector<char> compressed(compressedSize);
+    input.read(compressed.data(), compressedSize);
+    
+    std::vector<char> decompressed(origSize);
+    size_t result = ZSTD_decompress(decompressed.data(), origSize,
+                                    compressed.data(), compressedSize);
+    
+    if (ZSTD_isError(result)) {
+        return false;
+    }
+    
+    hwda::kdb::KnowledgeBase kdb;
+    if (!kdb.ParseFromArray(decompressed.data(), result)) {
+        return false;
+    }
+    
+    fromProtobuf(kdb);
+    return true;
+#else
+    (void)filepath;
+    return false;
+#endif
+#else
+    (void)filepath;
+    return false;
+#endif
 }
 
 bool KdbBuilder::deserializeFromString(const std::string& data) {
+#ifdef USE_PROTOBUF
     hwda::kdb::KnowledgeBase kdb;
     if (!kdb.ParseFromString(data)) {
         return false;
@@ -503,6 +653,10 @@ bool KdbBuilder::deserializeFromString(const std::string& data) {
     
     fromProtobuf(kdb);
     return true;
+#else
+    (void)data;
+    return false;
+#endif
 }
 
 #else // !USE_PROTOBUF
