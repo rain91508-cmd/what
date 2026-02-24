@@ -41,7 +41,15 @@ public:
         if (!filePath.empty()) {
             auto it = filePathToId_.find(filePath);
             if (it == filePathToId_.end()) {
-                moduleInfo.fileId = builder_.addSourceFile(filePath, "", 0);
+                // Read file content
+                std::ifstream fileStream(filePath);
+                std::string content;
+                if (fileStream) {
+                    std::stringstream buffer;
+                    buffer << fileStream.rdbuf();
+                    content = buffer.str();
+                }
+                moduleInfo.fileId = builder_.addSourceFile(filePath, content);
                 filePathToId_[filePath] = moduleInfo.fileId;
             } else {
                 moduleInfo.fileId = it->second;

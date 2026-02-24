@@ -52,6 +52,101 @@ uint64_t KdbBuilder::addSourceFile(const std::string& path, const std::string& h
     return id;
 }
 
+uint64_t KdbBuilder::addSourceFile(const std::string& path, const std::string& content) {
+    auto file = std::make_unique<SourceFileInfo>();
+    file->id = nextFileId_++;
+    file->path = path;
+    file->content = content;
+    file->lineCount = 0;
+    
+    // 计算行偏移量
+    file->lineOffsets.push_back(0);
+    for (size_t i = 0; i < content.size(); ++i) {
+        if (content[i] == '\n') {
+            file->lineOffsets.push_back(i + 1);
+        }
+    }
+    file->lineCount = file->lineOffsets.size();
+    
+    uint64_t id = file->id;
+    filePathToId_[path] = id;
+    fileIdToIndex_[id] = files_.size();
+    files_.push_back(std::move(file));
+    
+    return id;
+}
+
+bool KdbBuilder::setSourceFileContent(uint64_t fileId, const std::string& content) {
+    auto* file = const_cast<SourceFileInfo*>(findFileById(fileId));
+    if (!file) return false;
+    
+    file->content = content;
+    file->lineOffsets.clear();
+    file->lineOffsets.push_back(0);
+    
+    for (size_t i = 0; i < content.size(); ++i) {
+        if (content[i] == '\n') {
+            file->lineOffsets.push_back(i + 1);
+        }
+    }
+    file->lineCount = file->lineOffsets.size();
+    
+    return true;
+}
+
+std::string KdbBuilder::getSourceLine(uint64_t fileId, uint32_t line) const {
+    const auto* file = findFileById(fileId);
+    if (!file || line == 0 || line > file->lineCount) return "";
+    
+    return file->getLine(line);
+}
+
+std::string KdbBuilder::getSourceRange(uint64_t fileId, uint32_t startLine, uint32_t startCol,
+                                        uint32_t endLine, uint32_t endCol) const {
+    const auto* file = findFileById(fileId);
+    if (!file) return "";
+    
+    return file->getRange(startLine, startCol, endLine, endCol);
+}
+
+std::string KdbBuilder::getSourceFileContent(uint64_t fileId) const {
+    const auto* file = findFileById(fileId);
+    return file ? file->content : "";
+}
+
+// SourceFileInfo 方法实现
+std::string SourceFileInfo::getLine(uint32_t lineNum) const {
+    if (lineNum == 0 || lineNum > lineOffsets.size()) return "";
+    
+    size_t start = lineOffsets[lineNum - 1];
+    size_t end = (lineNum < lineOffsets.size()) ? lineOffsets[lineNum] : content.size();
+    
+    std::string line = content.substr(start, end - start);
+    // 移除行尾换行符
+    while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
+        line.pop_back();
+    }
+    return line;
+}
+
+std::string SourceFileInfo::getRange(uint32_t startLine, uint32_t startCol, 
+                                      uint32_t endLine, uint32_t endCol) const {
+    if (startLine == 0 || startLine > lineOffsets.size()) return "";
+    if (endLine == 0 || endLine > lineOffsets.size()) return "";
+    if (startLine > endLine) return "";
+    
+    size_t start = lineOffsets[startLine - 1] + (startCol > 0 ? startCol - 1 : 0);
+    size_t end = (endLine < lineOffsets.size()) 
+                 ? lineOffsets[endLine] 
+                 : content.size();
+    if (endCol > 0 && endLine < lineOffsets.size()) {
+        end = lineOffsets[endLine - 1] + endCol;
+    }
+    
+    if (start >= end || start >= content.size()) return "";
+    return content.substr(start, end - start);
+}
+
 uint64_t KdbBuilder::addModule(const ModuleInfo& module) {
     auto mod = std::make_unique<ModuleInfo>(module);
     mod->id = nextModuleId_++;
@@ -274,6 +369,10 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
         protoFile->set_path(file->path);
         protoFile->set_hash(file->hash);
         protoFile->set_line_count(file->lineCount);
+        protoFile->set_content(file->content);
+        for (uint64_t offset : file->lineOffsets) {
+            protoFile->add_line_offsets(offset);
+        }
     }
     
     // 添加模块
@@ -377,6 +476,11 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
         file->path = protoFile.path();
         file->hash = protoFile.hash();
         file->lineCount = protoFile.line_count();
+        file->content = protoFile.content();
+        
+        for (uint64_t offset : protoFile.line_offsets()) {
+            file->lineOffsets.push_back(offset);
+        }
         
         nextFileId_ = std::max(nextFileId_, file->id + 1);
         filePathToId_[file->path] = file->id;

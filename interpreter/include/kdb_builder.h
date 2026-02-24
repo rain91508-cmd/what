@@ -51,6 +51,14 @@ struct SourceFileInfo {
     std::string path;
     std::string hash;
     uint64_t lineCount;
+    std::string content;           // 源代码内容
+    std::vector<uint64_t> lineOffsets; // 每行起始偏移量
+    
+    // 获取指定行的源代码
+    std::string getLine(uint32_t lineNum) const;
+    // 获取指定范围的源代码
+    std::string getRange(uint32_t startLine, uint32_t startCol, 
+                         uint32_t endLine, uint32_t endCol) const;
 };
 
 // 源代码位置 (KDB专用)
@@ -134,6 +142,16 @@ public:
     
     // 添加源文件
     uint64_t addSourceFile(const std::string& path, const std::string& hash, uint64_t lineCount);
+    uint64_t addSourceFile(const std::string& path, const std::string& content);
+    
+    // 设置源文件内容
+    bool setSourceFileContent(uint64_t fileId, const std::string& content);
+    
+    // 获取源代码
+    std::string getSourceLine(uint64_t fileId, uint32_t line) const;
+    std::string getSourceRange(uint64_t fileId, uint32_t startLine, uint32_t startCol,
+                               uint32_t endLine, uint32_t endCol) const;
+    std::string getSourceFileContent(uint64_t fileId) const;
     
     // 添加模块
     uint64_t addModule(const ModuleInfo& module);

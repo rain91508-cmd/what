@@ -21,6 +21,8 @@ message SourceFile {
   string path = 2;              // 文件路径
   string hash = 3;              // 文件内容哈希
   uint64 line_count = 4;        // 总行数
+  string content = 5;           // 源代码内容
+  repeated uint64 line_offsets = 6; // 每行起始偏移量，用于快速定位
 }
 
 // 源代码位置信息
@@ -152,6 +154,28 @@ message DesignHierarchy {
   repeated uint64 module_ids = 2;   // 所有模块ID列表
 }
 
+// 名称索引条目
+message NameIndexEntry {
+  string name = 1;              // 名称
+  uint64 object_id = 2;         // 对象ID
+  enum ObjectType {
+    OBJECT_TYPE_UNKNOWN = 0;
+    OBJECT_TYPE_MODULE = 1;
+    OBJECT_TYPE_SIGNAL = 2;
+    OBJECT_TYPE_PORT = 3;
+    OBJECT_TYPE_INSTANCE = 4;
+  }
+  ObjectType object_type = 3;   // 对象类型
+  SourceLocation location = 4;  // 源码位置
+}
+
+// 名称索引，用于快速查找
+message NameIndex {
+  map<string, uint64> module_name_to_id = 1;    // 模块名到ID的映射
+  map<string, uint64> signal_name_to_id = 2;    // 信号全名到ID的映射
+  repeated NameIndexEntry entries = 3;          // 所有名称条目
+}
+
 // 知识库主结构
 message KnowledgeBase {
   KDBHeader header = 1;
@@ -159,4 +183,5 @@ message KnowledgeBase {
   repeated Module modules = 3;
   repeated Signal signals = 4;
   DesignHierarchy hierarchy = 5;
+  NameIndex name_index = 6;     // 名称索引
 }

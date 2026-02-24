@@ -16,6 +16,8 @@ void printUsage(const char* progName) {
               << "  -h, --hierarchy       Show design hierarchy\n"
               << "  -M, --module <name>   Show details of a specific module\n"
               << "  -S, --signal <name>   Search for signals by name pattern\n"
+              << "  -c, --source          Show source code for module/signal\n"
+              << "  -C, --content <file>  Show content of a source file\n"
               << "  -j, --json            Output in JSON format\n"
               << "  -v, --verbose         Verbose output\n"
               << "  --help                Show this help\n";
@@ -89,7 +91,91 @@ void printFiles(const KdbBuilder& builder) {
     for (uint64_t id = 1; id <= builder.getFileCount(); ++id) {
         const auto* file = builder.findFileById(id);
         if (file) {
-            std::cout << "  [" << id << "] " << file->path << "\n";
+            std::cout << "  [" << id << "] " << file->path 
+                      << " (" << file->lineCount << " lines)\n";
+        }
+    }
+}
+
+void printSourceFileContent(const KdbBuilder& builder, const std::string& filePath) {
+    const auto* file = builder.findFileByPath(filePath);
+    if (!file) {
+        // Try to find by ID
+        try {
+            uint64_t id = std::stoull(filePath);
+            file = builder.findFileById(id);
+        } catch (...) {}
+    }
+    
+    if (!file) {
+        std::cout << "File not found: " << filePath << "\n";
+        return;
+    }
+    
+    std::cout << "\n=== Source File: " << file->path << " ===\n";
+    std::cout << "Lines: " << file->lineCount << "\n\n";
+    
+    // Print with line numbers
+    for (uint32_t line = 1; line <= file->lineCount; ++line) {
+        std::cout << std::setw(5) << std::right << line << " | " 
+                  << file->getLine(line) << "\n";
+    }
+}
+
+void printModuleWithSource(const KdbBuilder& builder, const std::string& moduleName) {
+    const auto* module = builder.findModuleByName(moduleName);
+    if (!module) {
+        std::cout << "Module not found: " << moduleName << "\n";
+        return;
+    }
+    
+    auto allSignals = builder.getAllSignals();
+    
+    std::cout << "\n=== Module: " << module->name << " ===\n";
+    std::cout << "  ID: " << module->id << "\n";
+    std::cout << "  Full Name: " << module->fullName << "\n";
+    std::cout << "  File ID: " << module->fileId << "\n";
+    std::cout << "  Location: Line " << module->declaration.line 
+              << ", Col " << module->declaration.columnStart << "\n";
+    
+    // Show source code context
+    if (module->declaration.fileId != 0) {
+        const auto* file = builder.findFileById(module->declaration.fileId);
+        if (file && !file->content.empty()) {
+            std::cout << "\n  Source Code:\n";
+            uint32_t startLine = (module->declaration.line > 3) ? module->declaration.line - 3 : 1;
+            uint32_t endLine = std::min(startLine + 10, static_cast<uint32_t>(file->lineCount));
+            
+            for (uint32_t line = startLine; line <= endLine; ++line) {
+                std::cout << "    ";
+                if (line == module->declaration.line) {
+                    std::cout << ">>> ";
+                } else {
+                    std::cout << "    ";
+                }
+                std::cout << std::setw(5) << std::right << line << " | " 
+                          << file->getLine(line) << "\n";
+            }
+        }
+    }
+    
+    std::cout << "\n  Ports (" << module->ports.size() << "):\n";
+    for (const auto& port : module->ports) {
+        std::cout << "    " << std::setw(8) << std::left 
+                  << portDirectionToString(port.direction)
+                  << " " << port.name;
+        if (port.isVector) {
+            std::cout << " [" << port.msb << ":" << port.lsb << "]";
+        }
+        std::cout << "\n";
+    }
+    
+    std::cout << "\n  Signals:\n";
+    for (const auto* signal : allSignals) {
+        if (signal->parentModuleId == module->id) {
+            std::cout << "    " << std::setw(10) << std::left 
+                      << signalTypeToString(signal->type)
+                      << " " << signal->name << "\n";
         }
     }
 }
@@ -208,8 +294,10 @@ int main(int argc, char* argv[]) {
     bool showHierarchy = false;
     bool showJson = false;
     bool verbose = false;
+    bool showSource = false;
     std::string moduleName;
     std::string signalPattern;
+    std::string contentFile;
     
     static struct option longOptions[] = {
         {"modules", no_argument, nullptr, 'm'},
@@ -218,6 +306,8 @@ int main(int argc, char* argv[]) {
         {"hierarchy", no_argument, nullptr, 'h'},
         {"module", required_argument, nullptr, 'M'},
         {"signal", required_argument, nullptr, 'S'},
+        {"source", no_argument, nullptr, 'c'},
+        {"content", required_argument, nullptr, 'C'},
         {"json", no_argument, nullptr, 'j'},
         {"verbose", no_argument, nullptr, 'v'},
         {"help", no_argument, nullptr, 'H'},
@@ -225,7 +315,7 @@ int main(int argc, char* argv[]) {
     };
     
     int opt;
-    while ((opt = getopt_long(argc, argv, "msfhM:S:jv", longOptions, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "msfhM:S:cC:jv", longOptions, nullptr)) != -1) {
         switch (opt) {
             case 'm':
                 showModules = true;
@@ -244,6 +334,12 @@ int main(int argc, char* argv[]) {
                 break;
             case 'S':
                 signalPattern = optarg;
+                break;
+            case 'c':
+                showSource = true;
+                break;
+            case 'C':
+                contentFile = optarg;
                 break;
             case 'j':
                 showJson = true;
@@ -279,7 +375,8 @@ int main(int argc, char* argv[]) {
     std::cout << "  Files: " << builder.getFileCount() << "\n";
     
     bool anyOption = showModules || showSignals || showFiles || showHierarchy || 
-                     showJson || !moduleName.empty() || !signalPattern.empty();
+                     showJson || !moduleName.empty() || !signalPattern.empty() || 
+                     showSource || !contentFile.empty();
     
     if (!anyOption) {
         showModules = true;
@@ -291,11 +388,22 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     
+    if (!contentFile.empty()) {
+        printSourceFileContent(builder, contentFile);
+        return 0;
+    }
+    
     if (showModules) printModules(builder, verbose);
     if (showSignals) printSignals(builder, verbose);
     if (showFiles) printFiles(builder);
     if (showHierarchy) printHierarchy(builder);
-    if (!moduleName.empty()) printModuleDetails(builder, moduleName);
+    if (!moduleName.empty()) {
+        if (showSource) {
+            printModuleWithSource(builder, moduleName);
+        } else {
+            printModuleDetails(builder, moduleName);
+        }
+    }
     if (!signalPattern.empty()) searchSignals(builder, signalPattern);
     
     return 0;
