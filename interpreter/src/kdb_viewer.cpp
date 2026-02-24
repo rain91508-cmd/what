@@ -463,11 +463,6 @@ void printHierarchyTree(const KdbBuilder& builder, uint64_t moduleId, int depth)
     }
     std::cout << "\n";
     
-    for (const auto& port : module->ports) {
-        std::cout << indent << "  [" << portDirectionToString(port.direction) << "] " 
-                  << port.name << "\n";
-    }
-    
     auto children = builder.getChildModules(moduleId);
     for (const auto* child : children) {
         printHierarchyTree(builder, child->id, depth + 1);
@@ -477,23 +472,16 @@ void printHierarchyTree(const KdbBuilder& builder, uint64_t moduleId, int depth)
 void printHierarchy(const KdbBuilder& builder) {
     std::cout << "\n=== Design Hierarchy ===\n";
     
-    uint64_t topId = builder.getTopModuleId();
-    if (topId == 0) {
-        auto modules = builder.getAllModules();
-        for (const auto* mod : modules) {
-            if (mod->parentModuleId == 0) {
-                topId = mod->id;
-                break;
-            }
-        }
-    }
+    const auto& topModuleIds = builder.getTopModuleIds();
     
-    if (topId == 0) {
+    if (topModuleIds.empty()) {
         std::cout << "  (No top module found)\n";
         return;
     }
     
-    printHierarchyTree(builder, topId, 0);
+    for (uint64_t moduleId : topModuleIds) {
+        printHierarchyTree(builder, moduleId, 0);
+    }
 }
 
 void printJson(const KdbBuilder& builder) {
@@ -657,25 +645,6 @@ int main(int argc, char* argv[]) {
     std::cout << "  Modules: " << builder.getModuleCount() << "\n";
     std::cout << "  Signals: " << builder.getTotalSignalCount() << "\n";
     std::cout << "  Files: " << builder.getFileCount() << "\n";
-    
-    std::cout << "\n=== Checking Port Links ===\n";
-    for (uint64_t id = 1; id <= builder.getFileCount(); ++id) {
-        const auto* file = builder.findFileById(id);
-        if (!file) continue;
-        
-        std::cout << "File: " << file->path << "\n";
-        std::cout << "Port links count: " << file->portLinks.size() << "\n";
-        
-        if (!file->portLinks.empty()) {
-            std::cout << "Port links details:\n";
-            for (size_t i = 0; i < file->portLinks.size(); ++i) {
-                const auto& link = file->portLinks[i];
-                std::cout << "  [" << i << "] Line: " << link.line 
-                          << ", Col: " << link.columnStart << "-" << link.columnEnd 
-                          << ", Target ID: " << link.targetId << "\n";
-            }
-        }
-    }
     
     bool anyOption = showModules || showSignals || showFiles || showHierarchy || 
                      showJson || !moduleName.empty() || !signalPattern.empty() || 

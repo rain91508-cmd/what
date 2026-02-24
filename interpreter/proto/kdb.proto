@@ -99,5 +99,5 @@ message KnowledgeBase {
   KDBHeader header = 1;
   repeated SourceFile files = 2;
   repeated Module modules = 3;
-  DesignHierarchy hierarchy = 4;
+  repeated DesignHierarchy hierarchies = 4;
 }

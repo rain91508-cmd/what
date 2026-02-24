@@ -1,6 +1,7 @@
 #include "kdb_builder.h"
 #include <iostream>
 #include <vector>
+#include <functional>
 
 #ifdef USE_PROTOBUF
 #include "kdb.pb.h"
@@ -22,8 +23,7 @@ namespace hwda {
 namespace interpreter {
 
 KdbBuilder::KdbBuilder()
-    : topModuleId_(0)
-    , nextFileId_(1)
+    : nextFileId_(1)
     , nextModuleId_(1)
     , nextSignalId_(1)
     , nextInstanceId_(1) {
@@ -33,6 +33,34 @@ KdbBuilder::~KdbBuilder() = default;
 
 void KdbBuilder::setProjectName(const std::string& name) {
     projectName_ = name;
+}
+
+void KdbBuilder::setTopModule(uint64_t moduleId) {
+    topModuleIds_.clear();
+    topModuleIds_.push_back(moduleId);
+}
+
+void KdbBuilder::addHierarchy(uint64_t topModuleId) {
+    // Check if this topModuleId already exists
+    for (const auto& existing : hierarchies_) {
+        if (existing.topModuleId == topModuleId) {
+            return;
+        }
+    }
+    
+    HierarchyInfo hierarchy;
+    hierarchy.topModuleId = topModuleId;
+    
+    std::function<void(uint64_t)> collectModules = [&](uint64_t moduleId) {
+        hierarchy.moduleIds.push_back(moduleId);
+        auto children = getChildModules(moduleId);
+        for (const auto* child : children) {
+            collectModules(child->id);
+        }
+    };
+    collectModules(topModuleId);
+    
+    hierarchies_.push_back(hierarchy);
 }
 
 uint64_t KdbBuilder::addSourceFile(const std::string& path, const std::string& content) {
@@ -292,10 +320,6 @@ uint64_t KdbBuilder::addInstance(const ModuleInstanceInfo& instance) {
     instances_.push_back(std::move(inst));
     
     return id;
-}
-
-void KdbBuilder::setTopModule(uint64_t moduleId) {
-    topModuleId_ = moduleId;
 }
 
 void KdbBuilder::buildIndices() {
@@ -575,10 +599,12 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
         }
     }
     
-    auto* hierarchy = kdb->mutable_hierarchy();
-    hierarchy->set_top_module_id(topModuleId_);
-    for (const auto& mod : modules_) {
-        hierarchy->add_module_ids(mod->id);
+    for (const auto& hierarchyInfo : hierarchies_) {
+        auto* hierarchy = kdb->add_hierarchies();
+        hierarchy->set_top_module_id(hierarchyInfo.topModuleId);
+        for (uint64_t moduleId : hierarchyInfo.moduleIds) {
+            hierarchy->add_module_ids(moduleId);
+        }
     }
 }
 
@@ -704,7 +730,17 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
         modules_.push_back(std::move(mod));
     }
     
-    topModuleId_ = kdb.hierarchy().top_module_id();
+    topModuleIds_.clear();
+    hierarchies_.clear();
+    for (const auto& protoHierarchy : kdb.hierarchies()) {
+        HierarchyInfo hierarchy;
+        hierarchy.topModuleId = protoHierarchy.top_module_id();
+        topModuleIds_.push_back(hierarchy.topModuleId);
+        for (uint64_t moduleId : protoHierarchy.module_ids()) {
+            hierarchy.moduleIds.push_back(moduleId);
+        }
+        hierarchies_.push_back(hierarchy);
+    }
 }
 
 bool KdbBuilder::serializeToFile(const std::string& filepath) const {

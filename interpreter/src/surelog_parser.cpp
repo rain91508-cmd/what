@@ -12,6 +12,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <unordered_set>
 
 namespace hwda {
 namespace interpreter {
@@ -30,6 +31,9 @@ public:
         std::string fullName(object->VpiFullName());
         
         ModuleInfo moduleInfo;
+        moduleInfo.id = 0;
+        moduleInfo.parentModuleId = 0;
+        moduleInfo.fileId = 0;
         moduleInfo.name = defName.empty() ? instName : defName;
         moduleInfo.fullName = fullName.empty() ? moduleInfo.name : fullName;
         
@@ -69,6 +73,11 @@ public:
                 portInfo.declaration = extractLocation(port);
                 moduleInfo.ports.push_back(portInfo);
             }
+        }
+        
+        // Set parent module ID
+        if (!currentModuleStack_.empty()) {
+            moduleInfo.parentModuleId = currentModuleStack_.back();
         }
         
         // Add module
@@ -319,6 +328,33 @@ bool SurelogParser::buildKnowledgeBase(KdbBuilder& builder) {
         
         totalModules_ = listener.getTotalModules();
         totalSignals_ = listener.getTotalSignals();
+        
+        // Find all modules and identify top modules
+        auto modules = builder.getAllModules();
+        
+        // No parent (parentModuleId == 0) are top modules, same name only add once
+        std::unordered_set<std::string> addedTopModules;
+        for (const auto* mod : modules) {
+            if (mod->parentModuleId == 0) {
+                if (addedTopModules.find(mod->name) == addedTopModules.end()) {
+                    addedTopModules.insert(mod->name);
+                    builder.addHierarchy(mod->id);
+                }
+            }
+        }
+        
+        // If no top modules found (unlikely), fall back to all parentModuleId == 0
+        if (builder.getTopModuleIds().empty()) {
+            std::unordered_set<std::string> fallbackAddedTopModules;
+            for (const auto* mod : modules) {
+                if (mod->parentModuleId == 0) {
+                    if (fallbackAddedTopModules.find(mod->fullName) == fallbackAddedTopModules.end()) {
+                        fallbackAddedTopModules.insert(mod->fullName);
+                        builder.addHierarchy(mod->id);
+                    }
+                }
+            }
+        }
         
         // Build indices
         builder.buildIndices();

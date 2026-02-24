@@ -162,6 +162,7 @@ public:
     uint64_t addInstance(const ModuleInstanceInfo& instance);
     
     void setTopModule(uint64_t moduleId);
+    void addHierarchy(uint64_t topModuleId);
     
     void buildIndices();
     
@@ -178,7 +179,7 @@ public:
     std::vector<const SignalInfo*> getDrivers(uint64_t signalId) const;
     std::vector<const SignalInfo*> getLoads(uint64_t signalId) const;
     
-    uint64_t getTopModuleId() const { return topModuleId_; }
+    const std::vector<uint64_t>& getTopModuleIds() const { return topModuleIds_; }
     std::vector<const ModuleInfo*> getChildModules(uint64_t parentModuleId) const;
     
     bool serializeToFile(const std::string& filepath) const;
@@ -200,7 +201,13 @@ public:
     
 private:
     std::string projectName_;
-    uint64_t topModuleId_;
+    std::vector<uint64_t> topModuleIds_;
+    
+    struct HierarchyInfo {
+        uint64_t topModuleId;
+        std::vector<uint64_t> moduleIds;
+    };
+    std::vector<HierarchyInfo> hierarchies_;
     
     std::vector<std::unique_ptr<SourceFileInfo>> files_;
     std::vector<std::unique_ptr<ModuleInfo>> modules_;
