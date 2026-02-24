@@ -458,7 +458,7 @@ void printHierarchyTree(const KdbBuilder& builder, uint64_t moduleId, int depth)
     
     std::string indent(depth * 2, ' ');
     std::cout << indent << module->name;
-    if (!module->fullName.empty() && module->fullName != module->name) {
+    if (!module->fullName.empty()) {
         std::cout << " (" << module->fullName << ")";
     }
     std::cout << "\n";
