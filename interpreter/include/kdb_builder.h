@@ -230,7 +230,7 @@ private:
     
     // 压缩设置
     bool compressionEnabled_ = true;
-    int compressionLevel_ = 3;
+    int compressionLevel_ = 9;
     
     // Protobuf序列化辅助函数
     void toProtobuf(hwda::kdb::KnowledgeBase* kdb) const;
