@@ -332,10 +332,10 @@ bool SurelogParser::buildKnowledgeBase(KdbBuilder& builder) {
         // Find all modules and identify top modules
         auto modules = builder.getAllModules();
         
-        // No parent (parentModuleId == 0) AND has fullname are top modules, same fullname only add once
+        // No parent (parentModuleId == 0) AND name and fullname are same are top modules, same fullname only add once
         std::unordered_set<std::string> addedTopModules;
         for (const auto* mod : modules) {
-            if (mod->parentModuleId == 0 && !mod->fullName.empty()) {
+            if (mod->parentModuleId == 0 && mod->name == mod->fullName) {
                 if (addedTopModules.find(mod->fullName) == addedTopModules.end()) {
                     addedTopModules.insert(mod->fullName);
                     builder.addHierarchy(mod->id);
@@ -343,11 +343,11 @@ bool SurelogParser::buildKnowledgeBase(KdbBuilder& builder) {
             }
         }
         
-        // If no top modules found (unlikely), fall back to all parentModuleId == 0 with fullname
+        // If no top modules found (unlikely), fall back to all parentModuleId == 0 with name and fullname same
         if (builder.getTopModuleIds().empty()) {
             std::unordered_set<std::string> fallbackAddedTopModules;
             for (const auto* mod : modules) {
-                if (mod->parentModuleId == 0 && !mod->fullName.empty()) {
+                if (mod->parentModuleId == 0 && mod->name == mod->fullName) {
                     if (fallbackAddedTopModules.find(mod->fullName) == fallbackAddedTopModules.end()) {
                         fallbackAddedTopModules.insert(mod->fullName);
                         builder.addHierarchy(mod->id);
