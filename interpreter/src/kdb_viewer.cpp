@@ -63,7 +63,7 @@ void printModules(const KdbBuilder& builder, bool verbose) {
         if (!module->fullName.empty() && module->fullName != module->name) {
             std::cout << " (" << module->fullName << ")";
         }
-        std::cout << "\n";
+        std::cout << ", Parent: " << module->parentModuleId << "\n";
         
         if (verbose) {
             std::cout << "      Ports: " << module->ports.size() << "\n";

@@ -43,7 +43,7 @@ endif()
 
 if(BUILD_SURELOG)
     set(SURELOG_BUILD_TESTS OFF CACHE BOOL "Disable Surelog tests")
-    add_subdirectory(third_party/Surelog)
+    add_subdirectory(third_party/Surelog ${CMAKE_SOURCE_DIR}/third_party/build/Surelog)
 endif()
 
 if(BUILD_SERVER)
