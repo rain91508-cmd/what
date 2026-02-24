@@ -101,15 +101,15 @@ target_link_libraries(hwda_interpreter PRIVATE hwda_interpreter_lib)
 add_executable(kdb_viewer src/kdb_viewer.cpp)
 target_link_libraries(kdb_viewer PRIVATE hwda_interpreter_lib)
 
-# Test serialize tool
-add_executable(test_serialize ../test_serialize.cpp)
-target_link_libraries(test_serialize PRIVATE hwda_interpreter_lib)
+# Test serialize tool (temporarily disabled - file not found)
+# add_executable(test_serialize ../test_serialize.cpp)
+# target_link_libraries(test_serialize PRIVATE hwda_interpreter_lib)
 
-# Check parent IDs tool
-add_executable(check_parent_ids ../check_parent_ids.cpp)
-target_link_libraries(check_parent_ids PRIVATE hwda_interpreter_lib)
+# Check parent IDs tool (temporarily disabled - file not found)
+# add_executable(check_parent_ids ../check_parent_ids.cpp)
+# target_link_libraries(check_parent_ids PRIVATE hwda_interpreter_lib)
 
-install(TARGETS hwda_interpreter kdb_viewer test_serialize
+install(TARGETS hwda_interpreter kdb_viewer
     RUNTIME DESTINATION bin
 )
 
