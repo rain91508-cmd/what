@@ -86,7 +86,7 @@ public:
                 signalInfo.type = convertSignalType(net->VpiNetType());
                 signalInfo.parentModuleId = moduleId;
                 signalInfo.declaration = extractLocation(net);
-                builder_.addSignal(signalInfo);
+                builder_.addSignal(moduleId, signalInfo);
                 totalSignals_++;
             }
         }
@@ -102,7 +102,7 @@ public:
                 signalInfo.type = SignalType::PARAMETER;
                 signalInfo.parentModuleId = moduleId;
                 signalInfo.declaration = extractLocation(param);
-                builder_.addSignal(signalInfo);
+                builder_.addSignal(moduleId, signalInfo);
                 totalSignals_++;
             }
         }

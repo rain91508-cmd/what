@@ -1,4 +1,3 @@
-#include "parser.h"
 #include "kdb_builder.h"
 #include "kdb_serializer.h"
 #include "surelog_parser.h"
@@ -32,8 +31,6 @@ void printUsage(const char* progName) {
               << "  -l, --compress-level  Compression level 1-19 (default: 9)\n"
               << "\nOther Options:\n"
               << "  -v, --verbose         Verbose output\n"
-              << "  -s, --surelog         Use Surelog parser (default)\n"
-              << "  -b, --builtin         Use built-in parser\n"
               << "  --help                Show this help\n";
 }
 
@@ -74,7 +71,6 @@ std::vector<std::string> parseFileList(const std::string& filepath) {
     
     std::string line;
     while (std::getline(file, line)) {
-        // Remove comments
         size_t commentPos = line.find("//");
         if (commentPos != std::string::npos) {
             line = line.substr(0, commentPos);
@@ -84,7 +80,6 @@ std::vector<std::string> parseFileList(const std::string& filepath) {
             line = line.substr(0, commentPos);
         }
         
-        // Trim whitespace
         while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) {
             line.erase(0, 1);
         }
@@ -94,7 +89,6 @@ std::vector<std::string> parseFileList(const std::string& filepath) {
         
         if (line.empty()) continue;
         
-        // Split into tokens
         std::stringstream ss(line);
         std::string token;
         while (ss >> token) {
@@ -116,19 +110,16 @@ struct CommandLineOptions {
     std::vector<std::string> parameters;
     std::string topModule;
     bool verbose = false;
-    bool useSurelog = true;
     bool compressionEnabled = true;
     int compressionLevel = 9;
     bool forceSystemVerilog = false;
 };
 
 bool parseCommandLine(int argc, char* argv[], CommandLineOptions& opts) {
-    // First pass: handle + arguments and collect all arguments
     std::vector<std::string> args;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         
-        // Handle +incdir+
         if (arg.find("+incdir+") == 0) {
             auto dirs = parsePlusArg(arg, "+incdir+");
             for (const auto& dir : dirs) {
@@ -137,7 +128,6 @@ bool parseCommandLine(int argc, char* argv[], CommandLineOptions& opts) {
             continue;
         }
         
-        // Handle +define+
         if (arg.find("+define+") == 0) {
             auto defs = parsePlusArg(arg, "+define+");
             for (const auto& def : defs) {
@@ -146,7 +136,6 @@ bool parseCommandLine(int argc, char* argv[], CommandLineOptions& opts) {
             continue;
         }
         
-        // Handle +libext+
         if (arg.find("+libext+") == 0) {
             auto exts = parsePlusArg(arg, "+libext+");
             for (const auto& ext : exts) {
@@ -158,11 +147,9 @@ bool parseCommandLine(int argc, char* argv[], CommandLineOptions& opts) {
         args.push_back(arg);
     }
     
-    // Second pass: process remaining arguments
     for (size_t i = 0; i < args.size(); ++i) {
         const std::string& arg = args[i];
         
-        // Check for options with arguments
         if (arg == "-o" || arg == "--output") {
             if (i + 1 < args.size()) {
                 opts.outputPath = args[++i];
@@ -185,7 +172,6 @@ bool parseCommandLine(int argc, char* argv[], CommandLineOptions& opts) {
             if (i + 1 < args.size()) {
                 auto fileArgs = parseFileList(args[++i]);
                 for (const auto& fa : fileArgs) {
-                    // Process each argument from file
                     if (fa.find("+incdir+") == 0) {
                         auto dirs = parsePlusArg(fa, "+incdir+");
                         for (const auto& dir : dirs) {
@@ -197,7 +183,6 @@ bool parseCommandLine(int argc, char* argv[], CommandLineOptions& opts) {
                             opts.defines.push_back(def);
                         }
                     } else if (fa[0] == '-') {
-                        // Re-process as option
                         args.insert(args.begin() + i + 1, fa);
                     } else {
                         opts.inputFiles.push_back(fa);
@@ -241,7 +226,6 @@ bool parseCommandLine(int argc, char* argv[], CommandLineOptions& opts) {
             continue;
         }
         
-        // Boolean options
         if (arg == "-z" || arg == "--compress") {
             opts.compressionEnabled = true;
             continue;
@@ -254,19 +238,10 @@ bool parseCommandLine(int argc, char* argv[], CommandLineOptions& opts) {
             opts.verbose = true;
             continue;
         }
-        if (arg == "-s" || arg == "--surelog") {
-            opts.useSurelog = true;
-            continue;
-        }
-        if (arg == "-b" || arg == "--builtin") {
-            opts.useSurelog = false;
-            continue;
-        }
         if (arg == "--help" || arg == "-h") {
             return false;
         }
         
-        // Handle -D, -I, -P without space (e.g., -DWIDTH=8)
         if (arg.length() > 2 && arg[0] == '-') {
             char type = arg[1];
             std::string value = arg.substr(2);
@@ -284,7 +259,6 @@ bool parseCommandLine(int argc, char* argv[], CommandLineOptions& opts) {
             }
         }
         
-        // Handle -sv option
         if (arg == "-sv") {
             opts.forceSystemVerilog = true;
             if (i + 1 < args.size() && args[i + 1][0] != '-') {
@@ -293,19 +267,16 @@ bool parseCommandLine(int argc, char* argv[], CommandLineOptions& opts) {
             continue;
         }
         
-        // Handle -sverilog option
         if (arg == "-sverilog") {
             opts.forceSystemVerilog = true;
             continue;
         }
         
-        // Unknown option starting with -
         if (arg[0] == '-') {
             std::cerr << "Warning: Unknown option: " << arg << "\n";
             continue;
         }
         
-        // Otherwise it's an input file
         opts.inputFiles.push_back(arg);
     }
     
@@ -320,7 +291,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    // Check for --help
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
@@ -367,51 +337,32 @@ int main(int argc, char* argv[]) {
     builder.setCompressionEnabled(opts.compressionEnabled);
     builder.setCompressionLevel(opts.compressionLevel);
     
-    if (opts.useSurelog) {
-#ifdef USE_SURELOG
-        SurelogParser surelogParser;
-        surelogParser.setCompileOptions(opts.verbose, false, false);
-        if (!opts.topModule.empty()) {
-            surelogParser.setTopModule(opts.topModule);
-        }
-        
-        auto result = surelogParser.parseFiles(opts.inputFiles, opts.includeDirs, opts.defines);
-        if (!result.success) {
-            std::cerr << "Surelog parse error: " << result.errorMessage << "\n";
-            return 1;
-        }
-        
-        if (opts.verbose) {
-            std::cout << "Surelog parsed successfully\n";
-            std::cout << "  Modules: " << result.moduleCount << "\n";
-        }
-        
-        if (!surelogParser.buildKnowledgeBase(builder)) {
-            std::cerr << "Failed to build knowledge base: " << surelogParser.getLastError() << "\n";
-            return 1;
-        }
-        
-        if (opts.verbose) {
-            std::cout << "Knowledge base built successfully\n";
-            std::cout << "  Total modules: " << builder.getModuleCount() << "\n";
-            std::cout << "  Total signals: " << builder.getSignalCount() << "\n";
-        }
-#else
-        std::cerr << "Error: Surelog support not compiled in\n";
+    SurelogParser surelogParser;
+    surelogParser.setCompileOptions(opts.verbose, false, false);
+    if (!opts.topModule.empty()) {
+        surelogParser.setTopModule(opts.topModule);
+    }
+    
+    auto result = surelogParser.parseFiles(opts.inputFiles, opts.includeDirs, opts.defines);
+    if (!result.success) {
+        std::cerr << "Surelog parse error: " << result.errorMessage << "\n";
         return 1;
-#endif
-    } else {
-        Parser parser;
-        if (!parser.parseFiles(opts.inputFiles)) {
-            std::cerr << "Parse error: " << parser.getError() << "\n";
-            return 1;
-        }
-        
-        if (opts.verbose) {
-            std::cout << "Found " << parser.getModules().size() << " modules\n";
-            std::cout << "Found " << parser.getSignals().size() << " signals\n";
-            std::cout << "Found " << parser.getConnections().size() << " connections\n";
-        }
+    }
+    
+    if (opts.verbose) {
+        std::cout << "Surelog parsed successfully\n";
+        std::cout << "  Modules: " << result.moduleCount << "\n";
+    }
+    
+    if (!surelogParser.buildKnowledgeBase(builder)) {
+        std::cerr << "Failed to build knowledge base: " << surelogParser.getLastError() << "\n";
+        return 1;
+    }
+    
+    if (opts.verbose) {
+        std::cout << "Knowledge base built successfully\n";
+        std::cout << "  Total modules: " << builder.getModuleCount() << "\n";
+        std::cout << "  Total signals: " << builder.getTotalSignalCount() << "\n";
     }
     
     if (!builder.serializeToFile(opts.outputPath)) {
