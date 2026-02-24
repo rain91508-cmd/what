@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.20)
 
 project(hwdesignanalyzer 
     VERSION 1.0.0
@@ -16,6 +16,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(BUILD_SERVER "Build data server" ON)
 option(BUILD_INTERPRETER "Build design interpreter" ON)
 option(BUILD_TESTS "Build tests" OFF)
+option(BUILD_SURELOG "Build with Surelog parser" ON)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_compile_options(-g -O0 -Wall -Wextra)
@@ -40,6 +41,11 @@ if(CLANG_FORMAT)
     )
 endif()
 
+if(BUILD_SURELOG)
+    set(SURELOG_BUILD_TESTS OFF CACHE BOOL "Disable Surelog tests")
+    add_subdirectory(third_party/Surelog)
+endif()
+
 add_subdirectory(server)
 add_subdirectory(interpreter)
 
@@ -51,6 +57,7 @@ message(STATUS "=== Build Configuration ===")
 message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "Build Server: ${BUILD_SERVER}")
 message(STATUS "Build Interpreter: ${BUILD_INTERPRETER}")
+message(STATUS "Build Surelog: ${BUILD_SURELOG}")
 message(STATUS "Build Tests: ${BUILD_TESTS}")
 message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "Install Prefix: ${CMAKE_INSTALL_PREFIX}")

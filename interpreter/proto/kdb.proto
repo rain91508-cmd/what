@@ -1,0 +1,162 @@
+syntax = "proto3";
+
+package hwda.kdb;
+
+option cc_enable_arenas = true;
+
+// 知识库文件头
+message KDBHeader {
+  string version = 1;           // 知识库版本
+  string project_name = 2;      // 项目名称
+  string created_at = 3;        // 创建时间
+  string source_path = 4;       // 源文件根路径
+  uint64 module_count = 5;      // 模块数量
+  uint64 signal_count = 6;      // 信号总数
+  uint64 file_count = 7;        // 文件数量
+}
+
+// 源文件信息
+message SourceFile {
+  uint64 id = 1;                // 文件ID
+  string path = 2;              // 文件路径
+  string hash = 3;              // 文件内容哈希
+  uint64 line_count = 4;        // 总行数
+}
+
+// 源代码位置信息
+message SourceLocation {
+  uint64 file_id = 1;           // 文件ID (引用SourceFile)
+  uint32 line = 2;              // 行号
+  uint32 column_start = 3;      // 起始列
+  uint32 column_end = 4;        // 结束列
+}
+
+// 信号类型枚举
+enum SignalType {
+  SIGNAL_TYPE_UNKNOWN = 0;
+  SIGNAL_TYPE_WIRE = 1;         // wire
+  SIGNAL_TYPE_REG = 2;          // reg
+  SIGNAL_TYPE_LOGIC = 3;        // logic
+  SIGNAL_TYPE_BIT = 4;          // bit
+  SIGNAL_TYPE_INTEGER = 5;      // integer
+  SIGNAL_TYPE_REAL = 6;         // real
+  SIGNAL_TYPE_PARAMETER = 7;    // parameter
+  SIGNAL_TYPE_LOCALPARAM = 8;   // localparam
+  SIGNAL_TYPE_INPUT = 9;        // input port
+  SIGNAL_TYPE_OUTPUT = 10;      // output port
+  SIGNAL_TYPE_INOUT = 11;       // inout port
+}
+
+// 信号定义
+message Signal {
+  uint64 id = 1;                // 信号唯一ID
+  string name = 2;              // 信号名称
+  string full_name = 3;         // 完整层次名称 (如: top.mod1.sig1)
+  SignalType type = 4;          // 信号类型
+  
+  // 位宽信息
+  uint32 msb = 5;               // 最高位
+  uint32 lsb = 6;               // 最低位
+  bool is_vector = 7;           // 是否为向量
+  
+  // 源代码位置
+  SourceLocation declaration = 8;  // 声明位置
+  
+  // 层次信息
+  uint64 parent_module_id = 9;  // 所属模块ID
+  
+  // 连接信息
+  repeated uint64 driver_signal_ids = 10;   // 驱动该信号的信号ID列表
+  repeated uint64 load_signal_ids = 11;     // 被该信号驱动的信号ID列表
+  
+  // 注释/文档
+  string description = 12;      // 信号描述
+}
+
+// 端口方向
+enum PortDirection {
+  PORT_DIR_UNKNOWN = 0;
+  PORT_DIR_INPUT = 1;
+  PORT_DIR_OUTPUT = 2;
+  PORT_DIR_INOUT = 3;
+}
+
+// 模块端口
+message Port {
+  uint64 id = 1;                // 端口ID
+  string name = 2;              // 端口名称
+  PortDirection direction = 3;  // 端口方向
+  SignalType type = 4;          // 信号类型
+  
+  // 位宽
+  uint32 msb = 5;
+  uint32 lsb = 6;
+  bool is_vector = 7;
+  
+  // 连接的内部信号ID
+  uint64 connected_signal_id = 8;
+  
+  SourceLocation declaration = 9;
+}
+
+// 模块实例
+message ModuleInstance {
+  uint64 id = 1;                // 实例ID
+  string name = 2;              // 实例名称
+  uint64 module_def_id = 3;     // 引用的模块定义ID
+  uint64 parent_module_id = 4;  // 父模块ID
+  SourceLocation declaration = 5;
+  
+  // 端口连接
+  message PortConnection {
+    uint64 port_id = 1;         // 端口ID
+    string connection_expr = 2; // 连接表达式
+    uint64 connected_signal_id = 3; // 连接的信号ID
+  }
+  repeated PortConnection connections = 6;
+}
+
+// 模块定义
+message Module {
+  uint64 id = 1;                // 模块唯一ID
+  string name = 2;              // 模块名称
+  string full_name = 3;         // 完整层次名称
+  
+  // 源代码位置
+  SourceLocation declaration = 4;   // 模块声明位置
+  SourceLocation definition_start = 5;  // 定义开始位置
+  SourceLocation definition_end = 6;    // 定义结束位置
+  
+  // 端口列表
+  repeated Port ports = 7;
+  
+  // 信号列表
+  repeated uint64 signal_ids = 8;
+  
+  // 子模块实例
+  repeated ModuleInstance instances = 9;
+  
+  // 父模块ID (顶层模块为0)
+  uint64 parent_module_id = 10;
+  
+  // 文件ID
+  uint64 file_id = 11;
+  
+  // 注释/文档
+  string description = 12;
+}
+
+// 设计层次结构
+message DesignHierarchy {
+  uint64 top_module_id = 1;     // 顶层模块ID
+  repeated uint64 module_ids = 2;   // 所有模块ID列表
+}
+
+// 知识库主结构
+message KnowledgeBase {
+  KDBHeader header = 1;
+  repeated SourceFile files = 2;
+  repeated Module modules = 3;
+  repeated Signal signals = 4;
+  DesignHierarchy hierarchy = 5;
+}

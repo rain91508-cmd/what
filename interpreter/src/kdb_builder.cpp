@@ -1,91 +1,534 @@
 #include "kdb_builder.h"
 
+#ifdef USE_PROTOBUF
+#include "kdb.pb.h"
+#include <google/protobuf/io/zero_copy_stream_impl.h>
+#include <google/protobuf/io/coded_stream.h>
+#include <google/protobuf/util/json_util.h>
+#endif
+
+#include <fstream>
+#include <sstream>
+#include <chrono>
+#include <iomanip>
+
 namespace hwda {
 namespace interpreter {
 
-KdbBuilder::KdbBuilder() = default;
+KdbBuilder::KdbBuilder()
+    : topModuleId_(0)
+    , nextFileId_(1)
+    , nextModuleId_(1)
+    , nextSignalId_(1)
+    , nextInstanceId_(1) {
+}
+
 KdbBuilder::~KdbBuilder() = default;
 
-void KdbBuilder::addModule(const ParsedModule& module) {
-    KdbModule kdbModule;
-    kdbModule.name = module.name;
-    kdbModule.filePath = module.location.filePath;
-    kdbModule.startLine = module.location.line;
-    kdbModule.endLine = module.endLine;
-    kdbModule.ports = module.ports;
-    kdbModule.parameters = module.parameters;
-    modules_.push_back(kdbModule);
+void KdbBuilder::setProjectName(const std::string& name) {
+    projectName_ = name;
 }
 
-void KdbBuilder::addSignal(const ParsedSignal& signal, const std::string& scope) {
-    KdbSignal kdbSignal;
-    kdbSignal.id = nextSignalId_++;
-    kdbSignal.name = signal.name;
-    kdbSignal.fullPath = scope.empty() ? signal.name : scope + "." + signal.name;
-    kdbSignal.bitWidth = signal.bitWidth;
-    kdbSignal.type = signal.type;
-    kdbSignal.direction = signal.direction;
-    kdbSignal.filePath = signal.location.filePath;
-    kdbSignal.lineNumber = signal.location.line;
-    signals_.push_back(kdbSignal);
+void KdbBuilder::setSourcePath(const std::string& path) {
+    sourcePath_ = path;
 }
 
-void KdbBuilder::addConnection(const ParsedConnection& conn) {
-    KdbConnection kdbConn;
-    kdbConn.driverSignal = conn.driver;
-    kdbConn.loadSignal = conn.load;
-    kdbConn.driverInstance = conn.driverInstance;
-    kdbConn.loadInstance = conn.loadInstance;
-    kdbConn.driverLine = conn.driverLocation.line;
-    kdbConn.loadLine = conn.loadLocation.line;
-    connections_.push_back(kdbConn);
+uint64_t KdbBuilder::addSourceFile(const std::string& path, const std::string& hash, uint64_t lineCount) {
+    auto file = std::make_unique<SourceFileInfo>();
+    file->id = nextFileId_++;
+    file->path = path;
+    file->hash = hash;
+    file->lineCount = lineCount;
+    
+    uint64_t id = file->id;
+    filePathToId_[path] = id;
+    fileIdToIndex_[id] = files_.size();
+    files_.push_back(std::move(file));
+    
+    return id;
 }
 
-void KdbBuilder::addSourceFile(const std::string& path, const std::string& content) {
-    KdbSourceFile file;
-    file.path = path;
-    file.content = content;
-    sourceFiles_.push_back(file);
+uint64_t KdbBuilder::addModule(const ModuleInfo& module) {
+    auto mod = std::make_unique<ModuleInfo>(module);
+    mod->id = nextModuleId_++;
+    
+    uint64_t id = mod->id;
+    moduleNameToId_[mod->fullName] = id;
+    moduleIdToIndex_[id] = modules_.size();
+    modules_.push_back(std::move(mod));
+    
+    return id;
+}
+
+uint64_t KdbBuilder::addSignal(const SignalInfo& signal) {
+    auto sig = std::make_unique<SignalInfo>(signal);
+    sig->id = nextSignalId_++;
+    
+    uint64_t id = sig->id;
+    signalFullNameToId_[sig->fullName] = id;
+    signalIdToIndex_[id] = signals_.size();
+    signals_.push_back(std::move(sig));
+    
+    return id;
+}
+
+uint64_t KdbBuilder::addInstance(const ModuleInstanceInfo& instance) {
+    auto inst = std::make_unique<ModuleInstanceInfo>(instance);
+    inst->id = nextInstanceId_++;
+    
+    uint64_t id = inst->id;
+    instances_.push_back(std::move(inst));
+    
+    return id;
+}
+
+void KdbBuilder::setTopModule(uint64_t moduleId) {
+    topModuleId_ = moduleId;
 }
 
 void KdbBuilder::buildIndices() {
-    signalIndex_.clear();
-    moduleIndex_.clear();
+    // 构建信号驱动/负载关系索引
+    for (const auto& signal : signals_) {
+        // 清理旧的驱动/负载关系
+        signal->driverSignalIds.clear();
+        signal->loadSignalIds.clear();
+    }
     
+    // 这里可以添加更多复杂的连接分析逻辑
+}
+
+const ModuleInfo* KdbBuilder::findModuleByName(const std::string& name) const {
+    auto it = moduleNameToId_.find(name);
+    if (it != moduleNameToId_.end()) {
+        return findModuleById(it->second);
+    }
+    return nullptr;
+}
+
+const ModuleInfo* KdbBuilder::findModuleById(uint64_t id) const {
+    auto it = moduleIdToIndex_.find(id);
+    if (it != moduleIdToIndex_.end() && it->second < modules_.size()) {
+        return modules_[it->second].get();
+    }
+    return nullptr;
+}
+
+const SignalInfo* KdbBuilder::findSignalByName(const std::string& fullName) const {
+    auto it = signalFullNameToId_.find(fullName);
+    if (it != signalFullNameToId_.end()) {
+        return findSignalById(it->second);
+    }
+    return nullptr;
+}
+
+const SignalInfo* KdbBuilder::findSignalById(uint64_t id) const {
+    auto it = signalIdToIndex_.find(id);
+    if (it != signalIdToIndex_.end() && it->second < signals_.size()) {
+        return signals_[it->second].get();
+    }
+    return nullptr;
+}
+
+const SourceFileInfo* KdbBuilder::findFileByPath(const std::string& path) const {
+    auto it = filePathToId_.find(path);
+    if (it != filePathToId_.end()) {
+        return findFileById(it->second);
+    }
+    return nullptr;
+}
+
+const SourceFileInfo* KdbBuilder::findFileById(uint64_t id) const {
+    auto it = fileIdToIndex_.find(id);
+    if (it != fileIdToIndex_.end() && it->second < files_.size()) {
+        return files_[it->second].get();
+    }
+    return nullptr;
+}
+
+std::vector<const ModuleInfo*> KdbBuilder::getAllModules() const {
+    std::vector<const ModuleInfo*> result;
+    result.reserve(modules_.size());
+    for (const auto& mod : modules_) {
+        result.push_back(mod.get());
+    }
+    return result;
+}
+
+std::vector<const SignalInfo*> KdbBuilder::getAllSignals() const {
+    std::vector<const SignalInfo*> result;
+    result.reserve(signals_.size());
     for (const auto& sig : signals_) {
-        signalIndex_[sig.fullPath] = sig.id;
+        result.push_back(sig.get());
+    }
+    return result;
+}
+
+std::vector<const SignalInfo*> KdbBuilder::getDrivers(uint64_t signalId) const {
+    std::vector<const SignalInfo*> result;
+    const SignalInfo* signal = findSignalById(signalId);
+    if (signal) {
+        for (uint64_t driverId : signal->driverSignalIds) {
+            const SignalInfo* driver = findSignalById(driverId);
+            if (driver) {
+                result.push_back(driver);
+            }
+        }
+    }
+    return result;
+}
+
+std::vector<const SignalInfo*> KdbBuilder::getLoads(uint64_t signalId) const {
+    std::vector<const SignalInfo*> result;
+    const SignalInfo* signal = findSignalById(signalId);
+    if (signal) {
+        for (uint64_t loadId : signal->loadSignalIds) {
+            const SignalInfo* load = findSignalById(loadId);
+            if (load) {
+                result.push_back(load);
+            }
+        }
+    }
+    return result;
+}
+
+#ifdef USE_PROTOBUF
+
+// 辅助函数：SignalType 转换
+static hwda::kdb::SignalType toProtoSignalType(SignalType type) {
+    switch (type) {
+        case SignalType::WIRE: return hwda::kdb::SIGNAL_TYPE_WIRE;
+        case SignalType::REG: return hwda::kdb::SIGNAL_TYPE_REG;
+        case SignalType::LOGIC: return hwda::kdb::SIGNAL_TYPE_LOGIC;
+        case SignalType::BIT: return hwda::kdb::SIGNAL_TYPE_BIT;
+        case SignalType::INTEGER: return hwda::kdb::SIGNAL_TYPE_INTEGER;
+        case SignalType::REAL: return hwda::kdb::SIGNAL_TYPE_REAL;
+        case SignalType::PARAMETER: return hwda::kdb::SIGNAL_TYPE_PARAMETER;
+        case SignalType::LOCALPARAM: return hwda::kdb::SIGNAL_TYPE_LOCALPARAM;
+        case SignalType::INPUT: return hwda::kdb::SIGNAL_TYPE_INPUT;
+        case SignalType::OUTPUT: return hwda::kdb::SIGNAL_TYPE_OUTPUT;
+        case SignalType::INOUT: return hwda::kdb::SIGNAL_TYPE_INOUT;
+        default: return hwda::kdb::SIGNAL_TYPE_UNKNOWN;
+    }
+}
+
+static SignalType fromProtoSignalType(hwda::kdb::SignalType type) {
+    switch (type) {
+        case hwda::kdb::SIGNAL_TYPE_WIRE: return SignalType::WIRE;
+        case hwda::kdb::SIGNAL_TYPE_REG: return SignalType::REG;
+        case hwda::kdb::SIGNAL_TYPE_LOGIC: return SignalType::LOGIC;
+        case hwda::kdb::SIGNAL_TYPE_BIT: return SignalType::BIT;
+        case hwda::kdb::SIGNAL_TYPE_INTEGER: return SignalType::INTEGER;
+        case hwda::kdb::SIGNAL_TYPE_REAL: return SignalType::REAL;
+        case hwda::kdb::SIGNAL_TYPE_PARAMETER: return SignalType::PARAMETER;
+        case hwda::kdb::SIGNAL_TYPE_LOCALPARAM: return SignalType::LOCALPARAM;
+        case hwda::kdb::SIGNAL_TYPE_INPUT: return SignalType::INPUT;
+        case hwda::kdb::SIGNAL_TYPE_OUTPUT: return SignalType::OUTPUT;
+        case hwda::kdb::SIGNAL_TYPE_INOUT: return SignalType::INOUT;
+        default: return SignalType::UNKNOWN;
+    }
+}
+
+static hwda::kdb::PortDirection toProtoPortDirection(PortDirection dir) {
+    switch (dir) {
+        case PortDirection::INPUT: return hwda::kdb::PORT_DIR_INPUT;
+        case PortDirection::OUTPUT: return hwda::kdb::PORT_DIR_OUTPUT;
+        case PortDirection::INOUT: return hwda::kdb::PORT_DIR_INOUT;
+        default: return hwda::kdb::PORT_DIR_UNKNOWN;
+    }
+}
+
+static PortDirection fromProtoPortDirection(hwda::kdb::PortDirection dir) {
+    switch (dir) {
+        case hwda::kdb::PORT_DIR_INPUT: return PortDirection::INPUT;
+        case hwda::kdb::PORT_DIR_OUTPUT: return PortDirection::OUTPUT;
+        case hwda::kdb::PORT_DIR_INOUT: return PortDirection::INOUT;
+        default: return PortDirection::UNKNOWN;
+    }
+}
+
+void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
+    // 设置头部信息
+    auto* header = kdb->mutable_header();
+    header->set_version("1.0");
+    header->set_project_name(projectName_);
+    
+    auto now = std::chrono::system_clock::now();
+    auto time = std::chrono::system_clock::to_time_t(now);
+    std::stringstream ss;
+    ss << std::put_time(std::localtime(&time), "%Y-%m-%d %H:%M:%S");
+    header->set_created_at(ss.str());
+    
+    header->set_source_path(sourcePath_);
+    header->set_module_count(modules_.size());
+    header->set_signal_count(signals_.size());
+    header->set_file_count(files_.size());
+    
+    // 添加源文件
+    for (const auto& file : files_) {
+        auto* protoFile = kdb->add_files();
+        protoFile->set_id(file->id);
+        protoFile->set_path(file->path);
+        protoFile->set_hash(file->hash);
+        protoFile->set_line_count(file->lineCount);
     }
     
-    for (size_t i = 0; i < modules_.size(); ++i) {
-        moduleIndex_[modules_[i].name] = i;
+    // 添加模块
+    for (const auto& mod : modules_) {
+        auto* protoMod = kdb->add_modules();
+        protoMod->set_id(mod->id);
+        protoMod->set_name(mod->name);
+        protoMod->set_full_name(mod->fullName);
+        protoMod->set_parent_module_id(mod->parentModuleId);
+        protoMod->set_file_id(mod->fileId);
+        protoMod->set_description(mod->description);
+        
+        // 源代码位置
+        if (mod->declaration.fileId != 0) {
+            auto* decl = protoMod->mutable_declaration();
+            decl->set_file_id(mod->declaration.fileId);
+            decl->set_line(mod->declaration.line);
+            decl->set_column_start(mod->declaration.columnStart);
+            decl->set_column_end(mod->declaration.columnEnd);
+        }
+        
+        // 端口
+        for (const auto& port : mod->ports) {
+            auto* protoPort = protoMod->add_ports();
+            protoPort->set_id(port.id);
+            protoPort->set_name(port.name);
+            protoPort->set_direction(toProtoPortDirection(port.direction));
+            protoPort->set_type(toProtoSignalType(port.type));
+            protoPort->set_msb(port.msb);
+            protoPort->set_lsb(port.lsb);
+            protoPort->set_is_vector(port.isVector);
+            protoPort->set_connected_signal_id(port.connectedSignalId);
+        }
+        
+        // 信号ID列表
+        for (uint64_t sigId : mod->signalIds) {
+            protoMod->add_signal_ids(sigId);
+        }
+    }
+    
+    // 添加信号
+    for (const auto& sig : signals_) {
+        auto* protoSig = kdb->add_signals();
+        protoSig->set_id(sig->id);
+        protoSig->set_name(sig->name);
+        protoSig->set_full_name(sig->fullName);
+        protoSig->set_type(toProtoSignalType(sig->type));
+        protoSig->set_msb(sig->msb);
+        protoSig->set_lsb(sig->lsb);
+        protoSig->set_is_vector(sig->isVector);
+        protoSig->set_parent_module_id(sig->parentModuleId);
+        protoSig->set_description(sig->description);
+        
+        // 源代码位置
+        if (sig->declaration.fileId != 0) {
+            auto* decl = protoSig->mutable_declaration();
+            decl->set_file_id(sig->declaration.fileId);
+            decl->set_line(sig->declaration.line);
+            decl->set_column_start(sig->declaration.columnStart);
+            decl->set_column_end(sig->declaration.columnEnd);
+        }
+        
+        // 驱动和负载
+        for (uint64_t driverId : sig->driverSignalIds) {
+            protoSig->add_driver_signal_ids(driverId);
+        }
+        for (uint64_t loadId : sig->loadSignalIds) {
+            protoSig->add_load_signal_ids(loadId);
+        }
+    }
+    
+    // 设计层次
+    auto* hierarchy = kdb->mutable_hierarchy();
+    hierarchy->set_top_module_id(topModuleId_);
+    for (const auto& mod : modules_) {
+        hierarchy->add_module_ids(mod->id);
     }
 }
 
-std::vector<uint64_t> KdbBuilder::findDrivers(const std::string& signalPath) const {
-    std::vector<uint64_t> drivers;
-    for (const auto& conn : connections_) {
-        if (conn.loadSignal == signalPath) {
-            auto it = signalIndex_.find(conn.driverSignal);
-            if (it != signalIndex_.end()) {
-                drivers.push_back(it->second);
-            }
-        }
+void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
+    // 清理现有数据
+    files_.clear();
+    modules_.clear();
+    signals_.clear();
+    instances_.clear();
+    filePathToId_.clear();
+    moduleNameToId_.clear();
+    signalFullNameToId_.clear();
+    fileIdToIndex_.clear();
+    moduleIdToIndex_.clear();
+    signalIdToIndex_.clear();
+    
+    // 恢复头部信息
+    projectName_ = kdb.header().project_name();
+    sourcePath_ = kdb.header().source_path();
+    
+    // 恢复源文件
+    for (const auto& protoFile : kdb.files()) {
+        auto file = std::make_unique<SourceFileInfo>();
+        file->id = protoFile.id();
+        file->path = protoFile.path();
+        file->hash = protoFile.hash();
+        file->lineCount = protoFile.line_count();
+        
+        nextFileId_ = std::max(nextFileId_, file->id + 1);
+        filePathToId_[file->path] = file->id;
+        fileIdToIndex_[file->id] = files_.size();
+        files_.push_back(std::move(file));
     }
-    return drivers;
+    
+    // 恢复模块
+    for (const auto& protoMod : kdb.modules()) {
+        auto mod = std::make_unique<ModuleInfo>();
+        mod->id = protoMod.id();
+        mod->name = protoMod.name();
+        mod->fullName = protoMod.full_name();
+        mod->parentModuleId = protoMod.parent_module_id();
+        mod->fileId = protoMod.file_id();
+        mod->description = protoMod.description();
+        
+        // 源代码位置
+        if (protoMod.has_declaration()) {
+            mod->declaration.fileId = protoMod.declaration().file_id();
+            mod->declaration.line = protoMod.declaration().line();
+            mod->declaration.columnStart = protoMod.declaration().column_start();
+            mod->declaration.columnEnd = protoMod.declaration().column_end();
+        }
+        
+        // 端口
+        for (const auto& protoPort : protoMod.ports()) {
+            PortInfo port;
+            port.id = protoPort.id();
+            port.name = protoPort.name();
+            port.direction = fromProtoPortDirection(protoPort.direction());
+            port.type = fromProtoSignalType(protoPort.type());
+            port.msb = protoPort.msb();
+            port.lsb = protoPort.lsb();
+            port.isVector = protoPort.is_vector();
+            port.connectedSignalId = protoPort.connected_signal_id();
+            mod->ports.push_back(port);
+        }
+        
+        // 信号ID列表
+        for (uint64_t sigId : protoMod.signal_ids()) {
+            mod->signalIds.push_back(sigId);
+        }
+        
+        nextModuleId_ = std::max(nextModuleId_, mod->id + 1);
+        moduleNameToId_[mod->fullName] = mod->id;
+        moduleIdToIndex_[mod->id] = modules_.size();
+        modules_.push_back(std::move(mod));
+    }
+    
+    // 恢复信号
+    for (const auto& protoSig : kdb.signals()) {
+        auto sig = std::make_unique<SignalInfo>();
+        sig->id = protoSig.id();
+        sig->name = protoSig.name();
+        sig->fullName = protoSig.full_name();
+        sig->type = fromProtoSignalType(protoSig.type());
+        sig->msb = protoSig.msb();
+        sig->lsb = protoSig.lsb();
+        sig->isVector = protoSig.is_vector();
+        sig->parentModuleId = protoSig.parent_module_id();
+        sig->description = protoSig.description();
+        
+        // 源代码位置
+        if (protoSig.has_declaration()) {
+            sig->declaration.fileId = protoSig.declaration().file_id();
+            sig->declaration.line = protoSig.declaration().line();
+            sig->declaration.columnStart = protoSig.declaration().column_start();
+            sig->declaration.columnEnd = protoSig.declaration().column_end();
+        }
+        
+        // 驱动和负载
+        for (uint64_t driverId : protoSig.driver_signal_ids()) {
+            sig->driverSignalIds.push_back(driverId);
+        }
+        for (uint64_t loadId : protoSig.load_signal_ids()) {
+            sig->loadSignalIds.push_back(loadId);
+        }
+        
+        nextSignalId_ = std::max(nextSignalId_, sig->id + 1);
+        signalFullNameToId_[sig->fullName] = sig->id;
+        signalIdToIndex_[sig->id] = signals_.size();
+        signals_.push_back(std::move(sig));
+    }
+    
+    // 恢复设计层次
+    topModuleId_ = kdb.hierarchy().top_module_id();
 }
 
-std::vector<uint64_t> KdbBuilder::findLoads(const std::string& signalPath) const {
-    std::vector<uint64_t> loads;
-    for (const auto& conn : connections_) {
-        if (conn.driverSignal == signalPath) {
-            auto it = signalIndex_.find(conn.loadSignal);
-            if (it != signalIndex_.end()) {
-                loads.push_back(it->second);
-            }
-        }
+bool KdbBuilder::serializeToFile(const std::string& filepath) const {
+    hwda::kdb::KnowledgeBase kdb;
+    toProtobuf(&kdb);
+    
+    std::ofstream output(filepath, std::ios::binary);
+    if (!output) {
+        return false;
     }
-    return loads;
+    
+    return kdb.SerializeToOstream(&output);
 }
+
+bool KdbBuilder::serializeToString(std::string* output) const {
+    hwda::kdb::KnowledgeBase kdb;
+    toProtobuf(&kdb);
+    return kdb.SerializeToString(output);
+}
+
+bool KdbBuilder::deserializeFromFile(const std::string& filepath) {
+    std::ifstream input(filepath, std::ios::binary);
+    if (!input) {
+        return false;
+    }
+    
+    hwda::kdb::KnowledgeBase kdb;
+    if (!kdb.ParseFromIstream(&input)) {
+        return false;
+    }
+    
+    fromProtobuf(kdb);
+    return true;
+}
+
+bool KdbBuilder::deserializeFromString(const std::string& data) {
+    hwda::kdb::KnowledgeBase kdb;
+    if (!kdb.ParseFromString(data)) {
+        return false;
+    }
+    
+    fromProtobuf(kdb);
+    return true;
+}
+
+#else // !USE_PROTOBUF
+
+bool KdbBuilder::serializeToFile(const std::string& filepath) const {
+    // 未启用Protobuf时的占位实现
+    (void)filepath;
+    return false;
+}
+
+bool KdbBuilder::serializeToString(std::string* output) const {
+    (void)output;
+    return false;
+}
+
+bool KdbBuilder::deserializeFromFile(const std::string& filepath) {
+    (void)filepath;
+    return false;
+}
+
+bool KdbBuilder::deserializeFromString(const std::string& data) {
+    (void)data;
+    return false;
+}
+
+#endif // USE_PROTOBUF
 
 }
 }

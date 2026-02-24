@@ -1,6 +1,7 @@
 #include "parser.h"
 #include "kdb_builder.h"
 #include "kdb_serializer.h"
+#include "surelog_parser.h"
 #include <iostream>
 #include <fstream>
 #include <getopt.h>
@@ -13,7 +14,10 @@ void printUsage(const char* progName) {
               << "  -o, --output <path>   Output KDB file path (default: design.kdb)\n"
               << "  -I, --include <path>  Include directory\n"
               << "  -D, --define <macro>  Define macro\n"
+              << "  -t, --top <module>    Top module name\n"
               << "  -v, --verbose         Verbose output\n"
+              << "  -s, --surelog         Use Surelog parser (default)\n"
+              << "  -b, --builtin         Use built-in parser\n"
               << "  -h, --help            Show this help\n";
 }
 
@@ -22,19 +26,24 @@ int main(int argc, char* argv[]) {
     std::vector<std::string> includeDirs;
     std::vector<std::string> defines;
     std::vector<std::string> inputFiles;
+    std::string topModule;
     bool verbose = false;
+    bool useSurelog = true;
     
     static struct option longOptions[] = {
         {"output", required_argument, nullptr, 'o'},
         {"include", required_argument, nullptr, 'I'},
         {"define", required_argument, nullptr, 'D'},
+        {"top", required_argument, nullptr, 't'},
         {"verbose", no_argument, nullptr, 'v'},
+        {"surelog", no_argument, nullptr, 's'},
+        {"builtin", no_argument, nullptr, 'b'},
         {"help", no_argument, nullptr, 'h'},
         {nullptr, 0, nullptr, 0}
     };
     
     int opt;
-    while ((opt = getopt_long(argc, argv, "o:I:D:vh", longOptions, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "o:I:D:t:vsbh", longOptions, nullptr)) != -1) {
         switch (opt) {
             case 'o':
                 outputPath = optarg;
@@ -45,8 +54,17 @@ int main(int argc, char* argv[]) {
             case 'D':
                 defines.push_back(optarg);
                 break;
+            case 't':
+                topModule = optarg;
+                break;
             case 'v':
                 verbose = true;
+                break;
+            case 's':
+                useSurelog = true;
+                break;
+            case 'b':
+                useSurelog = false;
                 break;
             case 'h':
             default:
@@ -72,50 +90,67 @@ int main(int argc, char* argv[]) {
         }
     }
     
-    Parser parser;
-    if (!parser.parseFiles(inputFiles)) {
-        std::cerr << "Parse error: " << parser.getError() << "\n";
-        return 1;
-    }
-    
-    if (verbose) {
-        std::cout << "Found " << parser.getModules().size() << " modules\n";
-        std::cout << "Found " << parser.getSignals().size() << " signals\n";
-        std::cout << "Found " << parser.getConnections().size() << " connections\n";
-    }
-    
     KdbBuilder builder;
+    builder.setProjectName("hwda_design");
     
-    for (const auto& module : parser.getModules()) {
-        builder.addModule(module);
-    }
-    
-    for (const auto& signal : parser.getSignals()) {
-        builder.addSignal(signal, "");
-    }
-    
-    for (const auto& conn : parser.getConnections()) {
-        builder.addConnection(conn);
-    }
-    
-    for (const auto& file : inputFiles) {
-        std::ifstream ifs(file);
-        if (ifs.is_open()) {
-            std::string content((std::istreambuf_iterator<char>(ifs)),
-                               std::istreambuf_iterator<char>());
-            builder.addSourceFile(file, content);
+    if (useSurelog) {
+#ifdef USE_SURELOG
+        SurelogParser surelogParser;
+        surelogParser.setCompileOptions(verbose, false, false);
+        if (!topModule.empty()) {
+            surelogParser.setTopModule(topModule);
+        }
+        
+        auto result = surelogParser.parseFiles(inputFiles, includeDirs, defines);
+        if (!result.success) {
+            std::cerr << "Surelog parse error: " << result.errorMessage << "\n";
+            return 1;
+        }
+        
+        if (verbose) {
+            std::cout << "Surelog parsed successfully\n";
+            std::cout << "  Modules: " << result.moduleCount << "\n";
+        }
+        
+        if (!surelogParser.buildKnowledgeBase(builder)) {
+            std::cerr << "Failed to build knowledge base: " << surelogParser.getLastError() << "\n";
+            return 1;
+        }
+        
+        if (verbose) {
+            std::cout << "Knowledge base built successfully\n";
+            std::cout << "  Total modules: " << builder.getModuleCount() << "\n";
+            std::cout << "  Total signals: " << builder.getSignalCount() << "\n";
+        }
+#else
+        std::cerr << "Error: Surelog support not compiled in\n";
+        return 1;
+#endif
+    } else {
+        // 使用内置解析器
+        Parser parser;
+        if (!parser.parseFiles(inputFiles)) {
+            std::cerr << "Parse error: " << parser.getError() << "\n";
+            return 1;
+        }
+        
+        if (verbose) {
+            std::cout << "Found " << parser.getModules().size() << " modules\n";
+            std::cout << "Found " << parser.getSignals().size() << " signals\n";
+            std::cout << "Found " << parser.getConnections().size() << " connections\n";
         }
     }
     
-    builder.buildIndices();
-    
-    KdbSerializer serializer;
-    if (!serializer.serialize(builder, outputPath)) {
+    // 序列化知识库
+    if (!builder.serializeToFile(outputPath)) {
         std::cerr << "Failed to serialize KDB\n";
         return 1;
     }
     
     std::cout << "Generated KDB: " << outputPath << "\n";
+    std::cout << "  Modules: " << builder.getModuleCount() << "\n";
+    std::cout << "  Signals: " << builder.getSignalCount() << "\n";
+    std::cout << "  Files: " << builder.getFileCount() << "\n";
     
     return 0;
 }

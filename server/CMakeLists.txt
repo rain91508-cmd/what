@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.20)
 
 project(hwda_server VERSION 1.0.0 LANGUAGES CXX)
 
@@ -31,7 +31,7 @@ add_library(hwda_server_lib STATIC
 target_include_directories(hwda_server_lib
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/../interpreter/include
+        ${CMAKE_SOURCE_DIR}/interpreter/include
 )
 
 target_link_libraries(hwda_server_lib
@@ -46,6 +46,22 @@ if(OpenSSL_FOUND)
     target_compile_definitions(hwda_server_lib PUBLIC USE_OPENSSL)
 endif()
 
+find_package(Zstd QUIET)
+if(Zstd_FOUND)
+    target_link_libraries(hwda_server_lib PUBLIC zstd::zstd)
+else()
+    message(STATUS "zstd not found, will use system version or find alternative")
+endif()
+
+if(TARGET surelog)
+    target_link_libraries(hwda_server_lib PUBLIC surelog)
+    target_include_directories(hwda_server_lib PUBLIC
+        ${CMAKE_SOURCE_DIR}/third_party/Surelog-1.86/include
+        ${CMAKE_SOURCE_DIR}/third_party/Surelog-1.86/third_party/UHDM/include
+    )
+    message(STATUS "Surelog linked to server")
+endif()
+
 add_executable(hwda_server src/main.cpp)
 target_link_libraries(hwda_server PRIVATE hwda_server_lib)
 
@@ -56,3 +72,5 @@ install(TARGETS hwda_server
 install(FILES ${SERVER_HEADERS}
     DESTINATION include/hwda/server
 )
+
+message(STATUS "Server configured with Surelog integration")

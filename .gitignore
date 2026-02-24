@@ -41,3 +41,9 @@ Thumbs.db
 *.fst
 *.evcd
 test_*/
+
+# Third-party build artifacts
+third_party/Surelog/build/
+third_party/Surelog/third_party/**/build/
+third_party/**/CMakeCache.txt
+third_party/**/CMakeFiles/
