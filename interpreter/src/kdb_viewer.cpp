@@ -501,9 +501,122 @@ void printJson(const KdbBuilder& builder) {
     for (const auto* module : modules) {
         if (!first) std::cout << ",\n";
         first = false;
-        std::cout << "    {\"id\": " << module->id << ", \"name\": \"" << module->name 
-                  << "\", \"ports\": " << module->ports.size() 
-                  << ", \"signals\": " << module->signals.size() << "}";
+        std::cout << "    {\n";
+        std::cout << "      \"id\": " << module->id << ",\n";
+        std::cout << "      \"name\": \"" << module->name << "\",\n";
+        std::cout << "      \"full_name\": \"" << module->fullName << "\",\n";
+        std::cout << "      \"parent_module_id\": " << module->parentModuleId << ",\n";
+        std::cout << "      \"file_id\": " << module->fileId << ",\n";
+        std::cout << "      \"declaration\": {\n";
+        std::cout << "        \"file_id\": " << module->declaration.fileId << ",\n";
+        std::cout << "        \"line\": " << module->declaration.line << ",\n";
+        std::cout << "        \"column_start\": " << module->declaration.columnStart << ",\n";
+        std::cout << "        \"column_end\": " << module->declaration.columnEnd << "\n";
+        std::cout << "      },\n";
+        std::cout << "      \"definition_start\": {\n";
+        std::cout << "        \"file_id\": " << module->definitionStart.fileId << ",\n";
+        std::cout << "        \"line\": " << module->definitionStart.line << ",\n";
+        std::cout << "        \"column_start\": " << module->definitionStart.columnStart << ",\n";
+        std::cout << "        \"column_end\": " << module->definitionStart.columnEnd << "\n";
+        std::cout << "      },\n";
+        std::cout << "      \"definition_end\": {\n";
+        std::cout << "        \"file_id\": " << module->definitionEnd.fileId << ",\n";
+        std::cout << "        \"line\": " << module->definitionEnd.line << ",\n";
+        std::cout << "        \"column_start\": " << module->definitionEnd.columnStart << ",\n";
+        std::cout << "        \"column_end\": " << module->definitionEnd.columnEnd << "\n";
+        std::cout << "      },\n";
+        
+        std::cout << "      \"ports\": [\n";
+        bool firstPort = true;
+        for (const auto& port : module->ports) {
+            if (!firstPort) std::cout << ",\n";
+            firstPort = false;
+            std::cout << "        {\n";
+            std::cout << "          \"id\": " << port.id << ",\n";
+            std::cout << "          \"name\": \"" << port.name << "\",\n";
+            std::cout << "          \"direction\": \"" << portDirectionToString(port.direction) << "\",\n";
+            std::cout << "          \"type\": \"" << signalTypeToString(port.type) << "\",\n";
+            std::cout << "          \"msb\": " << port.msb << ",\n";
+            std::cout << "          \"lsb\": " << port.lsb << ",\n";
+            std::cout << "          \"connected_signal_id\": " << port.connectedSignalId << ",\n";
+            std::cout << "          \"declaration\": {\n";
+            std::cout << "            \"file_id\": " << port.declaration.fileId << ",\n";
+            std::cout << "            \"line\": " << port.declaration.line << ",\n";
+            std::cout << "            \"column_start\": " << port.declaration.columnStart << ",\n";
+            std::cout << "            \"column_end\": " << port.declaration.columnEnd << "\n";
+            std::cout << "          }\n";
+            std::cout << "        }";
+        }
+        std::cout << "\n      ],\n";
+        
+        std::cout << "      \"signals\": [\n";
+        bool firstModuleSignal = true;
+        for (const auto& signal : module->signals) {
+            if (!firstModuleSignal) std::cout << ",\n";
+            firstModuleSignal = false;
+            std::cout << "        {\n";
+            std::cout << "          \"id\": " << signal.id << ",\n";
+            std::cout << "          \"name\": \"" << signal.name << "\",\n";
+            std::cout << "          \"full_name\": \"" << signal.fullName << "\",\n";
+            std::cout << "          \"type\": \"" << signalTypeToString(signal.type) << "\",\n";
+            std::cout << "          \"msb\": " << signal.msb << ",\n";
+            std::cout << "          \"lsb\": " << signal.lsb << ",\n";
+            std::cout << "          \"parent_module_id\": " << signal.parentModuleId << ",\n";
+            std::cout << "          \"declaration\": {\n";
+            std::cout << "            \"file_id\": " << signal.declaration.fileId << ",\n";
+            std::cout << "            \"line\": " << signal.declaration.line << ",\n";
+            std::cout << "            \"column_start\": " << signal.declaration.columnStart << ",\n";
+            std::cout << "            \"column_end\": " << signal.declaration.columnEnd << "\n";
+            std::cout << "          },\n";
+            std::cout << "          \"driver_signal_ids\": [";
+            for (size_t i = 0; i < signal.driverSignalIds.size(); ++i) {
+                if (i > 0) std::cout << ", ";
+                std::cout << signal.driverSignalIds[i];
+            }
+            std::cout << "],\n";
+            std::cout << "          \"load_signal_ids\": [";
+            for (size_t i = 0; i < signal.loadSignalIds.size(); ++i) {
+                if (i > 0) std::cout << ", ";
+                std::cout << signal.loadSignalIds[i];
+            }
+            std::cout << "]\n";
+            std::cout << "        }";
+        }
+        std::cout << "\n      ],\n";
+        
+        std::cout << "      \"instances\": [\n";
+        bool firstInstance = true;
+        for (const auto& instance : module->instances) {
+            if (!firstInstance) std::cout << ",\n";
+            firstInstance = false;
+            std::cout << "        {\n";
+            std::cout << "          \"id\": " << instance.id << ",\n";
+            std::cout << "          \"name\": \"" << instance.name << "\",\n";
+            std::cout << "          \"module_def_id\": " << instance.moduleDefId << ",\n";
+            std::cout << "          \"parent_module_id\": " << instance.parentModuleId << ",\n";
+            std::cout << "          \"declaration\": {\n";
+            std::cout << "            \"file_id\": " << instance.declaration.fileId << ",\n";
+            std::cout << "            \"line\": " << instance.declaration.line << ",\n";
+            std::cout << "            \"column_start\": " << instance.declaration.columnStart << ",\n";
+            std::cout << "            \"column_end\": " << instance.declaration.columnEnd << "\n";
+            std::cout << "          },\n";
+            std::cout << "          \"connections\": [\n";
+            bool firstConnection = true;
+            for (const auto& conn : instance.connections) {
+                if (!firstConnection) std::cout << ",\n";
+                firstConnection = false;
+                std::cout << "            {\n";
+                std::cout << "              \"port_id\": " << conn.portId << ",\n";
+                std::cout << "              \"connection_expr\": \"" << conn.connectionExpr << "\",\n";
+                std::cout << "              \"connected_signal_id\": " << conn.connectedSignalId << "\n";
+                std::cout << "            }";
+            }
+            std::cout << "\n          ]\n";
+            std::cout << "        }";
+        }
+        std::cout << "\n      ]\n";
+        
+        std::cout << "    }";
     }
     std::cout << "\n  ],\n";
     
@@ -512,8 +625,33 @@ void printJson(const KdbBuilder& builder) {
     for (const auto* signal : signals) {
         if (!first) std::cout << ",\n";
         first = false;
-        std::cout << "    {\"id\": " << signal->id << ", \"name\": \"" << signal->name 
-                  << "\", \"type\": \"" << signalTypeToString(signal->type) << "\"}";
+        std::cout << "    {\n";
+        std::cout << "      \"id\": " << signal->id << ",\n";
+        std::cout << "      \"name\": \"" << signal->name << "\",\n";
+        std::cout << "      \"full_name\": \"" << signal->fullName << "\",\n";
+        std::cout << "      \"type\": \"" << signalTypeToString(signal->type) << "\",\n";
+        std::cout << "      \"msb\": " << signal->msb << ",\n";
+        std::cout << "      \"lsb\": " << signal->lsb << ",\n";
+        std::cout << "      \"parent_module_id\": " << signal->parentModuleId << ",\n";
+        std::cout << "      \"declaration\": {\n";
+        std::cout << "        \"file_id\": " << signal->declaration.fileId << ",\n";
+        std::cout << "        \"line\": " << signal->declaration.line << ",\n";
+        std::cout << "        \"column_start\": " << signal->declaration.columnStart << ",\n";
+        std::cout << "        \"column_end\": " << signal->declaration.columnEnd << "\n";
+        std::cout << "      },\n";
+        std::cout << "      \"driver_signal_ids\": [";
+        for (size_t i = 0; i < signal->driverSignalIds.size(); ++i) {
+            if (i > 0) std::cout << ", ";
+            std::cout << signal->driverSignalIds[i];
+        }
+        std::cout << "],\n";
+        std::cout << "      \"load_signal_ids\": [";
+        for (size_t i = 0; i < signal->loadSignalIds.size(); ++i) {
+            if (i > 0) std::cout << ", ";
+            std::cout << signal->loadSignalIds[i];
+        }
+        std::cout << "]\n";
+        std::cout << "    }";
     }
     std::cout << "\n  ]\n";
     
