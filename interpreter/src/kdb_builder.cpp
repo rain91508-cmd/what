@@ -558,8 +558,7 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
                 auto* protoDriverLine = protoSig->add_driver_lines();
                 protoDriverLine->set_file_id(driverLine.fileId);
                 protoDriverLine->set_line(driverLine.line);
-                protoDriverLine->set_column_start(driverLine.columnStart);
-                protoDriverLine->set_column_end(driverLine.columnEnd);
+                // Note: column_start and column_end removed - not needed for driver location
             }
         }
     }
@@ -663,8 +662,7 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
                 DriverLocation driverLine;
                 driverLine.fileId = protoDriverLine.file_id();
                 driverLine.line = protoDriverLine.line();
-                driverLine.columnStart = protoDriverLine.column_start();
-                driverLine.columnEnd = protoDriverLine.column_end();
+                // Note: column_start and column_end removed - not needed for driver location
                 sig.driverLines.push_back(driverLine);
             }
             

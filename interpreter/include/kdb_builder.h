@@ -76,8 +76,7 @@ struct KdbSourceLocation {
 struct DriverLocation {
     uint32_t fileId;
     uint32_t line;
-    uint32_t columnStart;
-    uint32_t columnEnd;
+    // Note: columnStart and columnEnd removed - not needed for driver location
 };
 
 
