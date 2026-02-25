@@ -369,25 +369,34 @@ bool SurelogParser::buildKnowledgeBase(KdbBuilder& builder) {
         // Find all modules and identify top modules
         auto modules = builder.getAllModules();
         
-        // No parent (parentModuleId == 0) AND is instance are top modules, same fullname only add once
-        std::unordered_set<std::string> addedTopModules;
-        for (const auto* mod : modules) {
-            if (mod->parentModuleId == 0 && mod->isInstance) {
-                if (addedTopModules.find(mod->fullName) == addedTopModules.end()) {
-                    addedTopModules.insert(mod->fullName);
-                    builder.addHierarchy(mod->id);
+        // If user specified a top module, use it
+        if (!topModuleName_.empty()) {
+            const ModuleInfo* topModule = builder.findModuleByName(topModuleName_);
+            if (topModule) {
+                builder.addHierarchy(topModule->id);
+            }
+        } else {
+            // Otherwise, find top modules: modules with no parent (parentModuleId == 0) that are definitions (not instances)
+            // This follows the Surelog convention where top level modules are module definitions
+            std::unordered_set<std::string> addedTopModules;
+            for (const auto* mod : modules) {
+                if (mod->parentModuleId == 0 && !mod->isInstance) {
+                    if (addedTopModules.find(mod->fullName) == addedTopModules.end()) {
+                        addedTopModules.insert(mod->fullName);
+                        builder.addHierarchy(mod->id);
+                    }
                 }
             }
-        }
-        
-        // If no top modules found (unlikely), fall back to all parentModuleId == 0 with is instance
-        if (builder.getTopModuleIds().empty()) {
-            std::unordered_set<std::string> fallbackAddedTopModules;
-            for (const auto* mod : modules) {
-                if (mod->parentModuleId == 0 && mod->isInstance) {
-                    if (fallbackAddedTopModules.find(mod->fullName) == fallbackAddedTopModules.end()) {
-                        fallbackAddedTopModules.insert(mod->fullName);
-                        builder.addHierarchy(mod->id);
+            
+            // If no top modules found, fall back to all parentModuleId == 0 (definitions)
+            if (builder.getTopModuleIds().empty()) {
+                std::unordered_set<std::string> fallbackAddedTopModules;
+                for (const auto* mod : modules) {
+                    if (mod->parentModuleId == 0 && !mod->isInstance) {
+                        if (fallbackAddedTopModules.find(mod->fullName) == fallbackAddedTopModules.end()) {
+                            fallbackAddedTopModules.insert(mod->fullName);
+                            builder.addHierarchy(mod->id);
+                        }
                     }
                 }
             }
