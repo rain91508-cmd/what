@@ -80,21 +80,8 @@ public:
                 SignalInfo signalInfo;
                 signalInfo.name = std::string(port->VpiName());
                 signalInfo.fullName = fullName + "." + signalInfo.name;
-                // Set appropriate type based on port direction
-                switch (convertPortDirection(port->VpiDirection())) {
-                    case PortDirection::INPUT:
-                        signalInfo.type = SignalType::INPUT;
-                        break;
-                    case PortDirection::OUTPUT:
-                        signalInfo.type = SignalType::OUTPUT;
-                        break;
-                    case PortDirection::INOUT:
-                        signalInfo.type = SignalType::INOUT;
-                        break;
-                    default:
-                        signalInfo.type = SignalType::WIRE;  // Default type for ports
-                        break;
-                }
+                // All ports default to WIRE type, direction is stored in direction field
+                signalInfo.type = SignalType::WIRE;
                 signalInfo.direction = convertPortDirection(port->VpiDirection());
                 signalInfo.parentModuleId = 0;  // Will be set after module is added
                 signalInfo.declaration = extractLocation(port);

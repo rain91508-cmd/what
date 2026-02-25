@@ -38,9 +38,6 @@ std::string signalTypeToString(SignalType type) {
         case SignalType::REAL: return "real";
         case SignalType::PARAMETER: return "parameter";
         case SignalType::LOCALPARAM: return "localparam";
-        case SignalType::INPUT: return "input";
-        case SignalType::OUTPUT: return "output";
-        case SignalType::INOUT: return "inout";
         default: return "unknown";
     }
 }

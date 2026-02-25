@@ -462,9 +462,6 @@ static hwda::kdb::SignalType toProtoSignalType(SignalType type) {
         case SignalType::REAL: return hwda::kdb::SIGNAL_TYPE_REAL;
         case SignalType::PARAMETER: return hwda::kdb::SIGNAL_TYPE_PARAMETER;
         case SignalType::LOCALPARAM: return hwda::kdb::SIGNAL_TYPE_LOCALPARAM;
-        case SignalType::INPUT: return hwda::kdb::SIGNAL_TYPE_INPUT;
-        case SignalType::OUTPUT: return hwda::kdb::SIGNAL_TYPE_OUTPUT;
-        case SignalType::INOUT: return hwda::kdb::SIGNAL_TYPE_INOUT;
         default: return hwda::kdb::SIGNAL_TYPE_UNKNOWN;
     }
 }
@@ -479,9 +476,6 @@ static SignalType fromProtoSignalType(hwda::kdb::SignalType type) {
         case hwda::kdb::SIGNAL_TYPE_REAL: return SignalType::REAL;
         case hwda::kdb::SIGNAL_TYPE_PARAMETER: return SignalType::PARAMETER;
         case hwda::kdb::SIGNAL_TYPE_LOCALPARAM: return SignalType::LOCALPARAM;
-        case hwda::kdb::SIGNAL_TYPE_INPUT: return SignalType::INPUT;
-        case hwda::kdb::SIGNAL_TYPE_OUTPUT: return SignalType::OUTPUT;
-        case hwda::kdb::SIGNAL_TYPE_INOUT: return SignalType::INOUT;
         default: return SignalType::UNKNOWN;
     }
 }

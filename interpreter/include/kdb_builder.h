@@ -29,10 +29,8 @@ enum class SignalType {
     INTEGER = 5,
     REAL = 6,
     PARAMETER = 7,
-    LOCALPARAM = 8,
-    INPUT = 9,
-    OUTPUT = 10,
-    INOUT = 11
+    LOCALPARAM = 8
+    // Note: INPUT, OUTPUT, INOUT removed - use PortDirection for direction
 };
 
 enum class PortDirection {

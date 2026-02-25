@@ -43,9 +43,8 @@ enum SignalType {
   SIGNAL_TYPE_REAL = 6;
   SIGNAL_TYPE_PARAMETER = 7;
   SIGNAL_TYPE_LOCALPARAM = 8;
-  SIGNAL_TYPE_INPUT = 9;
-  SIGNAL_TYPE_OUTPUT = 10;
-  SIGNAL_TYPE_INOUT = 11;
+  // Note: INPUT, OUTPUT, INOUT are removed
+  // Use PortDirection to represent signal direction
 }
 
 enum PortDirection {
