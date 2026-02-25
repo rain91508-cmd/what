@@ -21,9 +21,9 @@ message SourceFile {
   uint64 id = 1;
   string path = 2;
   string content = 3;
-  repeated SourceLink signal_links = 4;
+  repeated SourceLink signal_links = 4;  // Contains both port and internal signal links
   repeated SourceLink submod_links = 5;
-  repeated SourceLink port_links = 6;
+  // Note: port_links removed - ports are now stored in signals with direction != UNKNOWN
 }
 
 message SourceLocation {

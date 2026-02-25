@@ -146,23 +146,8 @@ bool KdbBuilder::addSubmodLink(uint64_t fileId, const SourceLinkInfo& link) {
     return true;
 }
 
-bool KdbBuilder::addPortLink(uint64_t fileId, uint32_t line, uint32_t columnStart,
-                              uint32_t columnEnd, uint64_t portId) {
-    SourceLinkInfo link;
-    link.line = line;
-    link.columnStart = columnStart;
-    link.columnEnd = columnEnd;
-    link.targetId = portId;
-    return addPortLink(fileId, link);
-}
-
-bool KdbBuilder::addPortLink(uint64_t fileId, const SourceLinkInfo& link) {
-    auto* file = const_cast<SourceFileInfo*>(findFileById(fileId));
-    if (!file) return false;
-    
-    file->portLinks.push_back(link);
-    return true;
-}
+// Note: addPortLink removed - port links are now stored in signalLinks
+// Use addSignalLink instead for both ports and internal signals
 
 std::string KdbBuilder::getSourceLine(uint64_t fileId, uint32_t line) const {
     const auto* file = findFileById(fileId);
@@ -280,15 +265,7 @@ std::vector<const SourceLinkInfo*> SourceFileInfo::getSubmodLinksAtLine(uint32_t
     return result;
 }
 
-std::vector<const SourceLinkInfo*> SourceFileInfo::getPortLinksAtLine(uint32_t line) const {
-    std::vector<const SourceLinkInfo*> result;
-    for (const auto& link : portLinks) {
-        if (link.line == line) {
-            result.push_back(&link);
-        }
-    }
-    return result;
-}
+// Note: getPortLinksAtLine removed - port links are now in signalLinks
 
 uint64_t SourceFileInfo::getLineCount() const {
     if (content.empty()) return 0;
@@ -530,14 +507,7 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
             protoLink->set_column_end(link.columnEnd);
             protoLink->set_target_id(link.targetId);
         }
-        
-        for (const auto& link : file->portLinks) {
-            auto* protoLink = protoFile->add_port_links();
-            protoLink->set_line(link.line);
-            protoLink->set_column_start(link.columnStart);
-            protoLink->set_column_end(link.columnEnd);
-            protoLink->set_target_id(link.targetId);
-        }
+        // Note: port_links removed - port links are now stored in signal_links
     }
     
     for (const auto& mod : modules_) {
@@ -630,15 +600,7 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
             link.targetId = protoLink.target_id();
             file->submodLinks.push_back(link);
         }
-        
-        for (const auto& protoLink : protoFile.port_links()) {
-            SourceLinkInfo link;
-            link.line = protoLink.line();
-            link.columnStart = protoLink.column_start();
-            link.columnEnd = protoLink.column_end();
-            link.targetId = protoLink.target_id();
-            file->portLinks.push_back(link);
-        }
+        // Note: port_links removed - port links are now stored in signal_links
         
         nextFileId_ = std::max(nextFileId_, file->id + 1);
         filePathToId_[file->path] = file->id;

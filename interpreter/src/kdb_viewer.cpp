@@ -121,8 +121,7 @@ void printFiles(const KdbBuilder& builder) {
             std::cout << "  [" << id << "] " << file->path 
                       << " (" << file->getLineCount() << " lines, " 
                       << file->signalLinks.size() << " signal links, "
-                      << file->submodLinks.size() << " submodule links, "
-                      << file->portLinks.size() << " port links)\n";
+                      << file->submodLinks.size() << " submodule links)\n";
         }
     }
 }

@@ -139,17 +139,8 @@ public:
             builder_.addSubmodLink(moduleInfo.declaration.fileId, link);
         }
         
-        // Add port links - now ports are stored in signals with direction != UNKNOWN
-        for (const auto& sig : moduleInfo.signals) {
-            if (sig.direction != PortDirection::UNKNOWN && sig.declaration.fileId != 0) {
-                SourceLinkInfo link;
-                link.line = sig.declaration.line;
-                link.columnStart = sig.declaration.columnStart;
-                link.columnEnd = sig.declaration.columnEnd;
-                link.targetId = sig.id;
-                builder_.addPortLink(sig.declaration.fileId, link);
-            }
-        }
+        // Note: port links are now stored in signalLinks
+        // Port signals (direction != UNKNOWN) will be added via addSignalLink below
         
         // Process nets/signals - skip if already added as port
         auto nets = object->Nets();
