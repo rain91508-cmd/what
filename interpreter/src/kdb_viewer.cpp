@@ -553,7 +553,16 @@ void printJson(const KdbBuilder& builder) {
                 if (i > 0) std::cout << ", ";
                 std::cout << signal.driverSignalIds[i];
             }
-            std::cout << "]\n";
+            std::cout << "],\n";
+            std::cout << "          \"driver_lines\": [\n";
+            for (size_t i = 0; i < signal.driverLines.size(); ++i) {
+                if (i > 0) std::cout << ",\n";
+                std::cout << "            {\n";
+                std::cout << "              \"file_id\": " << signal.driverLines[i].fileId << ",\n";
+                std::cout << "              \"line\": " << signal.driverLines[i].line << "\n";
+                std::cout << "            }";
+            }
+            std::cout << "\n          ]\n";
             // Note: load_signal_ids removed - not needed
             std::cout << "        }";
         }

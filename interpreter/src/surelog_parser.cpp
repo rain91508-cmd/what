@@ -13,6 +13,7 @@
 #include <fstream>
 #include <sstream>
 #include <unordered_set>
+#include <unordered_map>
 
 namespace hwda {
 namespace interpreter {
@@ -20,6 +21,12 @@ namespace interpreter {
 // Forward declaration of helper function for bit width extraction
 static void extractBitWidthFromUhdmObject(UHDM::BaseClass* uhdmObject, uint32_t& msb, 
                                           uint32_t& lsb, bool& isVector);
+
+// Structure to track driver information
+struct DriverInfo {
+    uint64_t driverSignalId;
+    KdbSourceLocation location;
+};
 
 // VpiListener to build KDB
 class KdbBuildListener : public UHDM::VpiListener {
@@ -38,6 +45,11 @@ public:
                   << "', defName='" << defName 
                   << "', fullName='" << fullName << "'\n";
         std::cerr << "DEBUG:   currentModuleStack_ size=" << currentModuleStack_.size() << "\n";
+        
+        // Clear driver tracking for new module
+        currentModuleDrivers_.clear();
+        currentModuleSignalMap_.clear();
+        currentModuleInstances_.clear();
         
         ModuleInfo moduleInfo;
         moduleInfo.id = 0;
@@ -92,6 +104,8 @@ public:
                 
                 // Add signal to module
                 moduleInfo.signals.push_back(signalInfo);
+                // Add to signal map for driver tracking
+                currentModuleSignalMap_[signalInfo.fullName] = 0; // ID will be set later
             }
         }
         
@@ -139,13 +153,16 @@ public:
             builder_.addSubmodLink(moduleInfo.declaration.fileId, link);
         }
         
-        // Add signal links for port signals (direction != UNKNOWN)
+        // Update signal map with actual signal IDs for ports
         // These were added to moduleInfo.signals during port processing
         for (const auto& sig : moduleInfo.signals) {
-            if (sig.direction != PortDirection::UNKNOWN && sig.declaration.fileId != 0) {
-                // Find the signal ID from the builder
-                const SignalInfo* addedSignal = builder_.findSignalByName(sig.fullName);
-                if (addedSignal) {
+            // Find the signal ID from the builder and update the map
+            const SignalInfo* addedSignal = builder_.findSignalByName(sig.fullName);
+            if (addedSignal) {
+                currentModuleSignalMap_[sig.fullName] = addedSignal->id;
+                
+                // Add signal links for port signals (direction != UNKNOWN)
+                if (sig.direction != PortDirection::UNKNOWN && sig.declaration.fileId != 0) {
                     SourceLinkInfo link;
                     link.line = sig.declaration.line;
                     link.columnStart = 0;  // Note: column info removed from KdbSourceLocation
@@ -187,6 +204,9 @@ public:
                 uint64_t signalId = builder_.addSignal(moduleId, signalInfo);
                 totalSignals_++;
                 
+                // Update signal map with actual ID
+                currentModuleSignalMap_[signalInfo.fullName] = signalId;
+                
                 // Add signal link
                 if (signalInfo.declaration.fileId != 0) {
                     SourceLinkInfo link;
@@ -213,6 +233,9 @@ public:
                 uint64_t signalId = builder_.addSignal(moduleId, signalInfo);
                 totalSignals_++;
                 
+                // Update signal map with actual ID
+                currentModuleSignalMap_[signalInfo.fullName] = signalId;
+                
                 // Add signal link for parameter
                 if (signalInfo.declaration.fileId != 0) {
                     SourceLinkInfo link;
@@ -224,6 +247,22 @@ public:
                 }
             }
         }
+        
+        // Process module instances for cross-module driver tracking
+        auto modules = object->Modules();
+        if (modules) {
+            for (auto* mod : *modules) {
+                if (!mod) continue;
+                std::string instName = std::string(mod->VpiName());
+                std::string instFullName = std::string(mod->VpiFullName());
+                if (!instName.empty()) {
+                    currentModuleInstances_.push_back({instFullName, 0}); // moduleId will be set later
+                }
+            }
+        }
+        
+        // Process continuous assignments to find drivers
+        processAssignStatements(object);
     }
     
     void leaveModule_inst(const UHDM::module_inst* object, vpiHandle handle) override {
@@ -231,9 +270,39 @@ public:
             bool shouldPop = moduleStackMarkers_.back();
             moduleStackMarkers_.pop_back();
             if (shouldPop && !currentModuleStack_.empty()) {
+                // Apply driver relationships before popping
+                applyDriverRelationships();
                 currentModuleStack_.pop_back();
             }
         }
+    }
+    
+    void applyDriverRelationships() {
+        if (currentModuleStack_.empty()) return;
+        
+        // Resolve driver signal IDs using signalToDriverNames_ map
+        for (auto& [drivenSignalName, driverInfos] : signalToDriverNames_) {
+            // Find the driven signal in the builder
+            const SignalInfo* drivenSignal = builder_.findSignalByName(drivenSignalName);
+            if (!drivenSignal) continue;
+            
+            // Resolve each driver
+            for (auto& [driverSignalName, driverLocation] : driverInfos) {
+                // Try to find the driver signal by name in current module
+                auto it = currentModuleSignalMap_.find(driverSignalName);
+                if (it != currentModuleSignalMap_.end() && it->second != 0) {
+                    uint64_t driverSignalId = it->second;
+                    
+                    // Add driver to signal (need to cast away const)
+                    SignalInfo* signal = const_cast<SignalInfo*>(drivenSignal);
+                    signal->driverSignalIds.push_back(driverSignalId);
+                    signal->driverLines.push_back(driverLocation);
+                }
+            }
+        }
+        
+        // Clear temporary storage
+        signalToDriverNames_.clear();
     }
     
     size_t getTotalModules() const { return totalModules_; }
@@ -247,6 +316,69 @@ private:
     size_t totalModules_;
     size_t totalSignals_;
     uint64_t nextPortId_;
+    
+    // Driver tracking: maps signal fullName to list of drivers
+    std::unordered_map<std::string, std::vector<DriverInfo>> currentModuleDrivers_;
+    // Signal name to ID mapping for current module
+    std::unordered_map<std::string, uint64_t> currentModuleSignalMap_;
+    // Module instance info for cross-module driver tracking
+    std::vector<std::pair<std::string, uint64_t>> currentModuleInstances_; // instanceName, moduleId
+    // Temporary storage: maps driven signal to driver signal names and locations
+    std::unordered_map<std::string, std::vector<std::pair<std::string, KdbSourceLocation>>> signalToDriverNames_;
+    
+    void processAssignStatements(const UHDM::module_inst* module) {
+        auto contAssigns = module->Cont_assigns();
+        if (!contAssigns) return;
+        
+        for (auto* contAssign : *contAssigns) {
+            if (!contAssign) continue;
+            
+            auto* lhs = contAssign->Lhs();
+            auto* rhs = contAssign->Rhs();
+            if (!lhs || !rhs) continue;
+            
+            // Get LHS signal name (full name)
+            std::string lhsName;
+            if (auto* refObj = lhs->Cast<UHDM::ref_obj>()) {
+                lhsName = std::string(refObj->VpiFullName());
+            }
+            
+            if (lhsName.empty()) continue;
+            
+            // Extract RHS signal names
+            extractRhsSignals(rhs, lhsName, contAssign);
+        }
+    }
+    
+    void extractRhsSignals(const UHDM::expr* expr, const std::string& lhsSignalName, 
+                          const UHDM::BaseClass* assignObj) {
+        if (!expr) return;
+        
+        // Check if this is a ref_obj (signal reference)
+        if (auto* refObj = expr->Cast<UHDM::ref_obj>()) {
+            std::string rhsName = std::string(refObj->VpiFullName());
+            if (!rhsName.empty()) {
+                // Store mapping from driven signal to driver signal name and location
+                signalToDriverNames_[lhsSignalName].push_back({rhsName, extractLocation(assignObj)});
+            }
+        }
+        
+        // Check if this is an operation (like a + b)
+        if (auto* op = expr->Cast<UHDM::operation>()) {
+            auto* operands = op->Operands();
+            if (operands) {
+                for (auto* operand : *operands) {
+                    if (auto* operandExpr = operand->Cast<UHDM::expr>()) {
+                        extractRhsSignals(operandExpr, lhsSignalName, assignObj);
+                    }
+                }
+            }
+        }
+        
+        // Recursively process child expressions
+        // Note: Full implementation would need to traverse the expression tree
+        // For now, we handle ref_obj and operation
+    }
     
     KdbSourceLocation extractLocation(const UHDM::BaseClass* obj) {
         KdbSourceLocation loc;
