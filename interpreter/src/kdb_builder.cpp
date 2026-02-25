@@ -563,25 +563,6 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
             decl->set_column_end(mod->declaration.columnEnd);
         }
         
-        for (const auto& port : mod->ports) {
-            auto* protoPort = protoMod->add_ports();
-            protoPort->set_id(port.id);
-            protoPort->set_name(port.name);
-            protoPort->set_direction(toProtoPortDirection(port.direction));
-            protoPort->set_type(toProtoSignalType(port.type));
-            protoPort->set_msb(port.msb);
-            protoPort->set_lsb(port.lsb);
-            protoPort->set_connected_signal_id(port.connectedSignalId);
-            
-            if (port.declaration.fileId != 0) {
-                auto* decl = protoPort->mutable_declaration();
-                decl->set_file_id(port.declaration.fileId);
-                decl->set_line(port.declaration.line);
-                decl->set_column_start(port.declaration.columnStart);
-                decl->set_column_end(port.declaration.columnEnd);
-            }
-        }
-        
         for (const auto& sig : mod->signals) {
             auto* protoSig = protoMod->add_signals();
             protoSig->set_id(sig.id);
@@ -591,6 +572,7 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
             protoSig->set_msb(sig.msb);
             protoSig->set_lsb(sig.lsb);
             protoSig->set_parent_module_id(sig.parentModuleId);
+            protoSig->set_direction(toProtoPortDirection(sig.direction));
             
             if (sig.declaration.fileId != 0) {
                 auto* decl = protoSig->mutable_declaration();
@@ -686,31 +668,13 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
             mod->declaration.columnEnd = protoMod.declaration().column_end();
         }
         
-        for (const auto& protoPort : protoMod.ports()) {
-            PortInfo port;
-            port.id = protoPort.id();
-            port.name = protoPort.name();
-            port.direction = fromProtoPortDirection(protoPort.direction());
-            port.type = fromProtoSignalType(protoPort.type());
-            port.msb = protoPort.msb();
-            port.lsb = protoPort.lsb();
-            port.connectedSignalId = protoPort.connected_signal_id();
-            
-            if (protoPort.has_declaration()) {
-                port.declaration.fileId = protoPort.declaration().file_id();
-                port.declaration.line = protoPort.declaration().line();
-                port.declaration.columnStart = protoPort.declaration().column_start();
-                port.declaration.columnEnd = protoPort.declaration().column_end();
-            }
-            mod->ports.push_back(port);
-        }
-        
         for (const auto& protoSig : protoMod.signals()) {
             SignalInfo sig;
             sig.id = protoSig.id();
             sig.name = protoSig.name();
             sig.fullName = protoSig.full_name();
             sig.type = fromProtoSignalType(protoSig.type());
+            sig.direction = fromProtoPortDirection(protoSig.direction());
             sig.msb = protoSig.msb();
             sig.lsb = protoSig.lsb();
             sig.parentModuleId = protoSig.parent_module_id();

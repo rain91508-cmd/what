@@ -55,16 +55,8 @@ enum PortDirection {
   PORT_DIR_INOUT = 3;
 }
 
-message Port {
-  uint64 id = 1;
-  string name = 2;
-  PortDirection direction = 3;
-  SignalType type = 4;
-  uint32 msb = 5;
-  uint32 lsb = 6;
-  uint64 connected_signal_id = 7;
-  SourceLocation declaration = 8;
-}
+// Port information is now integrated into Signal
+// See the direction field in Signal message below
 
 message Signal {
   uint64 id = 1;
@@ -77,6 +69,7 @@ message Signal {
   SourceLocation declaration = 8;
   repeated uint64 driver_signal_ids = 9;
   repeated uint64 load_signal_ids = 10;
+  PortDirection direction = 11;  // Direction of the signal: INPUT, OUTPUT, INOUT, or UNKNOWN for internal signals
 }
 
 message Module {
@@ -86,9 +79,8 @@ message Module {
   uint64 parent_module_id = 4;
   uint64 file_id = 5;
   SourceLocation declaration = 6;
-  repeated Port ports = 7;
-  repeated Signal signals = 8;
-  bool is_instance = 9;
+  repeated Signal signals = 7;  // Contains both ports and internal signals
+  bool is_instance = 8;
 }
 
 message DesignHierarchy {

@@ -67,7 +67,14 @@ void printModules(const KdbBuilder& builder, bool verbose) {
         std::cout << ", IsInstance: " << (module->isInstance ? "true" : "false") << "\n";
         
         if (verbose) {
-            std::cout << "      Ports: " << module->ports.size() << "\n";
+            // Count port signals (those with direction != UNKNOWN)
+        int portCount = 0;
+        for (const auto& sig : module->signals) {
+            if (sig.direction != PortDirection::UNKNOWN) {
+                portCount++;
+            }
+        }
+        std::cout << "      Ports: " << portCount << "\n";
             std::cout << "      Signals: " << module->signals.size() << "\n";
             std::cout << "      File: " << module->fileId << ", Line: " << module->declaration.line << "\n";
         }
@@ -334,15 +341,24 @@ void printModuleWithSource(const KdbBuilder& builder, const std::string& moduleN
         }
     }
     
-    std::cout << "\n  Ports (" << module->ports.size() << "):\n";
-    for (const auto& port : module->ports) {
-        std::cout << "    " << std::setw(8) << std::left 
-                  << portDirectionToString(port.direction)
-                  << " " << port.name;
-        if (port.msb != port.lsb) {
-            std::cout << " [" << port.msb << ":" << port.lsb << "]";
+    // Print port signals (those with direction != UNKNOWN)
+    int portCount = 0;
+    for (const auto& sig : module->signals) {
+        if (sig.direction != PortDirection::UNKNOWN) {
+            portCount++;
         }
-        std::cout << "\n";
+    }
+    std::cout << "\n  Ports (" << portCount << "):\n";
+    for (const auto& sig : module->signals) {
+        if (sig.direction != PortDirection::UNKNOWN) {
+            std::cout << "    " << std::setw(8) << std::left 
+                      << portDirectionToString(sig.direction)
+                      << " " << sig.name;
+            if (sig.msb != sig.lsb) {
+                std::cout << " [" << sig.msb << ":" << sig.lsb << "]";
+            }
+            std::cout << "\n";
+        }
     }
     
     std::cout << "\n  Signals (" << module->signals.size() << "):\n";
@@ -367,15 +383,24 @@ void printModuleDetails(const KdbBuilder& builder, const std::string& moduleName
     std::cout << "  Location: Line " << module->declaration.line 
               << ", Col " << module->declaration.columnStart << "\n";
     
-    std::cout << "\n  Ports (" << module->ports.size() << "):\n";
-    for (const auto& port : module->ports) {
-        std::cout << "    " << std::setw(8) << std::left 
-                  << portDirectionToString(port.direction)
-                  << " " << port.name;
-        if (port.msb != port.lsb) {
-            std::cout << " [" << port.msb << ":" << port.lsb << "]";
+    // Print port signals (those with direction != UNKNOWN)
+    int portCount = 0;
+    for (const auto& sig : module->signals) {
+        if (sig.direction != PortDirection::UNKNOWN) {
+            portCount++;
         }
-        std::cout << "\n";
+    }
+    std::cout << "\n  Ports (" << portCount << "):\n";
+    for (const auto& sig : module->signals) {
+        if (sig.direction != PortDirection::UNKNOWN) {
+            std::cout << "    " << std::setw(8) << std::left 
+                      << portDirectionToString(sig.direction)
+                      << " " << sig.name;
+            if (sig.msb != sig.lsb) {
+                std::cout << " [" << sig.msb << ":" << sig.lsb << "]";
+            }
+            std::cout << "\n";
+        }
     }
     
     std::cout << "\n  Signals (" << module->signals.size() << "):\n";
@@ -515,41 +540,6 @@ void printJson(const KdbBuilder& builder) {
         std::cout << "        \"column_start\": " << module->declaration.columnStart << ",\n";
         std::cout << "        \"column_end\": " << module->declaration.columnEnd << "\n";
         std::cout << "      },\n";
-        std::cout << "      \"definition_start\": {\n";
-        std::cout << "        \"file_id\": " << module->definitionStart.fileId << ",\n";
-        std::cout << "        \"line\": " << module->definitionStart.line << ",\n";
-        std::cout << "        \"column_start\": " << module->definitionStart.columnStart << ",\n";
-        std::cout << "        \"column_end\": " << module->definitionStart.columnEnd << "\n";
-        std::cout << "      },\n";
-        std::cout << "      \"definition_end\": {\n";
-        std::cout << "        \"file_id\": " << module->definitionEnd.fileId << ",\n";
-        std::cout << "        \"line\": " << module->definitionEnd.line << ",\n";
-        std::cout << "        \"column_start\": " << module->definitionEnd.columnStart << ",\n";
-        std::cout << "        \"column_end\": " << module->definitionEnd.columnEnd << "\n";
-        std::cout << "      },\n";
-        
-        std::cout << "      \"ports\": [\n";
-        bool firstPort = true;
-        for (const auto& port : module->ports) {
-            if (!firstPort) std::cout << ",\n";
-            firstPort = false;
-            std::cout << "        {\n";
-            std::cout << "          \"id\": " << port.id << ",\n";
-            std::cout << "          \"name\": \"" << port.name << "\",\n";
-            std::cout << "          \"direction\": \"" << portDirectionToString(port.direction) << "\",\n";
-            std::cout << "          \"type\": \"" << signalTypeToString(port.type) << "\",\n";
-            std::cout << "          \"msb\": " << port.msb << ",\n";
-            std::cout << "          \"lsb\": " << port.lsb << ",\n";
-            std::cout << "          \"connected_signal_id\": " << port.connectedSignalId << ",\n";
-            std::cout << "          \"declaration\": {\n";
-            std::cout << "            \"file_id\": " << port.declaration.fileId << ",\n";
-            std::cout << "            \"line\": " << port.declaration.line << ",\n";
-            std::cout << "            \"column_start\": " << port.declaration.columnStart << ",\n";
-            std::cout << "            \"column_end\": " << port.declaration.columnEnd << "\n";
-            std::cout << "          }\n";
-            std::cout << "        }";
-        }
-        std::cout << "\n      ],\n";
         
         std::cout << "      \"signals\": [\n";
         bool firstModuleSignal = true;

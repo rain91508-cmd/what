@@ -55,12 +55,20 @@ void KdbSerializer::writeModules(std::vector<uint8_t>& buffer, const std::vector
         writeUint64(buffer, mod.id);
         writeUint64(buffer, mod.fileId);
         
-        // Write ports
-        writeUint32(buffer, static_cast<uint32_t>(mod.ports.size()));
-        for (const auto& port : mod.ports) {
-            writeString(buffer, port.name);
-            writeUint32(buffer, static_cast<uint32_t>(port.direction));
-            writeUint32(buffer, static_cast<uint32_t>(port.type));
+        // Count and write port signals (those with direction != UNKNOWN)
+        uint32_t portCount = 0;
+        for (const auto& sig : mod.signals) {
+            if (sig.direction != PortDirection::UNKNOWN) {
+                portCount++;
+            }
+        }
+        writeUint32(buffer, portCount);
+        for (const auto& sig : mod.signals) {
+            if (sig.direction != PortDirection::UNKNOWN) {
+                writeString(buffer, sig.name);
+                writeUint32(buffer, static_cast<uint32_t>(sig.direction));
+                writeUint32(buffer, static_cast<uint32_t>(sig.type));
+            }
         }
     }
 }

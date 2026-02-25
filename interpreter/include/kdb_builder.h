@@ -74,22 +74,14 @@ struct KdbSourceLocation {
     uint32_t columnEnd;
 };
 
-struct PortInfo {
-    uint64_t id;
-    std::string name;
-    PortDirection direction;
-    SignalType type;
-    uint32_t msb;
-    uint32_t lsb;
-    uint64_t connectedSignalId;
-    KdbSourceLocation declaration;
-};
+
 
 struct SignalInfo {
     uint64_t id;
     std::string name;
     std::string fullName;
     SignalType type;
+    PortDirection direction;  // Direction of the signal: INPUT, OUTPUT, INOUT, or UNKNOWN for internal signals
     uint32_t msb;
     uint32_t lsb;
     KdbSourceLocation declaration;
@@ -118,10 +110,7 @@ struct ModuleInfo {
     std::string name;
     std::string fullName;
     KdbSourceLocation declaration;
-    KdbSourceLocation definitionStart;
-    KdbSourceLocation definitionEnd;
-    std::vector<PortInfo> ports;
-    std::vector<SignalInfo> signals;
+    std::vector<SignalInfo> signals;  // Contains both ports and internal signals
     std::vector<ModuleInstanceInfo> instances;
     uint64_t parentModuleId;
     uint64_t fileId;

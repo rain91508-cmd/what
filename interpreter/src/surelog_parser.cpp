@@ -68,18 +68,35 @@ public:
             }
         }
         
-        // Process ports
+        // Process ports - convert to signals with direction info
         auto ports = object->Ports();
         if (ports) {
             for (auto* port : *ports) {
                 if (!port) continue;
-                PortInfo portInfo;
-                portInfo.id = nextPortId_++;
-                portInfo.name = std::string(port->VpiName());
-                portInfo.direction = convertPortDirection(port->VpiDirection());
-                portInfo.type = SignalType::WIRE;
-                portInfo.declaration = extractLocation(port);
-                moduleInfo.ports.push_back(portInfo);
+                SignalInfo signalInfo;
+                signalInfo.name = std::string(port->VpiName());
+                signalInfo.fullName = fullName + "." + signalInfo.name;
+                // Set appropriate type based on port direction
+                switch (convertPortDirection(port->VpiDirection())) {
+                    case PortDirection::INPUT:
+                        signalInfo.type = SignalType::INPUT;
+                        break;
+                    case PortDirection::OUTPUT:
+                        signalInfo.type = SignalType::OUTPUT;
+                        break;
+                    case PortDirection::INOUT:
+                        signalInfo.type = SignalType::INOUT;
+                        break;
+                    default:
+                        signalInfo.type = SignalType::WIRE;  // Default type for ports
+                        break;
+                }
+                signalInfo.direction = convertPortDirection(port->VpiDirection());
+                signalInfo.parentModuleId = 0;  // Will be set after module is added
+                signalInfo.declaration = extractLocation(port);
+                
+                // Add signal to module
+                moduleInfo.signals.push_back(signalInfo);
             }
         }
         
@@ -127,27 +144,44 @@ public:
             builder_.addSubmodLink(moduleInfo.declaration.fileId, link);
         }
         
-        // Add port links
-        for (const auto& port : moduleInfo.ports) {
-            if (port.declaration.fileId != 0) {
+        // Add port links - now ports are stored in signals with direction != UNKNOWN
+        for (const auto& sig : moduleInfo.signals) {
+            if (sig.direction != PortDirection::UNKNOWN && sig.declaration.fileId != 0) {
                 SourceLinkInfo link;
-                link.line = port.declaration.line;
-                link.columnStart = port.declaration.columnStart;
-                link.columnEnd = port.declaration.columnEnd;
-                link.targetId = port.id;
-                builder_.addPortLink(port.declaration.fileId, link);
+                link.line = sig.declaration.line;
+                link.columnStart = sig.declaration.columnStart;
+                link.columnEnd = sig.declaration.columnEnd;
+                link.targetId = sig.id;
+                builder_.addPortLink(sig.declaration.fileId, link);
             }
         }
         
-        // Process nets/signals
+        // Process nets/signals - skip if already added as port
         auto nets = object->Nets();
         if (nets) {
             for (auto* net : *nets) {
                 if (!net) continue;
+                std::string netName = std::string(net->VpiName());
+                
+                // Check if this signal already exists as a port
+                bool alreadyExists = false;
+                for (const auto& existingSig : moduleInfo.signals) {
+                    if (existingSig.name == netName) {
+                        alreadyExists = true;
+                        break;
+                    }
+                }
+                
+                // Skip if already exists (port takes precedence)
+                if (alreadyExists) {
+                    continue;
+                }
+                
                 SignalInfo signalInfo;
-                signalInfo.name = std::string(net->VpiName());
+                signalInfo.name = netName;
                 signalInfo.fullName = fullName + "." + signalInfo.name;
                 signalInfo.type = convertSignalType(net->VpiNetType());
+                signalInfo.direction = PortDirection::UNKNOWN;  // Internal signal has no direction
                 signalInfo.parentModuleId = moduleId;
                 signalInfo.declaration = extractLocation(net);
                 uint64_t signalId = builder_.addSignal(moduleId, signalInfo);
