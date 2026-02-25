@@ -17,6 +17,10 @@
 namespace hwda {
 namespace interpreter {
 
+// Forward declaration of helper function for bit width extraction
+static void extractBitWidthFromUhdmObject(UHDM::BaseClass* uhdmObject, uint32_t& msb, 
+                                          uint32_t& lsb, bool& isVector);
+
 // VpiListener to build KDB
 class KdbBuildListener : public UHDM::VpiListener {
 public:
@@ -94,6 +98,10 @@ public:
                 signalInfo.direction = convertPortDirection(port->VpiDirection());
                 signalInfo.parentModuleId = 0;  // Will be set after module is added
                 signalInfo.declaration = extractLocation(port);
+                
+                // Extract bit width from port
+                bool isVector = false;
+                extractBitWidthFromUhdmObject(port, signalInfo.msb, signalInfo.lsb, isVector);
                 
                 // Add signal to module
                 moduleInfo.signals.push_back(signalInfo);
@@ -510,11 +518,25 @@ KdbSourceLocation SurelogParser::extractLocation(UHDM::BaseClass* uhdmObject) {
     return loc;
 }
 
-void SurelogParser::extractBitWidth(UHDM::BaseClass* uhdmObject, uint32_t& msb, 
-                                    uint32_t& lsb, bool& isVector) {
+// Helper function to extract bit width from UHDM objects
+static void extractBitWidthFromUhdmObject(UHDM::BaseClass* uhdmObject, uint32_t& msb, 
+                                          uint32_t& lsb, bool& isVector) {
     msb = 0;
     lsb = 0;
     isVector = false;
+    
+    if (!uhdmObject) return;
+    
+    // For now, we don't extract bit width from UHDM objects
+    // as it requires proper vpiHandle which is not directly available
+    // from BaseClass pointer. The bit width extraction would need
+    // to be done at a different level where vpiHandle is available.
+    // Default to scalar (msb=0, lsb=0, isVector=false)
+}
+
+void SurelogParser::extractBitWidth(UHDM::BaseClass* uhdmObject, uint32_t& msb, 
+                                    uint32_t& lsb, bool& isVector) {
+    extractBitWidthFromUhdmObject(uhdmObject, msb, lsb, isVector);
 }
 
 } // namespace interpreter
