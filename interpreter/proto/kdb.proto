@@ -74,9 +74,9 @@ message Signal {
   uint32 parent_module_id = 7;  // Changed from uint64 to uint32
   SourceLocation declaration = 8;
   repeated uint64 driver_signal_ids = 9;
-  repeated uint64 load_signal_ids = 10;
-  PortDirection direction = 11;  // Direction of the signal: INPUT, OUTPUT, INOUT, or UNKNOWN for internal signals
-  repeated DriverLocation driver_lines = 12;  // Source locations where drivers are discovered
+  // Note: load_signal_ids removed - not needed
+  PortDirection direction = 10;  // Direction of the signal: INPUT, OUTPUT, INOUT, or UNKNOWN for internal signals
+  repeated DriverLocation driver_lines = 11;  // Source locations where drivers are discovered
 }
 
 message Module {

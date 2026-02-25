@@ -404,16 +404,10 @@ std::vector<const SignalInfo*> KdbBuilder::getDrivers(uint64_t signalId) const {
 }
 
 std::vector<const SignalInfo*> KdbBuilder::getLoads(uint64_t signalId) const {
+    // Note: loadSignalIds removed - this function now returns empty result
+    // Loads can be computed by finding all signals that have this signal as driver
     std::vector<const SignalInfo*> result;
-    const SignalInfo* signal = findSignalById(signalId);
-    if (signal) {
-        for (uint64_t loadId : signal->loadSignalIds) {
-            const SignalInfo* load = findSignalById(loadId);
-            if (load) {
-                result.push_back(load);
-            }
-        }
-    }
+    // TODO: Implement load calculation by scanning all signals' driverSignalIds
     return result;
 }
 
@@ -549,9 +543,7 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
             for (uint64_t driverId : sig.driverSignalIds) {
                 protoSig->add_driver_signal_ids(driverId);
             }
-            for (uint64_t loadId : sig.loadSignalIds) {
-                protoSig->add_load_signal_ids(loadId);
-            }
+            // Note: load_signal_ids removed - not needed
             
             // Add driver lines
             for (const auto& driverLine : sig.driverLines) {
@@ -653,9 +645,7 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
             for (uint64_t driverId : protoSig.driver_signal_ids()) {
                 sig.driverSignalIds.push_back(driverId);
             }
-            for (uint64_t loadId : protoSig.load_signal_ids()) {
-                sig.loadSignalIds.push_back(loadId);
-            }
+            // Note: load_signal_ids removed - not needed
             
             // Load driver lines
             for (const auto& protoDriverLine : protoSig.driver_lines()) {

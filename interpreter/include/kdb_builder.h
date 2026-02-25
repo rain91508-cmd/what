@@ -92,7 +92,7 @@ struct SignalInfo {
     KdbSourceLocation declaration;
     uint32_t parentModuleId;  // Changed from uint64_t to uint32_t
     std::vector<uint64_t> driverSignalIds;
-    std::vector<uint64_t> loadSignalIds;
+    // Note: loadSignalIds removed - not needed
     std::vector<DriverLocation> driverLines;  // Source locations where drivers are discovered
 };
 
