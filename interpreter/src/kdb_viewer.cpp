@@ -63,7 +63,8 @@ void printModules(const KdbBuilder& builder, bool verbose) {
         if (!module->fullName.empty() && module->fullName != module->name) {
             std::cout << " (" << module->fullName << ")";
         }
-        std::cout << ", Parent: " << module->parentModuleId << "\n";
+        std::cout << ", Parent: " << module->parentModuleId;
+        std::cout << ", IsInstance: " << (module->isInstance ? "true" : "false") << "\n";
         
         if (verbose) {
             std::cout << "      Ports: " << module->ports.size() << "\n";
@@ -507,6 +508,7 @@ void printJson(const KdbBuilder& builder) {
         std::cout << "      \"full_name\": \"" << module->fullName << "\",\n";
         std::cout << "      \"parent_module_id\": " << module->parentModuleId << ",\n";
         std::cout << "      \"file_id\": " << module->fileId << ",\n";
+        std::cout << "      \"is_instance\": " << (module->isInstance ? "true" : "false") << ",\n";
         std::cout << "      \"declaration\": {\n";
         std::cout << "        \"file_id\": " << module->declaration.fileId << ",\n";
         std::cout << "        \"line\": " << module->declaration.line << ",\n";

@@ -125,6 +125,7 @@ struct ModuleInfo {
     std::vector<ModuleInstanceInfo> instances;
     uint64_t parentModuleId;
     uint64_t fileId;
+    bool isInstance;
 };
 
 class KdbBuilder {

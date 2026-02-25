@@ -30,12 +30,18 @@ public:
         std::string defName(object->VpiDefName());
         std::string fullName(object->VpiFullName());
         
+        std::cerr << "DEBUG: enterModule_inst - instName='" << instName 
+                  << "', defName='" << defName 
+                  << "', fullName='" << fullName << "'\n";
+        std::cerr << "DEBUG:   currentModuleStack_ size=" << currentModuleStack_.size() << "\n";
+        
         ModuleInfo moduleInfo;
         moduleInfo.id = 0;
         moduleInfo.parentModuleId = 0;
         moduleInfo.fileId = 0;
         moduleInfo.name = defName.empty() ? instName : defName;
         moduleInfo.fullName = fullName.empty() ? moduleInfo.name : fullName;
+        moduleInfo.isInstance = true;
         
         // Extract location
         moduleInfo.declaration = extractLocation(object);
@@ -75,18 +81,24 @@ public:
             }
         }
         
-        // Set parent module ID
-        if (!currentModuleStack_.empty()) {
-            moduleInfo.parentModuleId = currentModuleStack_.back();
+        // Determine parent module ID based on hierarchy in fullName
+        // If fullName contains dots, extract parent module name
+        std::string parentFullName;
+        size_t lastDot = moduleInfo.fullName.rfind('.');
+        if (lastDot != std::string::npos) {
+            parentFullName = moduleInfo.fullName.substr(0, lastDot);
+            // Look up parent module ID in builder
+            const ModuleInfo* parentModule = builder_.findModuleByName(parentFullName);
+            if (parentModule) {
+                moduleInfo.parentModuleId = parentModule->id;
+            }
         }
         
-        // If module fullname and name are same, parent id must be 0
-        if (moduleInfo.fullName == moduleInfo.name) {
-            moduleInfo.parentModuleId = 0;
-        }
+        std::cerr << "DEBUG:   parentModuleId=" << moduleInfo.parentModuleId << "\n";
         
         // Check if module already exists
         bool moduleExists = builder_.hasModule(moduleInfo.fullName);
+        std::cerr << "DEBUG:   moduleExists=" << (moduleExists ? "true" : "false") << "\n";
         
         // Push a marker to the stack to indicate whether we should process this module
         moduleStackMarkers_.push_back(!moduleExists);
@@ -98,8 +110,10 @@ public:
         
         // Add module
         uint64_t moduleId = builder_.addModule(moduleInfo);
+        std::cerr << "DEBUG:   Added module with id=" << moduleId << ", isInstance=" << (moduleInfo.isInstance ? "true" : "false") << "\n";
         currentModuleStack_.push_back(moduleId);
         totalModules_++;
+        std::cerr << "DEBUG:   After push, currentModuleStack_ size=" << currentModuleStack_.size() << "\n";
         
         // Add module link
         if (moduleInfo.declaration.fileId != 0) {
@@ -353,10 +367,10 @@ bool SurelogParser::buildKnowledgeBase(KdbBuilder& builder) {
         // Find all modules and identify top modules
         auto modules = builder.getAllModules();
         
-        // No parent (parentModuleId == 0) AND name and fullname are same are top modules, same fullname only add once
+        // No parent (parentModuleId == 0) AND is instance are top modules, same fullname only add once
         std::unordered_set<std::string> addedTopModules;
         for (const auto* mod : modules) {
-            if (mod->parentModuleId == 0 && mod->name == mod->fullName) {
+            if (mod->parentModuleId == 0 && mod->isInstance) {
                 if (addedTopModules.find(mod->fullName) == addedTopModules.end()) {
                     addedTopModules.insert(mod->fullName);
                     builder.addHierarchy(mod->id);
@@ -364,11 +378,11 @@ bool SurelogParser::buildKnowledgeBase(KdbBuilder& builder) {
             }
         }
         
-        // If no top modules found (unlikely), fall back to all parentModuleId == 0 with name and fullname same
+        // If no top modules found (unlikely), fall back to all parentModuleId == 0 with is instance
         if (builder.getTopModuleIds().empty()) {
             std::unordered_set<std::string> fallbackAddedTopModules;
             for (const auto* mod : modules) {
-                if (mod->parentModuleId == 0 && mod->name == mod->fullName) {
+                if (mod->parentModuleId == 0 && mod->isInstance) {
                     if (fallbackAddedTopModules.find(mod->fullName) == fallbackAddedTopModules.end()) {
                         fallbackAddedTopModules.insert(mod->fullName);
                         builder.addHierarchy(mod->id);

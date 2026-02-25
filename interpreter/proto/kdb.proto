@@ -88,6 +88,7 @@ message Module {
   SourceLocation declaration = 6;
   repeated Port ports = 7;
   repeated Signal signals = 8;
+  bool is_instance = 9;
 }
 
 message DesignHierarchy {

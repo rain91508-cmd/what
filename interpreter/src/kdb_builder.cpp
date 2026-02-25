@@ -29,6 +29,30 @@ KdbBuilder::KdbBuilder()
     , nextInstanceId_(1) {
 }
 
+uint64_t KdbBuilder::addModule(const ModuleInfo& module) {
+    auto it = moduleNameToId_.find(module.fullName);
+    if (it != moduleNameToId_.end()) {
+        return it->second;
+    }
+    
+    auto mod = std::make_unique<ModuleInfo>(module);
+    mod->id = nextModuleId_++;
+    
+    for (auto& sig : mod->signals) {
+        sig.id = nextSignalId_++;
+        sig.parentModuleId = mod->id;
+        signalFullNameToId_[sig.fullName] = sig.id;
+        signalIdToIndex_[sig.id] = mod->signals.size() - 1;
+    }
+    
+    uint64_t id = mod->id;
+    moduleNameToId_[mod->fullName] = id;
+    moduleIdToIndex_[id] = modules_.size();
+    modules_.push_back(std::move(mod));
+    
+    return id;
+}
+
 KdbBuilder::~KdbBuilder() = default;
 
 void KdbBuilder::setProjectName(const std::string& name) {
@@ -281,30 +305,6 @@ bool KdbBuilder::hasModule(const std::string& fullName) const {
     return moduleNameToId_.find(fullName) != moduleNameToId_.end();
 }
 
-uint64_t KdbBuilder::addModule(const ModuleInfo& module) {
-    auto it = moduleNameToId_.find(module.fullName);
-    if (it != moduleNameToId_.end()) {
-        return it->second;
-    }
-    
-    auto mod = std::make_unique<ModuleInfo>(module);
-    mod->id = nextModuleId_++;
-    
-    for (auto& sig : mod->signals) {
-        sig.id = nextSignalId_++;
-        sig.parentModuleId = mod->id;
-        signalFullNameToId_[sig.fullName] = sig.id;
-        signalIdToIndex_[sig.id] = mod->signals.size() - 1;
-    }
-    
-    uint64_t id = mod->id;
-    moduleNameToId_[mod->fullName] = id;
-    moduleIdToIndex_[id] = modules_.size();
-    modules_.push_back(std::move(mod));
-    
-    return id;
-}
-
 uint64_t KdbBuilder::addSignal(uint64_t moduleId, const SignalInfo& signal) {
     auto* mod = const_cast<ModuleInfo*>(findModuleById(moduleId));
     if (!mod) return 0;
@@ -553,6 +553,7 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
         protoMod->set_full_name(mod->fullName);
         protoMod->set_parent_module_id(mod->parentModuleId);
         protoMod->set_file_id(mod->fileId);
+        protoMod->set_is_instance(mod->isInstance);
         
         if (mod->declaration.fileId != 0) {
             auto* decl = protoMod->mutable_declaration();
@@ -676,6 +677,7 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
         mod->fullName = protoMod.full_name();
         mod->parentModuleId = protoMod.parent_module_id();
         mod->fileId = protoMod.file_id();
+        mod->isInstance = protoMod.is_instance();
         
         if (protoMod.has_declaration()) {
             mod->declaration.fileId = protoMod.declaration().file_id();
