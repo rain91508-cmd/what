@@ -38,6 +38,7 @@ if(TARGET surelog)
     list(APPEND INTERPRETER_SOURCES src/surelog_parser.cpp)
     list(APPEND INTERPRETER_SOURCES src/kdb_build_listener.cpp)
     list(APPEND INTERPRETER_SOURCES src/bit_width_extractor.cpp)
+    list(APPEND INTERPRETER_SOURCES src/driver_analyzer.cpp)
 endif()
 
 set(INTERPRETER_HEADERS
@@ -49,6 +50,7 @@ set(INTERPRETER_HEADERS
     include/surelog_parser.h
     include/kdb_build_listener.h
     include/bit_width_extractor.h
+    include/driver_analyzer.h
     # include/surelog_interpreter.h  # TODO: Enable when API is updated
     ${PROTO_HDRS}
 )

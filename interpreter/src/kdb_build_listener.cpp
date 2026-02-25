@@ -1,5 +1,6 @@
 #include "kdb_build_listener.h"
 #include "bit_width_extractor.h"
+#include "driver_analyzer.h"
 
 #include <Surelog/API/Surelog.h>
 #include <uhdm/VpiListener.h>
@@ -14,7 +15,12 @@ namespace hwda {
 namespace interpreter {
 
 KdbBuildListener::KdbBuildListener(KdbBuilder& builder, std::unordered_map<std::string, uint64_t>& filePathToId)
-    : builder_(builder), filePathToId_(filePathToId), totalModules_(0), totalSignals_(0), nextPortId_(1) {}
+    : builder_(builder), filePathToId_(filePathToId), totalModules_(0), totalSignals_(0), nextPortId_(1), 
+      driverAnalyzer_(new DriverAnalyzer(builder, filePathToId)) {}
+
+KdbBuildListener::~KdbBuildListener() {
+    delete driverAnalyzer_;
+}
 
 void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHandle handle) {
     if (!object) return;
@@ -28,7 +34,7 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
               << "', fullName='" << fullName << "'\n";
     std::cerr << "DEBUG:   currentModuleStack_ size=" << currentModuleStack_.size() << "\n";
     
-    currentModuleDrivers_.clear();
+    driverAnalyzer_->clear();
     currentModuleSignalMap_.clear();
     currentModuleInstances_.clear();
     
@@ -77,6 +83,7 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
             
             moduleInfo.signals.push_back(signalInfo);
             currentModuleSignalMap_[signalInfo.fullName] = 0;
+            driverAnalyzer_->getSignalMap()[signalInfo.fullName] = 0;
         }
     }
     
@@ -120,6 +127,7 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
         const SignalInfo* addedSignal = builder_.findSignalByName(sig.fullName);
         if (addedSignal) {
             currentModuleSignalMap_[sig.fullName] = addedSignal->id;
+            driverAnalyzer_->getSignalMap()[sig.fullName] = addedSignal->id;
             
             if (sig.direction != PortDirection::UNKNOWN && sig.declaration.fileId != 0) {
                 SourceLinkInfo link;
@@ -161,6 +169,7 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
             totalSignals_++;
             
             currentModuleSignalMap_[signalInfo.fullName] = signalId;
+            driverAnalyzer_->getSignalMap()[signalInfo.fullName] = signalId;
             
             if (signalInfo.declaration.fileId != 0) {
                 SourceLinkInfo link;
@@ -187,6 +196,7 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
             totalSignals_++;
             
             currentModuleSignalMap_[signalInfo.fullName] = signalId;
+            driverAnalyzer_->getSignalMap()[signalInfo.fullName] = signalId;
             
             if (signalInfo.declaration.fileId != 0) {
                 SourceLinkInfo link;
@@ -211,7 +221,7 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
         }
     }
     
-    processAssignStatements(object);
+    driverAnalyzer_->analyzeContinuousAssignments(object);
 }
 
 void KdbBuildListener::leaveModule_inst(const UHDM::module_inst* object, vpiHandle handle) {
@@ -219,75 +229,8 @@ void KdbBuildListener::leaveModule_inst(const UHDM::module_inst* object, vpiHand
         bool shouldPop = moduleStackMarkers_.back();
         moduleStackMarkers_.pop_back();
         if (shouldPop && !currentModuleStack_.empty()) {
-            applyDriverRelationships();
+            driverAnalyzer_->applyDriverRelationships();
             currentModuleStack_.pop_back();
-        }
-    }
-}
-
-void KdbBuildListener::applyDriverRelationships() {
-    if (currentModuleStack_.empty()) return;
-    
-    for (auto& [drivenSignalName, driverInfos] : signalToDriverNames_) {
-        const SignalInfo* drivenSignal = builder_.findSignalByName(drivenSignalName);
-        if (!drivenSignal) continue;
-        
-        for (auto& [driverSignalName, driverLocation] : driverInfos) {
-            auto it = currentModuleSignalMap_.find(driverSignalName);
-            if (it != currentModuleSignalMap_.end() && it->second != 0) {
-                uint64_t driverSignalId = it->second;
-                
-                SignalInfo* signal = const_cast<SignalInfo*>(drivenSignal);
-                signal->driverSignalIds.push_back(driverSignalId);
-                signal->driverLines.push_back(driverLocation);
-            }
-        }
-    }
-    
-    signalToDriverNames_.clear();
-}
-
-void KdbBuildListener::processAssignStatements(const UHDM::module_inst* module) {
-    auto contAssigns = module->Cont_assigns();
-    if (!contAssigns) return;
-    
-    for (auto* contAssign : *contAssigns) {
-        if (!contAssign) continue;
-        
-        auto* lhs = contAssign->Lhs();
-        auto* rhs = contAssign->Rhs();
-        if (!lhs || !rhs) continue;
-        
-        std::string lhsName;
-        if (auto* refObj = lhs->Cast<UHDM::ref_obj>()) {
-            lhsName = std::string(refObj->VpiFullName());
-        }
-        
-        if (lhsName.empty()) continue;
-        
-        extractRhsSignals(rhs, lhsName, contAssign);
-    }
-}
-
-void KdbBuildListener::extractRhsSignals(const UHDM::expr* expr, const std::string& lhsSignalName, 
-                                          const UHDM::BaseClass* assignObj) {
-    if (!expr) return;
-    
-    if (auto* refObj = expr->Cast<UHDM::ref_obj>()) {
-        std::string rhsName = std::string(refObj->VpiFullName());
-        if (!rhsName.empty()) {
-            signalToDriverNames_[lhsSignalName].push_back({rhsName, extractLocation(assignObj)});
-        }
-    }
-    
-    if (auto* op = expr->Cast<UHDM::operation>()) {
-        auto* operands = op->Operands();
-        if (operands) {
-            for (auto* operand : *operands) {
-                if (auto* operandExpr = operand->Cast<UHDM::expr>()) {
-                    extractRhsSignals(operandExpr, lhsSignalName, assignObj);
-                }
-            }
         }
     }
 }

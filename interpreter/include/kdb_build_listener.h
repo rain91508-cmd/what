@@ -19,14 +19,12 @@ namespace UHDM {
 namespace hwda {
 namespace interpreter {
 
-struct DriverInfo {
-    uint64_t driverSignalId;
-    KdbSourceLocation location;
-};
+class DriverAnalyzer;
 
 class KdbBuildListener : public UHDM::VpiListener {
 public:
     KdbBuildListener(KdbBuilder& builder, std::unordered_map<std::string, uint64_t>& filePathToId);
+    ~KdbBuildListener();
     
     void enterModule_inst(const UHDM::module_inst* object, vpiHandle handle) override;
     void leaveModule_inst(const UHDM::module_inst* object, vpiHandle handle) override;
@@ -35,10 +33,6 @@ public:
     size_t getTotalSignals() const { return totalSignals_; }
     
 private:
-    void applyDriverRelationships();
-    void processAssignStatements(const UHDM::module_inst* module);
-    void extractRhsSignals(const UHDM::expr* expr, const std::string& lhsSignalName, 
-                          const UHDM::BaseClass* assignObj);
     KdbSourceLocation extractLocation(const UHDM::BaseClass* obj);
     SignalType convertSignalType(int32_t uhdmNetType);
     PortDirection convertPortDirection(int direction);
@@ -51,10 +45,10 @@ private:
     size_t totalSignals_;
     uint64_t nextPortId_;
     
-    std::unordered_map<std::string, std::vector<DriverInfo>> currentModuleDrivers_;
     std::unordered_map<std::string, uint64_t> currentModuleSignalMap_;
     std::vector<std::pair<std::string, uint64_t>> currentModuleInstances_;
-    std::unordered_map<std::string, std::vector<std::pair<std::string, KdbSourceLocation>>> signalToDriverNames_;
+    
+    DriverAnalyzer* driverAnalyzer_;
 };
 
 }
