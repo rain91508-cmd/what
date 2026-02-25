@@ -277,7 +277,16 @@ uint64_t SourceFileInfo::getLineCount() const {
     return count;
 }
 
+bool KdbBuilder::hasModule(const std::string& fullName) const {
+    return moduleNameToId_.find(fullName) != moduleNameToId_.end();
+}
+
 uint64_t KdbBuilder::addModule(const ModuleInfo& module) {
+    auto it = moduleNameToId_.find(module.fullName);
+    if (it != moduleNameToId_.end()) {
+        return it->second;
+    }
+    
     auto mod = std::make_unique<ModuleInfo>(module);
     mod->id = nextModuleId_++;
     

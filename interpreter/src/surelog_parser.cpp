@@ -80,6 +80,22 @@ public:
             moduleInfo.parentModuleId = currentModuleStack_.back();
         }
         
+        // If module fullname and name are same, parent id must be 0
+        if (moduleInfo.fullName == moduleInfo.name) {
+            moduleInfo.parentModuleId = 0;
+        }
+        
+        // Check if module already exists
+        bool moduleExists = builder_.hasModule(moduleInfo.fullName);
+        
+        // Push a marker to the stack to indicate whether we should process this module
+        moduleStackMarkers_.push_back(!moduleExists);
+        
+        // If module already exists, don't process further
+        if (moduleExists) {
+            return;
+        }
+        
         // Add module
         uint64_t moduleId = builder_.addModule(moduleInfo);
         currentModuleStack_.push_back(moduleId);
@@ -161,8 +177,12 @@ public:
     }
     
     void leaveModule_inst(const UHDM::module_inst* object, vpiHandle handle) override {
-        if (!currentModuleStack_.empty()) {
-            currentModuleStack_.pop_back();
+        if (!moduleStackMarkers_.empty()) {
+            bool shouldPop = moduleStackMarkers_.back();
+            moduleStackMarkers_.pop_back();
+            if (shouldPop && !currentModuleStack_.empty()) {
+                currentModuleStack_.pop_back();
+            }
         }
     }
     
@@ -173,6 +193,7 @@ private:
     KdbBuilder& builder_;
     std::unordered_map<std::string, uint64_t>& filePathToId_;
     std::vector<uint64_t> currentModuleStack_;
+    std::vector<bool> moduleStackMarkers_;
     size_t totalModules_;
     size_t totalSignals_;
     uint64_t nextPortId_;

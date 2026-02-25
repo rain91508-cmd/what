@@ -156,6 +156,7 @@ public:
     std::string getSourceFileContent(uint64_t fileId) const;
     
     uint64_t addModule(const ModuleInfo& module);
+    bool hasModule(const std::string& fullName) const;
     
     uint64_t addSignal(uint64_t moduleId, const SignalInfo& signal);
     
