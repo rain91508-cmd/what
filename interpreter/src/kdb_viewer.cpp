@@ -365,7 +365,13 @@ void printModuleWithSource(const KdbBuilder& builder, const std::string& moduleN
     for (const auto& signal : module->signals) {
         std::cout << "    " << std::setw(10) << std::left 
                   << signalTypeToString(signal.type)
-                  << " " << signal.name << "\n";
+                  << " " << std::setw(8) << std::left
+                  << portDirectionToString(signal.direction)
+                  << " " << signal.name;
+        if (signal.msb != 0 || signal.lsb != 0) {
+            std::cout << " [" << signal.msb << ":" << signal.lsb << "]";
+        }
+        std::cout << "\n";
     }
 }
 
@@ -407,7 +413,13 @@ void printModuleDetails(const KdbBuilder& builder, const std::string& moduleName
     for (const auto& signal : module->signals) {
         std::cout << "    " << std::setw(10) << std::left 
                   << signalTypeToString(signal.type)
-                  << " " << signal.name << "\n";
+                  << " " << std::setw(8) << std::left
+                  << portDirectionToString(signal.direction)
+                  << " " << signal.name;
+        if (signal.msb != 0 || signal.lsb != 0) {
+            std::cout << " [" << signal.msb << ":" << signal.lsb << "]";
+        }
+        std::cout << "\n";
     }
 }
 

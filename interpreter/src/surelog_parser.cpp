@@ -519,19 +519,17 @@ KdbSourceLocation SurelogParser::extractLocation(UHDM::BaseClass* uhdmObject) {
 }
 
 // Helper function to extract bit width from UHDM objects
+// Note: This is a simplified version that doesn't extract actual bit width
+// Full implementation would require proper vpiHandle traversal
 static void extractBitWidthFromUhdmObject(UHDM::BaseClass* uhdmObject, uint32_t& msb, 
                                           uint32_t& lsb, bool& isVector) {
     msb = 0;
     lsb = 0;
     isVector = false;
     
-    if (!uhdmObject) return;
-    
-    // For now, we don't extract bit width from UHDM objects
-    // as it requires proper vpiHandle which is not directly available
-    // from BaseClass pointer. The bit width extraction would need
-    // to be done at a different level where vpiHandle is available.
-    // Default to scalar (msb=0, lsb=0, isVector=false)
+    // For now, we keep default values (0, 0, false)
+    // Full bit width extraction requires more complex UHDM traversal
+    // which would need access to the proper vpi context
 }
 
 void SurelogParser::extractBitWidth(UHDM::BaseClass* uhdmObject, uint32_t& msb, 
