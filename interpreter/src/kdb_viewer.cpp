@@ -520,7 +520,6 @@ void printHierarchy(const KdbBuilder& builder) {
 
 void printJson(const KdbBuilder& builder) {
     auto modules = builder.getAllModules();
-    auto signals = builder.getAllSignals();
     
     std::cout << "{\n";
     
@@ -617,42 +616,6 @@ void printJson(const KdbBuilder& builder) {
         }
         std::cout << "\n      ]\n";
         
-        std::cout << "    }";
-    }
-    std::cout << "\n  ],\n";
-    
-    std::cout << "  \"signals\": [\n";
-    first = true;
-    for (const auto* signal : signals) {
-        if (!first) std::cout << ",\n";
-        first = false;
-        std::cout << "    {\n";
-        std::cout << "      \"id\": " << signal->id << ",\n";
-        std::cout << "      \"name\": \"" << signal->name << "\",\n";
-        std::cout << "      \"full_name\": \"" << signal->fullName << "\",\n";
-        std::cout << "      \"type\": \"" << signalTypeToString(signal->type) << "\",\n";
-        std::cout << "      \"direction\": \"" << portDirectionToString(signal->direction) << "\",\n";
-        std::cout << "      \"msb\": " << signal->msb << ",\n";
-        std::cout << "      \"lsb\": " << signal->lsb << ",\n";
-        std::cout << "      \"parent_module_id\": " << signal->parentModuleId << ",\n";
-        std::cout << "      \"declaration\": {\n";
-        std::cout << "        \"file_id\": " << signal->declaration.fileId << ",\n";
-        std::cout << "        \"line\": " << signal->declaration.line << ",\n";
-        std::cout << "        \"column_start\": " << signal->declaration.columnStart << ",\n";
-        std::cout << "        \"column_end\": " << signal->declaration.columnEnd << "\n";
-        std::cout << "      },\n";
-        std::cout << "      \"driver_signal_ids\": [";
-        for (size_t i = 0; i < signal->driverSignalIds.size(); ++i) {
-            if (i > 0) std::cout << ", ";
-            std::cout << signal->driverSignalIds[i];
-        }
-        std::cout << "],\n";
-        std::cout << "      \"load_signal_ids\": [";
-        for (size_t i = 0; i < signal->loadSignalIds.size(); ++i) {
-            if (i > 0) std::cout << ", ";
-            std::cout << signal->loadSignalIds[i];
-        }
-        std::cout << "]\n";
         std::cout << "    }";
     }
     std::cout << "\n  ]\n";
