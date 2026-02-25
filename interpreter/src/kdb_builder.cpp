@@ -29,7 +29,7 @@ KdbBuilder::KdbBuilder()
     , nextInstanceId_(1) {
 }
 
-uint64_t KdbBuilder::addModule(const ModuleInfo& module) {
+uint32_t KdbBuilder::addModule(const ModuleInfo& module) {
     auto it = moduleNameToId_.find(module.fullName);
     if (it != moduleNameToId_.end()) {
         return it->second;
@@ -45,7 +45,7 @@ uint64_t KdbBuilder::addModule(const ModuleInfo& module) {
         signalIdToIndex_[sig.id] = mod->signals.size() - 1;
     }
     
-    uint64_t id = mod->id;
+    uint32_t id = mod->id;
     moduleNameToId_[mod->fullName] = id;
     moduleIdToIndex_[id] = modules_.size();
     modules_.push_back(std::move(mod));
@@ -59,12 +59,12 @@ void KdbBuilder::setProjectName(const std::string& name) {
     projectName_ = name;
 }
 
-void KdbBuilder::setTopModule(uint64_t moduleId) {
+void KdbBuilder::setTopModule(uint32_t moduleId) {
     topModuleIds_.clear();
     topModuleIds_.push_back(moduleId);
 }
 
-void KdbBuilder::addHierarchy(uint64_t topModuleId) {
+void KdbBuilder::addHierarchy(uint32_t topModuleId) {
     // Check if this topModuleId already exists
     for (const auto& existing : hierarchies_) {
         if (existing.topModuleId == topModuleId) {
@@ -75,7 +75,7 @@ void KdbBuilder::addHierarchy(uint64_t topModuleId) {
     HierarchyInfo hierarchy;
     hierarchy.topModuleId = topModuleId;
     
-    std::function<void(uint64_t)> collectModules = [&](uint64_t moduleId) {
+    std::function<void(uint32_t)> collectModules = [&](uint32_t moduleId) {
         hierarchy.moduleIds.push_back(moduleId);
         auto children = getChildModules(moduleId);
         for (const auto* child : children) {
@@ -87,13 +87,13 @@ void KdbBuilder::addHierarchy(uint64_t topModuleId) {
     hierarchies_.push_back(hierarchy);
 }
 
-uint64_t KdbBuilder::addSourceFile(const std::string& path, const std::string& content) {
+uint32_t KdbBuilder::addSourceFile(const std::string& path, const std::string& content) {
     auto file = std::make_unique<SourceFileInfo>();
     file->id = nextFileId_++;
     file->path = path;
     file->content = content;
     
-    uint64_t id = file->id;
+    uint32_t id = file->id;
     filePathToId_[path] = id;
     fileIdToIndex_[id] = files_.size();
     files_.push_back(std::move(file));
@@ -101,7 +101,7 @@ uint64_t KdbBuilder::addSourceFile(const std::string& path, const std::string& c
     return id;
 }
 
-bool KdbBuilder::setSourceFileContent(uint64_t fileId, const std::string& content) {
+bool KdbBuilder::setSourceFileContent(uint32_t fileId, const std::string& content) {
     auto* file = const_cast<SourceFileInfo*>(findFileById(fileId));
     if (!file) return false;
     
@@ -110,17 +110,17 @@ bool KdbBuilder::setSourceFileContent(uint64_t fileId, const std::string& conten
     return true;
 }
 
-bool KdbBuilder::addSignalLink(uint64_t fileId, uint32_t line, uint32_t columnStart, 
+bool KdbBuilder::addSignalLink(uint32_t fileId, uint32_t line, uint32_t columnStart, 
                                uint32_t columnEnd, uint64_t signalId) {
     SourceLinkInfo link;
     link.line = line;
     link.columnStart = columnStart;
     link.columnEnd = columnEnd;
-    link.targetId = signalId;
+    link.targetId = static_cast<uint32_t>(signalId);  // Cast to uint32_t
     return addSignalLink(fileId, link);
 }
 
-bool KdbBuilder::addSignalLink(uint64_t fileId, const SourceLinkInfo& link) {
+bool KdbBuilder::addSignalLink(uint32_t fileId, const SourceLinkInfo& link) {
     auto* file = const_cast<SourceFileInfo*>(findFileById(fileId));
     if (!file) return false;
     
@@ -128,8 +128,8 @@ bool KdbBuilder::addSignalLink(uint64_t fileId, const SourceLinkInfo& link) {
     return true;
 }
 
-bool KdbBuilder::addSubmodLink(uint64_t fileId, uint32_t line, uint32_t columnStart,
-                               uint32_t columnEnd, uint64_t moduleId) {
+bool KdbBuilder::addSubmodLink(uint32_t fileId, uint32_t line, uint32_t columnStart,
+                               uint32_t columnEnd, uint32_t moduleId) {
     SourceLinkInfo link;
     link.line = line;
     link.columnStart = columnStart;
@@ -138,7 +138,7 @@ bool KdbBuilder::addSubmodLink(uint64_t fileId, uint32_t line, uint32_t columnSt
     return addSubmodLink(fileId, link);
 }
 
-bool KdbBuilder::addSubmodLink(uint64_t fileId, const SourceLinkInfo& link) {
+bool KdbBuilder::addSubmodLink(uint32_t fileId, const SourceLinkInfo& link) {
     auto* file = const_cast<SourceFileInfo*>(findFileById(fileId));
     if (!file) return false;
     
@@ -149,14 +149,14 @@ bool KdbBuilder::addSubmodLink(uint64_t fileId, const SourceLinkInfo& link) {
 // Note: addPortLink removed - port links are now stored in signalLinks
 // Use addSignalLink instead for both ports and internal signals
 
-std::string KdbBuilder::getSourceLine(uint64_t fileId, uint32_t line) const {
+std::string KdbBuilder::getSourceLine(uint32_t fileId, uint32_t line) const {
     const auto* file = findFileById(fileId);
     if (!file || line == 0 || line > file->getLineCount()) return "";
     
     return file->getLine(line);
 }
 
-std::string KdbBuilder::getSourceRange(uint64_t fileId, uint32_t startLine, uint32_t startCol,
+std::string KdbBuilder::getSourceRange(uint32_t fileId, uint32_t startLine, uint32_t startCol,
                                         uint32_t endLine, uint32_t endCol) const {
     const auto* file = findFileById(fileId);
     if (!file) return "";
@@ -164,7 +164,7 @@ std::string KdbBuilder::getSourceRange(uint64_t fileId, uint32_t startLine, uint
     return file->getRange(startLine, startCol, endLine, endCol);
 }
 
-std::string KdbBuilder::getSourceFileContent(uint64_t fileId) const {
+std::string KdbBuilder::getSourceFileContent(uint32_t fileId) const {
     const auto* file = findFileById(fileId);
     return file ? file->content : "";
 }
@@ -239,7 +239,7 @@ uint64_t SourceFileInfo::getSignalAtPosition(uint32_t line, uint32_t column) con
     for (const auto& link : signalLinks) {
         if (link.line == line && 
             column >= link.columnStart && column <= link.columnEnd) {
-            return link.targetId;
+            return link.targetId;  // targetId is now uint32_t, but return as uint64_t
         }
     }
     return 0;
@@ -282,7 +282,7 @@ bool KdbBuilder::hasModule(const std::string& fullName) const {
     return moduleNameToId_.find(fullName) != moduleNameToId_.end();
 }
 
-uint64_t KdbBuilder::addSignal(uint64_t moduleId, const SignalInfo& signal) {
+uint64_t KdbBuilder::addSignal(uint32_t moduleId, const SignalInfo& signal) {
     auto* mod = const_cast<ModuleInfo*>(findModuleById(moduleId));
     if (!mod) return 0;
     
@@ -298,11 +298,11 @@ uint64_t KdbBuilder::addSignal(uint64_t moduleId, const SignalInfo& signal) {
     return id;
 }
 
-uint64_t KdbBuilder::addInstance(const ModuleInstanceInfo& instance) {
+uint32_t KdbBuilder::addInstance(const ModuleInstanceInfo& instance) {
     auto inst = std::make_unique<ModuleInstanceInfo>(instance);
     inst->id = nextInstanceId_++;
     
-    uint64_t id = inst->id;
+    uint32_t id = inst->id;
     instances_.push_back(std::move(inst));
     
     return id;
@@ -319,7 +319,7 @@ const ModuleInfo* KdbBuilder::findModuleByName(const std::string& name) const {
     return nullptr;
 }
 
-const ModuleInfo* KdbBuilder::findModuleById(uint64_t id) const {
+const ModuleInfo* KdbBuilder::findModuleById(uint32_t id) const {
     auto it = moduleIdToIndex_.find(id);
     if (it != moduleIdToIndex_.end() && it->second < modules_.size()) {
         return modules_[it->second].get();
@@ -354,7 +354,7 @@ const SourceFileInfo* KdbBuilder::findFileByPath(const std::string& path) const 
     return nullptr;
 }
 
-const SourceFileInfo* KdbBuilder::findFileById(uint64_t id) const {
+const SourceFileInfo* KdbBuilder::findFileById(uint32_t id) const {
     auto it = fileIdToIndex_.find(id);
     if (it != fileIdToIndex_.end() && it->second < files_.size()) {
         return files_[it->second].get();
@@ -417,7 +417,7 @@ std::vector<const SignalInfo*> KdbBuilder::getLoads(uint64_t signalId) const {
     return result;
 }
 
-std::vector<const ModuleInfo*> KdbBuilder::getChildModules(uint64_t parentModuleId) const {
+std::vector<const ModuleInfo*> KdbBuilder::getChildModules(uint32_t parentModuleId) const {
     std::vector<const ModuleInfo*> result;
     for (const auto& mod : modules_) {
         if (mod->parentModuleId == parentModuleId) {
@@ -552,6 +552,15 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
             for (uint64_t loadId : sig.loadSignalIds) {
                 protoSig->add_load_signal_ids(loadId);
             }
+            
+            // Add driver lines
+            for (const auto& driverLine : sig.driverLines) {
+                auto* protoDriverLine = protoSig->add_driver_lines();
+                protoDriverLine->set_file_id(driverLine.fileId);
+                protoDriverLine->set_line(driverLine.line);
+                protoDriverLine->set_column_start(driverLine.columnStart);
+                protoDriverLine->set_column_end(driverLine.columnEnd);
+            }
         }
     }
     
@@ -647,6 +656,16 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
             }
             for (uint64_t loadId : protoSig.load_signal_ids()) {
                 sig.loadSignalIds.push_back(loadId);
+            }
+            
+            // Load driver lines
+            for (const auto& protoDriverLine : protoSig.driver_lines()) {
+                DriverLocation driverLine;
+                driverLine.fileId = protoDriverLine.file_id();
+                driverLine.line = protoDriverLine.line();
+                driverLine.columnStart = protoDriverLine.column_start();
+                driverLine.columnEnd = protoDriverLine.column_end();
+                sig.driverLines.push_back(driverLine);
             }
             
             nextSignalId_ = std::max(nextSignalId_, sig.id + 1);

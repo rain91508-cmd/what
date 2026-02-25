@@ -14,11 +14,11 @@ message SourceLink {
   uint32 line = 1;
   uint32 column_start = 2;
   uint32 column_end = 3;
-  uint64 target_id = 4;
+  uint32 target_id = 4;  // Changed from uint64 to uint32 for non-signal IDs
 }
 
 message SourceFile {
-  uint64 id = 1;
+  uint32 id = 1;  // Changed from uint64 to uint32
   string path = 2;
   string content = 3;
   repeated SourceLink signal_links = 4;  // Contains both port and internal signal links
@@ -27,7 +27,15 @@ message SourceFile {
 }
 
 message SourceLocation {
-  uint64 file_id = 1;
+  uint32 file_id = 1;  // Changed from uint64 to uint32
+  uint32 line = 2;
+  uint32 column_start = 3;
+  uint32 column_end = 4;
+}
+
+// Source location for driver discovery
+message DriverLocation {
+  uint32 file_id = 1;
   uint32 line = 2;
   uint32 column_start = 3;
   uint32 column_end = 4;
@@ -58,33 +66,34 @@ enum PortDirection {
 // See the direction field in Signal message below
 
 message Signal {
-  uint64 id = 1;
+  uint64 id = 1;  // Keep uint64 for signal IDs (can be many signals)
   string name = 2;
   string full_name = 3;
   SignalType type = 4;
   uint32 msb = 5;
   uint32 lsb = 6;
-  uint64 parent_module_id = 7;
+  uint32 parent_module_id = 7;  // Changed from uint64 to uint32
   SourceLocation declaration = 8;
   repeated uint64 driver_signal_ids = 9;
   repeated uint64 load_signal_ids = 10;
   PortDirection direction = 11;  // Direction of the signal: INPUT, OUTPUT, INOUT, or UNKNOWN for internal signals
+  repeated DriverLocation driver_lines = 12;  // Source locations where drivers are discovered
 }
 
 message Module {
-  uint64 id = 1;
+  uint32 id = 1;  // Changed from uint64 to uint32
   string name = 2;
   string full_name = 3;
-  uint64 parent_module_id = 4;
-  uint64 file_id = 5;
+  uint32 parent_module_id = 4;  // Changed from uint64 to uint32
+  uint32 file_id = 5;  // Changed from uint64 to uint32
   SourceLocation declaration = 6;
   repeated Signal signals = 7;  // Contains both ports and internal signals
   bool is_instance = 8;
 }
 
 message DesignHierarchy {
-  uint64 top_module_id = 1;
-  repeated uint64 module_ids = 2;
+  uint32 top_module_id = 1;  // Changed from uint64 to uint32
+  repeated uint32 module_ids = 2;  // Changed from uint64 to uint32
 }
 
 message KnowledgeBase {
