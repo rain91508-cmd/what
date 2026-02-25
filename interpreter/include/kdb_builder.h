@@ -68,15 +68,7 @@ struct SourceFileInfo {
 struct KdbSourceLocation {
     uint32_t fileId;  // Changed from uint64_t to uint32_t
     uint32_t line;
-    uint32_t columnStart;
-    uint32_t columnEnd;
-};
-
-// Source location for driver discovery
-struct DriverLocation {
-    uint32_t fileId;
-    uint32_t line;
-    // Note: columnStart and columnEnd removed - not needed for driver location
+    // Note: columnStart and columnEnd removed - not needed
 };
 
 
@@ -93,7 +85,7 @@ struct SignalInfo {
     uint32_t parentModuleId;  // Changed from uint64_t to uint32_t
     std::vector<uint64_t> driverSignalIds;
     // Note: loadSignalIds removed - not needed
-    std::vector<DriverLocation> driverLines;  // Source locations where drivers are discovered
+    std::vector<KdbSourceLocation> driverLines;  // Source locations where drivers are discovered (using KdbSourceLocation instead of DriverLocation)
 };
 
 struct ModuleInstanceInfo {

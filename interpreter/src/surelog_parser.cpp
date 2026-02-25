@@ -133,8 +133,8 @@ public:
         if (moduleInfo.declaration.fileId != 0) {
             SourceLinkInfo link;
             link.line = moduleInfo.declaration.line;
-            link.columnStart = moduleInfo.declaration.columnStart;
-            link.columnEnd = moduleInfo.declaration.columnEnd;
+            link.columnStart = 0;  // Note: column info removed from KdbSourceLocation
+            link.columnEnd = 0;    // Note: column info removed from KdbSourceLocation
             link.targetId = moduleId;
             builder_.addSubmodLink(moduleInfo.declaration.fileId, link);
         }
@@ -148,8 +148,8 @@ public:
                 if (addedSignal) {
                     SourceLinkInfo link;
                     link.line = sig.declaration.line;
-                    link.columnStart = sig.declaration.columnStart;
-                    link.columnEnd = sig.declaration.columnEnd;
+                    link.columnStart = 0;  // Note: column info removed from KdbSourceLocation
+                    link.columnEnd = 0;    // Note: column info removed from KdbSourceLocation
                     link.targetId = addedSignal->id;
                     builder_.addSignalLink(sig.declaration.fileId, link);
                 }
@@ -191,8 +191,8 @@ public:
                 if (signalInfo.declaration.fileId != 0) {
                     SourceLinkInfo link;
                     link.line = signalInfo.declaration.line;
-                    link.columnStart = signalInfo.declaration.columnStart;
-                    link.columnEnd = signalInfo.declaration.columnEnd;
+                    link.columnStart = 0;  // Note: column info removed from KdbSourceLocation
+                    link.columnEnd = 0;    // Note: column info removed from KdbSourceLocation
                     link.targetId = signalId;
                     builder_.addSignalLink(signalInfo.declaration.fileId, link);
                 }
@@ -217,8 +217,8 @@ public:
                 if (signalInfo.declaration.fileId != 0) {
                     SourceLinkInfo link;
                     link.line = signalInfo.declaration.line;
-                    link.columnStart = signalInfo.declaration.columnStart;
-                    link.columnEnd = signalInfo.declaration.columnEnd;
+                    link.columnStart = 0;  // Note: column info removed from KdbSourceLocation
+                    link.columnEnd = 0;    // Note: column info removed from KdbSourceLocation
                     link.targetId = signalId;
                     builder_.addSignalLink(signalInfo.declaration.fileId, link);
                 }
@@ -252,8 +252,7 @@ private:
         KdbSourceLocation loc;
         loc.fileId = 0;
         loc.line = 0;
-        loc.columnStart = 0;
-        loc.columnEnd = 0;
+        // Note: columnStart and columnEnd removed from KdbSourceLocation
         
         if (!obj) return loc;
         
@@ -266,8 +265,7 @@ private:
         }
         
         loc.line = obj->VpiLineNo();
-        loc.columnStart = obj->VpiColumnNo();
-        loc.columnEnd = loc.columnStart;
+        // Note: column info removed from KdbSourceLocation
         
         return loc;
     }
@@ -505,8 +503,7 @@ KdbSourceLocation SurelogParser::extractLocation(UHDM::BaseClass* uhdmObject) {
     KdbSourceLocation loc;
     loc.fileId = 0;
     loc.line = 0;
-    loc.columnStart = 0;
-    loc.columnEnd = 0;
+    // Note: columnStart and columnEnd removed from KdbSourceLocation
     return loc;
 }
 

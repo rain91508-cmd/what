@@ -100,14 +100,7 @@ void printSignals(const KdbBuilder& builder, bool verbose) {
                 }
                 std::cout << "\n";
             }
-            if (!signal->loadSignalIds.empty()) {
-                std::cout << "      Loads: ";
-                for (size_t i = 0; i < signal->loadSignalIds.size(); ++i) {
-                    if (i > 0) std::cout << ", ";
-                    std::cout << signal->loadSignalIds[i];
-                }
-                std::cout << "\n";
-            }
+            // Note: loadSignalIds removed - not needed
         }
     }
 }
@@ -314,8 +307,8 @@ void printModuleWithSource(const KdbBuilder& builder, const std::string& moduleN
     std::cout << "  ID: " << module->id << "\n";
     std::cout << "  Full Name: " << module->fullName << "\n";
     std::cout << "  File ID: " << module->fileId << "\n";
-    std::cout << "  Location: Line " << module->declaration.line 
-              << ", Col " << module->declaration.columnStart << "\n";
+    std::cout << "  Location: Line " << module->declaration.line << "\n";
+    // Note: column info removed from KdbSourceLocation
     
     if (module->declaration.fileId != 0) {
         const auto* file = builder.findFileById(module->declaration.fileId);
@@ -382,8 +375,8 @@ void printModuleDetails(const KdbBuilder& builder, const std::string& moduleName
     std::cout << "  ID: " << module->id << "\n";
     std::cout << "  Full Name: " << module->fullName << "\n";
     std::cout << "  File ID: " << module->fileId << "\n";
-    std::cout << "  Location: Line " << module->declaration.line 
-              << ", Col " << module->declaration.columnStart << "\n";
+    std::cout << "  Location: Line " << module->declaration.line << "\n";
+    // Note: column info removed from KdbSourceLocation
     
     // Print port signals (those with direction != UNKNOWN)
     int portCount = 0;
@@ -471,19 +464,8 @@ void printSignalLoadTrace(const KdbBuilder& builder, const std::string& signalNa
     std::cout << "\n=== Load Trace for: " << signal->fullName << " ===\n";
     std::cout << "  Type: " << signalTypeToString(signal->type) << "\n";
     
-    if (signal->loadSignalIds.empty()) {
-        std::cout << "  (No loads found - this is likely a primary output or unused signal)\n";
-        return;
-    }
-    
-    std::cout << "  Loads:\n";
-    for (uint64_t loadId : signal->loadSignalIds) {
-        const auto* load = builder.findSignalById(loadId);
-        if (load) {
-            std::cout << "    [" << load->id << "] " << load->fullName 
-                      << " [" << signalTypeToString(load->type) << "]\n";
-        }
-    }
+    // Note: loadSignalIds removed - not needed
+    std::cout << "  (Load tracing not implemented - loadSignalIds removed)\n";
 }
 
 void printHierarchyTree(const KdbBuilder& builder, uint64_t moduleId, int depth) {
@@ -543,9 +525,8 @@ void printJson(const KdbBuilder& builder) {
         std::cout << "      \"is_instance\": " << (module->isInstance ? "true" : "false") << ",\n";
         std::cout << "      \"declaration\": {\n";
         std::cout << "        \"file_id\": " << module->declaration.fileId << ",\n";
-        std::cout << "        \"line\": " << module->declaration.line << ",\n";
-        std::cout << "        \"column_start\": " << module->declaration.columnStart << ",\n";
-        std::cout << "        \"column_end\": " << module->declaration.columnEnd << "\n";
+        std::cout << "        \"line\": " << module->declaration.line << "\n";
+        // Note: column_start and column_end removed - not needed
         std::cout << "      },\n";
         
         std::cout << "      \"signals\": [\n";
@@ -564,22 +545,16 @@ void printJson(const KdbBuilder& builder) {
             std::cout << "          \"parent_module_id\": " << signal.parentModuleId << ",\n";
             std::cout << "          \"declaration\": {\n";
             std::cout << "            \"file_id\": " << signal.declaration.fileId << ",\n";
-            std::cout << "            \"line\": " << signal.declaration.line << ",\n";
-            std::cout << "            \"column_start\": " << signal.declaration.columnStart << ",\n";
-            std::cout << "            \"column_end\": " << signal.declaration.columnEnd << "\n";
+            std::cout << "            \"line\": " << signal.declaration.line << "\n";
+            // Note: column_start and column_end removed - not needed
             std::cout << "          },\n";
             std::cout << "          \"driver_signal_ids\": [";
             for (size_t i = 0; i < signal.driverSignalIds.size(); ++i) {
                 if (i > 0) std::cout << ", ";
                 std::cout << signal.driverSignalIds[i];
             }
-            std::cout << "],\n";
-            std::cout << "          \"load_signal_ids\": [";
-            for (size_t i = 0; i < signal.loadSignalIds.size(); ++i) {
-                if (i > 0) std::cout << ", ";
-                std::cout << signal.loadSignalIds[i];
-            }
             std::cout << "]\n";
+            // Note: load_signal_ids removed - not needed
             std::cout << "        }";
         }
         std::cout << "\n      ],\n";
@@ -596,9 +571,8 @@ void printJson(const KdbBuilder& builder) {
             std::cout << "          \"parent_module_id\": " << instance.parentModuleId << ",\n";
             std::cout << "          \"declaration\": {\n";
             std::cout << "            \"file_id\": " << instance.declaration.fileId << ",\n";
-            std::cout << "            \"line\": " << instance.declaration.line << ",\n";
-            std::cout << "            \"column_start\": " << instance.declaration.columnStart << ",\n";
-            std::cout << "            \"column_end\": " << instance.declaration.columnEnd << "\n";
+            std::cout << "            \"line\": " << instance.declaration.line << "\n";
+            // Note: column_start and column_end removed - not needed
             std::cout << "          },\n";
             std::cout << "          \"connections\": [\n";
             bool firstConnection = true;

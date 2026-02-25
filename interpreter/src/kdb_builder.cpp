@@ -517,8 +517,7 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
             auto* decl = protoMod->mutable_declaration();
             decl->set_file_id(mod->declaration.fileId);
             decl->set_line(mod->declaration.line);
-            decl->set_column_start(mod->declaration.columnStart);
-            decl->set_column_end(mod->declaration.columnEnd);
+            // Note: column_start and column_end removed - not needed
         }
         
         for (const auto& sig : mod->signals) {
@@ -536,8 +535,7 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
                 auto* decl = protoSig->mutable_declaration();
                 decl->set_file_id(sig.declaration.fileId);
                 decl->set_line(sig.declaration.line);
-                decl->set_column_start(sig.declaration.columnStart);
-                decl->set_column_end(sig.declaration.columnEnd);
+                // Note: column_start and column_end removed - not needed
             }
             
             for (uint64_t driverId : sig.driverSignalIds) {
@@ -620,8 +618,7 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
         if (protoMod.has_declaration()) {
             mod->declaration.fileId = protoMod.declaration().file_id();
             mod->declaration.line = protoMod.declaration().line();
-            mod->declaration.columnStart = protoMod.declaration().column_start();
-            mod->declaration.columnEnd = protoMod.declaration().column_end();
+            // Note: column_start and column_end removed - not needed
         }
         
         for (const auto& protoSig : protoMod.signals()) {
@@ -638,8 +635,7 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
             if (protoSig.has_declaration()) {
                 sig.declaration.fileId = protoSig.declaration().file_id();
                 sig.declaration.line = protoSig.declaration().line();
-                sig.declaration.columnStart = protoSig.declaration().column_start();
-                sig.declaration.columnEnd = protoSig.declaration().column_end();
+                // Note: column_start and column_end removed - not needed
             }
             
             for (uint64_t driverId : protoSig.driver_signal_ids()) {
@@ -649,10 +645,10 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
             
             // Load driver lines
             for (const auto& protoDriverLine : protoSig.driver_lines()) {
-                DriverLocation driverLine;
+                KdbSourceLocation driverLine;
                 driverLine.fileId = protoDriverLine.file_id();
                 driverLine.line = protoDriverLine.line();
-                // Note: column_start and column_end removed - not needed for driver location
+                // Note: column_start and column_end removed - not needed
                 sig.driverLines.push_back(driverLine);
             }
             

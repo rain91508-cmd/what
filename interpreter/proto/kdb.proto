@@ -29,15 +29,7 @@ message SourceFile {
 message SourceLocation {
   uint32 file_id = 1;  // Changed from uint64 to uint32
   uint32 line = 2;
-  uint32 column_start = 3;
-  uint32 column_end = 4;
-}
-
-// Source location for driver discovery
-message DriverLocation {
-  uint32 file_id = 1;
-  uint32 line = 2;
-  // Note: column_start and column_end removed - not needed for driver location
+  // Note: column_start and column_end removed - not needed
 }
 
 enum SignalType {
@@ -76,7 +68,7 @@ message Signal {
   repeated uint64 driver_signal_ids = 9;
   // Note: load_signal_ids removed - not needed
   PortDirection direction = 10;  // Direction of the signal: INPUT, OUTPUT, INOUT, or UNKNOWN for internal signals
-  repeated DriverLocation driver_lines = 11;  // Source locations where drivers are discovered
+  repeated SourceLocation driver_lines = 11;  // Source locations where drivers are discovered (using SourceLocation instead of DriverLocation)
 }
 
 message Module {
