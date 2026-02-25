@@ -1,0 +1,478 @@
+Debug: File size = 1009 bytes
+Debug: Magic number = 0x4b445743
+Debug: File size in deserialize = 1009
+Debug: Magic in deserialize = 0x4b445743
+Debug: It's a compressed file
+Loaded KDB: output.kdb
+Statistics:
+  Modules: 5
+  Signals: 20
+  Files: 1
+{
+  "statistics": {
+    "modules": 5,
+    "signals": 20,
+    "files": 1
+  },
+  "modules": [
+    {
+      "id": 1,
+      "name": "work@counter",
+      "full_name": "work@counter",
+      "parent_module_id": 0,
+      "file_id": 1,
+      "is_instance": false,
+      "declaration": {
+        "file_id": 0,
+        "line": 0
+      },
+      "signals": [
+        {
+          "id": 1,
+          "name": "clk",
+          "full_name": "work@counter.clk",
+          "type": "wire",
+          "direction": "input",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 1,
+          "declaration": {
+            "file_id": 1,
+            "line": 14
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        },
+        {
+          "id": 2,
+          "name": "rst_n",
+          "full_name": "work@counter.rst_n",
+          "type": "wire",
+          "direction": "input",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 1,
+          "declaration": {
+            "file_id": 1,
+            "line": 15
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        },
+        {
+          "id": 3,
+          "name": "count",
+          "full_name": "work@counter.count",
+          "type": "wire",
+          "direction": "output",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 1,
+          "declaration": {
+            "file_id": 1,
+            "line": 16
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        },
+        {
+          "id": 4,
+          "name": "WIDTH",
+          "full_name": "work@counter.WIDTH",
+          "type": "parameter",
+          "direction": "output",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 1,
+          "declaration": {
+            "file_id": 1,
+            "line": 12
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        }
+      ],
+      "instances": [
+
+      ]
+    },
+    {
+      "id": 2,
+      "name": "work@simple_adder",
+      "full_name": "work@simple_adder",
+      "parent_module_id": 0,
+      "file_id": 1,
+      "is_instance": false,
+      "declaration": {
+        "file_id": 1,
+        "line": 2
+      },
+      "signals": [
+        {
+          "id": 5,
+          "name": "a",
+          "full_name": "work@simple_adder.a",
+          "type": "wire",
+          "direction": "input",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 2,
+          "declaration": {
+            "file_id": 1,
+            "line": 3
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        },
+        {
+          "id": 6,
+          "name": "b",
+          "full_name": "work@simple_adder.b",
+          "type": "wire",
+          "direction": "input",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 2,
+          "declaration": {
+            "file_id": 1,
+            "line": 4
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        },
+        {
+          "id": 7,
+          "name": "sum",
+          "full_name": "work@simple_adder.sum",
+          "type": "wire",
+          "direction": "output",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 2,
+          "declaration": {
+            "file_id": 1,
+            "line": 5
+          },
+          "driver_signal_ids": [5, 6],
+          "driver_lines": [
+            {
+              "file_id": 1,
+              "line": 7
+            },
+            {
+              "file_id": 1,
+              "line": 7
+            }
+          ]
+        }
+      ],
+      "instances": [
+
+      ]
+    },
+    {
+      "id": 3,
+      "name": "work@top",
+      "full_name": "work@top",
+      "parent_module_id": 0,
+      "file_id": 1,
+      "is_instance": false,
+      "declaration": {
+        "file_id": 1,
+        "line": 28
+      },
+      "signals": [
+        {
+          "id": 8,
+          "name": "clk",
+          "full_name": "work@top.clk",
+          "type": "wire",
+          "direction": "input",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 3,
+          "declaration": {
+            "file_id": 1,
+            "line": 29
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        },
+        {
+          "id": 9,
+          "name": "rst_n",
+          "full_name": "work@top.rst_n",
+          "type": "wire",
+          "direction": "input",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 3,
+          "declaration": {
+            "file_id": 1,
+            "line": 30
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        },
+        {
+          "id": 10,
+          "name": "a",
+          "full_name": "work@top.a",
+          "type": "wire",
+          "direction": "input",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 3,
+          "declaration": {
+            "file_id": 1,
+            "line": 31
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        },
+        {
+          "id": 11,
+          "name": "b",
+          "full_name": "work@top.b",
+          "type": "wire",
+          "direction": "input",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 3,
+          "declaration": {
+            "file_id": 1,
+            "line": 32
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        },
+        {
+          "id": 12,
+          "name": "sum",
+          "full_name": "work@top.sum",
+          "type": "wire",
+          "direction": "output",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 3,
+          "declaration": {
+            "file_id": 1,
+            "line": 33
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        },
+        {
+          "id": 13,
+          "name": "count_out",
+          "full_name": "work@top.count_out",
+          "type": "wire",
+          "direction": "output",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 3,
+          "declaration": {
+            "file_id": 1,
+            "line": 34
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        }
+      ],
+      "instances": [
+
+      ]
+    },
+    {
+      "id": 4,
+      "name": "work@simple_adder",
+      "full_name": "work@top.u_adder",
+      "parent_module_id": 3,
+      "file_id": 1,
+      "is_instance": true,
+      "declaration": {
+        "file_id": 1,
+        "line": 37
+      },
+      "signals": [
+        {
+          "id": 14,
+          "name": "a",
+          "full_name": "work@top.u_adder.a",
+          "type": "wire",
+          "direction": "input",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 4,
+          "declaration": {
+            "file_id": 1,
+            "line": 3
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        },
+        {
+          "id": 15,
+          "name": "b",
+          "full_name": "work@top.u_adder.b",
+          "type": "wire",
+          "direction": "input",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 4,
+          "declaration": {
+            "file_id": 1,
+            "line": 4
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        },
+        {
+          "id": 16,
+          "name": "sum",
+          "full_name": "work@top.u_adder.sum",
+          "type": "wire",
+          "direction": "output",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 4,
+          "declaration": {
+            "file_id": 1,
+            "line": 5
+          },
+          "driver_signal_ids": [14, 15],
+          "driver_lines": [
+            {
+              "file_id": 1,
+              "line": 7
+            },
+            {
+              "file_id": 1,
+              "line": 7
+            }
+          ]
+        }
+      ],
+      "instances": [
+
+      ]
+    },
+    {
+      "id": 5,
+      "name": "work@counter",
+      "full_name": "work@top.u_counter",
+      "parent_module_id": 3,
+      "file_id": 1,
+      "is_instance": true,
+      "declaration": {
+        "file_id": 1,
+        "line": 44
+      },
+      "signals": [
+        {
+          "id": 17,
+          "name": "clk",
+          "full_name": "work@top.u_counter.clk",
+          "type": "wire",
+          "direction": "input",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 5,
+          "declaration": {
+            "file_id": 1,
+            "line": 14
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        },
+        {
+          "id": 18,
+          "name": "rst_n",
+          "full_name": "work@top.u_counter.rst_n",
+          "type": "wire",
+          "direction": "input",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 5,
+          "declaration": {
+            "file_id": 1,
+            "line": 15
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        },
+        {
+          "id": 19,
+          "name": "count",
+          "full_name": "work@top.u_counter.count",
+          "type": "wire",
+          "direction": "output",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 5,
+          "declaration": {
+            "file_id": 1,
+            "line": 16
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        },
+        {
+          "id": 20,
+          "name": "WIDTH",
+          "full_name": "work@top.u_counter.WIDTH",
+          "type": "parameter",
+          "direction": "output",
+          "msb": 0,
+          "lsb": 0,
+          "parent_module_id": 5,
+          "declaration": {
+            "file_id": 1,
+            "line": 12
+          },
+          "driver_signal_ids": [],
+          "driver_lines": [
+
+          ]
+        }
+      ],
+      "instances": [
+
+      ]
+    }
+  ]
+}
