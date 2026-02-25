@@ -222,6 +222,7 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     }
     
     driverAnalyzer_->analyzeContinuousAssignments(object);
+    driverAnalyzer_->analyzeProceduralAssignments(object);
 }
 
 void KdbBuildListener::leaveModule_inst(const UHDM::module_inst* object, vpiHandle handle) {

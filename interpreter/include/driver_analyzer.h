@@ -10,6 +10,8 @@ namespace UHDM {
     class module_inst;
     class expr;
     class BaseClass;
+    class process_stmt;
+    class assignment;
 }
 
 namespace hwda {
@@ -29,6 +31,9 @@ public:
     // Analyze continuous assignments in a module to find driver relationships
     void analyzeContinuousAssignments(const UHDM::module_inst* module);
     
+    // Analyze procedural assignments in always/initial blocks
+    void analyzeProceduralAssignments(const UHDM::module_inst* module);
+    
     // Apply collected driver relationships to signals
     void applyDriverRelationships();
     
@@ -41,6 +46,9 @@ public:
 private:
     void extractRhsSignals(const UHDM::expr* expr, const std::string& lhsSignalName, 
                           const UHDM::BaseClass* assignObj);
+    void processAssignment(const UHDM::assignment* assign);
+    void processProcessStmt(const UHDM::process_stmt* process);
+    void processStmt(const UHDM::BaseClass* stmt);
     KdbSourceLocation extractLocation(const UHDM::BaseClass* obj);
     
     KdbBuilder& builder_;
@@ -51,6 +59,9 @@ private:
     
     // Temporary storage: maps driven signal to driver signal names and locations
     std::unordered_map<std::string, std::vector<std::pair<std::string, KdbSourceLocation>>> signalToDriverNames_;
+    
+    // Track which signals have driver lines recorded (even without RHS signals)
+    std::unordered_map<std::string, std::vector<KdbSourceLocation>> signalDriverLines_;
 };
 
 }
