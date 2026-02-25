@@ -1,5 +1,6 @@
 #include "surelog_parser.h"
 #include "kdb_build_listener.h"
+#include "bit_width_extractor.h"
 
 #include <Surelog/API/Surelog.h>
 #include <Surelog/CommandLine/CommandLineParser.h>
@@ -18,9 +19,6 @@
 
 namespace hwda {
 namespace interpreter {
-
-static void extractBitWidthFromUhdmObject(UHDM::BaseClass* uhdmObject, uint32_t& msb, 
-                                          uint32_t& lsb, bool& isVector);
 
 SurelogParser::SurelogParser()
     : verbose_(false)
@@ -234,20 +232,6 @@ KdbSourceLocation SurelogParser::extractLocation(UHDM::BaseClass* uhdmObject) {
     loc.line = 0;
     // Note: columnStart and columnEnd removed from KdbSourceLocation
     return loc;
-}
-
-// Helper function to extract bit width from UHDM objects
-// Note: This is a simplified version that doesn't extract actual bit width
-// Full implementation would require proper vpiHandle traversal
-static void extractBitWidthFromUhdmObject(UHDM::BaseClass* uhdmObject, uint32_t& msb, 
-                                          uint32_t& lsb, bool& isVector) {
-    msb = 0;
-    lsb = 0;
-    isVector = false;
-    
-    // For now, we keep default values (0, 0, false)
-    // Full bit width extraction requires more complex UHDM traversal
-    // which would need access to the proper vpi context
 }
 
 void SurelogParser::extractBitWidth(UHDM::BaseClass* uhdmObject, uint32_t& msb, 

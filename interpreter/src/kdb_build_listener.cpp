@@ -1,4 +1,5 @@
 #include "kdb_build_listener.h"
+#include "bit_width_extractor.h"
 
 #include <Surelog/API/Surelog.h>
 #include <uhdm/VpiListener.h>
@@ -11,9 +12,6 @@
 
 namespace hwda {
 namespace interpreter {
-
-static void extractBitWidthFromUhdmObject(UHDM::BaseClass* uhdmObject, uint32_t& msb, 
-                                          uint32_t& lsb, bool& isVector);
 
 KdbBuildListener::KdbBuildListener(KdbBuilder& builder, std::unordered_map<std::string, uint64_t>& filePathToId)
     : builder_(builder), filePathToId_(filePathToId), totalModules_(0), totalSignals_(0), nextPortId_(1) {}
@@ -333,13 +331,6 @@ PortDirection KdbBuildListener::convertPortDirection(int direction) {
         case vpiInout: return PortDirection::INOUT;
         default: return PortDirection::UNKNOWN;
     }
-}
-
-static void extractBitWidthFromUhdmObject(UHDM::BaseClass* uhdmObject, uint32_t& msb, 
-                                          uint32_t& lsb, bool& isVector) {
-    msb = 0;
-    lsb = 0;
-    isVector = false;
 }
 
 }

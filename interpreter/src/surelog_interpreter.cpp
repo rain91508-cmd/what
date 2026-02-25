@@ -1,4 +1,5 @@
 #include "surelog_interpreter.h"
+#include "bit_width_extractor.h"
 
 #include <Surelog/API/Surelog.h>
 #include <Surelog/CommandLine/CommandLineParser.h>
@@ -426,14 +427,7 @@ KdbSourceLocation SurelogInterpreter::extractLocation(UHDM::base* uhdmObject) {
 
 void SurelogInterpreter::extractBitWidth(UHDM::base* uhdmObject, uint32_t& msb, 
                                          uint32_t& lsb, bool& isVector) {
-    msb = 0;
-    lsb = 0;
-    isVector = false;
-    
-    if (!uhdmObject) return;
-    
-    // 尝试获取向量信息
-    // UHDM中的位宽表示可能需要根据具体对象类型解析
+    extractBitWidthFromUhdmObject(uhdmObject, msb, lsb, isVector);
 }
 
 } // namespace interpreter
