@@ -139,8 +139,22 @@ public:
             builder_.addSubmodLink(moduleInfo.declaration.fileId, link);
         }
         
-        // Note: port links are now stored in signalLinks
-        // Port signals (direction != UNKNOWN) will be added via addSignalLink below
+        // Add signal links for port signals (direction != UNKNOWN)
+        // These were added to moduleInfo.signals during port processing
+        for (const auto& sig : moduleInfo.signals) {
+            if (sig.direction != PortDirection::UNKNOWN && sig.declaration.fileId != 0) {
+                // Find the signal ID from the builder
+                const SignalInfo* addedSignal = builder_.findSignalByName(sig.fullName);
+                if (addedSignal) {
+                    SourceLinkInfo link;
+                    link.line = sig.declaration.line;
+                    link.columnStart = sig.declaration.columnStart;
+                    link.columnEnd = sig.declaration.columnEnd;
+                    link.targetId = addedSignal->id;
+                    builder_.addSignalLink(sig.declaration.fileId, link);
+                }
+            }
+        }
         
         // Process nets/signals - skip if already added as port
         auto nets = object->Nets();
