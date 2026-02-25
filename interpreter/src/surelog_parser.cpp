@@ -256,19 +256,13 @@ public:
                 std::string instName = std::string(mod->VpiName());
                 std::string instFullName = std::string(mod->VpiFullName());
                 if (!instName.empty()) {
-                    currentModuleInstances_.push_back(std::make_pair(instFullName, 0)); // moduleId will be set later
+                    currentModuleInstances_.push_back({instFullName, 0}); // moduleId will be set later
                 }
             }
         }
         
         // Process continuous assignments to find drivers
         processAssignStatements(object);
-        
-        // Process procedural assignments (always blocks)
-        processProceduralAssignments(object);
-        
-        // Process module instance port connections
-        processModuleInstanceConnections(object);
     }
     
     void leaveModule_inst(const UHDM::module_inst* object, vpiHandle handle) override {
@@ -307,50 +301,8 @@ public:
             }
         }
         
-        // Process module instance INPUT port connections (parent -> instance)
-        for (auto& [instancePortName, parentSignalInfo] : instancePortToParentSignal_) {
-            auto& [parentSignalName, portLocation] = parentSignalInfo;
-            
-            // Find the instance port signal
-            const SignalInfo* instancePortSignal = builder_.findSignalByName(instancePortName);
-            if (!instancePortSignal) continue;
-            
-            // Find the parent signal
-            auto parentIt = currentModuleSignalMap_.find(parentSignalName);
-            if (parentIt != currentModuleSignalMap_.end() && parentIt->second != 0) {
-                uint64_t parentSignalId = parentIt->second;
-                
-                // Add parent signal as driver to instance port
-                SignalInfo* signal = const_cast<SignalInfo*>(instancePortSignal);
-                signal->driverSignalIds.push_back(parentSignalId);
-                signal->driverLines.push_back(portLocation);
-            }
-        }
-        
-        // Process module instance OUTPUT port connections (instance -> parent)
-        for (auto& [parentSignalName, instanceOutputs] : parentSignalToInstanceOutput_) {
-            // Find the parent signal
-            const SignalInfo* parentSignal = builder_.findSignalByName(parentSignalName);
-            if (!parentSignal) continue;
-            
-            // Find the parent signal's module signal map
-            // The parent signal should be in currentModuleSignalMap_
-            for (auto& [instancePortName, portLocation] : instanceOutputs) {
-                // Find the instance port signal
-                const SignalInfo* instancePortSignal = builder_.findSignalByName(instancePortName);
-                if (!instancePortSignal) continue;
-                
-                // Add instance port as driver to parent signal
-                SignalInfo* signal = const_cast<SignalInfo*>(parentSignal);
-                signal->driverSignalIds.push_back(instancePortSignal->id);
-                signal->driverLines.push_back(portLocation);
-            }
-        }
-        
         // Clear temporary storage
         signalToDriverNames_.clear();
-        instancePortToParentSignal_.clear();
-        parentSignalToInstanceOutput_.clear();
     }
     
     size_t getTotalModules() const { return totalModules_; }
@@ -373,10 +325,6 @@ private:
     std::vector<std::pair<std::string, uint64_t>> currentModuleInstances_; // instanceName, moduleId
     // Temporary storage: maps driven signal to driver signal names and locations
     std::unordered_map<std::string, std::vector<std::pair<std::string, KdbSourceLocation>>> signalToDriverNames_;
-    // Maps instance port fullName to parent signal name and location
-    std::unordered_map<std::string, std::pair<std::string, KdbSourceLocation>> instancePortToParentSignal_;
-    // Maps parent signal to instance output port (for output ports, instance drives parent)
-    std::unordered_map<std::string, std::vector<std::pair<std::string, KdbSourceLocation>>> parentSignalToInstanceOutput_;
     
     void processAssignStatements(const UHDM::module_inst* module) {
         auto contAssigns = module->Cont_assigns();
@@ -411,7 +359,7 @@ private:
             std::string rhsName = std::string(refObj->VpiFullName());
             if (!rhsName.empty()) {
                 // Store mapping from driven signal to driver signal name and location
-                signalToDriverNames_[lhsSignalName].push_back(std::make_pair(rhsName, extractLocation(assignObj)));
+                signalToDriverNames_[lhsSignalName].push_back({rhsName, extractLocation(assignObj)});
             }
         }
         
@@ -430,133 +378,6 @@ private:
         // Recursively process child expressions
         // Note: Full implementation would need to traverse the expression tree
         // For now, we handle ref_obj and operation
-    }
-    
-    void processProceduralAssignments(const UHDM::module_inst* module) {
-        auto* processes = module->Process();
-        if (!processes) return;
-        
-        for (auto* proc : *processes) {
-            if (!proc) continue;
-            
-            auto* stmt = proc->Stmt();
-            if (!stmt) continue;
-            
-            // Process the statement to find assignments
-            processStatementForAssignments(stmt, module);
-        }
-    }
-    
-    void processStatementForAssignments(const UHDM::any* stmt, const UHDM::module_inst* module) {
-        if (!stmt) return;
-        
-        // Check if this is a begin block (statement group)
-        if (auto* beginBlock = stmt->Cast<UHDM::begin>()) {
-            auto* stmts = beginBlock->Stmts();
-            if (stmts) {
-                for (auto* s : *stmts) {
-                    processStatementForAssignments(s, module);
-                }
-            }
-            return;
-        }
-        
-        // Check if this is an if statement - process both branches
-        if (auto* ifStmt = stmt->Cast<UHDM::if_stmt>()) {
-            // Process then branch
-            auto* thenStmt = ifStmt->VpiStmt();
-            if (thenStmt) {
-                processStatementForAssignments(thenStmt, module);
-            }
-            // Process else branch if exists
-            auto* elseStmt = ifStmt->VpiElseStmt();
-            if (elseStmt) {
-                processStatementForAssignments(elseStmt, module);
-            }
-            return;
-        }
-        
-        // Check if this is an assignment
-        if (auto* assign = stmt->Cast<UHDM::assignment>()) {
-            auto* lhs = assign->Lhs();
-            auto* rhs = assign->Rhs();
-            
-            std::string lhsName;
-            if (lhs) {
-                if (auto* refObj = lhs->Cast<UHDM::ref_obj>()) {
-                    lhsName = std::string(refObj->VpiFullName());
-                }
-            }
-            
-            if (lhsName.empty()) return;
-            
-            // Always record driver_lines for this assignment
-            // For procedural assignments, we always add the location
-            signalToDriverNames_[lhsName].push_back(std::make_pair("", extractLocation(assign)));
-            
-            // Extract RHS signals if present
-            if (rhs) {
-                if (auto* rhsExpr = rhs->Cast<UHDM::expr>()) {
-                    extractRhsSignals(rhsExpr, lhsName, assign);
-                }
-            }
-        }
-    }
-    
-    void processModuleInstanceConnections(const UHDM::module_inst* module) {
-        auto* instances = module->Modules();
-        if (!instances) return;
-        
-        for (auto* instance : *instances) {
-            if (!instance) continue;
-            
-            std::string instFullName = std::string(instance->VpiFullName());
-            std::string instName = std::string(instance->VpiName());
-            if (instName.empty()) continue;
-            
-            // Process port connections
-            auto* port_conns = instance->Port_conns();
-            if (!port_conns) continue;
-            
-            for (auto* portConn : *port_conns) {
-                if (!portConn) continue;
-                
-                std::string portName = std::string(portConn->VpiName());
-                auto* connExpr = portConn->High_conn();
-                auto* lowConn = portConn->Low_conn();
-                
-                // Get port direction from low_conn (the actual port in the module definition)
-                int portDirection = 0; // 0 = unknown, 1 = input, 2 = output, 3 = inout
-                if (lowConn) {
-                    if (auto* portObj = lowConn->Cast<UHDM::port>()) {
-                        portDirection = portObj->VpiDirection();
-                    }
-                }
-                
-                std::string connectedSignalName;
-                if (connExpr) {
-                    if (auto* refObj = connExpr->Cast<UHDM::ref_obj>()) {
-                        connectedSignalName = std::string(refObj->VpiFullName());
-                    }
-                }
-                
-                if (connectedSignalName.empty()) continue;
-                
-                std::string instancePortFullName = instFullName + "." + portName;
-                KdbSourceLocation loc = extractLocation(portConn);
-                
-                // For input ports: parent signal drives instance port
-                // For output ports: instance port drives parent signal
-                if (portDirection == 1) { // input
-                    // Store: instance port is driven by parent signal
-                    instancePortToParentSignal_[instancePortFullName] = std::make_pair(connectedSignalName, loc);
-                } else if (portDirection == 2) { // output
-                    // Store: parent signal is driven by instance port
-                    parentSignalToInstanceOutput_[connectedSignalName].push_back(std::make_pair(instancePortFullName, loc));
-                }
-                // For inout (3), we could store both directions if needed
-            }
-        }
     }
     
     KdbSourceLocation extractLocation(const UHDM::BaseClass* obj) {
