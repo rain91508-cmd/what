@@ -560,6 +560,7 @@ void printJson(const KdbBuilder& builder) {
             std::cout << "          \"name\": \"" << signal.name << "\",\n";
             std::cout << "          \"full_name\": \"" << signal.fullName << "\",\n";
             std::cout << "          \"type\": \"" << signalTypeToString(signal.type) << "\",\n";
+            std::cout << "          \"direction\": \"" << portDirectionToString(signal.direction) << "\",\n";
             std::cout << "          \"msb\": " << signal.msb << ",\n";
             std::cout << "          \"lsb\": " << signal.lsb << ",\n";
             std::cout << "          \"parent_module_id\": " << signal.parentModuleId << ",\n";
@@ -631,6 +632,7 @@ void printJson(const KdbBuilder& builder) {
         std::cout << "      \"name\": \"" << signal->name << "\",\n";
         std::cout << "      \"full_name\": \"" << signal->fullName << "\",\n";
         std::cout << "      \"type\": \"" << signalTypeToString(signal->type) << "\",\n";
+        std::cout << "      \"direction\": \"" << portDirectionToString(signal->direction) << "\",\n";
         std::cout << "      \"msb\": " << signal->msb << ",\n";
         std::cout << "      \"lsb\": " << signal->lsb << ",\n";
         std::cout << "      \"parent_module_id\": " << signal->parentModuleId << ",\n";
