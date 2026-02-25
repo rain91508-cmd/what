@@ -41,7 +41,9 @@ public:
         moduleInfo.fileId = 0;
         moduleInfo.name = defName.empty() ? instName : defName;
         moduleInfo.fullName = fullName.empty() ? moduleInfo.name : fullName;
-        moduleInfo.isInstance = true;
+        // Determine if this is a module instance or definition
+        // If instName is empty, it's a module definition, otherwise it's an instance
+        moduleInfo.isInstance = !instName.empty();
         
         // Extract location
         moduleInfo.declaration = extractLocation(object);
