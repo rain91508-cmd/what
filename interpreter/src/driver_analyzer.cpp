@@ -91,51 +91,41 @@ void DriverAnalyzer::analyzePortConnections(const UHDM::module_inst* module) {
         
         std::cerr << "DEBUG: Processing port: " << portName << " direction=" << portDirection << "\n";
         
-        // Only process output/inout ports (they drive parent module signals)
-        if (portDirection != vpiOutput && portDirection != vpiInout) {
-            continue;
-        }
-        
-        // Get the high_conn (parent module side connection)
-        // High_conn returns any* (which is BaseClass* in UHDM)
+        // Get the high_conn (parent module side connection) and low_conn (sub-module side)
         UHDM::any* highConn = port->High_conn();
-        if (!highConn) {
-            std::cerr << "DEBUG: No high_conn for port " << portName << "\n";
-            continue;
-        }
+        UHDM::any* lowConn = port->Low_conn();
         
         // Get the parent signal name from high_conn
         std::string parentSignalName;
-        if (auto* refObj = highConn->Cast<UHDM::ref_obj>()) {
-            parentSignalName = std::string(refObj->VpiFullName());
-        } else {
-            // Try to get name directly from BaseClass
-            parentSignalName = std::string(highConn->VpiName());
+        KdbSourceLocation parentSignalLoc;
+        if (highConn) {
+            if (auto* refObj = highConn->Cast<UHDM::ref_obj>()) {
+                parentSignalName = std::string(refObj->VpiFullName());
+                if (auto* actualSignal = refObj->Actual_group()) {
+                    parentSignalLoc = extractLocation(actualSignal);
+                } else {
+                    parentSignalLoc = extractLocation(refObj);
+                }
+            } else {
+                parentSignalName = std::string(highConn->VpiName());
+                parentSignalLoc = extractLocation(highConn);
+            }
         }
         
-        if (parentSignalName.empty()) {
-            std::cerr << "DEBUG: Empty parent signal name for port " << portName << "\n";
-            continue;
-        }
-        
-        // Get the sub-module signal name (low_conn)
-        // Low_conn returns any* (which is BaseClass* in UHDM)
-        UHDM::any* lowConn = port->Low_conn();
+        // Get the sub-module signal name from low_conn
         std::string subModuleSignalName;
-        KdbSourceLocation driverSignalLoc;  // Location of the sub-module signal definition
-        
+        KdbSourceLocation subModuleSignalLoc;
         if (lowConn) {
             if (auto* refObj = lowConn->Cast<UHDM::ref_obj>()) {
                 subModuleSignalName = std::string(refObj->VpiFullName());
-                // Get the location of the actual signal (not the ref_obj)
                 if (auto* actualSignal = refObj->Actual_group()) {
-                    driverSignalLoc = extractLocation(actualSignal);
+                    subModuleSignalLoc = extractLocation(actualSignal);
                 } else {
-                    driverSignalLoc = extractLocation(refObj);
+                    subModuleSignalLoc = extractLocation(refObj);
                 }
             } else {
                 subModuleSignalName = std::string(lowConn->VpiName());
-                driverSignalLoc = extractLocation(lowConn);
+                subModuleSignalLoc = extractLocation(lowConn);
             }
         }
         
@@ -146,17 +136,42 @@ void DriverAnalyzer::analyzePortConnections(const UHDM::module_inst* module) {
         // Use module instance's line number for port connection location
         KdbSourceLocation portLoc = extractLocation(module);
         
-        std::cerr << "DEBUG: Port connection: " << subModuleSignalName << " -> " << parentSignalName 
-                  << " at module instance line " << portLoc.line 
-                  << ", driver signal defined at line " << driverSignalLoc.line << "\n";
+        // Process output/inout ports: sub-module output drives parent module signal
+        if (portDirection == vpiOutput || portDirection == vpiInout) {
+            if (parentSignalName.empty()) {
+                std::cerr << "DEBUG: Empty parent signal name for output port " << portName << "\n";
+                continue;
+            }
+            
+            std::cerr << "DEBUG: Output port connection: " << subModuleSignalName << " -> " << parentSignalName 
+                      << " at module instance line " << portLoc.line << "\n";
+            
+            // Record the driver relationship: sub-module output drives parent module signal
+            signalToDriverNames_[parentSignalName].push_back({subModuleSignalName, portLoc});
+            
+            // Record the driver signal definition location
+            if (subModuleSignalLoc.line > 0) {
+                signalDriverLines_[parentSignalName].push_back(subModuleSignalLoc);
+            }
+        }
         
-        // Record the driver relationship
-        // Sub-module output signal drives parent module signal
-        signalToDriverNames_[parentSignalName].push_back({subModuleSignalName, portLoc});
-        
-        // Record the driver signal definition location (e.g., line 5 for sum in simple_adder)
-        if (driverSignalLoc.line > 0) {
-            signalDriverLines_[parentSignalName].push_back(driverSignalLoc);
+        // Process input ports: parent module signal drives sub-module input
+        if (portDirection == vpiInput || portDirection == vpiInout) {
+            if (parentSignalName.empty()) {
+                std::cerr << "DEBUG: Empty parent signal name for input port " << portName << "\n";
+                continue;
+            }
+            
+            std::cerr << "DEBUG: Input port connection: " << parentSignalName << " -> " << subModuleSignalName 
+                      << " at module instance line " << portLoc.line << "\n";
+            
+            // Record the driver relationship: parent module signal drives sub-module input
+            signalToDriverNames_[subModuleSignalName].push_back({parentSignalName, portLoc});
+            
+            // Record the driver signal definition location (parent signal location)
+            if (parentSignalLoc.line > 0) {
+                signalDriverLines_[subModuleSignalName].push_back(parentSignalLoc);
+            }
         }
     }
 }
@@ -303,10 +318,21 @@ void DriverAnalyzer::applyDriverRelationships() {
         }
         
         for (auto& [driverSignalName, driverLocation] : driverInfos) {
+            // First try to find driver signal ID in current module's signal map
             auto it = currentModuleSignalMap_.find(driverSignalName);
+            uint64_t driverSignalId = 0;
+            
             if (it != currentModuleSignalMap_.end() && it->second != 0) {
-                uint64_t driverSignalId = it->second;
-                
+                driverSignalId = it->second;
+            } else {
+                // If not found in current module, try to find globally via builder
+                const SignalInfo* driverSignal = builder_.findSignalByName(driverSignalName);
+                if (driverSignal) {
+                    driverSignalId = driverSignal->id;
+                }
+            }
+            
+            if (driverSignalId != 0) {
                 SignalInfo* signal = const_cast<SignalInfo*>(drivenSignal);
                 
                 // Check if this driver is already added (avoid duplicates)
@@ -324,7 +350,7 @@ void DriverAnalyzer::applyDriverRelationships() {
                               << ") to " << drivenSignalName << "\n";
                 }
             } else {
-                std::cerr << "DEBUG: Driver signal not in map: " << driverSignalName << "\n";
+                std::cerr << "DEBUG: Driver signal not found: " << driverSignalName << "\n";
             }
         }
     }
