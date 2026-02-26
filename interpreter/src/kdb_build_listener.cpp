@@ -79,16 +79,11 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
             signalInfo.declaration = extractLocation(port);
             
             bool isVector = false;
-            // Try to get bit width from the actual signal connected to the port
-            // First try low_conn (for module instances), then high_conn
-            UHDM::any* conn = port->Low_conn();
-            if (!conn) {
-                conn = port->High_conn();
-            }
-            if (conn) {
-                if (auto* connBase = conn->Cast<UHDM::BaseClass>()) {
-                    extractBitWidthFromUhdmObject(connBase, signalInfo.msb, signalInfo.lsb, isVector);
-                }
+            // Try to get bit width from the port's typespec with module context
+            if (auto* portBase = port->Cast<UHDM::BaseClass>()) {
+                // Cast module_inst to BaseClass for context
+                UHDM::BaseClass* moduleContext = const_cast<UHDM::module_inst*>(object);
+                extractBitWidthFromUhdmObject(portBase, signalInfo.msb, signalInfo.lsb, isVector, moduleContext, nullptr);
             }
             
             moduleInfo.signals.push_back(signalInfo);
