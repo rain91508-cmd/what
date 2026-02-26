@@ -47,3 +47,26 @@ third_party/Surelog/build/
 third_party/Surelog/third_party/**/build/
 third_party/**/CMakeCache.txt
 third_party/**/CMakeFiles/
+
+# Directories to ignore (not committing)
+third_party/
+slpp_all/
+
+# Rust build artifacts
+target/
+Cargo.lock
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Downloaded test files
+*.download
+
+# Temporary files
+*.tmp
+*.temp
+*.bak

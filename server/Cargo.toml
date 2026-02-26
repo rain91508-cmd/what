@@ -1,0 +1,80 @@
+[package]
+name = "hwda-server"
+version = "0.1.0"
+edition = "2021"
+description = "Hardware Design Analyzer Data Server"
+authors = ["HWDA Team"]
+
+[[bin]]
+name = "hwda-server"
+path = "src/main.rs"
+
+[lib]
+name = "hwda_server"
+path = "src/lib.rs"
+
+[dependencies]
+# Web framework
+axum = { version = "0.7", features = ["multipart"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace", "limit"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+prost = "0.12"
+
+# Waveform processing
+wavefst = { version = "0.1", features = ["gzip", "lz4", "mmap", "simd"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+bytes = "1.5"
+http-body-util = "0.1"
+hyper = "1.1"
+hyper-util = { version = "0.1", features = ["full"] }
+tokio-util = "0.7"
+
+# File system
+tokio-stream = "0.1"
+notify = "6.1"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Configuration
+clap = { version = "4.4", features = ["derive"] }
+
+# Async utilities
+futures = "0.3"
+async-trait = "0.1"
+
+# Caching
+moka = { version = "0.12", features = ["future"] }
+
+# UUID for request tracking
+uuid = { version = "1.6", features = ["v4"] }
+
+# MIME types
+mime_guess = "2.0"
+
+# URL encoding
+urlencoding = "2.1"
+url = "2.5"
+
+[dev-dependencies]
+tokio-test = "0.4"
+reqwest = { version = "0.11", features = ["json"] }
+tempfile = "3.8"
+
+[features]
+default = []
+perf = ["wavefst/parallel"]
