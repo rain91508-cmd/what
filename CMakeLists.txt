@@ -13,7 +13,6 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-option(BUILD_SERVER "Build data server" ON)
 option(BUILD_INTERPRETER "Build design interpreter" ON)
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_SURELOG "Build with Surelog parser" ON)
@@ -33,8 +32,6 @@ if(CLANG_FORMAT)
         COMMAND ${CLANG_FORMAT}
         -i
         -style=file
-        ${CMAKE_SOURCE_DIR}/server/src/*.cpp
-        ${CMAKE_SOURCE_DIR}/server/include/*.h
         ${CMAKE_SOURCE_DIR}/interpreter/src/*.cpp
         ${CMAKE_SOURCE_DIR}/interpreter/include/*.h
         COMMENT "Formatting code with clang-format"
@@ -44,10 +41,6 @@ endif()
 if(BUILD_SURELOG)
     set(SURELOG_BUILD_TESTS OFF CACHE BOOL "Disable Surelog tests")
     add_subdirectory(third_party/Surelog ${CMAKE_SOURCE_DIR}/third_party/build/Surelog)
-endif()
-
-if(BUILD_SERVER)
-    add_subdirectory(server)
 endif()
 
 if(BUILD_INTERPRETER)
@@ -60,9 +53,9 @@ endif()
 
 message(STATUS "=== Build Configuration ===")
 message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
-message(STATUS "Build Server: ${BUILD_SERVER}")
 message(STATUS "Build Interpreter: ${BUILD_INTERPRETER}")
 message(STATUS "Build Surelog: ${BUILD_SURELOG}")
 message(STATUS "Build Tests: ${BUILD_TESTS}")
 message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "Install Prefix: ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "Note: Server is now Rust-based, see server-rs/ directory")
