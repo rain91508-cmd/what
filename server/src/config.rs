@@ -56,6 +56,10 @@ pub struct ServerConfig {
     /// 速率限制 (每秒请求数)
     #[arg(long, default_value = "100")]
     pub rate_limit: u64,
+
+    /// FST 读取后端 (fstapi, wavefst)
+    #[arg(long, default_value = "fstapi")]
+    pub fst_backend: String,
 }
 
 impl ServerConfig {
@@ -136,6 +140,7 @@ impl Default for ServerConfig {
             enable_auth: false,
             auth_token: None,
             rate_limit: 100,
+            fst_backend: "fstapi".to_string(),
         }
     }
 }

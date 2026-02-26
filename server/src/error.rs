@@ -34,6 +34,9 @@ pub enum ServerError {
     #[error("无效的 Range 请求")]
     InvalidRange,
 
+    #[error("无效的参数：{0}")]
+    InvalidParameter(String),
+
     #[error("文件 IO 错误：{0}")]
     IoError(#[from] std::io::Error),
 
@@ -85,6 +88,11 @@ impl IntoResponse for ServerError {
                 StatusCode::RANGE_NOT_SATISFIABLE,
                 "INVALID_RANGE",
                 "无效的 Range 请求范围".to_string(),
+            ),
+            ServerError::InvalidParameter(msg) => (
+                StatusCode::BAD_REQUEST,
+                "INVALID_PARAMETER",
+                msg.clone(),
             ),
             ServerError::IoError(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

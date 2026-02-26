@@ -1,5 +1,5 @@
 use crate::error::{Result, ServerError};
-use crate::services::WaveService;
+use crate::services::{FstBackend, WaveService};
 use crate::state::ServerState;
 use axum::{
     body::Body,
@@ -11,6 +11,15 @@ use axum::{
 use serde::Deserialize;
 use tracing::info;
 
+/// 根据配置创建 WaveService
+fn create_wave_service(state: &ServerState) -> WaveService {
+    let backend = match state.config.fst_backend.as_str() {
+        "wavefst" => FstBackend::WaveFst,
+        _ => FstBackend::FstApi,
+    };
+    WaveService::with_backend(state.clone(), backend)
+}
+
 /// 波形列表查询参数
 #[derive(Debug, Deserialize)]
 pub struct WaveListQuery {
@@ -18,6 +27,24 @@ pub struct WaveListQuery {
     limit: Option<usize>,
     /// 偏移量
     offset: Option<usize>,
+}
+
+/// 信号列表查询参数
+#[derive(Debug, Deserialize)]
+pub struct SignalListQuery {
+    /// 限制返回数量
+    limit: Option<usize>,
+    /// 偏移量
+    offset: Option<usize>,
+    /// 信号名称正则表达式过滤
+    #[serde(default)]
+    name_regex: Option<String>,
+    /// 起始 handle (包含)
+    #[serde(default)]
+    handle_from: Option<u32>,
+    /// 结束 handle (包含)
+    #[serde(default)]
+    handle_to: Option<u32>,
 }
 
 /// 波形数据查询参数
@@ -84,16 +111,49 @@ pub async fn get_wave_info(
 pub async fn list_wave_signals(
     State(state): State<ServerState>,
     Path(waveform_name): Path<String>,
+    Query(query): Query<SignalListQuery>,
 ) -> Result<Json<serde_json::Value>> {
     state.stats.record_request(crate::state::RequestType::Wave).await;
-    
-    info!("处理信号列表请求: waveform={}", waveform_name);
-    
-    let wave_service = WaveService::new(state.clone());
+
+    info!("处理信号列表请求: waveform={}, query={:?}", waveform_name, query);
+
+    let wave_service = create_wave_service(&state);
     info!("WaveService 创建成功, 后端: {:?}", wave_service.backend());
-    
-    let signals = wave_service.list_signals(&waveform_name).await?;
+
+    let mut signals = wave_service.list_signals(&waveform_name).await?;
     info!("获取到 {} 个信号", signals.len());
+
+    // 应用名称正则过滤
+    if let Some(regex_pattern) = &query.name_regex {
+        match regex::Regex::new(regex_pattern) {
+            Ok(regex) => {
+                signals.retain(|s| regex.is_match(&s.name));
+                info!("正则过滤后剩余 {} 个信号", signals.len());
+            }
+            Err(e) => {
+                return Err(crate::error::ServerError::InvalidParameter(format!(
+                    "无效的正则表达式: {}",
+                    e
+                )));
+            }
+        }
+    }
+
+    // 应用 handle 范围过滤
+    if let Some(handle_from) = query.handle_from {
+        signals.retain(|s| s.handle >= handle_from);
+    }
+    if let Some(handle_to) = query.handle_to {
+        signals.retain(|s| s.handle <= handle_to);
+    }
+
+    // 应用分页
+    if let Some(offset) = query.offset {
+        signals = signals.into_iter().skip(offset).collect();
+    }
+    if let Some(limit) = query.limit {
+        signals = signals.into_iter().take(limit).collect();
+    }
 
     Ok(Json(serde_json::json!({
         "status": "success",

@@ -33,6 +33,9 @@ fstapi = { path = "../third_party/fst-tools/fstapi" }
 zstd = "0.13"
 lz4 = "1.24"
 
+# Regex
+regex = "1.10"
+
 # Error handling
 thiserror = "1.0"
 anyhow = "1.0"

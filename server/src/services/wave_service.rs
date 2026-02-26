@@ -1,5 +1,5 @@
 use crate::error::{Result, ServerError};
-use crate::services::wave_data::{LodConfig, LodLevel, SignalWaveData, Transition, ChunkSerializer};
+use crate::services::wave_data::{LodConfig, LodLevel, SignalWaveData, Transition, ChunkSerializer, CompressionAlgorithm};
 use crate::state::ServerState;
 use std::path::PathBuf;
 use tokio::fs;

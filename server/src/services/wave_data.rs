@@ -590,12 +590,13 @@ impl WaveDataManager {
                 // 生成该 LoD 层级的数据
                 let lod_data = self.generator.generate_level(signal, lod_level);
 
-                // 序列化为 chunk
+                // 序列化为 chunk（使用默认无压缩）
                 let chunk_data = ChunkSerializer::serialize(
                     chunk_id,
                     level as u16,
                     &[&lod_data],
                     (chunk_start, chunk_end),
+                    CompressionAlgorithm::None,
                 )?;
 
                 chunks.push((chunk_id, level as u16, chunk_data));
