@@ -879,6 +879,215 @@ kdb_viewer design.kdb --json
 
 * 存储为FST格式或自定义二进制格式
 
+### 6.4.1 OPFS 数据结构规范（Warm层）
+
+**Requirement: SV-003-1 OPFS目录结构**
+
+客户端OPFS中的波形数据应采用以下生产级目录结构：
+
+```
+/opfs/waves/
+└── <wave_id>/
+    ├── meta.json              # 波形元数据（<10KB）
+    ├── signals.bin            # 信号表（紧凑二进制）
+    ├── level_0/               # LoD 0 - 原始精度
+    │   ├── chunk_000000.bin   # 时间分块数据
+    │   ├── chunk_000001.bin
+    │   └── ...
+    ├── level_1/               # LoD 1 - 2x降采样
+    │   ├── chunk_000000.bin
+    │   └── ...
+    ├── level_2/               # LoD 2 - 4x降采样
+    │   └── ...
+    └── level_N/               # 最高LoD层级
+```
+
+**设计原则：**
+
+* **永远不要在浏览器里"现算全量波形"** - 采用chunk + multi-resolution (LOD) + 按需加载
+
+* **时间分块** - 每个chunk覆盖固定时间窗口，实现O(1)定位
+
+* **预生成LOD** - LOD必须在server端或后台worker预生成，避免zoom out卡顿
+
+**Requirement: SV-003-2 meta.json 结构**
+
+```json
+{
+  "version": 1,
+  "wave_id": "hdl-example",
+  "time_begin": 0,
+  "time_end": 1000000000,
+  "time_unit": "ps",
+  "levels": 6,
+  "base_chunk_ns": 1000,
+  "signal_count": 45,
+  "chunk_size_bytes": 65536,
+  "signals_meta_offset": 1024
+}
+```
+
+**作用：**
+
+* Viewer快速初始化
+
+* LOD层级选择
+
+* 时间到chunk的映射
+
+**Requirement: SV-003-3 signals.bin 结构**
+
+紧凑二进制信号表，采用SoA（Structure of Arrays）布局：
+
+```rust
+struct SignalEntry {
+    handle: u32,        // 信号句柄
+    width: u16,         // 位宽
+    name_offset: u32,   // 名称在字符串池中的偏移
+    flags: u16,         // 标志位（类型、方向等）
+}
+
+// 文件布局：
+// [Header: count, string_pool_offset]
+// [SignalEntry...]
+// [StringPool: null-terminated names]
+```
+
+**Requirement: SV-003-4 chunk 内部数据布局**
+
+**推荐格式：SoA（Structure of Arrays）**
+
+```
+chunk_000000.bin:
+├── Header (32 bytes)
+│   ├── magic: u32 = 0x57415645 ('WAVE')
+│   ├── version: u16 = 1
+│   ├── level: u16          // LoD层级
+│   ├── chunk_id: u32       // chunk序号
+│   ├── time_start: u64     // 起始时间
+│   ├── time_end: u64       // 结束时间
+│   └── signal_count: u32   // 信号数量
+│
+├── Signal Block Table
+│   └── [SignalBlockHeader...]
+│       ├── signal_handle: u32
+│       ├── time_array_offset: u32
+│       ├── value_array_offset: u32
+│       ├── transition_count: u32
+│       └── compression: u8
+│
+└── Signal Data Blocks
+    └── Per Signal:
+        ├── [timestamp array: u64...]  // SoA: 时间戳数组
+        └── [value array: u8...]       // SoA: 值数组
+```
+
+**为什么用SoA而不是AoS：**
+
+* ✅ GPU友好 - WebGL/Shader可以直接使用
+
+* ✅ SIMD友好 - 便于批量处理
+
+* ✅ 压缩效率高 - 同类数据连续存储
+
+**Requirement: SV-003-5 LOD金字塔生成算法**
+
+**核心算法：min/max bucket（业界标准）**
+
+```rust
+// 伪代码
+fn generate_lod_level(input: &WaveData, level: u32) -> WaveData {
+    let bucket_size = 1 << level;  // 2^level
+    let mut output = WaveData::new();
+    
+    for signal in input.signals {
+        let mut bucket_min = signal.values[0];
+        let mut bucket_max = signal.values[0];
+        let mut bucket_time_min = signal.times[0];
+        
+        for (i, (time, value)) in signal.iter().enumerate() {
+            if i % bucket_size == 0 && i > 0 {
+                // 输出上一个bucket的min/max
+                output.push_transition(signal.handle, bucket_time_min, bucket_min);
+                output.push_transition(signal.handle, bucket_time_min, bucket_max);
+                bucket_min = value;
+                bucket_max = value;
+                bucket_time_min = time;
+            } else {
+                bucket_min = bucket_min.min(value);
+                bucket_max = bucket_max.max(value);
+            }
+        }
+        // 输出最后一个bucket
+        output.push_transition(signal.handle, bucket_time_min, bucket_min);
+        output.push_transition(signal.handle, bucket_time_min, bucket_max);
+    }
+    output
+}
+```
+
+**为什么不用简单抽样：**
+
+* ❌ 简单抽样会丢失窄脉冲（glitch）和边沿
+
+* ✅ min/max bucket保证边沿不丢，zoom out时波形真实
+
+**Requirement: SV-003-6 LOD参数建议（实战值）**
+
+如果没有实测数据，使用以下默认值：
+
+| 参数 | 推荐值 | 说明 |
+|------|--------|------|
+| base window (L0) | 1-10 μs | 最精细层级的时间窗口 |
+| levels | 6-10 | LOD金字塔层数 |
+| chunk size | 64KB-512KB | 单个chunk文件大小 |
+| max points per screen | 50k | 单屏最大绘制点数 |
+| OPFS cache size | 1-5GB | 本地缓存上限 |
+
+**判断是否合理的指标：**
+
+* 单屏draw < 50k points
+
+* 单chunk < 1MB
+
+* OPFS命中率 > 90%
+
+**Requirement: SV-003-7 数据流架构**
+
+```
+Server FST File
+    │
+    ▼ (Server-side preprocessing)
+┌─────────────────┐
+│  LOD Generator  │  ← 预计算多分辨率金字塔
+│  (Rust/WASM)    │
+└─────────────────┘
+    │
+    ▼ (HTTP Range Request)
+Client OPFS Storage
+    │
+    ▼ (WASM decode)
+┌─────────────────┐
+│  WASM Decoder   │  ← 解压、格式转换
+└─────────────────┘
+    │
+    ▼ (TypedArray)
+┌─────────────────┐
+│  WebGL Buffer   │  ← 上传GPU
+└─────────────────┘
+    │
+    ▼
+WebGL Rendering
+```
+
+**关键原则：**
+
+* ❗OPFS → WASM 一次大块读取（不要碎片读取）
+
+* ❗LOD必须预生成（server端或后台worker）
+
+* ❗永远只拉"刚好够画一屏"的那一层
+
 ### 6.5 API接口定义
 
 **Requirement: SV-004 知识库API**
