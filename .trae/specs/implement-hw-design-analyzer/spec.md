@@ -969,17 +969,17 @@ chunk_000000.bin:
 │   └── signal_count: u32   // 信号数量
 │
 ├── Signal Block Table
-│   └── [SignalBlockHeader...]
+│   └── [SignalBlockHeader...] (17 bytes each)
 │       ├── signal_handle: u32
 │       ├── time_array_offset: u32
 │       ├── value_array_offset: u32
 │       ├── transition_count: u32
-│       └── compression: u8
+│       └── compression: u8  // 0=none, 1=zstd, 2=lz4
 │
-└── Signal Data Blocks
+└── Signal Data Blocks (压缩后的数据)
     └── Per Signal:
-        ├── [timestamp array: u64...]  // SoA: 时间戳数组
-        └── [value array: u8...]       // SoA: 值数组
+        ├── [compressed timestamp array]  // 压缩后的时间戳数组
+        └── [compressed value array]      // 压缩后的值数组
 ```
 
 **为什么用SoA而不是AoS：**
@@ -989,6 +989,18 @@ chunk_000000.bin:
 * ✅ SIMD友好 - 便于批量处理
 
 * ✅ 压缩效率高 - 同类数据连续存储
+
+**压缩算法：**
+
+| 算法 | ID | 特点 | 适用场景 |
+|------|-----|------|----------|
+| None | 0 | 无压缩，直接透传 | 小数据量、低延迟要求 |
+| Zstd | 1 | 高压缩比，速度中等 | 大数据量、带宽受限 |
+| Lz4 | 2 | 超快压缩，压缩比较低 | 实时性要求高 |
+
+**客户端自动解压：**
+- 根据 SignalBlockHeader.compression 字段自动选择解压算法
+- 解压后恢复为原始 SoA 格式供 WebGL 使用
 
 **Requirement: SV-003-5 LOD金字塔生成算法**
 
@@ -1112,20 +1124,37 @@ GET /api/kdb/info
   }
 ```
 
-**Requirement: SV-005 波形数据API（HTTP Range）**
+**Requirement: SV-005 波形数据API（HTTP Range + 压缩）**
 
 ```
-GET /api/wave/:waveform_name/:signal_name?lod=<level>&start=<time>&end=<time>
+GET /api/wave/:waveform_name/signals/:signal_name/data?lod=<level>&start=<time>&end=<time>&compress=<algo>
   描述: 获取指定波形中指定信号的波形数据
   参数:
     - waveform_name: 波形文件名（不含扩展名）
     - signal_name: 信号完整路径（URL编码）
-    - lod: LoD层级 (0-11)
-    - start: 起始时间（ps）
-    - end: 结束时间（ps）
-  响应: 二进制波形数据（内部格式，非FST）
+    - lod: LoD层级 (0-11, 默认: 0)
+    - start: 起始时间（ps, 默认: 0）
+    - end: 结束时间（ps, 默认: 波形结束时间）
+    - compress: 压缩算法 (none, zstd, lz4, 默认: none)
+  响应: 
+    - Content-Type: application/octet-stream
+    - 二进制波形数据（Chunk格式，见6.4.1节）
   支持Range: 是（用于断点续传）
-  数据格式: 服务端内部优化的二进制格式，包含时间戳-值对序列
+  数据格式: 
+    - ChunkHeader (32 bytes) + SignalBlockHeader(s) + 压缩后的时间/值数组
+    - 采用SoA (Structure of Arrays) 布局
+    - 支持自动解压（根据SignalBlockHeader.compression字段）
+
+  示例:
+    # 获取原始精度数据，无压缩
+    GET /api/wave/hdl-example/signals/fejkon_fc_debug.clk/data?lod=0&start=0&end=1000000
+    
+    # 获取LoD 2数据，使用zstd压缩
+    GET /api/wave/hdl-example/signals/fejkon_fc_debug.clk/data?lod=2&start=0&end=1000000&compress=zstd
+    
+    # 获取数据并使用HTTP Range（断点续传）
+    GET /api/wave/hdl-example/signals/fejkon_fc_debug.clk/data?lod=0&start=0&end=1000000
+    Range: bytes=0-1023
 
 GET /api/wave/list
   描述: 获取所有可用波形文件列表
