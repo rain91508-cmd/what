@@ -51,6 +51,8 @@ third_party/**/CMakeFiles/
 # Directories to ignore (not committing)
 third_party/
 slpp_all/
+build/
+build_new/
 
 # Rust build artifacts
 target/

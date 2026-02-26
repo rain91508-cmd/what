@@ -31,13 +31,14 @@ pub fn create_router(state: ServerState) -> Router<ServerState> {
     // 波形数据 API 路由
     let wave_routes = Router::new()
         .route("/api/wave/list", get(list_waves))
+        .route("/api/wave/:waveform_name/info", get(get_wave_info))
         .route("/api/wave/:waveform_name/signals", get(list_wave_signals))
         .route(
-            "/api/wave/:waveform_name/info/:signal_name",
+            "/api/wave/:waveform_name/signals/:signal_name/info",
             get(get_signal_info),
         )
         .route(
-            "/api/wave/:waveform_name/:signal_name",
+            "/api/wave/:waveform_name/signals/:signal_name/data",
             get(get_wave_data),
         );
 

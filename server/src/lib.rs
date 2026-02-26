@@ -49,7 +49,7 @@ pub mod state;
 pub use config::ServerConfig;
 pub use error::{Result, ServerError, success, SuccessResponse};
 pub use handlers::{create_router, handler_404};
-pub use services::{KdbService, WaveService};
+pub use services::{KdbService, WaveService, FstBackend};
 pub use state::{ServerState, ServerStats, TimeRange, WaveMetadata};
 
 // 重新导出 handlers 中的具体处理器

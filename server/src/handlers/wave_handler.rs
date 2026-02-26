@@ -58,6 +58,25 @@ pub async fn list_waves(
     })))
 }
 
+/// 获取波形文件元信息
+pub async fn get_wave_info(
+    State(state): State<ServerState>,
+    Path(waveform_name): Path<String>,
+) -> Result<Json<serde_json::Value>> {
+    state.stats.record_request(crate::state::RequestType::Wave).await;
+    
+    let wave_service = WaveService::new(state.clone());
+    let info = wave_service.get_wave_info(&waveform_name).await?;
+
+    Ok(Json(serde_json::json!({
+        "status": "success",
+        "data": {
+            "wave_info": info
+        },
+        "error": null
+    })))
+}
+
 /// 获取波形中所有信号列表
 pub async fn list_wave_signals(
     State(state): State<ServerState>,
@@ -65,13 +84,19 @@ pub async fn list_wave_signals(
 ) -> Result<Json<serde_json::Value>> {
     state.stats.record_request(crate::state::RequestType::Wave).await;
     
+    info!("处理信号列表请求: waveform={}", waveform_name);
+    
     let wave_service = WaveService::new(state.clone());
+    info!("WaveService 创建成功, 后端: {:?}", wave_service.backend());
+    
     let signals = wave_service.list_signals(&waveform_name).await?;
+    info!("获取到 {} 个信号", signals.len());
 
     Ok(Json(serde_json::json!({
         "status": "success",
         "data": {
             "waveform_name": waveform_name,
+            "signal_count": signals.len(),
             "signals": signals
         },
         "error": null

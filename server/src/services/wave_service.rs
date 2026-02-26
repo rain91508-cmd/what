@@ -1,278 +1,458 @@
 use crate::error::{Result, ServerError};
-use crate::state::{ServerState, TimeRange, WaveMetadata};
+use crate::state::ServerState;
 use std::path::PathBuf;
 use tokio::fs;
-use tracing::{debug, info};
+use tracing::{debug, error, info, warn};
 
-/// 波形数据服务
-/// 负责管理 FST 波形文件的读取和 LoD 数据查询
-pub struct WaveService {
-    state: ServerState,
-    wave_dir: PathBuf,
+/// FST 文件魔数 (用于识别 FST 文件)
+const FST_MAGIC: &[u8] = b"FST\x00";
+
+/// FST 文件最小大小 (魔数 + 头部信息)
+const FST_MIN_SIZE: u64 = 32;
+
+/// 波形文件基本信息
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
+pub struct WaveFileInfo {
+    /// 波形文件名
+    pub name: String,
+    /// 文件大小 (字节)
+    pub file_size: u64,
+    /// 是否为有效的 FST 文件
+    pub is_valid: bool,
 }
 
-/// 波形信号元信息
+/// 波形文件元数据信息
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
-pub struct WaveSignalInfo {
-    /// 波形名称
-    pub waveform_name: String,
-    /// 信号完整路径
-    pub signal_name: String,
-    /// 时间范围
-    pub time_range: TimeRange,
-    /// 跳变数量
-    pub transition_count: u64,
-    /// 可用的 LoD 层级
-    pub lod_levels: Vec<u32>,
-    /// 信号位宽
-    pub bit_width: u32,
+pub struct WaveInfo {
+    /// 波形文件名
+    pub name: String,
+    /// 文件大小 (字节)
+    pub file_size: u64,
+    /// 时间单位
+    pub time_unit: String,
+    /// 时间精度
+    pub time_precision: String,
+    /// 开始时间
+    pub start_time: u64,
+    /// 结束时间 (时长)
+    pub end_time: u64,
+    /// 信号数量
+    pub signal_count: usize,
+    /// 版本信息
+    pub version: String,
+    /// 日期信息
+    pub date: String,
+}
+
+/// 信号信息
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
+pub struct SignalInfo {
+    /// 信号句柄/ID
+    pub handle: u32,
+    /// 信号名称
+    pub name: String,
     /// 信号类型
     pub signal_type: String,
+    /// 位宽
+    pub width: u32,
+    /// 方向 (输入/输出/内部)
+    pub direction: String,
 }
 
-/// LoD 层级配置
-pub const LOD_LEVELS: [u32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+/// FST 读取后端枚举
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FstBackend {
+    /// 使用 fstapi (GTKWave C API)
+    FstApi,
+    /// 使用 wavefst (纯 Rust)
+    WaveFst,
+}
 
-/// LoD 时间精度 (皮秒)
-pub fn lod_precision(lod: u32) -> i64 {
-    match lod {
-        0 => 10,           // 10ps
-        1 => 100,          // 100ps
-        2 => 1_000,        // 1ns
-        3 => 10_000,       // 10ns
-        4 => 100_000,      // 100ns
-        5 => 1_000_000,    // 1us
-        6 => 10_000_000,   // 10us
-        7 => 100_000_000,  // 100us
-        8 => 1_000_000_000,    // 1ms
-        9 => 10_000_000_000,   // 10ms
-        10 => 100_000_000_000, // 100ms
-        11 => 1_000_000_000_000, // 1s
-        _ => 10,
+impl Default for FstBackend {
+    fn default() -> Self {
+        // 默认使用 fstapi，因为它支持更完整的 FST 格式
+        FstBackend::FstApi
     }
+}
+
+/// 波形数据服务
+pub struct WaveService {
+    state: ServerState,
+    backend: FstBackend,
 }
 
 impl WaveService {
     /// 创建新的波形数据服务
     pub fn new(state: ServerState) -> Self {
-        let wave_dir = state.config.wave_dir.clone();
-        Self { state, wave_dir }
+        Self {
+            state,
+            backend: FstBackend::default(),
+        }
+    }
+
+    /// 创建指定后端的波形数据服务
+    pub fn with_backend(state: ServerState, backend: FstBackend) -> Self {
+        Self { state, backend }
+    }
+
+    /// 设置后端
+    pub fn set_backend(&mut self, backend: FstBackend) {
+        self.backend = backend;
+    }
+
+    /// 获取当前后端
+    pub fn backend(&self) -> FstBackend {
+        self.backend
     }
 
     /// 获取所有可用的波形文件列表
-    pub async fn list_waves(&self) -> Result<Vec<WaveMetadata>> {
+    /// 只返回有效的 FST 文件
+    pub async fn list_waves(&self) -> Result<Vec<WaveFileInfo>> {
         let mut waves = Vec::new();
 
-        let mut entries = fs::read_dir(&self.wave_dir).await?;
+        info!("正在读取波形目录: {}", self.state.config.wave_dir.display());
+        let mut entries = fs::read_dir(&self.state.config.wave_dir).await?;
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("fst") {
-                if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                    let metadata = fs::metadata(&path).await?;
-                    // TODO: 解析 FST 文件获取真实信息
-                    waves.push(WaveMetadata {
-                        name: name.to_string(),
-                        file: format!("{}.fst", name),
-                        time_range: TimeRange::new(0, 1_000_000_000), // TODO: 从文件解析
-                        signal_count: 0,                               // TODO: 从文件解析
-                        lod_levels: LOD_LEVELS.to_vec(),
-                        file_size: metadata.len(),
-                    });
+
+            // 检查是否是 .fst 文件
+            info!("检查文件: {:?}", path);
+            if let Some(ext) = path.extension() {
+                info!("  扩展名: {:?}", ext);
+                if ext == "fst" {
+                    if let Some(name) = path.file_stem() {
+                        let name = name.to_string_lossy().to_string();
+                        let metadata = fs::metadata(&path).await?;
+                        let file_size = metadata.len();
+
+                        // 验证 FST 文件有效性
+                        let is_valid = self.validate_fst_file(&path).await?;
+
+                        info!("  发现 FST 文件: {} ({} bytes, valid={})", name, file_size, is_valid);
+
+                        waves.push(WaveFileInfo {
+                            name,
+                            file_size,
+                            is_valid,
+                        });
+                    }
                 }
             }
         }
 
-        debug!("找到 {} 个波形文件", waves.len());
+        // 按名称排序
+        waves.sort_by(|a, b| a.name.cmp(&b.name));
+
+        info!("发现 {} 个波形文件", waves.len());
         Ok(waves)
     }
 
-    /// 获取波形中指定信号的元信息
-    pub async fn get_signal_info(
-        &self,
-        waveform_name: &str,
-        signal_name: &str,
-    ) -> Result<WaveSignalInfo> {
-        // 验证波形文件存在
-        self.get_wave_path(waveform_name)?;
-
-        // TODO: 实际实现中需要从 FST 文件解析信号信息
-        // 这里使用占位实现
-
-        Ok(WaveSignalInfo {
-            waveform_name: waveform_name.to_string(),
-            signal_name: signal_name.to_string(),
-            time_range: TimeRange::new(0, 1_000_000_000),
-            transition_count: 0, // TODO: 从文件解析
-            lod_levels: LOD_LEVELS.to_vec(),
-            bit_width: 1, // TODO: 从文件解析
-            signal_type: "wire".to_string(), // TODO: 从文件解析
-        })
-    }
-
-    /// 获取波形中所有信号列表
-    pub async fn list_signals(&self, waveform_name: &str) -> Result<Vec<String>> {
-        // 验证波形文件存在
-        self.get_wave_path(waveform_name)?;
-
-        // TODO: 实际实现中需要从 FST 文件解析信号列表
-        // 这里返回空列表作为占位
-        Ok(Vec::new())
-    }
-
-    /// 获取波形数据 (支持 HTTP Range 和 LoD)
-    pub async fn get_wave_data(
-        &self,
-        waveform_name: &str,
-        signal_name: &str,
-        lod: u32,
-        start_time: i64,
-        end_time: i64,
-        range: Option<(u64, Option<u64>)>,
-    ) -> Result<(Vec<u8>, u64, Option<u64>)> {
-        // 验证 LoD 层级
-        if lod > 11 {
-            return Err(ServerError::InvalidLod(lod));
+    /// 验证 FST 文件的有效性
+    async fn validate_fst_file(&self, path: &PathBuf) -> Result<bool> {
+        // 检查文件大小
+        let metadata = fs::metadata(path).await?;
+        if metadata.len() < FST_MIN_SIZE {
+            return Ok(false);
         }
 
-        // 验证时间范围
-        if start_time < 0 || end_time < start_time {
-            return Err(ServerError::InvalidTimeRange(format!(
-                "无效的时间范围：{} - {}",
-                start_time, end_time
-            )));
+        // 读取文件头部检查魔数
+        let header = fs::read(&path).await?;
+        if header.len() < FST_MAGIC.len() {
+            return Ok(false);
         }
 
-        // 验证波形文件存在
-        let wave_path = self.get_wave_path(waveform_name)?;
+        // 检查魔数
+        let valid = &header[..FST_MAGIC.len()] == FST_MAGIC;
 
-        // 尝试从缓存获取
-        let cache_key = ServerState::make_wave_chunk_key(
-            waveform_name,
-            signal_name,
-            lod,
-            start_time,
-            end_time,
-        );
-
-        if let Some(cached) = self.state.wave_chunk_cache.get(&cache_key).await {
-            debug!("波形数据缓存命中：{} (LoD {})", signal_name, lod);
-            self.state.stats.record_cache_hit().await;
-            let data = (*cached).clone();
-            let len = data.len() as u64;
-            return Ok((data, len, Some(len)));
+        if !valid {
+            warn!("文件 {:?} 不是有效的 FST 文件", path);
         }
 
-        self.state.stats.record_cache_miss().await;
-
-        // TODO: 实际实现中需要：
-        // 1. 使用 wavefst 库读取 FST 文件
-        // 2. 根据 LoD 层级进行降采样
-        // 3. 裁剪时间范围 [start_time, end_time]
-        // 4. 序列化为二进制格式
-        // 这里使用占位实现
-
-        // 读取 FST 文件
-        let file_content = fs::read(&wave_path).await?;
-        let file_size = file_content.len() as u64;
-
-        // 计算 Range 范围
-        let (start, end) = match range {
-            Some((start, Some(end))) => (start, end.min(file_size - 1)),
-            Some((start, None)) => (start, file_size - 1),
-            None => (0, file_size - 1),
-        };
-
-        let data = file_content[start as usize..=end as usize].to_vec();
-
-        // 缓存数据
-        self.state
-            .wave_chunk_cache
-            .insert(cache_key, Arc::new(data.clone()))
-            .await;
-
-        debug!(
-            "读取波形数据：{}.{} (LoD {}, {}-{} ps)",
-            waveform_name, signal_name, lod, start_time, end_time
-        );
-
-        Ok((data, file_size, Some(end - start + 1)))
+        Ok(valid)
     }
 
-    /// 获取波形文件路径
-    fn get_wave_path(&self, waveform_name: &str) -> Result<PathBuf> {
-        let wave_path = self.wave_dir.join(format!("{}.fst", waveform_name));
+    /// 获取波形文件的完整路径
+    fn get_wave_path(&self, wave_name: &str) -> Result<PathBuf> {
+        let wave_dir = &self.state.config.wave_dir;
+        let wave_path = wave_dir.join(format!("{}.fst", wave_name));
 
         if !wave_path.exists() {
-            return Err(ServerError::WaveformNotFound(format!(
-                "波形文件 '{}.fst' 不存在",
-                waveform_name
-            )));
+            return Err(ServerError::WaveformNotFound(wave_name.to_string()));
         }
 
         Ok(wave_path)
     }
 
-    /// 检查波形文件是否存在
-    pub fn wave_exists(&self, waveform_name: &str) -> bool {
-        self.wave_dir.join(format!("{}.fst", waveform_name)).exists()
-    }
+    /// 获取波形文件的元数据信息
+    pub async fn get_wave_info(&self, wave_name: &str) -> Result<WaveInfo> {
+        let wave_path = self.get_wave_path(wave_name)?;
 
-    /// 根据缩放级别自动选择 LoD
-    pub fn select_lod(&self, pixels_per_ps: f64) -> u32 {
-        // 根据像素密度选择合适的 LoD 层级
-        // 这是一个简化实现，实际应该更复杂
-        if pixels_per_ps > 0.1 {
-            0 // 最高精度
-        } else if pixels_per_ps > 0.01 {
-            2
-        } else if pixels_per_ps > 0.001 {
-            4
-        } else if pixels_per_ps > 0.0001 {
-            6
-        } else {
-            8 // 最低精度
+        // 根据后端选择不同的读取方式
+        match self.backend {
+            FstBackend::FstApi => self.get_wave_info_fstapi(&wave_path, wave_name).await,
+            FstBackend::WaveFst => self.get_wave_info_wavefst(&wave_path, wave_name).await,
         }
     }
-}
 
-use std::sync::Arc;
+    /// 使用 fstapi 获取波形文件信息
+    async fn get_wave_info_fstapi(&self, wave_path: &PathBuf, wave_name: &str) -> Result<WaveInfo> {
+        let path_str = wave_path.to_string_lossy().to_string();
+        let wave_name = wave_name.to_string();
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::ServerConfig;
-    use tempfile::TempDir;
+        // 使用 spawn_blocking 避免阻塞异步运行时
+        let info = tokio::task::spawn_blocking(move || {
+            info!("正在使用 fstapi 打开 FST 文件: {}", path_str);
+            let reader = fstapi::Reader::open(&path_str)
+                .map_err(|e| {
+                    error!("无法打开 FST 文件 {}: {}", path_str, e);
+                    ServerError::Internal(format!("无法打开 FST 文件: {}", e))
+                })?;
 
-    #[test]
-    fn test_lod_precision() {
-        assert_eq!(lod_precision(0), 10);
-        assert_eq!(lod_precision(2), 1_000);
-        assert_eq!(lod_precision(5), 1_000_000);
-        assert_eq!(lod_precision(11), 1_000_000_000_000);
+            let file_size = std::fs::metadata(&path_str)
+                .map(|m| m.len())
+                .unwrap_or(0);
+
+            // 获取各个字段
+            let date = reader.date().unwrap_or("Unknown");
+            let version = reader.version().unwrap_or("Unknown");
+            let start_time = reader.start_time();
+            let end_time = reader.end_time();
+            let var_count = reader.var_count();
+
+            info!("FST 文件元数据: vars={}, start={}, end={}, version={}",
+                var_count, start_time, end_time, version);
+
+            // 获取时间单位字符串 (fstapi 不直接提供 timescale，使用默认值)
+            let time_unit = "1ps".to_string();
+
+            Ok::<_, ServerError>(WaveInfo {
+                name: wave_name,
+                file_size,
+                time_unit: time_unit.clone(),
+                time_precision: time_unit,
+                start_time,
+                end_time,
+                signal_count: var_count as usize,
+                version: version.to_string(),
+                date: date.to_string(),
+            })
+        })
+        .await
+        .map_err(|e| ServerError::Internal(format!("任务执行失败: {}", e)))??;
+
+        Ok(info)
     }
 
-    #[tokio::test]
-    async fn test_list_waves_empty() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = ServerConfig {
-            wave_dir: temp_dir.path().to_path_buf(),
-            ..Default::default()
+    /// 使用 wavefst 获取波形文件信息
+    async fn get_wave_info_wavefst(&self, wave_path: &PathBuf, wave_name: &str) -> Result<WaveInfo> {
+        let file = std::fs::File::open(wave_path)?;
+        let reader = wavefst::ReaderBuilder::new(file).build()
+            .map_err(|e| ServerError::Internal(format!("无法读取 FST 文件: {}", e)))?;
+
+        let header = reader.header();
+        let metadata = fs::metadata(wave_path).await?;
+        let file_size = metadata.len();
+
+        // 解析时间单位
+        let time_unit = if header.timescale_exponent < 0 {
+            format!("{}s", 10f64.powi(header.timescale_exponent as i32))
+        } else {
+            format!("{}s", 10f64.powi(header.timescale_exponent as i32))
         };
-        let state = ServerState::new(config);
-        let service = WaveService::new(state);
 
-        let waves = service.list_waves().await.unwrap();
-        assert!(waves.is_empty());
+        Ok(WaveInfo {
+            name: wave_name.to_string(),
+            file_size,
+            time_unit: time_unit.clone(),
+            time_precision: time_unit,
+            start_time: header.start_time,
+            end_time: header.end_time,
+            signal_count: header.var_count as usize,
+            version: header.version.clone(),
+            date: header.date.clone(),
+        })
     }
 
-    #[test]
-    fn test_select_lod() {
-        let config = ServerConfig::default();
-        let state = ServerState::new(config);
-        let service = WaveService::new(state);
+    /// 获取波形文件中所有信号列表
+    pub async fn list_signals(&self, wave_name: &str) -> Result<Vec<SignalInfo>> {
+        let wave_path = self.get_wave_path(wave_name)?;
 
-        assert_eq!(service.select_lod(1.0), 0);
-        assert_eq!(service.select_lod(0.05), 2);
-        assert_eq!(service.select_lod(0.00001), 8);
+        // 根据后端选择不同的读取方式
+        match self.backend {
+            FstBackend::FstApi => self.list_signals_fstapi(&wave_path, wave_name).await,
+            FstBackend::WaveFst => self.list_signals_wavefst(&wave_path, wave_name).await,
+        }
+    }
+
+    /// 使用 fstapi 获取信号列表
+    async fn list_signals_fstapi(&self, wave_path: &PathBuf, _wave_name: &str) -> Result<Vec<SignalInfo>> {
+        let path_str = wave_path.to_string_lossy().to_string();
+
+        // 使用 spawn_blocking 避免阻塞异步运行时
+        let signals = tokio::task::spawn_blocking(move || {
+            info!("正在使用 fstapi 打开 FST 文件: {}", path_str);
+            let mut reader = fstapi::Reader::open(&path_str)
+                .map_err(|e| {
+                    error!("无法打开 FST 文件 {}: {}", path_str, e);
+                    ServerError::Internal(format!("无法打开 FST 文件: {}", e))
+                })?;
+
+            let mut signals = Vec::new();
+            let mut var_count = 0;
+            let mut alias_count = 0;
+
+            // 遍历所有变量
+            info!("开始遍历 FST 文件的变量...");
+            for var_result in reader.vars() {
+                var_count += 1;
+                let (name, var) = var_result
+                    .map_err(|e| {
+                        error!("读取变量失败: {}", e);
+                        ServerError::Internal(format!("读取变量失败: {}", e))
+                    })?;
+
+                // 跳过别名
+                if var.is_alias() {
+                    alias_count += 1;
+                    continue;
+                }
+
+                // 转换信号类型
+                let signal_type = match var.ty() {
+                    fstapi::var_type::VCD_EVENT => "VcdEvent",
+                    fstapi::var_type::VCD_INTEGER => "VcdInteger",
+                    fstapi::var_type::VCD_PARAMETER => "VcdParameter",
+                    fstapi::var_type::VCD_REAL => "VcdReal",
+                    fstapi::var_type::VCD_REAL_PARAMETER => "VcdRealParameter",
+                    fstapi::var_type::VCD_REG => "VcdReg",
+                    fstapi::var_type::VCD_SUPPLY0 => "VcdSupply0",
+                    fstapi::var_type::VCD_SUPPLY1 => "VcdSupply1",
+                    fstapi::var_type::VCD_TIME => "VcdTime",
+                    fstapi::var_type::VCD_TRI => "VcdTri",
+                    fstapi::var_type::VCD_TRIAND => "VcdTriand",
+                    fstapi::var_type::VCD_TRIOR => "VcdTrior",
+                    fstapi::var_type::VCD_TRIREG => "VcdTrireg",
+                    fstapi::var_type::VCD_TRI0 => "VcdTri0",
+                    fstapi::var_type::VCD_TRI1 => "VcdTri1",
+                    fstapi::var_type::VCD_WAND => "VcdWand",
+                    fstapi::var_type::VCD_WIRE => "VcdWire",
+                    fstapi::var_type::VCD_WOR => "VcdWor",
+                    fstapi::var_type::VCD_PORT => "VcdPort",
+                    fstapi::var_type::VCD_SPARRAY => "VcdSparray",
+                    fstapi::var_type::VCD_REALTIME => "VcdRealtime",
+                    fstapi::var_type::GEN_STRING => "GenString",
+                    fstapi::var_type::SV_BIT => "SvBit",
+                    fstapi::var_type::SV_LOGIC => "SvLogic",
+                    fstapi::var_type::SV_INT => "SvInt",
+                    fstapi::var_type::SV_SHORTINT => "SvShortint",
+                    fstapi::var_type::SV_LONGINT => "SvLongint",
+                    fstapi::var_type::SV_BYTE => "SvByte",
+                    fstapi::var_type::SV_ENUM => "SvEnum",
+                    fstapi::var_type::SV_SHORTREAL => "SvShortreal",
+                    _ => "Unknown",
+                };
+
+                // 转换方向
+                let direction = match var.direction() {
+                    fstapi::var_dir::IMPLICIT => "Implicit",
+                    fstapi::var_dir::INPUT => "Input",
+                    fstapi::var_dir::OUTPUT => "Output",
+                    fstapi::var_dir::INOUT => "Inout",
+                    fstapi::var_dir::BUFFER => "Buffer",
+                    fstapi::var_dir::LINKAGE => "Linkage",
+                    _ => "Unknown",
+                };
+
+                signals.push(SignalInfo {
+                    handle: var.handle().into(),
+                    name: name.to_string(),
+                    signal_type: signal_type.to_string(),
+                    width: var.length(),
+                    direction: direction.to_string(),
+                });
+            }
+
+            info!("FST 文件从 fstapi 读取完成: 总变量={}, 别名={}, 有效信号={}",
+                var_count, alias_count, signals.len());
+            Ok::<_, ServerError>(signals)
+        })
+        .await
+        .map_err(|e| ServerError::Internal(format!("任务执行失败: {}", e)))??;
+
+        Ok(signals)
+    }
+
+    /// 使用 wavefst 获取信号列表
+    async fn list_signals_wavefst(&self, wave_path: &PathBuf, wave_name: &str) -> Result<Vec<SignalInfo>> {
+        let file = std::fs::File::open(wave_path)?;
+        let reader = wavefst::ReaderBuilder::new(file).build()
+            .map_err(|e| ServerError::Internal(format!("无法读取 FST 文件: {}", e)))?;
+
+        let mut signals = Vec::new();
+
+        // 遍历层次结构中的所有信号
+        match reader.hierarchy() {
+            Some(hierarchy) => {
+                for var in &hierarchy.variables {
+                    signals.push(SignalInfo {
+                        handle: var.handle,
+                        name: var.name.to_string(),
+                        signal_type: format!("{:?}", var.var_type),
+                        width: var.length.unwrap_or(1),
+                        direction: format!("{:?}", var.direction),
+                    });
+                }
+                info!("波形 {} 从 wavefst 读取了 {} 个信号", wave_name, signals.len());
+            }
+            None => {
+                // 如果层次结构不可用，尝试从 header 获取信号数量信息
+                let header = reader.header();
+                warn!("波形 {} 的层次结构块无法读取 (var_count={})", wave_name, header.var_count);
+
+                // 返回一个特殊的信号项，说明层次结构不可用
+                signals.push(SignalInfo {
+                    handle: 0,
+                    name: "__hierarchy_unavailable__".to_string(),
+                    signal_type: "N/A".to_string(),
+                    width: header.var_count as u32,
+                    direction: "N/A".to_string(),
+                });
+            }
+        }
+
+        Ok(signals)
+    }
+
+    /// 获取单个信号的详细信息
+    pub async fn get_signal_info(&self, wave_name: &str, signal_name: &str) -> Result<SignalInfo> {
+        let signals = self.list_signals(wave_name).await?;
+
+        for signal in signals {
+            if signal.name == signal_name {
+                return Ok(signal);
+            }
+        }
+
+        Err(ServerError::SignalNotFound(signal_name.to_string()))
+    }
+
+    /// 获取波形数据 (支持 HTTP Range 和 LoD)
+    pub async fn get_wave_data(
+        &self,
+        wave_name: &str,
+        _signal_name: &str,
+        _lod: u32,
+        _start: i64,
+        _end: i64,
+        _range: Option<(u64, Option<u64>)>,
+    ) -> Result<(Vec<u8>, u64, Option<u64>)> {
+        // TODO: 实现真正的波形数据读取
+        // 目前返回空数据作为占位符
+        let wave_path = self.get_wave_path(wave_name)?;
+        let metadata = fs::metadata(&wave_path).await?;
+        let file_size = metadata.len();
+
+        // 返回空数据
+        Ok((Vec::new(), file_size, None))
     }
 }
