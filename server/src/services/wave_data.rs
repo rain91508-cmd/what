@@ -6,6 +6,81 @@
 use crate::error::{Result, ServerError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
+
+/// 压缩算法类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CompressionAlgorithm {
+    /// 无压缩
+    #[default]
+    None = 0,
+    /// Zstd 压缩
+    Zstd = 1,
+    /// Lz4 压缩
+    Lz4 = 2,
+}
+
+impl CompressionAlgorithm {
+    /// 从 u8 解析压缩算法
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Zstd,
+            2 => Self::Lz4,
+            _ => Self::None,
+        }
+    }
+
+    /// 获取压缩算法名称
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Zstd => "zstd",
+            Self::Lz4 => "lz4",
+        }
+    }
+
+    /// 压缩数据
+    pub fn compress(&self, data: &[u8]) -> Result<Vec<u8>> {
+        match self {
+            Self::None => Ok(data.to_vec()),
+            Self::Zstd => {
+                let compressed = zstd::encode_all(data, 3)
+                    .map_err(|e| ServerError::Internal(format!("Zstd compression failed: {}", e)))?;
+                Ok(compressed)
+            }
+            Self::Lz4 => {
+                let mut encoder = lz4::EncoderBuilder::new()
+                    .build(Vec::new())
+                    .map_err(|e| ServerError::Internal(format!("Lz4 encoder creation failed: {}", e)))?;
+                encoder.write_all(data)
+                    .map_err(|e| ServerError::Internal(format!("Lz4 compression failed: {}", e)))?;
+                let (compressed, result) = encoder.finish();
+                result.map_err(|e| ServerError::Internal(format!("Lz4 compression finish failed: {}", e)))?;
+                Ok(compressed)
+            }
+        }
+    }
+
+    /// 解压数据
+    pub fn decompress(&self, data: &[u8]) -> Result<Vec<u8>> {
+        match self {
+            Self::None => Ok(data.to_vec()),
+            Self::Zstd => {
+                let decompressed = zstd::decode_all(data)
+                    .map_err(|e| ServerError::Internal(format!("Zstd decompression failed: {}", e)))?;
+                Ok(decompressed)
+            }
+            Self::Lz4 => {
+                let mut decoder = lz4::Decoder::new(data)
+                    .map_err(|e| ServerError::Internal(format!("Lz4 decoder creation failed: {}", e)))?;
+                let mut decompressed = Vec::new();
+                std::io::copy(&mut decoder, &mut decompressed)
+                    .map_err(|e| ServerError::Internal(format!("Lz4 decompression failed: {}", e)))?;
+                Ok(decompressed)
+            }
+        }
+    }
+}
 
 /// 波形数据转换点
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -331,11 +406,19 @@ pub struct ChunkSerializer;
 
 impl ChunkSerializer {
     /// 将信号波形数据序列化为 chunk 格式（SoA: Structure of Arrays）
+    /// 
+    /// # Arguments
+    /// * `chunk_id` - Chunk ID
+    /// * `level` - LoD 层级
+    /// * `signals` - 信号波形数据列表
+    /// * `time_range` - 时间范围 (start, end)
+    /// * `compression` - 压缩算法（默认不压缩）
     pub fn serialize(
         chunk_id: u32,
         level: u16,
         signals: &[&SignalWaveData],
         time_range: (u64, u64),
+        compression: CompressionAlgorithm,
     ) -> Result<Vec<u8>> {
         let (time_start, time_end) = time_range;
         let signal_count = signals.len() as u32;
@@ -370,26 +453,31 @@ impl ChunkSerializer {
                 .iter()
                 .flat_map(|t| t.time.to_le_bytes())
                 .collect();
-            let time_array_size = time_array.len() as u32;
 
             // 值数组（u64 数组，简化处理）
             let value_array: Vec<u8> = filtered
                 .iter()
                 .flat_map(|t| t.value.to_le_bytes())
                 .collect();
-            let value_array_size = value_array.len() as u32;
+
+            // 压缩数据
+            let compressed_time = compression.compress(&time_array)?;
+            let compressed_value = compression.compress(&value_array)?;
+            
+            let time_array_size = compressed_time.len() as u32;
+            let value_array_size = compressed_value.len() as u32;
 
             let block_header = SignalBlockHeader {
                 signal_handle: signal.handle,
                 time_array_offset: current_offset,
                 value_array_offset: current_offset + time_array_size,
                 transition_count,
-                compression: 0, // 暂不压缩
+                compression: compression as u8,
             };
 
             block_headers.push(block_header);
-            time_arrays.push(time_array);
-            value_arrays.push(value_array);
+            time_arrays.push(compressed_time);
+            value_arrays.push(compressed_value);
 
             current_offset += time_array_size + value_array_size;
         }
@@ -420,28 +508,38 @@ impl ChunkSerializer {
         let mut signals = Vec::new();
         let header_size = ChunkHeader::SIZE;
         let block_table_size = SignalBlockHeader::SIZE * header.signal_count as usize;
-        let data_start = header_size + block_table_size;
 
         // 解析每个信号块
         for i in 0..header.signal_count {
             let block_offset = header_size + SignalBlockHeader::SIZE * i as usize;
             let block_header = SignalBlockHeader::from_bytes(&data[block_offset..])?;
 
-            // 读取时间数组
+            // 读取压缩的时间数组
             let time_array_start = block_header.time_array_offset as usize;
             let time_array_end = block_header.value_array_offset as usize;
-            let time_bytes = &data[time_array_start..time_array_end];
+            let compressed_time_bytes = &data[time_array_start..time_array_end];
 
-            // 读取值数组
+            // 读取压缩的值数组
             let value_array_start = block_header.value_array_offset as usize;
             let value_array_end = value_array_start + block_header.transition_count as usize * 8;
-            let value_bytes = &data[value_array_start..value_array_end];
+            let compressed_value_bytes = &data[value_array_start..];
+
+            // 解压数据
+            let compression = CompressionAlgorithm::from_u8(block_header.compression);
+            let time_bytes = compression.decompress(compressed_time_bytes)?;
+            let value_bytes = compression.decompress(compressed_value_bytes)?;
 
             // 重建转换点
             let mut transitions = Vec::new();
             for j in 0..block_header.transition_count as usize {
                 let time_offset = j * 8;
                 let value_offset = j * 8;
+                
+                // 确保不越界
+                if time_offset + 8 > time_bytes.len() || value_offset + 8 > value_bytes.len() {
+                    break;
+                }
+                
                 let time = u64::from_le_bytes(time_bytes[time_offset..time_offset + 8].try_into().unwrap());
                 let value = u64::from_le_bytes(value_bytes[value_offset..value_offset + 8].try_into().unwrap());
                 transitions.push(Transition { time, value });

@@ -29,6 +29,9 @@ pub struct WaveDataQuery {
     start: i64,
     /// 结束时间 (皮秒)
     end: i64,
+    /// 压缩算法 (none, zstd, lz4)
+    #[serde(default)]
+    compress: Option<String>,
 }
 
 /// 获取所有可用的波形文件列表
@@ -147,6 +150,13 @@ pub async fn get_wave_data(
         return Err(crate::error::ServerError::InvalidLod(lod));
     }
 
+    // 解析压缩算法
+    let compression = match query.compress.as_deref() {
+        Some("zstd") => crate::services::CompressionAlgorithm::Zstd,
+        Some("lz4") => crate::services::CompressionAlgorithm::Lz4,
+        _ => crate::services::CompressionAlgorithm::None,
+    };
+
     // 解析 Range 头
     let range = parse_range_header(headers.get("range"))?;
     
@@ -159,6 +169,7 @@ pub async fn get_wave_data(
             query.start,
             query.end,
             range,
+            compression,
         )
         .await?;
 

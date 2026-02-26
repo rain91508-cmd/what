@@ -29,6 +29,10 @@ prost = "0.12"
 wavefst = { version = "0.1", features = ["gzip", "lz4", "mmap", "simd"] }
 fstapi = { path = "../third_party/fst-tools/fstapi" }
 
+# Compression
+zstd = "0.13"
+lz4 = "1.24"
+
 # Error handling
 thiserror = "1.0"
 anyhow = "1.0"

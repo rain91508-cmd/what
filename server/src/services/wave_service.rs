@@ -448,6 +448,7 @@ impl WaveService {
         start: i64,
         end: i64,
         range: Option<(u64, Option<u64>)>,
+        compression: CompressionAlgorithm,
     ) -> Result<(Vec<u8>, u64, Option<u64>)> {
         let wave_path = self.get_wave_path(wave_name)?;
         let metadata = fs::metadata(&wave_path).await?;
@@ -469,18 +470,18 @@ impl WaveService {
         };
 
         info!(
-            "获取波形数据: wave={}, signal={}, lod={}, time={}-{}",
-            wave_name, signal_name, lod, time_start, time_end
+            "获取波形数据: wave={}, signal={}, lod={}, time={}-{}, compression={}",
+            wave_name, signal_name, lod, time_start, time_end, compression.name()
         );
 
         // 根据后端选择数据获取方式
         let chunk_data = match self.backend {
             FstBackend::FstApi => {
-                self.get_wave_data_fstapi(&wave_path, signal_name, lod_level, time_start, time_end)
+                self.get_wave_data_fstapi(&wave_path, signal_name, lod_level, time_start, time_end, compression)
                     .await?
             }
             FstBackend::WaveFst => {
-                self.get_wave_data_wavefst(&wave_path, signal_name, lod_level, time_start, time_end)
+                self.get_wave_data_wavefst(&wave_path, signal_name, lod_level, time_start, time_end, compression)
                     .await?
             }
         };
@@ -513,6 +514,7 @@ impl WaveService {
         lod: LodLevel,
         time_start: u64,
         time_end: u64,
+        compression: CompressionAlgorithm,
     ) -> Result<Vec<u8>> {
         let path_str = wave_path.to_string_lossy().to_string();
         let signal_name = signal_name.to_string();
@@ -565,15 +567,17 @@ impl WaveService {
             let config = LodConfig::default();
             let lod_data = LodPyramidGenerator::new(config).generate_level(&signal_data, lod);
 
-            // 序列化为 chunk
+            // 序列化为 chunk（带压缩）
             let chunk = ChunkSerializer::serialize(
                 0, // chunk_id
                 lod.0 as u16,
                 &[&lod_data],
                 (time_start, time_end),
+                compression,
             )?;
 
-            info!("生成 chunk: {} bytes, {} transitions", chunk.len(), lod_data.transitions.len());
+            info!("生成 chunk: {} bytes (compression={}), {} transitions", 
+                chunk.len(), compression.name(), lod_data.transitions.len());
 
             Ok::<_, ServerError>(chunk)
         })
@@ -586,11 +590,12 @@ impl WaveService {
     /// 使用 wavefst 获取波形数据
     async fn get_wave_data_wavefst(
         &self,
-        wave_path: &PathBuf,
+        _wave_path: &PathBuf,
         _signal_name: &str,
         lod: LodLevel,
         time_start: u64,
         time_end: u64,
+        compression: CompressionAlgorithm,
     ) -> Result<Vec<u8>> {
         // wavefst 目前不支持读取实际波形数据
         // 返回一个空的 chunk 作为占位符
@@ -602,6 +607,7 @@ impl WaveService {
             lod.0 as u16,
             &[&signal_data],
             (time_start, time_end),
+            compression,
         )?;
 
         Ok(chunk)
