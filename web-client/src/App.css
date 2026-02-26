@@ -1,0 +1,419 @@
+/* ============================================
+   HWDA Web Client - Main Styles
+   ============================================ */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #333;
+  background-color: #f5f5f5;
+}
+
+/* Loading Screen */
+.loading-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background: #fff;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid #e0e0e0;
+  border-top-color: #1976d2;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 16px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Main App Layout */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+/* Menu Bar */
+.menu-bar {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  background: #2d2d2d;
+  color: #fff;
+  padding: 0 8px;
+  border-bottom: 1px solid #1a1a1a;
+}
+
+.menu-bar-item {
+  padding: 4px 12px;
+  cursor: pointer;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.menu-bar-item:hover {
+  background: #404040;
+}
+
+/* Tool Bar */
+.tool-bar {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  background: #f0f0f0;
+  border-bottom: 1px solid #d0d0d0;
+  padding: 0 8px;
+  gap: 4px;
+}
+
+.tool-bar-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.tool-bar-button:hover {
+  background: #e0e0e0;
+  border-color: #c0c0c0;
+}
+
+.tool-bar-separator {
+  width: 1px;
+  height: 20px;
+  background: #d0d0d0;
+  margin: 0 4px;
+}
+
+/* Main Content */
+.main-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Left Panel - Design Browser */
+.left-panel {
+  width: 280px;
+  min-width: 200px;
+  max-width: 400px;
+  background: #fff;
+  border-right: 1px solid #d0d0d0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Right Panel - Source Code & Waveform */
+.right-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.source-code-container {
+  flex: 1;
+  min-height: 200px;
+  background: #fff;
+  border-bottom: 1px solid #d0d0d0;
+  overflow: hidden;
+}
+
+.waveform-container {
+  flex: 1;
+  min-height: 200px;
+  background: #fff;
+  overflow: hidden;
+}
+
+/* Bottom Panel - Messages */
+.bottom-panel {
+  height: 120px;
+  min-height: 80px;
+  max-height: 300px;
+  background: #fff;
+  border-top: 1px solid #d0d0d0;
+  overflow: hidden;
+}
+
+/* Panel Headers */
+.panel-header {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  background: #f5f5f5;
+  border-bottom: 1px solid #d0d0d0;
+  padding: 0 8px;
+  font-weight: 600;
+  font-size: 12px;
+  color: #555;
+}
+
+/* Tree View (Design Browser) */
+.tree-view {
+  flex: 1;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+.tree-node {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tree-node:hover {
+  background: #e3f2fd;
+}
+
+.tree-node.selected {
+  background: #1976d2;
+  color: #fff;
+}
+
+.tree-node-icon {
+  width: 16px;
+  height: 16px;
+  margin-right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tree-node-expand {
+  width: 16px;
+  height: 16px;
+  margin-right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+/* Code Editor */
+.code-editor {
+  height: 100%;
+  overflow: auto;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.code-line {
+  display: flex;
+  min-height: 20px;
+}
+
+.code-line-number {
+  width: 50px;
+  padding: 0 8px;
+  text-align: right;
+  color: #999;
+  background: #f5f5f5;
+  border-right: 1px solid #e0e0e0;
+  user-select: none;
+}
+
+.code-line-content {
+  flex: 1;
+  padding: 0 8px;
+  white-space: pre;
+}
+
+/* Waveform Canvas */
+.waveform-canvas {
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+/* Message Window */
+.message-window {
+  height: 100%;
+  overflow: auto;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.message-item {
+  padding: 2px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+/* Dialog */
+.dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.dialog {
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  min-width: 400px;
+  max-width: 600px;
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.dialog-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.dialog-close {
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  color: #666;
+}
+
+.dialog-body {
+  padding: 16px;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px;
+  border-top: 1px solid #e0e0e0;
+}
+
+/* Form Elements */
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 500;
+  color: #555;
+}
+
+.form-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #d0d0d0;
+  border-radius: 3px;
+  font-size: 13px;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: #1976d2;
+}
+
+/* Buttons */
+.btn {
+  padding: 8px 16px;
+  border: 1px solid #d0d0d0;
+  border-radius: 3px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn:hover {
+  background: #f5f5f5;
+}
+
+.btn-primary {
+  background: #1976d2;
+  color: #fff;
+  border-color: #1976d2;
+}
+
+.btn-primary:hover {
+  background: #1565c0;
+}
+
+/* Status Indicators */
+.status-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-dot.connected {
+  background: #4caf50;
+}
+
+.status-dot.disconnected {
+  background: #f44336;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f5f5f5;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c0c0c0;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a0a0a0;
+}
