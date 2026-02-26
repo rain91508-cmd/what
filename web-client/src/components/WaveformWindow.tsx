@@ -1,10 +1,44 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { waveformRenderer } from '../core/render/waveformRenderer';
-import type { Viewport, Segment } from '../types';
+import type { Viewport, Segment, Signal } from '../types';
 
-export function WaveformWindow() {
+interface WaveformWindowProps {
+  signals: Signal[];
+  onSignalRemove: (signal: Signal) => void;
+}
+
+interface SignalGroup {
+  id: string;
+  name: string;
+  parentId: string | null;
+  signals: Signal[];
+  expanded: boolean;
+  children: string[];
+}
+
+interface CursorState {
+  position: number;
+  visible: boolean;
+}
+
+interface TreeNode {
+  type: 'group' | 'signal';
+  group?: SignalGroup;
+  signal?: Signal;
+  level: number;
+  isLast: boolean;
+  parentNodes: { level: number; isLast: boolean }[];
+}
+
+// Generate unique signal ID
+const generateSignalId = (signal: Signal): string => {
+  return `${signal.fullPath}_${signal.handle}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+};
+
+export function WaveformWindow({ signals, onSignalRemove }: WaveformWindowProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const signalPanelRef = useRef<HTMLDivElement>(null);
   const [viewport] = useState<Viewport>({
     timeStart: 0,
     timeEnd: 1000,
@@ -13,6 +47,109 @@ export function WaveformWindow() {
     pixelsPerTime: 1,
     pixelsPerSignal: 24,
   });
+  const [signalValues] = useState<Record<string, string>>({
+    'top.clk': '1',
+    'top.rst_n': '0',
+    'top.data_in': '0x1234',
+    'top.data_out': '0xABCD',
+    'top.state': '0x3',
+    'top.counter': '0x00FF',
+  });
+  const [selectedSignal, setSelectedSignal] = useState<string | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<string>('root');
+  const [expandedSignals, setExpandedSignals] = useState<Set<string>>(new Set());
+  const [cursor, setCursor] = useState<CursorState>({ position: 500, visible: true });
+  const [mouseX, setMouseX] = useState<number | null>(null);
+  const [hierarchyColumnWidth, setHierarchyColumnWidth] = useState(60);
+  const [nameColumnWidth, setNameColumnWidth] = useState(120);
+  const [valueColumnWidth, setValueColumnWidth] = useState(80);
+  const [signalPanelWidth, setSignalPanelWidth] = useState(200);
+  const [nameFilter, setNameFilter] = useState('');
+  const [ioFilter, setIoFilter] = useState<'all' | 'input' | 'output' | 'inout' | 'internal'>('all');
+  const [editingGroup, setEditingGroup] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+
+  // Signal groups - root is hidden, show its children directly
+  const [groups, setGroups] = useState<Record<string, SignalGroup>>({
+    'root': {
+      id: 'root',
+      name: 'root',
+      parentId: null,
+      signals: [],
+      expanded: true,
+      children: ['group_1'],
+    },
+    'group_1': {
+      id: 'group_1',
+      name: 'Group_1',
+      parentId: 'root',
+      signals: [],
+      expanded: true,
+      children: [],
+    },
+  });
+
+  // Store signals with unique IDs
+  const [displaySignals, setDisplaySignals] = useState<Array<Signal & { uniqueId: string }>>([]);
+  // Track signals length to detect additions (including duplicates)
+  const prevSignalsLengthRef = useRef(0);
+  
+  // Sync with external signals - add new signals and remove deleted ones
+  useEffect(() => {
+    const currentLength = signals.length;
+    const prevLength = prevSignalsLengthRef.current;
+    const signalsAdded = currentLength > prevLength;
+    const signalsRemoved = currentLength < prevLength;
+    prevSignalsLengthRef.current = currentLength;
+    
+    // Get handles of current external signals
+    const currentHandles = new Set(signals.map(s => s.handle));
+    
+    // Remove signals that are no longer in the external list
+    if (signalsRemoved) {
+      setDisplaySignals(prev => {
+        const filtered = prev.filter(s => currentHandles.has(s.handle));
+        return filtered;
+      });
+      
+      // Also update groups
+      setGroups(prev => {
+        const newGroups = { ...prev };
+        Object.keys(newGroups).forEach(groupId => {
+          newGroups[groupId] = {
+            ...newGroups[groupId],
+            signals: newGroups[groupId].signals.filter(s => currentHandles.has(s.handle)),
+          };
+        });
+        return newGroups;
+      });
+    }
+    
+    // Add new signals (including duplicates) - based on length difference
+    if (signalsAdded) {
+      // Get the newly added signals (last N signals)
+      const addedCount = currentLength - prevLength;
+      const newSignals = signals.slice(-addedCount);
+      
+      if (newSignals.length > 0) {
+        const newDisplaySignals = newSignals.map(s => ({
+          ...s,
+          uniqueId: generateSignalId(s),
+        }));
+        
+        setDisplaySignals(prev => [...prev, ...newDisplaySignals]);
+        
+        // Add to selected group
+        setGroups(prev => ({
+          ...prev,
+          [selectedGroup]: {
+            ...prev[selectedGroup],
+            signals: [...prev[selectedGroup].signals, ...newDisplaySignals],
+          },
+        }));
+      }
+    }
+  }, [signals, selectedGroup]);
 
   useEffect(() => {
     const initRenderer = async () => {
@@ -43,52 +180,883 @@ export function WaveformWindow() {
     handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, []);
+  }, [groups, cursor, mouseX, selectedSignal, displaySignals]);
 
   const renderWaveform = () => {
     if (!canvasRef.current) return;
 
     const { width, height } = canvasRef.current;
 
-    // Generate mock segments for demonstration
+    // Generate mock segments - only for visible signals in treeNodes
     const segments: Segment[] = [];
-    const signalCount = 5;
     const timeStep = (viewport.timeEnd - viewport.timeStart) / 20;
 
-    for (let signalIdx = 0; signalIdx < signalCount; signalIdx++) {
-      let currentTime = viewport.timeStart;
-      let currentValue = 0;
+    // Calculate row index for each signal, considering group rows
+    let currentRow = 0;
+    treeNodes.forEach((node) => {
+      if (node.type === 'group') {
+        // Group row - no waveform, just increment row counter
+        currentRow++;
+      } else if (node.type === 'signal' && node.signal) {
+        // Signal row - render waveform
+        let currentTime = viewport.timeStart;
+        let currentValue = 0;
 
-      while (currentTime < viewport.timeEnd) {
-        const nextTime = currentTime + timeStep;
-        segments.push({
-          t0: currentTime,
-          t1: nextTime,
-          row: signalIdx,
-          value: currentValue,
-        });
+        while (currentTime < viewport.timeEnd) {
+          const nextTime = currentTime + timeStep;
+          segments.push({
+            t0: currentTime,
+            t1: nextTime,
+            row: currentRow,
+            value: currentValue,
+          });
 
-        currentTime = nextTime;
-        currentValue = currentValue === 0 ? 1 : 0;
+          currentTime = nextTime;
+          currentValue = currentValue === 0 ? 1 : 0;
+        }
+        currentRow++;
       }
+    });
+
+    // Reserve space for time ruler at top
+    const rulerHeight = 20;
+    waveformRenderer.render(segments, viewport, width, height, rulerHeight);
+
+    const ctx = canvasRef.current.getContext('2d');
+    if (ctx && cursor.visible) {
+      const cursorX = ((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * width;
+      ctx.strokeStyle = '#ff00ff';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath();
+      ctx.moveTo(cursorX, rulerHeight);
+      ctx.lineTo(cursorX, height);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
 
-    waveformRenderer.render(segments, viewport, width, height);
+    if (mouseX !== null && ctx) {
+      ctx.strokeStyle = '#00aa00';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(mouseX, rulerHeight);
+      ctx.lineTo(mouseX, height);
+      ctx.stroke();
+    }
+  };
+
+  const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const time = viewport.timeStart + (x / rect.width) * (viewport.timeEnd - viewport.timeStart);
+    setCursor({ position: Math.round(time), visible: true });
+  }, [viewport]);
+
+  const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    setMouseX(e.clientX - rect.left);
+  }, []);
+
+  const handleCanvasMouseLeave = useCallback(() => {
+    setMouseX(null);
+  }, []);
+
+  const handleColumnResize = (column: 'hierarchy' | 'name' | 'value', e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidths = { hierarchy: hierarchyColumnWidth, name: nameColumnWidth, value: valueColumnWidth };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const delta = e.clientX - startX;
+      if (column === 'hierarchy') {
+        setHierarchyColumnWidth(Math.max(40, Math.min(150, startWidths.hierarchy + delta)));
+      } else if (column === 'name') {
+        setNameColumnWidth(Math.max(80, Math.min(250, startWidths.name + delta)));
+      } else if (column === 'value') {
+        setValueColumnWidth(Math.max(50, Math.min(200, startWidths.value + delta)));
+      }
+    };
+
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
+  const handleSignalPanelResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = signalPanelWidth;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const delta = e.clientX - startX;
+      setSignalPanelWidth(Math.max(150, Math.min(400, startWidth + delta)));
+    };
+
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
+  // Handle signal removal - remove only the specific instance by uniqueId
+  const handleRemoveSignal = (signal: Signal & { uniqueId: string }) => {
+    // Remove from displaySignals
+    setDisplaySignals(prev => prev.filter(s => s.uniqueId !== signal.uniqueId));
+    
+    // Remove from groups
+    setGroups(prev => {
+      const newGroups = { ...prev };
+      Object.keys(newGroups).forEach(groupId => {
+        newGroups[groupId] = {
+          ...newGroups[groupId],
+          signals: newGroups[groupId].signals.filter(s => (s as Signal & { uniqueId: string }).uniqueId !== signal.uniqueId),
+        };
+      });
+      return newGroups;
+    });
+    
+    // Notify parent
+    onSignalRemove(signal);
+  };
+
+  const toggleGroupExpand = (groupId: string) => {
+    setGroups(prev => ({
+      ...prev,
+      [groupId]: {
+        ...prev[groupId],
+        expanded: !prev[groupId].expanded,
+      },
+    }));
+  };
+
+  const addGroup = (parentId: string, asSibling: boolean = false) => {
+    const newId = `group_${Date.now()}`;
+    const targetParentId = asSibling ? (groups[parentId]?.parentId || 'root') : parentId;
+    const groupCount = Object.keys(groups).filter(id => id !== 'root').length;
+    
+    setGroups(prev => {
+      const newGroup: SignalGroup = {
+        id: newId,
+        name: `Group_${groupCount + 1}`,
+        parentId: targetParentId,
+        signals: [],
+        expanded: true,
+        children: [],
+      };
+
+      return {
+        ...prev,
+        [newId]: newGroup,
+        [targetParentId]: {
+          ...prev[targetParentId],
+          children: [...prev[targetParentId].children, newId],
+        },
+      };
+    });
+
+    setSelectedGroup(newId);
+  };
+
+  const deleteGroup = (groupId: string) => {
+    if (groupId === 'root') return;
+    
+    const group = groups[groupId];
+    if (!group) return;
+
+    const parentId = group.parentId || 'root';
+    const parentGroup = groups[parentId];
+    
+    // Check if this is the last child of its parent
+    const isLastChild = parentGroup && parentGroup.children.length === 1 && parentGroup.children[0] === groupId;
+    
+    // Remove signals in this group from display
+    const signalIdsToRemove = group.signals.map(s => (s as Signal & { uniqueId: string }).uniqueId);
+    setDisplaySignals(prev => prev.filter(s => !signalIdsToRemove.includes(s.uniqueId)));
+    
+    if (isLastChild) {
+      // If this is the last child, only clear signals but keep the group
+      setGroups(prev => ({
+        ...prev,
+        [groupId]: {
+          ...prev[groupId],
+          signals: [],
+          children: [],
+        },
+      }));
+    } else {
+      // Otherwise, delete the group completely
+      setGroups(prev => {
+        const newGroups = { ...prev };
+        
+        // Remove from parent's children
+        newGroups[parentId] = {
+          ...newGroups[parentId],
+          children: newGroups[parentId].children.filter(id => id !== groupId),
+        };
+        
+        // Remove the group
+        delete newGroups[groupId];
+        
+        return newGroups;
+      });
+
+      setSelectedGroup(parentId);
+    }
+  };
+
+  const startRenameGroup = (groupId: string) => {
+    setEditingGroup(groupId);
+    setEditName(groups[groupId].name);
+  };
+
+  const finishRenameGroup = () => {
+    if (editingGroup && editName.trim()) {
+      setGroups(prev => ({
+        ...prev,
+        [editingGroup]: {
+          ...prev[editingGroup],
+          name: editName.trim(),
+        },
+      }));
+    }
+    setEditingGroup(null);
+    setEditName('');
+  };
+
+  const toggleSignalExpand = (uniqueId: string) => {
+    const newExpanded = new Set(expandedSignals);
+    if (newExpanded.has(uniqueId)) {
+      newExpanded.delete(uniqueId);
+    } else {
+      newExpanded.add(uniqueId);
+    }
+    setExpandedSignals(newExpanded);
+  };
+
+  const getSignalDisplayName = (signal: Signal) => {
+    if (signal.bitWidth > 1) {
+      return `${signal.name}[${signal.msb}:${signal.lsb}]`;
+    }
+    return signal.name;
+  };
+
+  const getSignalValue = (signal: Signal) => {
+    return signalValues[signal.fullPath] || '0x0';
+  };
+
+  const getHierarchyDisplay = (signal: Signal): string => {
+    // Extract hierarchy from fullPath
+    const parts = signal.fullPath.split('.');
+    if (parts.length <= 1) return '-';
+    // Return the second to last part (parent instance)
+    return parts[parts.length - 2] || '-';
+  };
+
+  const matchesIOFilter = (signal: Signal): boolean => {
+    if (ioFilter === 'all') return true;
+    if (ioFilter === 'input') return signal.direction === 0;
+    if (ioFilter === 'output') return signal.direction === 1;
+    if (ioFilter === 'inout') return signal.direction === 2;
+    if (ioFilter === 'internal') return signal.direction === 3;
+    return true;
+  };
+
+  const matchesNameFilter = (signal: Signal): boolean => {
+    if (!nameFilter.trim()) return true;
+    const pattern = nameFilter.toLowerCase();
+    return signal.name.toLowerCase().includes(pattern) ||
+           signal.fullPath.toLowerCase().includes(pattern);
+  };
+
+  // Build tree structure - hide root, but show its direct children (top-level groups)
+  const buildTreeNodes = (groupId: string, level: number, parentNodes: { level: number; isLast: boolean }[]): TreeNode[] => {
+    const group = groups[groupId];
+    if (!group) return [];
+
+    const nodes: TreeNode[] = [];
+    const isRoot = groupId === 'root';
+    
+    // Only hide root, show all other groups including top-level groups
+    if (!isRoot) {
+      nodes.push({
+        type: 'group',
+        group: group,
+        level,
+        isLast: false,
+        parentNodes: [...parentNodes],
+      });
+    }
+
+    // Process children if expanded
+    // For root, always process children (to show top-level groups)
+    const shouldProcessChildren = isRoot || group.expanded;
+    
+    if (shouldProcessChildren) {
+      const childGroups = group.children.map(childId => groups[childId]).filter(Boolean);
+      const filteredSignals = group.signals.filter(s => matchesIOFilter(s) && matchesNameFilter(s));
+      const allItems = [...childGroups, ...filteredSignals];
+
+      allItems.forEach((item, index) => {
+        const isLast = index === allItems.length - 1;
+        // For root, don't increase level (top-level groups start at level 0)
+        const newLevel = isRoot ? level : level + 1;
+        const newParentNodes = isRoot
+          ? [...parentNodes] 
+          : [...parentNodes, { level, isLast: index === allItems.length - 1 }];
+
+        if ('children' in item) {
+          nodes.push(...buildTreeNodes(item.id, newLevel, newParentNodes));
+        } else {
+          nodes.push({
+            type: 'signal',
+            signal: item as Signal,
+            level: newLevel,
+            isLast,
+            parentNodes: newParentNodes,
+          });
+        }
+      });
+    }
+
+    return nodes;
+  };
+
+  const treeNodes = buildTreeNodes('root', 0, []);
+
+  const renderTreeConnectors = (parentNodes: { level: number; isLast: boolean }[]) => {
+    return parentNodes.map((node, index) => (
+      <span
+        key={index}
+        style={{
+          display: 'inline-block',
+          width: '12px',
+          height: '20px',
+          position: 'relative',
+        }}
+      >
+        {!node.isLast && (
+          <span
+            style={{
+              position: 'absolute',
+              left: '5px',
+              top: '0',
+              width: '1px',
+              height: '100%',
+              borderLeft: '1px dashed #c0c0c0',
+            }}
+          />
+        )}
+        <span
+          style={{
+            position: 'absolute',
+            left: '5px',
+            top: '10px',
+            width: '7px',
+            height: '1px',
+            borderTop: '1px dashed #c0c0c0',
+          }}
+        />
+      </span>
+    ));
   };
 
   return (
-    <div ref={containerRef} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div className="panel-header">
-        Waveform
-        <span style={{ marginLeft: 'auto', fontSize: '11px', color: '#666' }}>
-          Time: {viewport.timeStart} - {viewport.timeEnd}
-        </span>
+    <div className="waveform-container">
+      <div 
+        className="waveform-signal-panel" 
+        ref={signalPanelRef}
+        style={{ width: signalPanelWidth }}
+      >
+        {/* Filter bar */}
+        <div style={{
+          height: '30px',
+          padding: '4px',
+          borderBottom: '1px solid #d0d0d0',
+          background: '#f0f0f0',
+          display: 'flex',
+          gap: '4px',
+          alignItems: 'center',
+          boxSizing: 'border-box',
+        }}>
+          <input
+            type="text"
+            placeholder="Filter..."
+            value={nameFilter}
+            onChange={(e) => setNameFilter(e.target.value)}
+            style={{
+              flex: 1,
+              padding: '2px 4px',
+              fontSize: '10px',
+              border: '1px solid #c0c0c0',
+              borderRadius: '2px',
+            }}
+          />
+          <select
+            value={ioFilter}
+            onChange={(e) => setIoFilter(e.target.value as any)}
+            style={{
+              padding: '2px 4px',
+              fontSize: '10px',
+              border: '1px solid #c0c0c0',
+              borderRadius: '2px',
+              width: '70px',
+            }}
+          >
+            <option value="all">All</option>
+            <option value="input">Input</option>
+            <option value="output">Output</option>
+            <option value="inout">InOut</option>
+            <option value="internal">Internal</option>
+          </select>
+        </div>
+
+        {/* Header with 3 columns and visible dividers */}
+        <div className="waveform-header" style={{ display: 'flex', position: 'relative', borderBottom: '1px solid #c0c0c0', height: '22px', boxSizing: 'border-box' }}>
+          <span style={{ width: hierarchyColumnWidth, paddingLeft: '4px', fontSize: '10px', borderRight: '1px solid #c0c0c0' }}>Scope</span>
+          <span style={{ width: nameColumnWidth, paddingLeft: '4px', borderRight: '1px solid #c0c0c0' }}>Name</span>
+          <span style={{ 
+            flex: 1,
+            textAlign: 'right',
+            paddingRight: '4px',
+          }}>Value</span>
+          
+          {/* Resizers - positioned on the right edge of each column */}
+          <div
+            style={{
+              position: 'absolute',
+              left: hierarchyColumnWidth,
+              top: 0,
+              width: '4px',
+              height: '100%',
+              cursor: 'col-resize',
+              backgroundColor: 'transparent',
+              zIndex: 10,
+              marginLeft: '-2px',
+            }}
+            onMouseDown={(e) => handleColumnResize('hierarchy', e)}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              left: hierarchyColumnWidth + nameColumnWidth,
+              top: 0,
+              width: '4px',
+              height: '100%',
+              cursor: 'col-resize',
+              backgroundColor: 'transparent',
+              zIndex: 10,
+              marginLeft: '-2px',
+            }}
+            onMouseDown={(e) => handleColumnResize('name', e)}
+          />
+        </div>
+        
+        {/* Group and signal list */}
+        <div className="waveform-signal-list">
+          {treeNodes.map((node) => {
+            if (node.type === 'group' && node.group) {
+              const group = node.group;
+              const isSelected = selectedGroup === group.id;
+              
+              return (
+                <div key={group.id}>
+                  <div 
+                    className={`waveform-group-header ${isSelected ? 'selected' : ''}`}
+                    onClick={() => {
+                      // Toggle selection: if already selected, deselect (set to root)
+                      if (selectedGroup === group.id) {
+                        setSelectedGroup('root');
+                      } else {
+                        setSelectedGroup(group.id);
+                      }
+                    }}
+                    style={{ 
+                      display: 'flex',
+                      alignItems: 'center',
+                      paddingLeft: '4px',
+                    }}
+                  >
+                    {/* Scope column - empty for groups */}
+                    <span style={{ 
+                      width: hierarchyColumnWidth,
+                      borderRight: '1px solid #e0e0e0',
+                      height: '100%',
+                    }}></span>
+                    
+                    {/* Name column with tree structure */}
+                    <span style={{ 
+                      width: nameColumnWidth,
+                      display: 'flex',
+                      alignItems: 'center',
+                      paddingLeft: `${node.level * 12}px`,
+                      borderRight: '1px solid #e0e0e0',
+                      height: '100%',
+                    }}>
+                      {renderTreeConnectors(node.parentNodes)}
+                      <span 
+                        style={{ cursor: 'pointer', marginRight: '2px' }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleGroupExpand(group.id);
+                        }}
+                      >
+                        {group.expanded ? '▼' : '▶'}
+                      </span>
+                      
+                      {editingGroup === group.id ? (
+                        <input
+                          type="text"
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          onBlur={finishRenameGroup}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') finishRenameGroup();
+                            if (e.key === 'Escape') {
+                              setEditingGroup(null);
+                              setEditName('');
+                            }
+                          }}
+                          autoFocus
+                          style={{
+                            width: '80px',
+                            fontSize: '11px',
+                            padding: '1px 2px',
+                            border: '1px solid #4080c0',
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <span 
+                          style={{ fontWeight: 600 }}
+                          onDoubleClick={(e) => {
+                            e.stopPropagation();
+                            startRenameGroup(group.id);
+                          }}
+                          title="Double-click to rename"
+                        >
+                          {group.name}
+                        </span>
+                      )}
+                      
+                      <span style={{ marginLeft: '8px', fontSize: '9px', color: '#666' }}>
+                        ({group.signals.length + group.children.length})
+                      </span>
+                    </span>
+                    
+                    {/* Value column - empty for groups */}
+                    <span style={{ flex: 1 }}></span>
+                    
+                    {/* Action buttons */}
+                    <span style={{ display: 'flex', gap: '2px', marginLeft: '4px' }}>
+                      <button
+                        style={{
+                          fontSize: '9px',
+                          padding: '1px 3px',
+                          border: '1px solid #c0c0c0',
+                          background: isSelected ? '#d0e0f0' : '#f0f0f0',
+                          cursor: 'pointer',
+                          borderRadius: '2px',
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          addGroup(group.id, false);
+                        }}
+                        title="Add child group"
+                      >
+                        +↓
+                      </button>
+                      <button
+                        style={{
+                          fontSize: '9px',
+                          padding: '1px 3px',
+                          border: '1px solid #c0c0c0',
+                          background: isSelected ? '#d0e0f0' : '#f0f0f0',
+                          cursor: 'pointer',
+                          borderRadius: '2px',
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          addGroup(group.id, true);
+                        }}
+                        title="Add sibling group"
+                      >
+                        +→
+                      </button>
+                      <button
+                        style={{
+                          fontSize: '9px',
+                          padding: '1px 3px',
+                          border: '1px solid #c0c0c0',
+                          background: '#f0f0f0',
+                          cursor: 'pointer',
+                          borderRadius: '2px',
+                          color: '#cc0000',
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteGroup(group.id);
+                        }}
+                        title="Delete group"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  </div>
+                </div>
+              );
+            } else if (node.type === 'signal' && node.signal) {
+              const signal = node.signal as Signal & { uniqueId: string };
+              const isSelected = selectedSignal === signal.uniqueId;
+              
+              return (
+                <div key={signal.uniqueId}>
+                  <div
+                    className={`waveform-signal-item ${isSelected ? 'selected' : ''}`}
+                    onClick={() => setSelectedSignal(signal.uniqueId)}
+                    style={{ 
+                      display: 'flex',
+                      alignItems: 'center',
+                      paddingLeft: '4px',
+                    }}
+                  >
+                    {/* Scope column */}
+                    <span 
+                      style={{ 
+                        width: hierarchyColumnWidth,
+                        fontSize: '10px',
+                        color: '#666',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        borderRight: '1px solid #e0e0e0',
+                        height: '100%',
+                      }}
+                      title={getHierarchyDisplay(signal)}
+                    >
+                      {getHierarchyDisplay(signal)}
+                    </span>
+                    
+                    {/* Name column with tree structure */}
+                    <span style={{ 
+                      width: nameColumnWidth,
+                      display: 'flex',
+                      alignItems: 'center',
+                      paddingLeft: `${node.level * 12}px`,
+                      borderRight: '1px solid #e0e0e0',
+                      height: '100%',
+                    }}>
+                      {renderTreeConnectors(node.parentNodes)}
+                      
+                      <span style={{ 
+                        width: '14px',
+                        cursor: signal.bitWidth > 1 ? 'pointer' : 'default'
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (signal.bitWidth > 1) {
+                          toggleSignalExpand(signal.uniqueId);
+                        }
+                      }}
+                      >
+                        {signal.bitWidth > 1 ? (expandedSignals.has(signal.uniqueId) ? '▼' : '▶') : ''}
+                      </span>
+                      
+                      <span className="waveform-signal-name">
+                        {getSignalDisplayName(signal)}
+                      </span>
+                    </span>
+                    
+                    {/* Value column */}
+                    <span 
+                      className="waveform-signal-value"
+                      style={{ 
+                        flex: 1,
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <span></span>
+                      <span>{getSignalValue(signal)}</span>
+                      <span
+                        className="waveform-signal-remove"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveSignal(signal);
+                        }}
+                        title="Remove signal"
+                      >
+                        ×
+                      </span>
+                    </span>
+                  </div>
+                  
+                  {expandedSignals.has(signal.uniqueId) && signal.bitWidth > 1 && (
+                    <div className="waveform-bus-bits">
+                      {Array.from({ length: Math.min(signal.bitWidth, 32) }, (_, i) => {
+                        const bitIndex = signal.msb - i;
+                        return (
+                          <div
+                            key={i}
+                            className="waveform-bus-bit"
+                            style={{ 
+                              display: 'flex',
+                              alignItems: 'center',
+                              paddingLeft: '4px',
+                            }}
+                          >
+                            {/* Scope column - empty for bus bits */}
+                            <span style={{ 
+                              width: hierarchyColumnWidth,
+                              borderRight: '1px solid #e0e0e0',
+                              height: '100%',
+                            }}></span>
+                            
+                            {/* Name column with tree structure */}
+                            <span style={{ 
+                              width: nameColumnWidth,
+                              display: 'flex',
+                              alignItems: 'center',
+                              paddingLeft: `${(node.level + 1) * 12}px`,
+                              borderRight: '1px solid #e0e0e0',
+                              height: '100%',
+                            }}>
+                              {renderTreeConnectors([...node.parentNodes, { level: node.level, isLast: i === Math.min(signal.bitWidth, 32) - 1 }])}
+                              <span style={{ width: '14px' }}></span>
+                              <span className="waveform-signal-name">
+                                {signal.name}[{bitIndex}]
+                              </span>
+                            </span>
+                            
+                            {/* Value column */}
+                            <span className="waveform-signal-value" style={{ flex: 1 }}>
+                              {Math.random() > 0.5 ? '1' : '0'}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            return null;
+          })}
+          
+          {displaySignals.length === 0 && (
+            <div style={{
+              padding: '20px',
+              textAlign: 'center',
+              color: '#999',
+              fontSize: '11px',
+            }}>
+              No signals added
+            </div>
+          )}
+        </div>
       </div>
-      <div style={{ flex: 1, position: 'relative' }}>
+
+      {/* Resizer between signal panel and canvas */}
+      <div
+        className="panel-resizer"
+        onMouseDown={handleSignalPanelResize}
+        title="Drag to resize"
+      >
+        <div className="panel-resizer-handle" />
+      </div>
+
+      <div className="waveform-canvas-container" ref={containerRef} style={{ display: 'flex', flexDirection: 'column' }}>
+        {/* Cursor/Marker info bar - corresponds to left filter bar (30px) */}
+        <div style={{
+          height: '30px',
+          background: '#1a1a1a',
+          borderBottom: '1px solid #404040',
+          flexShrink: 0,
+          position: 'relative',
+          boxSizing: 'border-box',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 12px',
+          fontSize: '13px',
+          fontFamily: 'Consolas, Monaco, monospace',
+        }}>
+          {/* Cursor vertical line */}
+          {cursor.visible && (
+            <div style={{
+              position: 'absolute',
+              left: `${((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * 100}%`,
+              top: 0,
+              bottom: 0,
+              width: '1px',
+              background: '#ff00ff',
+              zIndex: 1,
+            }} />
+          )}
+          
+          {/* Mouse vertical line */}
+          {mouseX !== null && (
+            <div style={{
+              position: 'absolute',
+              left: `${(mouseX / (containerRef.current?.clientWidth || 1)) * 100}%`,
+              top: 0,
+              bottom: 0,
+              width: '1px',
+              background: '#00ffff',
+              zIndex: 1,
+            }} />
+          )}
+          
+          {/* Cursor name and time */}
+          {cursor.visible && (
+            <span style={{
+              position: 'absolute',
+              left: `${((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * 100}%`,
+              transform: 'translateX(4px)',
+              color: '#ffffff',
+              fontWeight: 'bold',
+              zIndex: 2,
+            }}>
+              Cursor: {cursor.position}
+            </span>
+          )}
+          
+          {/* Mouse name and time */}
+          {mouseX !== null && (
+            <span style={{
+              position: 'absolute',
+              left: `${(mouseX / (containerRef.current?.clientWidth || 1)) * 100}%`,
+              transform: 'translateX(4px)',
+              color: '#00ffff',
+              fontWeight: 'bold',
+              zIndex: 2,
+            }}>
+              Mouse: {Math.round(viewport.timeStart + (mouseX / (containerRef.current?.clientWidth || 1)) * (viewport.timeEnd - viewport.timeStart))}
+            </span>
+          )}
+        </div>
+        
+        {/* Waveform canvas */}
         <canvas
           ref={canvasRef}
           className="waveform-canvas"
-          style={{ display: 'block' }}
+          style={{ 
+            display: 'block',
+            cursor: 'crosshair',
+            background: selectedSignal ? '#f8f8ff' : '#fff',
+            flex: 1,
+          }}
+          onClick={handleCanvasClick}
+          onMouseMove={handleCanvasMouseMove}
+          onMouseLeave={handleCanvasMouseLeave}
         />
       </div>
     </div>

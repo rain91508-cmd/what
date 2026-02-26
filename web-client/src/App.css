@@ -1,5 +1,5 @@
 /* ============================================
-   HWDA Web Client - Main Styles
+   HWDA Web Client - DVE Style Layout
    ============================================ */
 
 * {
@@ -15,11 +15,11 @@ html, body, #root {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-  font-size: 13px;
-  line-height: 1.5;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft YaHei', sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
   color: #333;
-  background-color: #f5f5f5;
+  background-color: #f0f0f0;
 }
 
 /* Loading Screen */
@@ -55,232 +55,479 @@ body {
   overflow: hidden;
 }
 
-/* Menu Bar */
+/* Menu Bar - DVE Style */
 .menu-bar {
   display: flex;
   align-items: center;
-  height: 28px;
-  background: #2d2d2d;
-  color: #fff;
-  padding: 0 8px;
-  border-bottom: 1px solid #1a1a1a;
+  height: 26px;
+  background: linear-gradient(to bottom, #e8e8e8, #d0d0d0);
+  border-bottom: 1px solid #a0a0a0;
+  padding: 0 4px;
+  font-size: 12px;
 }
 
 .menu-bar-item {
-  padding: 4px 12px;
+  padding: 3px 10px;
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: 2px;
   font-size: 12px;
 }
 
 .menu-bar-item:hover {
-  background: #404040;
+  background: #c0c0c0;
 }
 
-/* Tool Bar */
+/* Tool Bar - DVE Style */
 .tool-bar {
   display: flex;
   align-items: center;
-  height: 36px;
-  background: #f0f0f0;
-  border-bottom: 1px solid #d0d0d0;
-  padding: 0 8px;
-  gap: 4px;
+  height: 32px;
+  background: linear-gradient(to bottom, #f5f5f5, #e0e0e0);
+  border-bottom: 1px solid #b0b0b0;
+  padding: 0 4px;
+  gap: 2px;
 }
 
 .tool-bar-button {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   border: 1px solid transparent;
-  border-radius: 3px;
+  border-radius: 2px;
   background: transparent;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 12px;
 }
 
 .tool-bar-button:hover {
-  background: #e0e0e0;
-  border-color: #c0c0c0;
+  background: #d0d0d0;
+  border-color: #a0a0a0;
 }
 
 .tool-bar-separator {
   width: 1px;
   height: 20px;
-  background: #d0d0d0;
+  background: #c0c0c0;
   margin: 0 4px;
 }
 
-/* Main Content */
+/* Main Content - Three Column Layout */
 .main-content {
   display: flex;
   flex: 1;
   overflow: hidden;
 }
 
-/* Left Panel - Design Browser */
-.left-panel {
-  width: 280px;
-  min-width: 200px;
-  max-width: 400px;
+/* Left Panel - Hierarchy (Design Browser) */
+.hierarchy-panel {
   background: #fff;
-  border-right: 1px solid #d0d0d0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  flex-shrink: 0;
 }
 
-/* Right Panel - Source Code & Waveform */
+/* Middle Panel - Signal List */
+.signal-panel {
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+/* Right Panel - Tab Panel */
 .right-panel {
   flex: 1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-.source-code-container {
-  flex: 1;
-  min-height: 200px;
   background: #fff;
-  border-bottom: 1px solid #d0d0d0;
-  overflow: hidden;
 }
 
-.waveform-container {
-  flex: 1;
-  min-height: 200px;
-  background: #fff;
-  overflow: hidden;
-}
-
-/* Bottom Panel - Messages */
-.bottom-panel {
-  height: 120px;
-  min-height: 80px;
-  max-height: 300px;
-  background: #fff;
-  border-top: 1px solid #d0d0d0;
-  overflow: hidden;
-}
-
-/* Panel Headers */
+/* Panel Headers - DVE Style */
 .panel-header {
   display: flex;
   align-items: center;
-  height: 28px;
-  background: #f5f5f5;
-  border-bottom: 1px solid #d0d0d0;
-  padding: 0 8px;
+  height: 22px;
+  background: linear-gradient(to bottom, #e0e8f0, #c0d0e0);
+  border-bottom: 1px solid #a0b0c0;
+  padding: 0 6px;
   font-weight: 600;
-  font-size: 12px;
-  color: #555;
+  font-size: 11px;
+  color: #333;
 }
 
-/* Tree View (Design Browser) */
+/* Tab Panel */
+.tab-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.tab-header {
+  display: flex;
+  background: linear-gradient(to bottom, #e8e8e8, #d0d0d0);
+  border-bottom: 1px solid #a0a0a0;
+  padding: 2px 4px 0 4px;
+  gap: 2px;
+}
+
+.tab-button {
+  padding: 4px 12px;
+  background: linear-gradient(to bottom, #f0f0f0, #e0e0e0);
+  border: 1px solid #a0a0a0;
+  border-bottom: none;
+  border-radius: 3px 3px 0 0;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.tab-button:hover {
+  background: linear-gradient(to bottom, #f8f8f8, #e8e8e8);
+}
+
+.tab-button.active {
+  background: #fff;
+  border-bottom: 1px solid #fff;
+  margin-bottom: -1px;
+}
+
+.tab-content {
+  flex: 1;
+  overflow: hidden;
+  background: #fff;
+}
+
+/* Tree View (Hierarchy) - DVE Style */
 .tree-view {
   flex: 1;
   overflow: auto;
-  padding: 4px 0;
+  background: #fff;
 }
 
 .tree-node {
   display: flex;
   align-items: center;
+  height: 20px;
+  padding: 0 4px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+}
+
+.tree-node:hover {
+  background: #e0f0ff;
+}
+
+.tree-node.selected {
+  background: #c0e0ff;
+  color: #000;
+}
+
+.tree-node-icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+}
+
+.tree-node-expand {
+  width: 14px;
+  height: 14px;
+  margin-right: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 9px;
+}
+
+/* Signal List - DVE Style */
+.signal-list {
+  flex: 1;
+  overflow: auto;
+  background: #fff;
+}
+
+.signal-item {
+  display: flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.signal-item:hover {
+  background: #e0f0ff;
+}
+
+.signal-item.selected {
+  background: #c0e0ff;
+}
+
+.signal-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal-type {
+  font-size: 9px;
+  color: #666;
+  margin-left: 4px;
+}
+
+.signal-value {
+  font-size: 10px;
+  color: #0066cc;
+  font-family: 'Consolas', monospace;
+  margin-left: 4px;
+}
+
+/* Waveform Window - DVE Style */
+.waveform-container {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.waveform-signal-panel {
+  position: relative;
+  background: #f8f8f8;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.waveform-header {
+  height: 22px;
+  background: linear-gradient(to bottom, #e0e8f0, #c0d0e0);
+  border-bottom: 1px solid #a0b0c0;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.waveform-signal-list {
+  flex: 1;
+  overflow: auto;
+}
+
+.waveform-group-header {
+  display: flex;
+  align-items: center;
   height: 24px;
-  padding: 0 8px;
+  background: #e8e8e8;
+  border-bottom: 1px solid #d0d0d0;
+  font-size: 11px;
+  font-weight: 600;
   cursor: pointer;
   user-select: none;
 }
 
-.tree-node:hover {
-  background: #e3f2fd;
+.waveform-group-header:hover {
+  background: #d8d8d8;
 }
 
-.tree-node.selected {
-  background: #1976d2;
-  color: #fff;
+.waveform-group-header.selected {
+  background: #c0d8f0;
 }
 
-.tree-node-icon {
-  width: 16px;
-  height: 16px;
-  margin-right: 4px;
+.waveform-signal-item {
   display: flex;
   align-items: center;
-  justify-content: center;
+  height: 24px;
+  border-bottom: 1px solid #e8e8e8;
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
 }
 
-.tree-node-expand {
+.waveform-signal-item:hover {
+  background: #e0f0ff;
+}
+
+.waveform-signal-item.selected {
+  background: #c0e0ff;
+}
+
+.waveform-signal-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: 4px;
+}
+
+.waveform-signal-value {
+  font-family: 'Consolas', monospace;
+  font-size: 10px;
+  color: #0066cc;
+  min-width: 60px;
+  text-align: right;
+  border-left: 1px solid #d0d0d0;
+  padding-left: 4px;
+}
+
+.waveform-signal-remove {
   width: 16px;
   height: 16px;
-  margin-right: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  opacity: 0;
+  font-size: 12px;
+  color: #666;
 }
 
-/* Code Editor */
+.waveform-signal-item:hover .waveform-signal-remove {
+  opacity: 1;
+}
+
+.waveform-signal-remove:hover {
+  color: #cc0000;
+}
+
+.waveform-bus-bits {
+  background: #f0f0f0;
+}
+
+.waveform-bus-bit {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  border-bottom: 1px solid #e0e0e0;
+  font-size: 10px;
+  color: #666;
+}
+
+.waveform-canvas-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+}
+
+.waveform-canvas {
+  flex: 1;
+  width: 100%;
+  cursor: crosshair;
+}
+
+/* Panel Resizer - between signal panel and waveform */
+.panel-resizer,
+.panel-splitter {
+  width: 8px;
+  cursor: col-resize;
+  background: #e8e8e8;
+  border-left: 1px solid #c0c0c0;
+  border-right: 1px solid #c0c0c0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+
+.panel-resizer:hover,
+.panel-splitter:hover {
+  background: #d0d0d0;
+}
+
+.panel-resizer:active,
+.panel-splitter:active {
+  background: #b0b0b0;
+}
+
+.panel-resizer-handle {
+  width: 3px;
+  height: 30px;
+  background: #909090;
+  border-radius: 1.5px;
+}
+
+/* Code Editor - DVE Style */
 .code-editor {
   height: 100%;
   overflow: auto;
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.5;
+  background: #fff;
 }
 
 .code-line {
   display: flex;
-  min-height: 20px;
+  min-height: 18px;
 }
 
 .code-line-number {
-  width: 50px;
-  padding: 0 8px;
+  width: 45px;
+  padding: 0 6px;
   text-align: right;
   color: #999;
   background: #f5f5f5;
   border-right: 1px solid #e0e0e0;
   user-select: none;
+  font-size: 11px;
 }
 
 .code-line-content {
   flex: 1;
-  padding: 0 8px;
+  padding: 0 6px;
   white-space: pre;
 }
 
-/* Waveform Canvas */
-.waveform-canvas {
-  width: 100%;
-  height: 100%;
-  cursor: crosshair;
+/* Message Window - DVE Style */
+.bottom-panel {
+  height: 100px;
+  min-height: 60px;
+  max-height: 250px;
+  background: #fff;
+  border-top: 1px solid #b0b0b0;
+  overflow: hidden;
 }
 
-/* Message Window */
 .message-window {
   height: 100%;
   overflow: auto;
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-  font-size: 12px;
-  padding: 4px 8px;
+  font-size: 11px;
+  padding: 4px;
+  background: #fff;
 }
 
 .message-item {
-  padding: 2px 0;
+  padding: 1px 0;
   border-bottom: 1px solid #f0f0f0;
+  color: #333;
 }
 
-/* Dialog */
+/* Dialog - DVE Style */
 .dialog-overlay {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.4);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -288,9 +535,10 @@ body {
 }
 
 .dialog {
-  background: #fff;
-  border-radius: 4px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  background: #f0f0f0;
+  border: 1px solid #808080;
+  border-radius: 3px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
   min-width: 400px;
   max-width: 600px;
 }
@@ -299,121 +547,136 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px;
-  border-bottom: 1px solid #e0e0e0;
+  padding: 8px 12px;
+  background: linear-gradient(to bottom, #e0e8f0, #c0d0e0);
+  border-bottom: 1px solid #a0b0c0;
 }
 
 .dialog-title {
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .dialog-close {
   background: none;
   border: none;
-  font-size: 20px;
+  font-size: 16px;
   cursor: pointer;
   color: #666;
+  padding: 0 4px;
+}
+
+.dialog-close:hover {
+  color: #000;
 }
 
 .dialog-body {
   padding: 16px;
+  background: #f8f8f8;
 }
 
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding: 16px;
-  border-top: 1px solid #e0e0e0;
+  padding: 12px 16px;
+  background: #f0f0f0;
+  border-top: 1px solid #d0d0d0;
 }
 
-/* Form Elements */
+/* Form Elements - DVE Style */
 .form-group {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .form-label {
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
   font-weight: 500;
-  color: #555;
+  color: #333;
+  font-size: 11px;
 }
 
 .form-input {
   width: 100%;
-  padding: 8px 12px;
-  border: 1px solid #d0d0d0;
-  border-radius: 3px;
-  font-size: 13px;
+  padding: 4px 8px;
+  border: 1px solid #a0a0a0;
+  border-radius: 2px;
+  font-size: 12px;
+  background: #fff;
 }
 
 .form-input:focus {
   outline: none;
-  border-color: #1976d2;
+  border-color: #4080c0;
 }
 
-/* Buttons */
+/* Buttons - DVE Style */
 .btn {
-  padding: 8px 16px;
-  border: 1px solid #d0d0d0;
-  border-radius: 3px;
-  background: #fff;
+  padding: 4px 12px;
+  border: 1px solid #808080;
+  border-radius: 2px;
+  background: linear-gradient(to bottom, #f0f0f0, #e0e0e0);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 11px;
 }
 
 .btn:hover {
-  background: #f5f5f5;
+  background: linear-gradient(to bottom, #f8f8f8, #e8e8e8);
 }
 
 .btn-primary {
-  background: #1976d2;
+  background: linear-gradient(to bottom, #4080c0, #2060a0);
   color: #fff;
-  border-color: #1976d2;
+  border-color: #205080;
 }
 
 .btn-primary:hover {
-  background: #1565c0;
+  background: linear-gradient(to bottom, #5090d0, #3070b0);
 }
 
 /* Status Indicators */
 .status-indicator {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: 4px;
+  font-size: 11px;
 }
 
 .status-dot {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
 }
 
 .status-dot.connected {
-  background: #4caf50;
+  background: #00aa00;
 }
 
 .status-dot.disconnected {
-  background: #f44336;
+  background: #cc0000;
 }
 
-/* Scrollbars */
+/* Scrollbars - DVE Style */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 14px;
+  height: 14px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #f5f5f5;
+  background: #f0f0f0;
+  border: 1px solid #d0d0d0;
 }
 
 ::-webkit-scrollbar-thumb {
   background: #c0c0c0;
-  border-radius: 4px;
+  border: 1px solid #a0a0a0;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #a0a0a0;
+  background: #b0b0b0;
+}
+
+::-webkit-scrollbar-corner {
+  background: #f0f0f0;
 }

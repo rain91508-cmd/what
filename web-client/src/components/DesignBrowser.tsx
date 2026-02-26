@@ -1,79 +1,120 @@
 import { useState } from 'react';
+import type { Instance } from '../types';
 
 interface DesignBrowserProps {
-  onFileSelect: (filePath: string) => void;
-  onSignalSelect: (signalPath: string) => void;
+  onInstanceSelect: (instance: Instance) => void;
+  selectedInstance: Instance | null;
 }
 
-interface TreeNode {
+interface HierarchyNode {
   id: string;
   name: string;
-  type: 'module' | 'instance' | 'signal' | 'file';
-  children?: TreeNode[];
-  expanded?: boolean;
+  moduleName: string;
+  type: 'instance';
+  children: HierarchyNode[];
+  expanded: boolean;
+  instance: Instance;
 }
 
-// Mock data for demonstration
-const mockHierarchy: TreeNode[] = [
+// Mock data for demonstration - 只显示instance层次结构
+const mockHierarchy: HierarchyNode[] = [
   {
     id: 'top',
     name: 'top',
-    type: 'module',
+    moduleName: 'top_module',
+    type: 'instance',
     expanded: true,
+    instance: {
+      name: 'top',
+      fullPath: 'top',
+      moduleName: 'top_module',
+      parentPath: '',
+      children: ['top.u_cpu', 'top.u_mem', 'top.u_bus'],
+    },
     children: [
-      {
-        id: 'top.clk',
-        name: 'clk',
-        type: 'signal',
-      },
-      {
-        id: 'top.rst_n',
-        name: 'rst_n',
-        type: 'signal',
-      },
       {
         id: 'top.u_cpu',
         name: 'u_cpu',
+        moduleName: 'cpu',
         type: 'instance',
         expanded: false,
+        instance: {
+          name: 'u_cpu',
+          fullPath: 'top.u_cpu',
+          moduleName: 'cpu',
+          parentPath: 'top',
+          children: ['top.u_cpu.u_alu', 'top.u_cpu.u_regfile'],
+        },
         children: [
           {
-            id: 'top.u_cpu.pc',
-            name: 'pc[31:0]',
-            type: 'signal',
+            id: 'top.u_cpu.u_alu',
+            name: 'u_alu',
+            moduleName: 'alu',
+            type: 'instance',
+            expanded: false,
+            instance: {
+              name: 'u_alu',
+              fullPath: 'top.u_cpu.u_alu',
+              moduleName: 'alu',
+              parentPath: 'top.u_cpu',
+              children: [],
+            },
+            children: [],
           },
           {
-            id: 'top.u_cpu.instr',
-            name: 'instr[31:0]',
-            type: 'signal',
+            id: 'top.u_cpu.u_regfile',
+            name: 'u_regfile',
+            moduleName: 'regfile',
+            type: 'instance',
+            expanded: false,
+            instance: {
+              name: 'u_regfile',
+              fullPath: 'top.u_cpu.u_regfile',
+              moduleName: 'regfile',
+              parentPath: 'top.u_cpu',
+              children: [],
+            },
+            children: [],
           },
         ],
       },
       {
         id: 'top.u_mem',
         name: 'u_mem',
+        moduleName: 'memory',
         type: 'instance',
         expanded: false,
-        children: [
-          {
-            id: 'top.u_mem.addr',
-            name: 'addr[15:0]',
-            type: 'signal',
-          },
-          {
-            id: 'top.u_mem.data',
-            name: 'data[31:0]',
-            type: 'signal',
-          },
-        ],
+        instance: {
+          name: 'u_mem',
+          fullPath: 'top.u_mem',
+          moduleName: 'memory',
+          parentPath: 'top',
+          children: [],
+        },
+        children: [],
+      },
+      {
+        id: 'top.u_bus',
+        name: 'u_bus',
+        moduleName: 'bus_arbiter',
+        type: 'instance',
+        expanded: false,
+        instance: {
+          name: 'u_bus',
+          fullPath: 'top.u_bus',
+          moduleName: 'bus_arbiter',
+          parentPath: 'top',
+          children: [],
+        },
+        children: [],
       },
     ],
   },
 ];
 
-export function DesignBrowser({ onFileSelect, onSignalSelect }: DesignBrowserProps) {
+export function DesignBrowser({ onInstanceSelect, selectedInstance }: DesignBrowserProps) {
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['top']));
-  const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const [hierarchy] = useState<HierarchyNode[]>(mockHierarchy);
 
   const toggleNode = (nodeId: string) => {
     const newExpanded = new Set(expandedNodes);
@@ -85,26 +126,20 @@ export function DesignBrowser({ onFileSelect, onSignalSelect }: DesignBrowserPro
     setExpandedNodes(newExpanded);
   };
 
-  const handleNodeClick = (node: TreeNode) => {
-    setSelectedNode(node.id);
-    
-    if (node.type === 'signal') {
-      onSignalSelect(node.id);
-    } else if (node.type === 'file') {
-      onFileSelect(node.id);
-    }
+  const handleNodeClick = (node: HierarchyNode) => {
+    onInstanceSelect(node.instance);
   };
 
-  const renderTreeNode = (node: TreeNode, depth: number = 0) => {
+  const renderTreeNode = (node: HierarchyNode, depth: number = 0) => {
     const isExpanded = expandedNodes.has(node.id);
     const hasChildren = node.children && node.children.length > 0;
-    const isSelected = selectedNode === node.id;
+    const isSelected = selectedInstance?.fullPath === node.instance.fullPath;
 
     return (
       <div key={node.id}>
         <div
           className={`tree-node ${isSelected ? 'selected' : ''}`}
-          style={{ paddingLeft: `${8 + depth * 16}px` }}
+          style={{ paddingLeft: `${4 + depth * 12}px` }}
           onClick={() => handleNodeClick(node)}
         >
           {hasChildren && (
@@ -119,13 +154,10 @@ export function DesignBrowser({ onFileSelect, onSignalSelect }: DesignBrowserPro
             </span>
           )}
           {!hasChildren && <span className="tree-node-expand"></span>}
-          <span className="tree-node-icon">
-            {node.type === 'module' && '📦'}
-            {node.type === 'instance' && '🔧'}
-            {node.type === 'signal' && '📊'}
-            {node.type === 'file' && '📄'}
+          <span className="tree-node-icon">🔧</span>
+          <span title={`${node.name} (${node.moduleName})`}>
+            {node.name}
           </span>
-          <span>{node.name}</span>
         </div>
         {hasChildren && isExpanded && (
           <div>
@@ -137,10 +169,10 @@ export function DesignBrowser({ onFileSelect, onSignalSelect }: DesignBrowserPro
   };
 
   return (
-    <div className="left-panel">
-      <div className="panel-header">Design Browser</div>
+    <div className="hierarchy-panel">
+      <div className="panel-header">Hierarchy</div>
       <div className="tree-view">
-        {mockHierarchy.map(node => renderTreeNode(node))}
+        {hierarchy.map(node => renderTreeNode(node))}
       </div>
     </div>
   );
