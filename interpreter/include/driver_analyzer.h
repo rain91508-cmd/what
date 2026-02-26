@@ -34,6 +34,9 @@ public:
     // Analyze procedural assignments in always/initial blocks
     void analyzeProceduralAssignments(const UHDM::module_inst* module);
     
+    // Analyze port connections from module instances
+    void analyzePortConnections(const UHDM::module_inst* module);
+    
     // Apply collected driver relationships to signals
     void applyDriverRelationships();
     

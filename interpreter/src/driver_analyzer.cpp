@@ -60,6 +60,107 @@ void DriverAnalyzer::analyzeProceduralAssignments(const UHDM::module_inst* modul
     }
 }
 
+void DriverAnalyzer::analyzePortConnections(const UHDM::module_inst* module) {
+    if (!module) return;
+    
+    std::string moduleName(module->VpiFullName());
+    std::string instName(module->VpiName());
+    std::string defName(module->VpiDefName());
+    
+    std::cerr << "DEBUG: analyzePortConnections for module: " << moduleName 
+              << " (instName='" << instName << "', defName='" << defName << "')\n";
+    
+    // Process both module definitions and instances
+    // For definitions (instName empty), we still want to analyze their port connections
+    // when they are used as instances
+    
+    // Get ports for this module
+    auto ports = module->Ports();
+    if (!ports) {
+        std::cerr << "DEBUG: No ports found for module\n";
+        return;
+    }
+    
+    std::cerr << "DEBUG: Found " << ports->size() << " ports\n";
+    
+    for (auto* port : *ports) {
+        if (!port) continue;
+        
+        std::string portName(port->VpiName());
+        int portDirection = port->VpiDirection();
+        
+        std::cerr << "DEBUG: Processing port: " << portName << " direction=" << portDirection << "\n";
+        
+        // Only process output/inout ports (they drive parent module signals)
+        if (portDirection != vpiOutput && portDirection != vpiInout) {
+            continue;
+        }
+        
+        // Get the high_conn (parent module side connection)
+        // High_conn returns any* (which is BaseClass* in UHDM)
+        UHDM::any* highConn = port->High_conn();
+        if (!highConn) {
+            std::cerr << "DEBUG: No high_conn for port " << portName << "\n";
+            continue;
+        }
+        
+        // Get the parent signal name from high_conn
+        std::string parentSignalName;
+        if (auto* refObj = highConn->Cast<UHDM::ref_obj>()) {
+            parentSignalName = std::string(refObj->VpiFullName());
+        } else {
+            // Try to get name directly from BaseClass
+            parentSignalName = std::string(highConn->VpiName());
+        }
+        
+        if (parentSignalName.empty()) {
+            std::cerr << "DEBUG: Empty parent signal name for port " << portName << "\n";
+            continue;
+        }
+        
+        // Get the sub-module signal name (low_conn)
+        // Low_conn returns any* (which is BaseClass* in UHDM)
+        UHDM::any* lowConn = port->Low_conn();
+        std::string subModuleSignalName;
+        KdbSourceLocation driverSignalLoc;  // Location of the sub-module signal definition
+        
+        if (lowConn) {
+            if (auto* refObj = lowConn->Cast<UHDM::ref_obj>()) {
+                subModuleSignalName = std::string(refObj->VpiFullName());
+                // Get the location of the actual signal (not the ref_obj)
+                if (auto* actualSignal = refObj->Actual_group()) {
+                    driverSignalLoc = extractLocation(actualSignal);
+                } else {
+                    driverSignalLoc = extractLocation(refObj);
+                }
+            } else {
+                subModuleSignalName = std::string(lowConn->VpiName());
+                driverSignalLoc = extractLocation(lowConn);
+            }
+        }
+        
+        if (subModuleSignalName.empty()) {
+            subModuleSignalName = moduleName + "." + portName;
+        }
+        
+        // Use module instance's line number for port connection location
+        KdbSourceLocation portLoc = extractLocation(module);
+        
+        std::cerr << "DEBUG: Port connection: " << subModuleSignalName << " -> " << parentSignalName 
+                  << " at module instance line " << portLoc.line 
+                  << ", driver signal defined at line " << driverSignalLoc.line << "\n";
+        
+        // Record the driver relationship
+        // Sub-module output signal drives parent module signal
+        signalToDriverNames_[parentSignalName].push_back({subModuleSignalName, portLoc});
+        
+        // Record the driver signal definition location (e.g., line 5 for sum in simple_adder)
+        if (driverSignalLoc.line > 0) {
+            signalDriverLines_[parentSignalName].push_back(driverSignalLoc);
+        }
+    }
+}
+
 void DriverAnalyzer::processProcessStmt(const UHDM::process_stmt* process) {
     if (!process) return;
     
