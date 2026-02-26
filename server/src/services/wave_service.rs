@@ -548,20 +548,41 @@ impl WaveService {
                 ServerError::SignalNotFound(signal_name.clone())
             })?;
 
-            info!("找到信号: {} (handle={}, width={})", signal_name, handle, signal_width);
+            info!("找到信号: {} (handle={:?}, width={})", signal_name, handle, signal_width);
 
             // 读取信号波形数据
             let mut signal_data = SignalWaveData::new(handle.into(), signal_width);
 
-            // 使用 fstapi 的迭代器读取转换点
-            // 注意：fstapi 的 API 可能需要根据实际库调整
-            // 这里使用简化的实现
+            // 设置 mask 只读取目标信号
+            reader.set_mask(handle);
 
-            // 模拟一些转换点数据（实际实现需要从 fstapi 读取）
-            // TODO: 实现真正的 fstapi 波形数据读取
-            signal_data.add_transition(time_start, 0);
-            signal_data.add_transition((time_start + time_end) / 2, 1);
-            signal_data.add_transition(time_end, 0);
+            // 设置时间范围
+            reader.set_time_range_limit(time_start, time_end);
+
+            // 使用 fstapi 读取实际波形数据
+            let mut transition_count = 0u64;
+            reader.for_each_block(|time, h, value, _var_len| {
+                if h == handle {
+                    // 将字符串值转换为 u64
+                    let val_str = String::from_utf8_lossy(value);
+                    let val = match val_str.trim() {
+                        "0" => 0u64,
+                        "1" => 1u64,
+                        s => {
+                            // 尝试解析二进制字符串
+                            if s.starts_with('b') {
+                                u64::from_str_radix(&s[1..], 2).unwrap_or(0)
+                            } else {
+                                s.parse::<u64>().unwrap_or(0)
+                            }
+                        }
+                    };
+                    signal_data.add_transition(time, val);
+                    transition_count += 1;
+                }
+            }).map_err(|e| ServerError::Internal(format!("读取波形数据失败: {:?}", e)))?;
+
+            info!("读取到 {} 个转换点", transition_count);
 
             // 生成 LoD 数据
             let config = LodConfig::default();
@@ -576,8 +597,8 @@ impl WaveService {
                 compression,
             )?;
 
-            info!("生成 chunk: {} bytes (compression={}), {} transitions", 
-                chunk.len(), compression.name(), lod_data.transitions.len());
+            info!("生成 chunk: {} bytes (compression={}), {} transitions (LoD {})", 
+                chunk.len(), compression.name(), lod_data.transitions.len(), lod.0);
 
             Ok::<_, ServerError>(chunk)
         })
