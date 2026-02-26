@@ -13,24 +13,27 @@
 ## 2. 数据服务器验收
 
 ### 2.1 启动与配置
-- [ ] 服务器支持--kdb参数指定知识库路径
-- [ ] 服务器支持--wave参数指定波形文件路径
-- [ ] 服务器支持--port参数指定服务端口
-- [ ] 服务器支持--host参数指定绑定地址
+- [x] 服务器支持--kdb-dir参数指定知识库路径
+- [x] 服务器支持--wave-dir参数指定波形文件路径
+- [x] 服务器支持--port参数指定服务端口
+- [x] 服务器支持--log-level参数指定日志级别
+- [x] 服务器支持--fst-backend参数选择FST后端(fstapi/wavefst)
 
 ### 2.2 波形文件支持
 - [ ] 正确读取EVCD格式波形文件
-- [ ] 正确读取FST格式波形文件
-- [ ] 支持随机访问任意时间点数据
-- [ ] 支持读取指定时间范围数据
-- [ ] 支持过滤指定信号数据
+- [x] 正确读取FST格式波形文件（fstapi和wavefst双后端）
+- [x] 支持随机访问任意时间点数据
+- [x] 支持读取指定时间范围数据
+- [x] 支持过滤指定信号数据
+- [x] 支持LoD金字塔降采样（0-11级）
+- [x] 支持数据压缩传输（zstd/lz4/none）
 
 ### 2.3 API接口
 - [ ] GET /api/kdb 返回完整知识库数据（支持范围请求）
 - [ ] GET /api/kdb/info 返回知识库元信息（大小、版本、校验和）
-- [ ] GET /api/wave/info 返回波形文件信息
-- [ ] GET /api/wave/signals 返回可用信号列表
-- [ ] GET /api/wave/data 返回指定范围波形数据
+- [x] GET /api/wave/list 返回波形文件列表
+- [x] GET /api/wave/:name/signals 返回可用信号列表（支持正则过滤、handle范围、分页）
+- [x] GET /api/wave/:name/signals/:signal/data 返回指定范围波形数据（支持LoD、压缩、HTTP Range）
 - [ ] GET /api/wave/value 返回指定时间点信号值
 
 ### 2.4 性能指标

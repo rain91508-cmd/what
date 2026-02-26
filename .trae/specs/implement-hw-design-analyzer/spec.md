@@ -1179,9 +1179,43 @@ GET /api/wave/:waveform_name/info/:signal_name
     "lod_levels": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
   }
 
-GET /api/wave/:waveform_name/signals
-  描述: 获取指定波形中所有可用信号列表
-  响应: JSON数组，包含信号名称、位宽、类型
+GET /api/wave/:waveform_name/signals?name_regex=<pattern>&handle_from=<n>&handle_to=<n>&limit=<n>&offset=<n>
+  描述: 获取指定波形中可用信号列表（支持过滤和分页）
+  参数:
+    - name_regex: 信号名称正则表达式过滤（可选）
+    - handle_from: 起始handle（包含，可选）
+    - handle_to: 结束handle（包含，可选）
+    - limit: 最大返回数量（可选，默认无限制）
+    - offset: 跳过前N个信号（可选，默认0）
+  响应: 
+    {
+      "status": "success",
+      "data": {
+        "waveform_name": "riscv2",
+        "signal_count": 2,
+        "signals": [
+          {
+            "name": "tb_top.u_dut.u_cluster0.mem_arvalid",
+            "handle": 1,
+            "signal_type": "VcdWire",
+            "width": 1
+          }
+        ]
+      }
+    }
+  
+  示例:
+    # 获取所有信号
+    GET /api/wave/riscv2/signals
+    
+    # 正则过滤包含"clk"的信号
+    GET /api/wave/riscv/signals?name_regex=.*clk.*&limit=10
+    
+    # 按handle范围过滤
+    GET /api/wave/riscv/signals?handle_from=100&handle_to=200
+    
+    # 分页获取
+    GET /api/wave/riscv/signals?limit=50&offset=100
 ```
 
 **Requirement: SV-006 HTTP Range支持**
@@ -1210,6 +1244,43 @@ Response:
 * 客户端可以精确控制下载范围
 
 * 与OPFS文件系统配合，实现流式写入
+
+**Requirement: SV-006-1 Server启动选项**
+
+Server支持以下命令行参数：
+
+```
+hwda-server [OPTIONS]
+
+Options:
+  -k, --kdb-dir <DIR>         知识库目录 [default: ./kdb]
+  -w, --wave-dir <DIR>        波形文件目录 [default: ./waves]
+  -p, --port <PORT>           监听端口 [default: 8080]
+  -l, --log-level <LEVEL>     日志级别 [default: info]
+      --fst-backend <BACKEND> FST读取后端 [default: fstapi]
+                                可选值: fstapi, wavefst
+  -h, --help                  打印帮助信息
+
+Examples:
+  # 使用默认配置启动
+  hwda-server
+
+  # 指定波形目录和端口
+  hwda-server --wave-dir ./my_waves --port 9000
+
+  # 使用wavefst后端（纯Rust实现）
+  hwda-server --fst-backend wavefst
+
+  # 完整配置
+  hwda-server --kdb-dir ./kdb --wave-dir ./waves --port 8080 --fst-backend fstapi --log-level debug
+```
+
+**后端选择建议：**
+
+| 后端 | 特点 | 适用场景 |
+|------|------|----------|
+| fstapi | GTKWave C API，功能完整 | 生产环境，复杂FST文件 |
+| wavefst | 纯Rust实现，轻量 | 简单FST文件，避免C依赖 |
 
 ### 6.6 性能要求
 
