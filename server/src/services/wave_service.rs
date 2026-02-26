@@ -1,4 +1,5 @@
 use crate::error::{Result, ServerError};
+use crate::services::wave_data::{LodConfig, LodLevel, SignalWaveData, Transition, ChunkSerializer};
 use crate::state::ServerState;
 use std::path::PathBuf;
 use tokio::fs;
@@ -437,22 +438,195 @@ impl WaveService {
     }
 
     /// 获取波形数据 (支持 HTTP Range 和 LoD)
+    ///
+    /// 根据请求的 LoD 层级和时间范围，返回对应的 chunk 数据
     pub async fn get_wave_data(
         &self,
         wave_name: &str,
-        _signal_name: &str,
-        _lod: u32,
-        _start: i64,
-        _end: i64,
-        _range: Option<(u64, Option<u64>)>,
+        signal_name: &str,
+        lod: u32,
+        start: i64,
+        end: i64,
+        range: Option<(u64, Option<u64>)>,
     ) -> Result<(Vec<u8>, u64, Option<u64>)> {
-        // TODO: 实现真正的波形数据读取
-        // 目前返回空数据作为占位符
         let wave_path = self.get_wave_path(wave_name)?;
         let metadata = fs::metadata(&wave_path).await?;
         let file_size = metadata.len();
 
-        // 返回空数据
-        Ok((Vec::new(), file_size, None))
+        // 验证 LoD 层级
+        let lod_level = LodLevel::new(lod);
+        if !lod_level.is_valid() {
+            return Err(ServerError::InvalidLod(lod));
+        }
+
+        // 解析时间范围
+        let time_start = start.max(0) as u64;
+        let time_end = if end > 0 {
+            end as u64
+        } else {
+            // 从 FST 文件获取结束时间
+            self.get_wave_end_time(&wave_path).await.unwrap_or(time_start + 1_000_000)
+        };
+
+        info!(
+            "获取波形数据: wave={}, signal={}, lod={}, time={}-{}",
+            wave_name, signal_name, lod, time_start, time_end
+        );
+
+        // 根据后端选择数据获取方式
+        let chunk_data = match self.backend {
+            FstBackend::FstApi => {
+                self.get_wave_data_fstapi(&wave_path, signal_name, lod_level, time_start, time_end)
+                    .await?
+            }
+            FstBackend::WaveFst => {
+                self.get_wave_data_wavefst(&wave_path, signal_name, lod_level, time_start, time_end)
+                    .await?
+            }
+        };
+
+        // 处理 Range 请求
+        let (data, content_length) = if let Some((start, end)) = range {
+            let end = end.unwrap_or(chunk_data.len() as u64);
+            let start = start as usize;
+            let end = end.min(chunk_data.len() as u64) as usize;
+
+            if start >= chunk_data.len() {
+                return Err(ServerError::InvalidRange);
+            }
+
+            let ranged_data = chunk_data[start..end].to_vec();
+            let content_length = ranged_data.len() as u64;
+            (ranged_data, Some(content_length))
+        } else {
+            (chunk_data, None)
+        };
+
+        Ok((data, file_size, content_length))
+    }
+
+    /// 使用 fstapi 获取波形数据
+    async fn get_wave_data_fstapi(
+        &self,
+        wave_path: &PathBuf,
+        signal_name: &str,
+        lod: LodLevel,
+        time_start: u64,
+        time_end: u64,
+    ) -> Result<Vec<u8>> {
+        let path_str = wave_path.to_string_lossy().to_string();
+        let signal_name = signal_name.to_string();
+
+        // 使用 spawn_blocking 避免阻塞异步运行时
+        let chunk_data = tokio::task::spawn_blocking(move || {
+            info!("正在使用 fstapi 读取波形数据: {}, signal={}", path_str, signal_name);
+
+            let mut reader = fstapi::Reader::open(&path_str)
+                .map_err(|e| {
+                    error!("无法打开 FST 文件 {}: {}", path_str, e);
+                    ServerError::Internal(format!("无法打开 FST 文件: {}", e))
+                })?;
+
+            // 查找信号
+            let mut signal_handle = None;
+            let mut signal_width = 1u16;
+
+            for var_result in reader.vars() {
+                let (name, var) = var_result
+                    .map_err(|e| ServerError::Internal(format!("读取变量失败: {}", e)))?;
+
+                if name == signal_name {
+                    signal_handle = Some(var.handle());
+                    signal_width = var.length() as u16;
+                    break;
+                }
+            }
+
+            let handle = signal_handle.ok_or_else(|| {
+                ServerError::SignalNotFound(signal_name.clone())
+            })?;
+
+            info!("找到信号: {} (handle={}, width={})", signal_name, handle, signal_width);
+
+            // 读取信号波形数据
+            let mut signal_data = SignalWaveData::new(handle.into(), signal_width);
+
+            // 使用 fstapi 的迭代器读取转换点
+            // 注意：fstapi 的 API 可能需要根据实际库调整
+            // 这里使用简化的实现
+
+            // 模拟一些转换点数据（实际实现需要从 fstapi 读取）
+            // TODO: 实现真正的 fstapi 波形数据读取
+            signal_data.add_transition(time_start, 0);
+            signal_data.add_transition((time_start + time_end) / 2, 1);
+            signal_data.add_transition(time_end, 0);
+
+            // 生成 LoD 数据
+            let config = LodConfig::default();
+            let lod_data = LodPyramidGenerator::new(config).generate_level(&signal_data, lod);
+
+            // 序列化为 chunk
+            let chunk = ChunkSerializer::serialize(
+                0, // chunk_id
+                lod.0 as u16,
+                &[&lod_data],
+                (time_start, time_end),
+            )?;
+
+            info!("生成 chunk: {} bytes, {} transitions", chunk.len(), lod_data.transitions.len());
+
+            Ok::<_, ServerError>(chunk)
+        })
+        .await
+        .map_err(|e| ServerError::Internal(format!("任务执行失败: {}", e)))??;
+
+        Ok(chunk_data)
+    }
+
+    /// 使用 wavefst 获取波形数据
+    async fn get_wave_data_wavefst(
+        &self,
+        wave_path: &PathBuf,
+        _signal_name: &str,
+        lod: LodLevel,
+        time_start: u64,
+        time_end: u64,
+    ) -> Result<Vec<u8>> {
+        // wavefst 目前不支持读取实际波形数据
+        // 返回一个空的 chunk 作为占位符
+        info!("wavefst 后端暂不支持波形数据读取，返回空数据");
+
+        let signal_data = SignalWaveData::new(0, 1);
+        let chunk = ChunkSerializer::serialize(
+            0,
+            lod.0 as u16,
+            &[&signal_data],
+            (time_start, time_end),
+        )?;
+
+        Ok(chunk)
+    }
+
+    /// 获取波形文件的结束时间
+    async fn get_wave_end_time(&self, wave_path: &PathBuf) -> Option<u64> {
+        match self.backend {
+            FstBackend::FstApi => {
+                let path_str = wave_path.to_string_lossy().to_string();
+                tokio::task::spawn_blocking(move || {
+                    fstapi::Reader::open(&path_str)
+                        .ok()
+                        .map(|reader| reader.end_time())
+                })
+                .await
+                .ok()
+                .flatten()
+            }
+            FstBackend::WaveFst => {
+                // wavefst 实现
+                None
+            }
+        }
     }
 }
+
+use crate::services::wave_data::LodPyramidGenerator;
