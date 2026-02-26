@@ -38,58 +38,135 @@ Web客户端支持跨平台运行。
 ## 2. 系统架构
 
 ### 2.1 整体架构
+
+**架构设计原则：**
+- **客户端重计算**：知识库查询、波形渲染在客户端完成
+- **服务端轻量**：仅提供源文件存储和波形数据服务
+- **数据分层**：热数据（内存LRU缓存）、温数据（OPFS/IndexedDB本地存储）、冷数据（服务端）
+- **LoD传输**：波形数据按需分块传输，支持细节层次（Level of Detail）
+
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                          Web Browser Client                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────────┐  │
-│  │    wHDL      │  │   wSignal    │  │      Knowledge Manager       │  │
-│  │   Module     │  │    Module    │  │  ┌────────────────────────┐  │  │
-│  └──────────────┘  └──────────────┘  │  │ Local KDB Storage      │  │  │
-│                                       │  │ (IndexedDB/File API)   │  │  │
-│  ┌────────────────────────────────┐  │  └────────────────────────┘  │  │
-│  │    Local Query Engine          │  │  ┌────────────────────────┐  │  │
-│  │  - Driver/Load Tracing         │  │  │ Signal Manager         │  │  │
-│  │  - Hierarchy Navigation        │──┤  └────────────────────────┘  │  │
-│  │  - Code Search                 │  └──────────────────────────────┘  │
-│  └────────────────────────────────┘                                     │
-│                         │                                                │
-│                    WebSocket/HTTP                                        │
-└─────────────────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                       Data Server (Linux/WSL)                │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
-│  │  Knowledge   │  │   Waveform   │  │   API Handler    │  │
-│  │   Database   │  │    Reader    │  │                  │  │
-│  │  (只读服务)  │  │              │  │                  │  │
-│  └──────────────┘  └──────────────┘  └──────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                 Design Interpreter (Linux/WSL)               │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Verilog/SystemVerilog Parser (基于Surelog)          │  │
-│  └──────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           Web Browser Client                                 │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                        Application Layer                              │  │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │  │
+│  │  │    wHDL      │  │   wSignal    │  │    Knowledge Manager     │  │  │
+│  │  │   Module     │  │    Module    │  │  ┌────────────────────┐  │  │  │
+│  │  │              │  │              │  │  │ Signal Manager     │  │  │  │
+│  │  │ - Code View  │  │ - Wave Render│  │  │ - Signal Groups    │  │  │  │
+│  │  │ - Trace D/L  │  │ - Cursor/Zoom│  │  │ - Bus Operations   │  │  │  │
+│  │  │ - Bookmarks  │  │ - Search     │  │  │ - Value Formatting │  │  │  │
+│  │  └──────────────┘  └──────────────┘  │  └────────────────────┘  │  │  │
+│  │                                      └──────────────────────────┘  │  │
+│  ├──────────────────────────────────────────────────────────────────────┤  │
+│  │                      Client Data Layer (Hot + Warm)                   │  │
+│  │                                                                      │  │
+│  │  ┌─────────────────────────┐    ┌─────────────────────────────────┐  │  │
+│  │  │   Memory Cache (Hot)    │    │   OPFS Local Storage (Warm)     │  │  │
+│  │  │  ┌───────────────────┐  │    │  ┌───────────────────────────┐  │  │  │
+│  │  │  │ LRU Wave Cache    │  │    │  │ Waveform Cache Files      │  │  │  │
+│  │  │  │ - Time ranges     │  │    │  │ - FST chunks              │  │  │  │
+│  │  │  │ - Signal values   │  │    │  │ - Decompressed blocks     │  │  │  │
+│  │  │  │ - Pre-fetch buffer│  │    │  │ - LOD pyramid data        │  │  │  │
+│  │  │  └───────────────────┘  │    │  └───────────────────────────┘  │  │  │
+│  │  │  ┌───────────────────┐  │    │                                 │  │  │
+│  │  │  │ Query Engine      │  │    │  IndexedDB (Warm)               │  │  │
+│  │  │  │ - Driver/Load     │  │    │  ┌───────────────────────────┐  │  │  │
+│  │  │  │ - Hierarchy nav   │  │    │  │ Knowledge Base (.kdb)     │  │  │  │
+│  │  │  │ - Code search     │  │    │  │ - Design metadata         │  │  │  │
+│  │  │  └───────────────────┘  │    │  │ - Signal index            │  │  │  │
+│  │  └─────────────────────────┘    │  │ - Source file cache       │  │  │  │
+│  │                                 │  └───────────────────────────┘  │  │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                    │                                         │
+│                           HTTP/1.1 with Range Requests                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                     │
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Data Server (Linux/WSL)                              │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                        Service Layer (Rust + Axum)                    │  │
+│  │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  │  │
+│  │  │  Source File     │  │  Waveform Data   │  │   API Service    │  │  │
+│  │  │  Service         │  │  Service         │  │                  │  │  │
+│  │  │                  │  │  (wavefst)       │  │  - HTTP Range    │  │  │
+│  │  │  - File storage  │  │                  │  │  - Auth/Rate     │  │  │
+│  │  │  - Version ctrl  │  │  - FST only      │  │  - CORS          │  │  │
+│  │  │  - Access log    │  │  - LOD chunks    │  │                  │  │  │
+│  │  └──────────────────┘  └──────────────────┘  └──────────────────┘  │  │
+│  ├──────────────────────────────────────────────────────────────────────┤  │
+│  │                        Data Layer                                     │  │
+│  │  ┌──────────────────┐  ┌──────────────────┐                         │  │
+│  │  │  Source Files    │  │  Waveform Files  │                         │  │
+│  │  │  (.v/.sv)        │  │  (.fst only)     │                         │  │
+│  │  └──────────────────┘  └──────────────────┘                         │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                     │
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      Design Interpreter (Build Time)                         │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │  Surelog Parser → UHDM → KnowledgeBase Builder → .kdb Generator      │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 2.2 组件说明
 
-| 组件 | 技术栈 | 职责 |
-|------|--------|------|
-| Web客户端 | TypeScript + React/Vue | 用户界面、波形渲染、信号管理、**知识库本地存储与查询** |
-| 数据服务器 | C++/Rust | 知识库文件传输、波形数据服务、API处理 |
-| 设计解释器 | C++ (Surelog) | Verilog/SV代码解析、知识库生成 |
+| 层级 | 组件 | 技术栈 | 职责 |
+|------|------|--------|------|
+| **Client App** | wHDL Module | TypeScript + React | 代码查看、Driver/Load追踪、书签管理 |
+| **Client App** | wSignal Module | TypeScript + React + WebGL/regl | 波形渲染、游标/标记、信号管理 |
+| **Client App** | Knowledge Manager | TypeScript | 知识库加载、本地查询引擎、信号管理 |
+| **Client Data (Hot)** | LRU Wave Cache | JavaScript (In-Memory) | 波形数据内存缓存、预取策略 |
+| **Client Data (Hot)** | Query Engine | JavaScript | Driver/Load追踪、层次遍历、代码搜索 |
+| **Client Data (Warm)** | OPFS Storage | Origin Private File System API | 波形缓存文件持久化 |
+| **Client Data (Warm)** | IndexedDB | IndexedDB API | 知识库、设计元数据、信号索引 |
+| **Server** | Source File Service | Rust (Axum) | 源文件存储、版本控制、访问日志 |
+| **Server** | Waveform Data Service | Rust (wavefst) | FST格式支持、LoD分块、HTTP Range查询 |
+| **Server** | API Service | Rust (Axum) | HTTP Range支持、认证、限流、CORS |
+| **Build** | Design Interpreter | C++ (Surelog) | Verilog/SV解析、知识库生成 |
 
-### 2.3 数据流设计原则
+### 2.3 客户端数据存储策略
 
-| 原则 | 描述 |
-|------|------|
-| 知识库本地化 | 客户端获取完整知识库后，所有查询操作在本地完成 |
-| 波形按需获取 | 波形数据不预加载，按需从服务器获取 |
-| 减少网络请求 | 信号追踪、层次导航等操作无需网络请求 |
+**数据存储分配：**
+
+| 数据类型 | 存储位置 | 原因 |
+|----------|----------|------|
+| 波形缓存文件 (FST chunks) | OPFS | 大文件、需要流式访问、二进制数据 |
+| 知识库 (.kdb) | IndexedDB | 结构化数据、需要索引查询、元数据 |
+| 设计元数据 | IndexedDB | 信号索引、模块信息、层次关系 |
+| 源文件缓存 | IndexedDB | 文本数据、代码搜索、快速访问 |
+| 当前视图波形 | Memory (LRU) | 热数据、快速渲染、临时缓存 |
+
+**OPFS vs IndexedDB 选择依据：**
+- **OPFS**: 适合大文件、流式读写、二进制数据（波形文件）
+- **IndexedDB**: 适合结构化数据、索引查询、事务支持（知识库元数据）
+
+### 2.4 数据分层架构
+
+**三层数据架构：**
+
+| 层级 | 数据类型 | 存储位置 | 访问延迟 | 容量 |
+|------|----------|----------|----------|------|
+| **Hot (热数据)** | 当前视图波形、查询结果 | 内存 (LRU Cache) | <1ms | 100-500MB |
+| **Warm (温数据)** | 波形缓存块(OPFS)、知识库(IndexedDB) | 本地磁盘 | <10ms | 10-50GB |
+| **Cold (冷数据)** | 源文件、完整FST文件 | 服务端存储 | >10ms | 无限制 |
+
+**数据流设计原则：**
+
+| 原则 | 描述 | 实现方式 |
+|------|------|----------|
+| **知识库本地化** | 客户端获取完整知识库后，所有查询操作在本地完成 | IndexedDB持久化存储，启动时加载到内存索引 |
+| **波形按需获取** | 波形数据不预加载，按需从服务器获取LoD分块 | HTTP Range请求，OPFS本地缓存 |
+| **LoD细节层次** | 根据缩放级别传输不同精度的波形数据 | 服务端预计算多分辨率数据，客户端动态请求 |
+| **二进制传输** | 波形数据使用二进制格式传输 | FST原生格式，HTTP Range分块 |
+| **预取策略** | 预测用户行为，提前加载可能访问的数据 | 基于时间局部性的预取算法 |
 
 ---
 
@@ -522,6 +599,9 @@ wSignal是波形查看和分析工具，用于显示和分析仿真结果，支�
 
 ### 5.3 知识库数据结构
 
+**Requirement: IN-004 知识库数据结构定义**
+知识库应采用Protocol Buffers定义数据结构，使用zstd压缩存储。
+
 ```protobuf
 // 知识库数据结构定义
 message KnowledgeBase {
@@ -550,6 +630,9 @@ message Signal {
     string file_path = 6;
     int32 line_number = 7;
     int32 column = 8;
+    // 位宽信息
+    int32 msb = 9;  // 最高有效位
+    int32 lsb = 10; // 最低有效位
 }
 
 message Connection {
@@ -566,109 +649,327 @@ message SourceFiles {
 }
 ```
 
+### 5.4 位宽提取实现
+
+**Requirement: IN-005 信号位宽提取**
+设计解释器应正确提取信号的位宽信息（MSB/LSB）。
+
+| 提取场景 | 实现方法 | 说明 |
+|----------|----------|------|
+| 直接位宽声明 | `logic [7:0] a` | 从port的Typespec获取range信息 |
+| 参数化位宽 | `logic [WIDTH-1:0] a` | 使用ExprEval在模块上下文中计算表达式 |
+| 标量信号 | `logic a` | MSB=LSB=0 |
+| 数组信号 | `logic [7:0] a [3:0]` | 支持packed和unpacked range |
+
+**实现细节：**
+1. **UHDM数据结构路径**：`port -> Typespec() -> Actual_typespec() -> logic_typespec -> Ranges()`
+2. **表达式计算**：使用`UHDM::ExprEval::reduceExpr()`在模块实例上下文中计算参数表达式
+3. **上下文传递**：将模块实例指针作为`inst`参数传递给`reduceExpr`，以解析参数值
+
+**示例代码：**
+```cpp
+// 从port提取位宽
+if (auto* port = obj->Cast<UHDM::port>()) {
+    if (auto* ref_typespec = port->Typespec()) {
+        if (auto* actual_typespec = ref_typespec->Actual_typespec()) {
+            if (auto* logic_typespec = actual_typespec->Cast<UHDM::logic_typespec>()) {
+                auto ranges = logic_typespec->Ranges();
+                if (ranges && !ranges->empty()) {
+                    auto* range = ranges->at(0);
+                    // 使用上下文计算表达式
+                    UHDM::ExprEval eval;
+                    bool invalidValue = false;
+                    UHDM::expr* reducedLeft = eval.reduceExpr(
+                        range->Left_expr(), invalidValue, module_inst, nullptr);
+                    uint64_t msb = eval.getValue(reducedLeft);
+                }
+            }
+        }
+    }
+}
+```
+
+### 5.5 知识库构建流程
+
+**Requirement: IN-006 知识库构建流程**
+设计解释器应实现完整的知识库构建流程。
+
+```
+Verilog Source Files
+        │
+        ▼
+┌───────────────────┐
+│   Surelog Parser  │  ← 解析Verilog/SystemVerilog
+│  (with elaboration)│  ← 参数展开、层次展开
+└───────────────────┘
+        │
+        ▼
+┌───────────────────┐
+│   UHDM Database   │  ← 统一硬件数据模型
+│  (uhdmTopModules) │  ← 展开后的模块实例
+└───────────────────┘
+        │
+        ▼
+┌───────────────────┐
+│  VpiListener遍历  │  ← 遍历UHDM对象树
+│  (KdbBuildListener)│
+└───────────────────┘
+        │
+        ▼
+┌───────────────────┐
+│  KnowledgeBase    │  ← 提取模块、信号、连接关系
+│   Builder         │
+└───────────────────┘
+        │
+        ▼
+┌───────────────────┐
+│ Protocol Buffers  │  ← 序列化
+│   Serialization   │
+└───────────────────┘
+        │
+        ▼
+┌───────────────────┐
+│    zstd Compress  │  ← 压缩
+└───────────────────┘
+        │
+        ▼
+    .kdb File
+```
+
+### 5.6 实现组件
+
+**Requirement: IN-007 核心组件列表**
+设计解释器包含以下核心组件：
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| SurelogParser | `surelog_parser.cpp` | Surelog解析器封装，配置解析选项 |
+| KdbBuildListener | `kdb_build_listener.cpp` | UHDM遍历监听器，提取设计信息 |
+| BitWidthExtractor | `bit_width_extractor.cpp` | 信号位宽提取，支持参数化位宽 |
+| KnowledgeBaseBuilder | `kdb_builder.cpp` | 知识库构建器，管理KDB数据结构 |
+| KdbSerializer | `kdb_serializer.cpp` | 知识库序列化/反序列化 |
+| KdbViewer | `kdb_viewer.cpp` | 知识库查看工具（CLI） |
+
+**Requirement: IN-008 Surelog解析配置**
+Surelog解析器应配置以下选项：
+
+| 配置项 | 值 | 说明 |
+|--------|-----|------|
+| setParse(true) | 启用 | 启用语法解析 |
+| setElaborate(true) | 启用 | 启用设计展开（elaboration） |
+| setElabUhdm(true) | 启用 | 生成展开后的UHDM |
+| setDebugUhdm(false) | 禁用 | 禁用UHDM调试输出 |
+| setCacheAllowed(true) | 启用 | 启用解析缓存 |
+
+**Requirement: IN-009 命令行接口**
+设计解释器应提供命令行接口：
+
+```bash
+# 基本用法
+hwda_interpreter <verilog_files...> --output <output.kdb>
+
+# 示例
+hwda_interpreter tests/simple.v --output design.kdb
+
+# 查看知识库
+kdb_viewer design.kdb --json
+```
+
 ---
 
 ## 6. 数据服务器规格
 
 ### 6.1 功能概述
-数据服务器负责管理知识库和波形数据，响应Web客户端的数据请求。
+数据服务器负责管理源文件和FST波形数据，通过HTTP Range协议向客户端提供数据服务。
 
-### 6.2 启动配置
+### 6.2 技术栈
 
-**Requirement: SV-001 启动参数**
+**Requirement: SV-001 服务端技术栈**
+数据服务器应采用Rust + Axum技术栈。
+
+| 组件 | 技术选择 | 说明 |
+|------|----------|------|
+| Web框架 | Axum | 高性能异步HTTP框架 |
+| 波形解析 | wavefst | Rust FST格式解析库 |
+| 波形格式 | FST only | 仅支持FST格式（GTKWave格式） |
+| 传输协议 | HTTP/1.1 Range | 支持断点续传和分块下载 |
+
+### 6.3 启动配置
+
+**Requirement: SV-002 启动参数**
 服务器应支持以下启动参数：
 
 | 参数 | 描述 | 示例 |
 |------|------|------|
-| --kdb | 知识库文件路径 | --kdb design.kdb |
-| --wave | 波形文件路径 | --wave sim.fst |
+| --kdb-dir | 知识库文件目录 | --kdb-dir ./kdb |
+| --wave-dir | 波形文件目录 | --wave-dir ./waves |
 | --port | 服务端口 | --port 8080 |
 | --host | 绑定地址 | --host 0.0.0.0 |
 
-### 6.3 波形文件支持
+### 6.4 LoD（Level of Detail）层级
 
-**Requirement: SV-002 波形格式支持**
-服务器必须支持以下波形文件格式：
+**Requirement: SV-003 LoD层级定义**
+服务端应支持多分辨率波形数据，LoD层级从10ps到1s。
 
-| 格式 | 描述 | 开源库 |
-|------|------|--------|
-| EVCD | Extended VCD格式 | libvcd |
-| FST | Fast Signal Trace | fstlib |
+| LoD级别 | 时间精度 | 适用场景 | 数据量 |
+|---------|----------|----------|--------|
+| LoD 0 | 10ps | 最高精度，查看单个跳变 | 100% |
+| LoD 1 | 100ps | 高精度查看 | ~50% |
+| LoD 2 | 1ns | 正常缩放查看 | ~25% |
+| LoD 3 | 10ns | 缩小查看整体趋势 | ~10% |
+| LoD 4 | 100ns | 概览模式 | ~5% |
+| LoD 5 | 1us | 长时间范围概览 | ~1% |
+| LoD 6 | 10us | 超长时间概览 | ~0.5% |
+| LoD 7 | 100us | 极长时间概览 | ~0.1% |
+| LoD 8 | 1ms | 毫秒级概览 | ~0.05% |
+| LoD 9 | 10ms | 十毫秒级概览 | ~0.01% |
+| LoD 10 | 100ms | 百毫秒级概览 | ~0.005% |
+| LoD 11 | 1s | 秒级概览 | ~0.001% |
 
-**Requirement: SV-003 波形数据读取**
-服务器应高效读取波形数据。
+**LoD数据生成：**
+- 构建时预计算各LoD层级数据
+- 使用降采样算法（min/max bucket）保持波形特征
+- 存储为FST格式或自定义二进制格式
 
-| 功能 | 描述 |
-|------|------|
-| 随机访问 | 支持随机访问任意时间点的数据 |
-| 范围读取 | 支持读取指定时间范围的数据 |
-| 信号过滤 | 支持只读取指定信号的数据 |
-| 流式传输 | 支持大数据量的流式传输 |
-
-### 6.4 API接口定义
+### 6.5 API接口定义
 
 **Requirement: SV-004 知识库API**
-服务器仅需提供知识库文件传输API，所有查询由客户端本地完成。
 
 ```
 GET /api/kdb
-  描述: 获取完整知识库数据
-  响应: 完整知识库数据（二进制格式，Protocol Buffers序列化 + zstd压缩）
-  支持范围请求: 是（支持断点续传）
+  描述: 获取完整知识库文件
+  响应: 二进制知识库数据（.kdb文件）
+  支持Range: 否（必须一次性获取完整知识库）
+  说明: 知识库包含设计层次、信号信息、连接关系、源代码等所有元数据
 
 GET /api/kdb/info
   描述: 获取知识库元信息
-  响应: 
+  响应:
   {
-    "size": 12345678,        // 文件大小（字节）
-    "version": "1.0",        // 知识库版本
-    "checksum": "abc123",    // 文件校验和（用于验证完整性）
-    "design_name": "top",    // 设计名称
-    "signal_count": 50000,   // 信号数量
-    "module_count": 100      // 模块数量
+    "design_name": "top",
+    "version": "1.0.0",
+    "signal_count": 100000,
+    "module_count": 500,
+    "file_size": 10485760,
+    "checksum": "sha256:abc123..."
   }
 ```
 
-**Requirement: SV-005 波形数据API**
-服务器应提供波形数据访问API。
+**Requirement: SV-005 波形数据API（HTTP Range）**
 
 ```
-GET /api/wave/info
-  响应: 波形文件信息（时间范围、信号列表等）
-
-GET /api/wave/signals
-  响应: 可用信号列表
-
-GET /api/wave/data?signals=<sig1,sig2>&start=<time>&end=<time>
+GET /api/wave/:waveform_name/:signal_name?lod=<level>&start=<time>&end=<time>
+  描述: 获取指定波形中指定信号的波形数据
   参数:
-    - signals: 信号列表（逗号分隔）
-    - start: 起始时间
-    - end: 结束时间
-  响应: 指定时间范围内的信号数据
+    - waveform_name: 波形文件名（不含扩展名）
+    - signal_name: 信号完整路径（URL编码）
+    - lod: LoD层级 (0-11)
+    - start: 起始时间（ps）
+    - end: 结束时间（ps）
+  响应: 二进制波形数据（内部格式，非FST）
+  支持Range: 是（用于断点续传）
+  数据格式: 服务端内部优化的二进制格式，包含时间戳-值对序列
 
-GET /api/wave/value?signal=<sig>&time=<time>
-  响应: 指定时间点的信号值
+GET /api/wave/list
+  描述: 获取所有可用波形文件列表
+  响应:
+  [
+    {
+      "name": "tb_top",
+      "file": "tb_top.fst",
+      "time_range": {"start": 0, "end": 1000000000, "unit": "ps"},
+      "signal_count": 5000
+    }
+  ]
+
+GET /api/wave/:waveform_name/info/:signal_name
+  描述: 获取指定波形中指定信号的元信息
+  响应:
+  {
+    "waveform_name": "tb_top",
+    "signal_name": "top.clk",
+    "time_range": {"start": 0, "end": 1000000000, "unit": "ps"},
+    "transition_count": 1000000,
+    "lod_levels": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  }
+
+GET /api/wave/:waveform_name/signals
+  描述: 获取指定波形中所有可用信号列表
+  响应: JSON数组，包含信号名称、位宽、类型
 ```
 
-### 6.5 性能要求
+**Requirement: SV-006 HTTP Range支持**
 
-**Requirement: SV-006 传输性能**
+服务端必须支持HTTP/1.1 Range请求头：
+
+```
+Request:
+  GET /api/wave/top.clk?lod=2 HTTP/1.1
+  Range: bytes=0-65535
+
+Response:
+  HTTP/1.1 206 Partial Content
+  Content-Type: application/octet-stream
+  Content-Range: bytes 0-65535/1048576
+  
+  [binary waveform data]
+```
+
+**Range请求优势：**
+- 支持断点续传
+- 支持分块并行下载
+- 客户端可以精确控制下载范围
+- 与OPFS文件系统配合，实现流式写入
+
+### 6.6 性能要求
+
+**Requirement: SV-007 服务性能**
 服务器应满足以下性能指标：
 
 | 指标 | 要求 |
 |------|------|
-| 知识库传输 | 首次连接时一次性传输 |
-| 波形数据传输 | 仅传输请求的时间范围和信号 |
-| 响应时间 | 普通请求 < 100ms |
-| 并发连接 | 支持至少10个并发客户端 |
+| 响应延迟 | P99 < 50ms |
+| 吞吐量 | >100MB/s |
+| 并发连接 | >1000 |
+| 波形查询 | <10ms (LoD 0-5) |
 
 ---
 
 ## 7. Web客户端规格
 
-### 7.1 界面设计
+### 7.1 波形渲染架构
 
-**Requirement: CL-001 整体布局**
+**Requirement: CL-001 渲染技术栈**
+客户端波形渲染应采用WebGL + regl技术栈。
+
+| 层级 | 技术 | 职责 |
+|------|------|------|
+| **WASM层** | Rust/WASM | FST解码、时间裁剪、降采样、数据解压 |
+| **JS层** | TypeScript | 调度管理、缓存管理、viewport逻辑、UI |
+| **WebGL层** | regl | GPU buffer管理、draw batching、shader、zoom/pan |
+
+**WASM层职责（参考hint2.md）：**
+- FST block解压
+- 时间窗口裁剪
+- 多分辨率降采样（LoD/decimation）
+- 数据压缩/展开
+- 输出：TypedArray (Float32Array / Uint32Array)
+
+**JS层职责：**
+- cache管理
+- viewport逻辑
+- WebGL调用调度
+- UI交互
+
+**WebGL/regl层职责：**
+- GPU buffer管理
+- draw batching
+- shader渲染
+- zoom/pan变换
+
+### 7.2 界面设计
+
+**Requirement: CL-002 整体布局**
 客户端界面应采用专业的硬件调试工具布局设计。
 
 ```
@@ -688,7 +989,7 @@ GET /api/wave/value?signal=<sig>&time=<time>
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Requirement: CL-002 窗口组件**
+**Requirement: CL-003 窗口组件**
 客户端应包含以下主要窗口组件：
 
 | 组件 | 功能 |
@@ -699,9 +1000,9 @@ GET /api/wave/value?signal=<sig>&time=<time>
 | 值窗格 | 显示当前游标位置的信号值 |
 | 消息窗口 | 显示操作结果、追踪结果 |
 
-### 7.2 服务器连接
+### 7.3 服务器连接
 
-**Requirement: CL-003 连接配置**
+**Requirement: CL-004 连接配置**
 客户端应支持配置服务器连接。
 
 | 功能 | 描述 |
@@ -712,87 +1013,75 @@ GET /api/wave/value?signal=<sig>&time=<time>
 
 **Scenario: 用户连接服务器**
 - **WHEN** 用户输入服务器地址并点击连接
-- **THEN** 客户端建立与服务器的WebSocket连接
+- **THEN** 客户端建立与服务器的HTTP连接
 - **AND** 自动获取知识库数据
 - **AND** 在设计浏览器显示设计层次
 
-### 7.3 数据获取策略
+### 7.4 数据获取策略
 
-**Requirement: CL-004 知识库获取与存储**
-客户端应在连接时获取完整知识库，并支持本地持久化存储。
+**Requirement: CL-005 知识库获取与存储**
+客户端应在连接时获取完整知识库，存储到IndexedDB。
 
 | 策略 | 描述 |
 |------|------|
 | 获取时机 | 建立连接后立即获取 |
 | 获取方式 | 一次性获取完整知识库 |
-| 断点续传 | 支持大文件的断点续传 |
-| 本地存储 | 使用IndexedDB或File System Access API存储到本地磁盘 |
+| 断点续传 | 支持大文件的断点续传（HTTP Range） |
+| 本地存储 | IndexedDB存储知识库元数据 |
 | 增量更新 | 支持检测知识库版本变化，仅下载变更部分 |
 
-**Requirement: CL-004-1 知识库本地存储实现**
-客户端应实现知识库的本地磁盘存储机制。
-
-| 存储方案 | 描述 |
-|----------|------|
-| 方案一：IndexedDB | 使用IndexedDB存储知识库二进制数据，适用于中小型知识库（<500MB） |
-| 方案二：File System Access API | 使用File System Access API写入本地文件，适用于大型知识库（>500MB） |
-| 缓存目录 | 默认存储在浏览器指定的缓存目录或用户选择的目录 |
-| 存储管理 | 提供清理旧知识库文件的功能 |
-
-**Scenario: 知识库获取与存储流程**
-- **WHEN** 客户端首次连接服务器
-- **THEN** 获取知识库元信息（大小、版本、校验和）
-- **AND** 检查本地是否已有相同版本的知识库
-- **IF** 本地无知识库或版本不匹配
-- **THEN** 下载完整知识库到本地存储
-- **AND** 验证校验和确保完整性
-- **AND** 加载知识库到内存
-
-**Requirement: CL-004-2 知识库本地查询引擎**
-客户端应实现完整的知识库查询引擎，所有查询操作在本地完成。
-
-| 查询功能 | 描述 |
-|----------|------|
-| 模块查询 | 根据名称或路径查找模块定义 |
-| 信号查询 | 根据名称、路径或作用域查找信号 |
-| 层次遍历 | 遍历设计层次结构 |
-| Driver追踪 | 查找信号的驱动源 |
-| Load追踪 | 查找信号的负载 |
-| 连接性分析 | 分析信号连接关系 |
-| 代码搜索 | 在源代码中搜索字符串或模式 |
-
-**Requirement: CL-005 波形数据获取**
-客户端应按需获取波形数据。
+**Requirement: CL-006 波形数据获取**
+客户端应按需获取波形数据，使用HTTP Range请求。
 
 | 策略 | 描述 |
 |------|------|
-| 不预加载 | 不预先获取完整波形文件 |
-| 按需请求 | 用户查看信号时请求对应数据 |
-| 时间范围 | 仅请求当前视图时间范围的数据 |
-| 缓存机制 | 缓存已获取的波形数据 |
+| LoD动态选择 | 根据缩放级别自动选择LoD层级 |
+| HTTP Range请求 | 使用Range头分块获取波形数据 |
+| OPFS缓存 | 波形数据块缓存到OPFS本地文件 |
+| 流式写入 | 支持边下载边写入OPFS |
 
-### 7.4 波形渲染
-
-**Requirement: CL-006 客户端波形渲染**
-波形渲染应在客户端本地完成。
-
-| 功能 | 描述 |
-|------|------|
-| Canvas渲染 | 使用HTML5 Canvas渲染波形 |
-| 虚拟滚动 | 支持大量信号的高效渲染 |
-| 缩放渲染 | 支持无损缩放 |
-| 响应式 | 支持窗口大小变化自适应 |
+**波形数据请求流程：**
+```
+Client                                          Server
+  │                                               │
+  │──── HTTP GET /api/wave/top.clk?lod=2 ────────>│
+  │     Range: bytes=0-65535                      │
+  │                                               │
+  │<─── HTTP 206 Partial Content ─────────────────│
+  │     Content-Range: bytes 0-65535/1048576      │
+  │                                               │
+  │ [Stream to OPFS file]                         │
+  │                                               │
+  │ [Update memory LRU cache]                     │
+  │                                               │
+  │ [Render waveform with WebGL/regl]             │
+```
 
 ### 7.5 性能优化
 
 **Requirement: CL-007 波形数据缓存**
-客户端应实现波形数据缓存机制。
+客户端应实现多级波形数据缓存机制。
 
-| 缓存策略 | 描述 |
-|----------|------|
-| 内存缓存 | 缓存已获取的波形数据 |
-| LRU淘汰 | 采用LRU策略淘汰旧数据 |
-| 预取策略 | 可选的相邻时间范围预取 |
+**三级缓存架构：**
+
+| 缓存级别 | 存储介质 | 容量 | 淘汰策略 | 用途 |
+|----------|----------|------|----------|------|
+| L1 Cache | JavaScript Heap | 50-100MB | LRU | 当前视图数据、热点信号 |
+| L2 Cache | OPFS | 1-5GB | LRU + 时间过期 | 波形数据块持久化 |
+| L3 Storage | 服务端 | 无限制 | 按需加载 | 完整FST文件 |
+
+**缓存键设计：**
+```
+cache_key = hash(signal_full_path + time_range_start + time_range_end + lod_level)
+```
+
+**预取策略：**
+
+| 预取类型 | 触发条件 | 预取数据 |
+|----------|----------|----------|
+| 时间方向预取 | 用户平移视图 | 平移方向相邻时间块 |
+| 信号关联预取 | 查看总线信号 | 总线各比特信号 |
+| 热点预取 | 信号被频繁访问 | 全时间范围低精度数据 |
 
 **Requirement: CL-008 响应性能**
 客户端应满足以下性能指标：
@@ -813,23 +1102,22 @@ GET /api/wave/value?signal=<sig>&time=<time>
 ```
 Client                          Server
   │                               │
-  │──── Connect Request ─────────>│
-  │                               │
-  │<─── Connection Established ───│
-  │                               │
-  │──── Get KDB Info ────────────>│
+  │──── HTTP GET /api/kdb/info ──>│
   │                               │
   │<─── KDB Metadata ─────────────│
   │                               │
-  │ [Check Local KDB Version]     │
+  │ [Check IndexedDB for cached KDB]
   │                               │
   │ [IF KDB not cached or old]    │
   │                               │
-  │──── Get Knowledge Base ──────>│
+  │──── HTTP GET /api/kdb ───────>│
+  │     Range: bytes=0-65535      │
   │                               │
-  │<─── Knowledge Base Data ──────│
+  │<─── HTTP 206 Partial Content ─│
   │                               │
-  │ [Save KDB to Local Storage]   │
+  │ [Continue Range requests]     │
+  │                               │
+  │ [Store KDB to IndexedDB]      │
   │                               │
   │ [Load KDB to Memory]          │
   │                               │
@@ -846,12 +1134,20 @@ Client                          Server
   │                               │
   │ [User adds signal to view]    │
   │                               │
-  │──── Get Wave Data ───────────>│
-  │     (signals, time_range)     │
+  │ [Check OPFS cache]            │
   │                               │
-  │<─── Wave Data ────────────────│
+  │ [IF not cached]               │
   │                               │
-  │ [Render Waveform Locally]     │
+  │──── HTTP GET /api/wave/... ──>│
+  │     Range: bytes=0-65535      │
+  │                               │
+  │<─── HTTP 206 Partial Content ─│
+  │                               │
+  │ [Stream to OPFS]              │
+  │                               │
+  │ [Update LRU cache]            │
+  │                               │
+  │ [Render with WebGL/regl]      │
   │                               │
 ```
 
@@ -862,26 +1158,11 @@ Client                          Server
   │                               │
   │ [User selects signal]         │
   │                               │
-  │ [Query Local KDB for Drivers] │
+  │ [Query IndexedDB for Drivers] │
   │                               │
-  │ [Query Local KDB for Loads]   │
+  │ [Query IndexedDB for Loads]   │
   │                               │
   │ [Navigate in Source Code]     │
-  │                               │
-  │ [No Server Request Needed]    │
-  │                               │
-```
-
-### 8.4 设计层次浏览流程（本地完成）
-
-```
-Client                          Server
-  │                               │
-  │ [User expands hierarchy node] │
-  │                               │
-  │ [Query Local KDB for Children]│
-  │                               │
-  │ [Display Child Instances]     │
   │                               │
   │ [No Server Request Needed]    │
   │                               │
@@ -903,38 +1184,37 @@ Client                          Server
 | 压缩算法 | zstd |
 | 版本标识 | 文件头包含版本号 |
 
-### 9.2 波形数据传输格式
+### 9.2 波形数据格式
 
-**Requirement: DF-002 波形数据格式**
-波形数据传输应采用以下格式：
+**Requirement: DF-002 FST格式**
+波形数据采用FST格式（GTKWave原生格式），通过HTTP Range传输。
 
-```json
-{
-  "time_range": {
-    "start": 0,
-    "end": 10000,
-    "unit": "ns"
-  },
-  "signals": [
-    {
-      "name": "top.clk",
-      "type": "wire",
-      "width": 1,
-      "values": [
-        {"time": 0, "value": "0"},
-        {"time": 10, "value": "1"},
-        {"time": 20, "value": "0"}
-      ]
-    }
-  ]
-}
-```
+| 属性 | 规格 |
+|------|------|
+| 格式 | FST (Fast Signal Trace) |
+| 压缩 | FST内部支持多种压缩算法 |
+| 传输 | HTTP Range分块传输 |
+| 客户端解析 | WASM层使用wavefst库解析 |
+
+**FST格式优势：**
+- 原生支持多信号、多时间范围查询
+- 高效的压缩比
+- 随机访问性能优秀
+- 业界标准格式（GTKWave）
 
 ### 9.3 API响应格式
 
 **Requirement: DF-003 API响应格式**
-API响应应采用统一的JSON格式：
+API响应应采用统一的JSON格式，适用于所有JSON格式的API响应。
 
+**使用场景：**
+- 知识库元信息查询 (`GET /api/kdb/info`)
+- 波形文件列表查询 (`GET /api/wave/list`)
+- 波形信号元信息查询 (`GET /api/wave/:waveform_name/info/:signal_name`)
+- 波形信号列表查询 (`GET /api/wave/:waveform_name/signals`)
+- 所有其他返回JSON数据的API
+
+**成功响应格式：**
 ```json
 {
   "status": "success",
@@ -943,7 +1223,7 @@ API响应应采用统一的JSON格式：
 }
 ```
 
-错误响应：
+**错误响应格式：**
 ```json
 {
   "status": "error",
@@ -955,6 +1235,19 @@ API响应应采用统一的JSON格式：
 }
 ```
 
+**错误码定义：**
+
+| 错误码 | 描述 | 适用场景 |
+|--------|------|----------|
+| KDB_NOT_FOUND | 知识库不存在 | 知识库API请求时知识库文件缺失 |
+| KDB_CORRUPTED | 知识库损坏 | 知识库文件校验失败 |
+| WAVEFORM_NOT_FOUND | 波形文件不存在 | 请求的波形文件不存在 |
+| SIGNAL_NOT_FOUND | 信号不存在 | 请求的信号在波形中不存在 |
+| INVALID_LOD | 无效的LoD层级 | LoD参数超出0-11范围 |
+| INVALID_TIME_RANGE | 无效的时间范围 | 起始时间大于结束时间 |
+| RANGE_NOT_SUPPORTED | 不支持Range请求 | 知识库API使用了Range头 |
+| INTERNAL_ERROR | 内部服务器错误 | 服务器内部异常 |
+
 ---
 
 ## 10. 验收标准
@@ -963,13 +1256,16 @@ API响应应采用统一的JSON格式：
 
 | 模块 | 验收项 | 验收标准 |
 |------|--------|----------|
-| 知识库存储 | 本地存储 | 知识库可正确存储到本地磁盘 |
+| 知识库存储 | IndexedDB存储 | 知识库可正确存储到IndexedDB |
 | 知识库存储 | 版本检测 | 可检测知识库版本变化，避免重复下载 |
-| 知识库存储 | 断点续传 | 大文件下载支持断点续传 |
+| 知识库存储 | 断点续传 | 大文件下载支持HTTP Range断点续传 |
 | 知识库查询 | 本地查询 | 所有知识库查询在本地完成，无需网络请求 |
 | 知识库查询 | Driver追踪 | 本地正确查询信号驱动源 |
 | 知识库查询 | Load追踪 | 本地正确查询信号负载 |
 | 知识库查询 | 层次遍历 | 本地正确遍历设计层次结构 |
+| 波形存储 | OPFS缓存 | 波形数据正确缓存到OPFS |
+| 波形存储 | HTTP Range | 支持Range请求分块下载 |
+| 波形渲染 | WebGL/regl | 使用WebGL/regl渲染波形 |
 | wHDL | 语法高亮 | Verilog/SV关键字正确高亮 |
 | wHDL | 代码导航 | 双击模块名跳转到定义 |
 | wHDL | Driver追踪 | 正确显示信号驱动源 |
@@ -985,9 +1281,10 @@ API响应应采用统一的JSON格式：
 
 | 指标 | 验收标准 |
 |------|----------|
-| 知识库下载 | 支持断点续传，网络中断后可恢复 |
+| 知识库下载 | 支持HTTP Range断点续传，网络中断后可恢复 |
 | 知识库本地加载 | < 5秒 (10万信号设计) |
 | 本地查询响应 | < 10ms (Driver/Load追踪) |
+| 波形Range请求 | < 50ms (64KB-1MB块) |
 | 波形首次渲染 | < 1秒 (1000信号) |
 | 缩放响应 | < 50ms |
 | 内存占用 | < 2GB |
@@ -998,8 +1295,8 @@ API响应应采用统一的JSON格式：
 |------|----------|
 | 浏览器 | Chrome 90+, Firefox 88+, Edge 90+ |
 | 操作系统 | Windows 10+, Linux, macOS |
-| 波形文件 | EVCD, FST格式正确读取 |
-| 存储API | IndexedDB和File System Access API至少支持一种 |
+| 波形文件 | FST格式正确读取 |
+| 存储API | OPFS和IndexedDB至少支持一种 |
 
 ---
 
@@ -1016,10 +1313,72 @@ API响应应采用统一的JSON格式：
 | Scope | 作用域，设计层次中的命名空间 |
 | wHDL | Web-based HDL code viewer，代码查看与分析模块 |
 | wSignal | Web-based Signal viewer，波形查看与分析模块 |
+| LoD | Level of Detail，细节层次 |
+| OPFS | Origin Private File System，源私有文件系统 |
+| FST | Fast Signal Trace，GTKWave波形格式 |
+| WASM | WebAssembly，客户端高性能计算 |
+| regl | WebGL的函数式封装库 |
 
-### 11.2 参考资料
+### 11.2 wavefst库使用说明
+
+**Requirement: REF-001 wavefst库集成**
+服务端使用wavefst库读取FST格式波形文件。
+
+**wavefst特性：**
+- 现代Rust实现的FST读写库
+- 零拷贝迭代，直接从解码缓冲区流式传输值变化
+- 支持多种压缩格式：zlib、LZ4、FastLZ
+- 可选特性：async、SIMD、serde
+
+**基本使用示例：**
+
+```rust
+use wavefst::{ReaderBuilder, SignalValue};
+
+// 读取FST文件
+fn read_fst(path: &str) -> wavefst::Result<()> {
+    let file = std::fs::File::open(path)?;
+    let mut reader = ReaderBuilder::new(file).build()?;
+
+    // 遍历所有值变化块
+    while let Some(mut block) = reader.next_value_changes()? {
+        while let Some(event) = block.next() {
+            let event = event?;
+            println!("t={} handle={} value={:?}", 
+                event.timestamp, event.handle, event.value);
+        }
+    }
+    Ok(())
+}
+```
+
+**Feature Flags配置：**
+
+| Feature | 默认 | 说明 |
+|---------|------|------|
+| gzip | ✅ | 启用zlib/deflate支持 |
+| lz4 | ✅ | 支持LZ4压缩的层次块和值变化链 |
+| fastlz | ❌ | FastLZ解压/压缩 |
+| parallel | ❌ | 使用Rayon并行解码链负载 |
+| serde | ❌ | 可序列化的层次/值变化快照 |
+| mmap | ✅ | 内存映射读取后端 |
+| async | ❌ | 基于tokio的异步包装器 |
+| simd | ✅ | SSE2加速ASCII向量打包 |
+
+**Cargo.toml配置：**
+```toml
+[dependencies]
+wavefst = { version = "0.1", features = ["gzip", "lz4", "mmap", "simd"] }
+```
+
+### 11.3 参考资料
 
 1. IEEE Standard for Verilog Hardware Description Language (IEEE 1364-2005)
 2. IEEE Standard for SystemVerilog (IEEE 1800-2017)
 3. Surelog: https://github.com/chipsalliance/Surelog
-4. FST Library: https://sourceforge.net/projects/gtkwave/
+4. GTKWave FST Format: https://sourceforge.net/projects/gtkwave/
+5. wavefst: https://docs.rs/wavefst/latest/wavefst/
+6. Axum Web Framework: https://github.com/tokio-rs/axum
+7. regl WebGL Library: http://regl.party/
+8. WebAssembly: https://webassembly.org/
+9. OPFS API: https://developer.mozilla.org/en-US/docs/Web/API/File_System_Access_API
