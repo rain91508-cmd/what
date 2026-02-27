@@ -107,11 +107,14 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     bool moduleExists = builder_.hasModule(moduleInfo.fullName);
     std::cerr << "DEBUG:   moduleExists=" << (moduleExists ? "true" : "false") << "\n";
     
-    moduleStackMarkers_.push_back(!moduleExists);
-    
     if (moduleExists) {
+        // Push false to indicate we didn't push to currentModuleStack_
+        moduleStackMarkers_.push_back(false);
         return;
     }
+    
+    // Push true to indicate we will push to currentModuleStack_
+    moduleStackMarkers_.push_back(true);
     
     uint64_t moduleId = builder_.addModule(moduleInfo);
     std::cerr << "DEBUG:   Added module with id=" << moduleId << ", isInstance=" << (moduleInfo.isInstance ? "true" : "false") << "\n";

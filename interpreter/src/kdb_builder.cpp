@@ -46,9 +46,19 @@ uint32_t KdbBuilder::addModule(const ModuleInfo& module) {
     }
     
     uint32_t id = mod->id;
+    uint32_t parentModuleId = mod->parentModuleId;  // Save before move
+    
     moduleNameToId_[mod->fullName] = id;
     moduleIdToIndex_[id] = modules_.size();
     modules_.push_back(std::move(mod));
+    
+    // Update parent's childModuleIds if this module has a parent
+    if (parentModuleId != 0) {
+        auto* parentMod = const_cast<ModuleInfo*>(findModuleById(parentModuleId));
+        if (parentMod) {
+            parentMod->childModuleIds.push_back(id);
+        }
+    }
     
     return id;
 }
@@ -551,6 +561,11 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
                 // Note: column_start and column_end removed - not needed for driver location
             }
         }
+        
+        // Add child module IDs
+        for (uint32_t childId : mod->childModuleIds) {
+            protoMod->add_child_module_ids(childId);
+        }
     }
     
     for (const auto& hierarchyInfo : hierarchies_) {
@@ -656,6 +671,11 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
             signalFullNameToId_[sig.fullName] = sig.id;
             signalIdToIndex_[sig.id] = mod->signals.size();
             mod->signals.push_back(std::move(sig));
+        }
+        
+        // Load child module IDs
+        for (uint32_t childId : protoMod.child_module_ids()) {
+            mod->childModuleIds.push_back(childId);
         }
         
         nextModuleId_ = std::max(nextModuleId_, mod->id + 1);

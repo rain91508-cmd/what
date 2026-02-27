@@ -104,15 +104,16 @@ struct ModuleInstanceInfo {
 };
 
 struct ModuleInfo {
-    uint32_t id;  // Changed from uint64_t to uint32_t
-    std::string name;
-    std::string fullName;
-    KdbSourceLocation declaration;
-    std::vector<SignalInfo> signals;  // Contains both ports and internal signals
-    std::vector<ModuleInstanceInfo> instances;
-    uint32_t parentModuleId;  // Changed from uint64_t to uint32_t
-    uint32_t fileId;  // Changed from uint64_t to uint32_t
-    bool isInstance;
+	uint32_t id;  // Changed from uint64_t to uint32_t
+	std::string name;
+	std::string fullName;
+	KdbSourceLocation declaration;
+	std::vector<SignalInfo> signals;  // Contains both ports and internal signals
+	std::vector<ModuleInstanceInfo> instances;
+	uint32_t parentModuleId;  // Changed from uint64_t to uint32_t
+	uint32_t fileId;  // Changed from uint64_t to uint32_t
+	bool isInstance;
+	std::vector<uint32_t> childModuleIds;  // Direct child module IDs for hierarchy traversal
 };
 
 class KdbBuilder {

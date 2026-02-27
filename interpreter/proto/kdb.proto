@@ -80,6 +80,7 @@ message Module {
   SourceLocation declaration = 6;
   repeated Signal signals = 7;  // Contains both ports and internal signals
   bool is_instance = 8;
+  repeated uint32 child_module_ids = 9;  // Direct child module IDs for hierarchy traversal
 }
 
 message DesignHierarchy {

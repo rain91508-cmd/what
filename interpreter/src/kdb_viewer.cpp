@@ -521,6 +521,12 @@ void printJson(const KdbBuilder& builder) {
         std::cout << "      \"name\": \"" << module->name << "\",\n";
         std::cout << "      \"full_name\": \"" << module->fullName << "\",\n";
         std::cout << "      \"parent_module_id\": " << module->parentModuleId << ",\n";
+        if (module->parentModuleId != 0) {
+            const auto* parentModule = builder.findModuleById(module->parentModuleId);
+            if (parentModule) {
+                std::cout << "      \"parent_module_full_name\": \"" << parentModule->fullName << "\",\n";
+            }
+        }
         std::cout << "      \"file_id\": " << module->fileId << ",\n";
         std::cout << "      \"is_instance\": " << (module->isInstance ? "true" : "false") << ",\n";
         std::cout << "      \"declaration\": {\n";
@@ -528,6 +534,13 @@ void printJson(const KdbBuilder& builder) {
         std::cout << "        \"line\": " << module->declaration.line << "\n";
         // Note: column_start and column_end removed - not needed
         std::cout << "      },\n";
+        
+        std::cout << "      \"child_module_ids\": [";
+        for (size_t i = 0; i < module->childModuleIds.size(); ++i) {
+            if (i > 0) std::cout << ", ";
+            std::cout << module->childModuleIds[i];
+        }
+        std::cout << "],\n";
         
         std::cout << "      \"signals\": [\n";
         bool firstModuleSignal = true;
@@ -570,31 +583,13 @@ void printJson(const KdbBuilder& builder) {
         
         std::cout << "      \"instances\": [\n";
         bool firstInstance = true;
-        for (const auto& instance : module->instances) {
+        for (uint32_t childId : module->childModuleIds) {
+            const auto* childModule = builder.findModuleById(childId);
+            if (!childModule) continue;
             if (!firstInstance) std::cout << ",\n";
             firstInstance = false;
             std::cout << "        {\n";
-            std::cout << "          \"id\": " << instance.id << ",\n";
-            std::cout << "          \"name\": \"" << instance.name << "\",\n";
-            std::cout << "          \"module_def_id\": " << instance.moduleDefId << ",\n";
-            std::cout << "          \"parent_module_id\": " << instance.parentModuleId << ",\n";
-            std::cout << "          \"declaration\": {\n";
-            std::cout << "            \"file_id\": " << instance.declaration.fileId << ",\n";
-            std::cout << "            \"line\": " << instance.declaration.line << "\n";
-            // Note: column_start and column_end removed - not needed
-            std::cout << "          },\n";
-            std::cout << "          \"connections\": [\n";
-            bool firstConnection = true;
-            for (const auto& conn : instance.connections) {
-                if (!firstConnection) std::cout << ",\n";
-                firstConnection = false;
-                std::cout << "            {\n";
-                std::cout << "              \"port_id\": " << conn.portId << ",\n";
-                std::cout << "              \"connection_expr\": \"" << conn.connectionExpr << "\",\n";
-                std::cout << "              \"connected_signal_id\": " << conn.connectedSignalId << "\n";
-                std::cout << "            }";
-            }
-            std::cout << "\n          ]\n";
+            std::cout << "          \"full_name\": \"" << childModule->fullName << "\"\n";
             std::cout << "        }";
         }
         std::cout << "\n      ]\n";
