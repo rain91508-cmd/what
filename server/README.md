@@ -73,9 +73,14 @@ GET /api/kdb/:name/file         # 下载知识库文件 (支持 Range)
 ### 波形数据 API
 ```
 GET /api/wave/list              # 获取波形文件列表
-GET /api/wave/:waveform_name/signals         # 获取信号列表
-GET /api/wave/:waveform_name/info/:signal_name  # 获取信号元信息
-GET /api/wave/:waveform_name/:signal_name?lod=N&start=T1&end=T2  # 获取波形数据
+GET /api/wave/:waveform_name/signals?name_regex=<pattern>&handle_from=<n>&handle_to=<n>&limit=<n>&offset=<n>  # 获取信号列表（支持过滤和分页）
+GET /api/wave/:waveform_name/signals/:signal_name/data?lod=N&start=T1&end=T2&compress=<algo>  # 获取波形数据（支持LoD、压缩）
+```
+
+### 静态文件服务
+```
+GET /                           # 访问 Web 客户端（如果配置了 --web-dir）
+GET /*                          # 静态文件（自动从 web-dir 提供）
 ```
 
 ## 启动参数
@@ -84,10 +89,14 @@ GET /api/wave/:waveform_name/:signal_name?lod=N&start=T1&end=T2  # 获取波形�
 # 基本启动
 cargo run -- --kdb-dir ./kdb --wave-dir ./waves --port 8080
 
+# 同时提供 Web 客户端静态文件服务
+hwda-server --kdb-dir ./kdb --wave-dir ./waves --web-dir ./web-client/dist --port 8080
+
 # 完整参数
 cargo run -- \
   --kdb-dir ./kdb \
   --wave-dir ./waves \
+  --web-dir ./web-client/dist \
   --port 8080 \
   --host 0.0.0.0 \
   --log-level info \
@@ -98,7 +107,8 @@ cargo run -- \
   --chunk-size-kb 64 \
   --enable-auth false \
   --auth-token "your-token" \
-  --rate-limit 100
+  --rate-limit 100 \
+  --fst-backend fstapi
 ```
 
 ### 参数说明
@@ -107,6 +117,7 @@ cargo run -- \
 |------|------|--------|
 | `--kdb-dir` | 知识库文件目录 | `./kdb` |
 | `--wave-dir` | 波形文件目录 | `./waves` |
+| `--web-dir` | Web 客户端静态文件目录（可选） | - |
 | `--port` | 服务端口 | `8080` |
 | `--host` | 绑定地址 | `0.0.0.0` |
 | `--log-level` | 日志级别 | `info` |
@@ -118,6 +129,7 @@ cargo run -- \
 | `--enable-auth` | 启用认证 | `false` |
 | `--auth-token` | 认证令牌 | - |
 | `--rate-limit` | 速率限制 (请求/秒) | `100` |
+| `--fst-backend` | FST 读取后端 (`fstapi`/`wavefst`) | `fstapi` |
 
 ## 开发指南
 
@@ -169,10 +181,9 @@ if let Some(cached) = state.wave_chunk_cache.get(&key).await {
 - ✅ 零拷贝数据传输 (bytes)
 
 ### 待实现
-- ⏳ FST 文件解析 (wavefst 集成)
-- ⏳ LoD 数据预计算
+- ⏳ LoD 数据预计算和缓存
 - ⏳ OPFS 持久化缓存
-- ⏳ 波形数据降采样算法
+- ⏳ 更高效的波形数据降采样算法
 
 ## 测试
 

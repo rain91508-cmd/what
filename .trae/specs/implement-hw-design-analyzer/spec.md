@@ -1255,10 +1255,16 @@ hwda-server [OPTIONS]
 Options:
   -k, --kdb-dir <DIR>         知识库目录 [default: ./kdb]
   -w, --wave-dir <DIR>        波形文件目录 [default: ./waves]
+      --web-dir <DIR>         Web客户端静态文件目录（可选）
   -p, --port <PORT>           监听端口 [default: 8080]
   -l, --log-level <LEVEL>     日志级别 [default: info]
       --fst-backend <BACKEND> FST读取后端 [default: fstapi]
                                 可选值: fstapi, wavefst
+      --enable-cors           启用CORS [default: true]
+      --cors-origin <ORIGIN>  CORS来源 [default: *]
+      --enable-auth           启用认证 [default: false]
+      --auth-token <TOKEN>    认证令牌
+      --rate-limit <N>        速率限制(请求/秒) [default: 100]
   -h, --help                  打印帮助信息
 
 Examples:
@@ -1271,8 +1277,12 @@ Examples:
   # 使用wavefst后端（纯Rust实现）
   hwda-server --fst-backend wavefst
 
+  # 同时提供Web客户端静态文件服务
+  hwda-server --kdb-dir ./kdb --wave-dir ./waves --web-dir ./web-client/dist --port 8080
+
   # 完整配置
-  hwda-server --kdb-dir ./kdb --wave-dir ./waves --port 8080 --fst-backend fstapi --log-level debug
+  hwda-server --kdb-dir ./kdb --wave-dir ./waves --web-dir ./web-client/dist \
+              --port 8080 --fst-backend fstapi --log-level debug --enable-cors
 ```
 
 **后端选择建议：**
@@ -1281,6 +1291,13 @@ Examples:
 |------|------|----------|
 | fstapi | GTKWave C API，功能完整 | 生产环境，复杂FST文件 |
 | wavefst | 纯Rust实现，轻量 | 简单FST文件，避免C依赖 |
+
+**静态文件服务：**
+
+当指定 `--web-dir` 时，Server 会自动提供静态文件服务：
+- API 路由 (`/api/*`) 优先处理
+- 未匹配的路径回退到静态文件服务
+- 适合部署时同时提供 API 和 Web 客户端
 
 ### 6.6 性能要求
 
