@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { waveformRenderer } from '../core/render/waveformRenderer';
 import type { Viewport, Segment, Signal } from '../types';
 import type { WaveformSignal, ColumnWidths, TimeConfig } from './TabPanel';
+import { psToDisplayValue } from './TabPanel';
 import { FilterInput } from './FilterInput';
 import { wildcardMatch } from '../utils/wildcardMatch';
 import { getOrCreateMockData, getValueAtTime, type SignalMockData } from '../utils/mockWaveformData';
@@ -102,6 +103,8 @@ export function WaveformWindow({
   const [expandedSignals, setExpandedSignals] = useState<Set<number>>(new Set());
   const [cursor, setCursor] = useState<CursorState>({ position: 500, visible: true });
   const [mouseX, setMouseX] = useState<number | null>(null);
+  const [displayMouseX, setDisplayMouseX] = useState<number | null>(null); // Debounced for display
+  const mouseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [nameFilter, setNameFilter] = useState('');
   const [ioFilter, setIoFilter] = useState<'all' | 'input' | 'output' | 'inout' | 'internal'>('all');
   const [editingGroup, setEditingGroup] = useState<string | null>(null);
@@ -184,6 +187,15 @@ export function WaveformWindow({
     }
   }, [timeConfig, canvasWidth, calculateViewport]);
 
+  // Cleanup mouse timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (mouseTimeoutRef.current) {
+        clearTimeout(mouseTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const renderWaveform = () => {
     if (!canvasRef.current) return;
 
@@ -252,6 +264,10 @@ export function WaveformWindow({
 
     // Reserve space for time ruler at top
     const rulerHeight = 20;
+    
+    // Set current time unit for renderer
+    waveformRenderer.setTimeUnit(timeConfig.unit);
+    
     waveformRenderer.render(segments, viewport, width, height, rulerHeight);
 
     const ctx = canvasRef.current.getContext('2d');
@@ -288,11 +304,26 @@ export function WaveformWindow({
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
-    setMouseX(e.clientX - rect.left);
+    const newMouseX = e.clientX - rect.left;
+    setMouseX(newMouseX);
+    
+    // Clear existing timeout
+    if (mouseTimeoutRef.current) {
+      clearTimeout(mouseTimeoutRef.current);
+    }
+    
+    // Set new timeout to update display value after mouse stops moving
+    mouseTimeoutRef.current = setTimeout(() => {
+      setDisplayMouseX(newMouseX);
+    }, 100); // 100ms delay
   }, []);
 
   const handleCanvasMouseLeave = useCallback(() => {
     setMouseX(null);
+    setDisplayMouseX(null);
+    if (mouseTimeoutRef.current) {
+      clearTimeout(mouseTimeoutRef.current);
+    }
   }, []);
 
   const handleColumnResize = (column: 'hierarchy' | 'name' | 'value', e: React.MouseEvent) => {
@@ -1065,12 +1096,12 @@ export function WaveformWindow({
               fontWeight: 'bold',
               zIndex: 2,
             }}>
-              Cursor: {cursor.position}
+              Cursor: {Math.round(psToDisplayValue(cursor.position, timeConfig.unit))} {timeConfig.unit}
             </span>
           )}
           
-          {/* Mouse name and time */}
-          {mouseX !== null && (
+          {/* Mouse name and time - using debounced displayMouseX for value */}
+          {displayMouseX !== null && (
             <span style={{
               position: 'absolute',
               left: `${(mouseX / (containerRef.current?.clientWidth || 1)) * 100}%`,
@@ -1079,7 +1110,7 @@ export function WaveformWindow({
               fontWeight: 'bold',
               zIndex: 2,
             }}>
-              Mouse: {Math.round(viewport.timeStart + (mouseX / (containerRef.current?.clientWidth || 1)) * (viewport.timeEnd - viewport.timeStart))}
+              Mouse: {Math.round(psToDisplayValue(viewport.timeStart + (displayMouseX / (containerRef.current?.clientWidth || 1)) * (viewport.timeEnd - viewport.timeStart), timeConfig.unit))} {timeConfig.unit}
             </span>
           )}
         </div>

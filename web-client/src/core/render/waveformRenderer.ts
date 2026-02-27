@@ -10,6 +10,8 @@
 // OPFS -> WASM decode -> TypedArray -> Canvas 2D draw
 
 import type { RenderChunk, Segment, Viewport } from '../../types';
+import type { TimeUnit } from '../../components/TabPanel';
+import { psToDisplayValue, TIME_UNIT_MULTIPLIERS } from '../../components/TabPanel';
 
 class WaveformRenderer {
   private canvas: HTMLCanvasElement | null = null;
@@ -32,6 +34,20 @@ class WaveformRenderer {
 
   isInitialized(): boolean {
     return this.canvas !== null && this.ctx !== null;
+  }
+
+  // Current time unit for display
+  private currentTimeUnit: TimeUnit = 'ns';
+
+  // Set time unit for display
+  setTimeUnit(unit: TimeUnit): void {
+    this.currentTimeUnit = unit;
+  }
+
+  // Format time value according to current unit (returns integer)
+  private formatTime(timePs: number): string {
+    const displayValue = psToDisplayValue(timePs, this.currentTimeUnit);
+    return Math.round(displayValue).toString();
   }
 
   // Render waveform data
@@ -116,11 +132,11 @@ class WaveformRenderer {
     for (let i = 0; i <= gridCount; i++) {
       const x = (i / gridCount) * width;
       
-      // Draw time label
-      const time = viewport.timeStart + (i / gridCount) * timeRange;
+      // Draw time label (formatted according to current unit)
+      const timePs = viewport.timeStart + (i / gridCount) * timeRange;
       this.ctx.fillStyle = '#333';
       this.ctx.font = '11px Consolas, Monaco, monospace';
-      this.ctx.fillText(time.toFixed(0), x + 2, height - 4);
+      this.ctx.fillText(this.formatTime(timePs), x + 2, height - 4);
     }
   }
 
