@@ -1,19 +1,27 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { waveformRenderer } from '../core/render/waveformRenderer';
 import type { Viewport, Segment, Signal } from '../types';
-
-interface WaveformWindowProps {
-  signals: Signal[];
-  onSignalRemove: (signal: Signal) => void;
-}
+import type { WaveformSignal, ColumnWidths } from './TabPanel';
 
 interface SignalGroup {
   id: string;
   name: string;
   parentId: string | null;
-  signals: Signal[];
+  signals: Array<Signal & { unique_id: number }>;  // 使用全局唯一的数字 ID
   expanded: boolean;
   children: string[];
+}
+
+interface WaveformWindowProps {
+  signals: WaveformSignal[];  // 待添加到 group 的信号队列，每个信号已有 unique_id
+  groups: Record<string, SignalGroup>;
+  selectedGroup: string;
+  columnWidths?: ColumnWidths;  // 列宽配置
+  onSignalRemove: (signal: Signal & { unique_id: number }) => void;
+  onGroupsUpdate: (groups: Record<string, SignalGroup>) => void;
+  onSelectedGroupUpdate: (selectedGroup: string) => void;
+  onSignalsProcessed: (processedIds: number[]) => void;  // 通知父组件已处理的信号 ID
+  onColumnWidthsChange?: (widths: ColumnWidths) => void;  // 列宽变化回调
 }
 
 interface CursorState {
@@ -30,12 +38,25 @@ interface TreeNode {
   parentNodes: { level: number; isLast: boolean }[];
 }
 
-// Generate unique signal ID
-const generateSignalId = (signal: Signal): string => {
-  return `${signal.fullPath}_${signal.handle}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+// 默认列宽配置
+const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
+  hierarchy: 60,
+  name: 120,
+  value: 80,
+  panel: 200,
 };
 
-export function WaveformWindow({ signals, onSignalRemove }: WaveformWindowProps) {
+export function WaveformWindow({
+  signals,
+  groups,
+  selectedGroup,
+  columnWidths,
+  onSignalRemove,
+  onGroupsUpdate,
+  onSelectedGroupUpdate,
+  onSignalsProcessed,
+  onColumnWidthsChange,
+}: WaveformWindowProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const signalPanelRef = useRef<HTMLDivElement>(null);
@@ -55,101 +76,48 @@ export function WaveformWindow({ signals, onSignalRemove }: WaveformWindowProps)
     'top.state': '0x3',
     'top.counter': '0x00FF',
   });
-  const [selectedSignal, setSelectedSignal] = useState<string | null>(null);
-  const [selectedGroup, setSelectedGroup] = useState<string>('root');
-  const [expandedSignals, setExpandedSignals] = useState<Set<string>>(new Set());
+  const [selectedSignal, setSelectedSignal] = useState<number | null>(null);
+  const [expandedSignals, setExpandedSignals] = useState<Set<number>>(new Set());
   const [cursor, setCursor] = useState<CursorState>({ position: 500, visible: true });
   const [mouseX, setMouseX] = useState<number | null>(null);
-  const [hierarchyColumnWidth, setHierarchyColumnWidth] = useState(60);
-  const [nameColumnWidth, setNameColumnWidth] = useState(120);
-  const [valueColumnWidth, setValueColumnWidth] = useState(80);
-  const [signalPanelWidth, setSignalPanelWidth] = useState(200);
   const [nameFilter, setNameFilter] = useState('');
   const [ioFilter, setIoFilter] = useState<'all' | 'input' | 'output' | 'inout' | 'internal'>('all');
   const [editingGroup, setEditingGroup] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
 
-  // Signal groups - root is hidden, show its children directly
-  const [groups, setGroups] = useState<Record<string, SignalGroup>>({
-    'root': {
-      id: 'root',
-      name: 'root',
-      parentId: null,
-      signals: [],
-      expanded: true,
-      children: ['group_1'],
-    },
-    'group_1': {
-      id: 'group_1',
-      name: 'Group_1',
-      parentId: 'root',
-      signals: [],
-      expanded: true,
-      children: [],
-    },
-  });
+  // 使用 props 中的列宽，如果没有则使用默认值
+  const widths = columnWidths || DEFAULT_COLUMN_WIDTHS;
+  const hierarchyColumnWidth = widths.hierarchy;
+  const nameColumnWidth = widths.name;
+  const valueColumnWidth = widths.value;
+  const signalPanelWidth = widths.panel;
 
-  // Store signals with unique IDs
-  const [displaySignals, setDisplaySignals] = useState<Array<Signal & { uniqueId: string }>>([]);
-  // Track signals length to detect additions (including duplicates)
-  const prevSignalsLengthRef = useRef(0);
-  
-  // Sync with external signals - add new signals and remove deleted ones
+  // Collect all display signals from all groups for rendering
+  const displaySignals = Object.values(groups).flatMap(g => g.signals);
+
+  // 处理待添加的信号队列 - 直接添加到选中的 group，然后通知父组件删除
   useEffect(() => {
-    const currentLength = signals.length;
-    const prevLength = prevSignalsLengthRef.current;
-    const signalsAdded = currentLength > prevLength;
-    const signalsRemoved = currentLength < prevLength;
-    prevSignalsLengthRef.current = currentLength;
-    
-    // Get handles of current external signals
-    const currentHandles = new Set(signals.map(s => s.handle));
-    
-    // Remove signals that are no longer in the external list
-    if (signalsRemoved) {
-      setDisplaySignals(prev => {
-        const filtered = prev.filter(s => currentHandles.has(s.handle));
-        return filtered;
-      });
-      
-      // Also update groups
-      setGroups(prev => {
-        const newGroups = { ...prev };
-        Object.keys(newGroups).forEach(groupId => {
-          newGroups[groupId] = {
-            ...newGroups[groupId],
-            signals: newGroups[groupId].signals.filter(s => currentHandles.has(s.handle)),
-          };
-        });
-        return newGroups;
-      });
-    }
-    
-    // Add new signals (including duplicates) - based on length difference
-    if (signalsAdded) {
-      // Get the newly added signals (last N signals)
-      const addedCount = currentLength - prevLength;
-      const newSignals = signals.slice(-addedCount);
-      
-      if (newSignals.length > 0) {
-        const newDisplaySignals = newSignals.map(s => ({
-          ...s,
-          uniqueId: generateSignalId(s),
-        }));
-        
-        setDisplaySignals(prev => [...prev, ...newDisplaySignals]);
-        
-        // Add to selected group
-        setGroups(prev => ({
-          ...prev,
-          [selectedGroup]: {
-            ...prev[selectedGroup],
-            signals: [...prev[selectedGroup].signals, ...newDisplaySignals],
-          },
-        }));
-      }
-    }
-  }, [signals, selectedGroup]);
+    if (signals.length === 0) return;
+
+    // 所有待处理的信号都有 unique_id，直接添加到选中的 group
+    const newSignals = signals.map(s => ({
+      ...s,
+      unique_id: s.unique_id,
+    }));
+
+    // 添加到选中的 group
+    onGroupsUpdate({
+      ...groups,
+      [selectedGroup]: {
+        ...groups[selectedGroup],
+        signals: [...groups[selectedGroup].signals, ...newSignals],
+      },
+    });
+
+    // 通知父组件这些信号已处理，可以从 signals 队列中删除
+    const processedIds = signals.map(s => s.unique_id);
+    onSignalsProcessed(processedIds);
+  }, [signals, selectedGroup, onGroupsUpdate, onSignalsProcessed]);
 
   useEffect(() => {
     const initRenderer = async () => {
@@ -270,12 +238,21 @@ export function WaveformWindow({ signals, onSignalRemove }: WaveformWindowProps)
 
     const handleMouseMove = (e: MouseEvent) => {
       const delta = e.clientX - startX;
+      let newWidths: ColumnWidths | null = null;
+
       if (column === 'hierarchy') {
-        setHierarchyColumnWidth(Math.max(40, Math.min(150, startWidths.hierarchy + delta)));
+        const newWidth = Math.max(40, Math.min(150, startWidths.hierarchy + delta));
+        newWidths = { ...widths, hierarchy: newWidth };
       } else if (column === 'name') {
-        setNameColumnWidth(Math.max(80, Math.min(250, startWidths.name + delta)));
+        const newWidth = Math.max(80, Math.min(250, startWidths.name + delta));
+        newWidths = { ...widths, name: newWidth };
       } else if (column === 'value') {
-        setValueColumnWidth(Math.max(50, Math.min(200, startWidths.value + delta)));
+        const newWidth = Math.max(50, Math.min(200, startWidths.value + delta));
+        newWidths = { ...widths, value: newWidth };
+      }
+
+      if (newWidths && onColumnWidthsChange) {
+        onColumnWidthsChange(newWidths);
       }
     };
 
@@ -295,7 +272,11 @@ export function WaveformWindow({ signals, onSignalRemove }: WaveformWindowProps)
 
     const handleMouseMove = (e: MouseEvent) => {
       const delta = e.clientX - startX;
-      setSignalPanelWidth(Math.max(150, Math.min(400, startWidth + delta)));
+      const newWidth = Math.max(150, Math.min(400, startWidth + delta));
+
+      if (onColumnWidthsChange) {
+        onColumnWidthsChange({ ...widths, panel: newWidth });
+      }
     };
 
     const handleMouseUp = () => {
@@ -307,35 +288,30 @@ export function WaveformWindow({ signals, onSignalRemove }: WaveformWindowProps)
     document.addEventListener('mouseup', handleMouseUp);
   };
 
-  // Handle signal removal - remove only the specific instance by uniqueId
-  const handleRemoveSignal = (signal: Signal & { uniqueId: string }) => {
-    // Remove from displaySignals
-    setDisplaySignals(prev => prev.filter(s => s.uniqueId !== signal.uniqueId));
-    
+  // Handle signal removal - remove only the specific instance by unique_id
+  const handleRemoveSignal = (signal: Signal & { unique_id: number }) => {
     // Remove from groups
-    setGroups(prev => {
-      const newGroups = { ...prev };
-      Object.keys(newGroups).forEach(groupId => {
-        newGroups[groupId] = {
-          ...newGroups[groupId],
-          signals: newGroups[groupId].signals.filter(s => (s as Signal & { uniqueId: string }).uniqueId !== signal.uniqueId),
-        };
-      });
-      return newGroups;
+    const newGroups = { ...groups };
+    Object.keys(newGroups).forEach(groupId => {
+      newGroups[groupId] = {
+        ...newGroups[groupId],
+        signals: newGroups[groupId].signals.filter(s => s.unique_id !== signal.unique_id),
+      };
     });
-    
+    onGroupsUpdate(newGroups);
+
     // Notify parent
     onSignalRemove(signal);
   };
 
   const toggleGroupExpand = (groupId: string) => {
-    setGroups(prev => ({
-      ...prev,
+    onGroupsUpdate({
+      ...groups,
       [groupId]: {
-        ...prev[groupId],
-        expanded: !prev[groupId].expanded,
+        ...groups[groupId],
+        expanded: !groups[groupId].expanded,
       },
-    }));
+    });
   };
 
   const addGroup = (parentId: string, asSibling: boolean = false) => {
@@ -343,27 +319,25 @@ export function WaveformWindow({ signals, onSignalRemove }: WaveformWindowProps)
     const targetParentId = asSibling ? (groups[parentId]?.parentId || 'root') : parentId;
     const groupCount = Object.keys(groups).filter(id => id !== 'root').length;
     
-    setGroups(prev => {
-      const newGroup: SignalGroup = {
-        id: newId,
-        name: `Group_${groupCount + 1}`,
-        parentId: targetParentId,
-        signals: [],
-        expanded: true,
-        children: [],
-      };
+    const newGroup: SignalGroup = {
+      id: newId,
+      name: `Group_${groupCount + 1}`,
+      parentId: targetParentId,
+      signals: [],
+      expanded: true,
+      children: [],
+    };
 
-      return {
-        ...prev,
-        [newId]: newGroup,
-        [targetParentId]: {
-          ...prev[targetParentId],
-          children: [...prev[targetParentId].children, newId],
-        },
-      };
+    onGroupsUpdate({
+      ...groups,
+      [newId]: newGroup,
+      [targetParentId]: {
+        ...groups[targetParentId],
+        children: [...groups[targetParentId].children, newId],
+      },
     });
 
-    setSelectedGroup(newId);
+    onSelectedGroupUpdate(newId);
   };
 
   const deleteGroup = (groupId: string) => {
@@ -378,38 +352,31 @@ export function WaveformWindow({ signals, onSignalRemove }: WaveformWindowProps)
     // Check if this is the last child of its parent
     const isLastChild = parentGroup && parentGroup.children.length === 1 && parentGroup.children[0] === groupId;
     
-    // Remove signals in this group from display
-    const signalIdsToRemove = group.signals.map(s => (s as Signal & { uniqueId: string }).uniqueId);
-    setDisplaySignals(prev => prev.filter(s => !signalIdsToRemove.includes(s.uniqueId)));
-    
     if (isLastChild) {
       // If this is the last child, only clear signals but keep the group
-      setGroups(prev => ({
-        ...prev,
+      onGroupsUpdate({
+        ...groups,
         [groupId]: {
-          ...prev[groupId],
+          ...groups[groupId],
           signals: [],
           children: [],
         },
-      }));
+      });
     } else {
       // Otherwise, delete the group completely
-      setGroups(prev => {
-        const newGroups = { ...prev };
-        
-        // Remove from parent's children
-        newGroups[parentId] = {
-          ...newGroups[parentId],
-          children: newGroups[parentId].children.filter(id => id !== groupId),
-        };
-        
-        // Remove the group
-        delete newGroups[groupId];
-        
-        return newGroups;
-      });
-
-      setSelectedGroup(parentId);
+      const newGroups = { ...groups };
+      
+      // Remove from parent's children
+      newGroups[parentId] = {
+        ...newGroups[parentId],
+        children: newGroups[parentId].children.filter(id => id !== groupId),
+      };
+      
+      // Remove the group
+      delete newGroups[groupId];
+      
+      onGroupsUpdate(newGroups);
+      onSelectedGroupUpdate(parentId);
     }
   };
 
@@ -420,24 +387,24 @@ export function WaveformWindow({ signals, onSignalRemove }: WaveformWindowProps)
 
   const finishRenameGroup = () => {
     if (editingGroup && editName.trim()) {
-      setGroups(prev => ({
-        ...prev,
+      onGroupsUpdate({
+        ...groups,
         [editingGroup]: {
-          ...prev[editingGroup],
+          ...groups[editingGroup],
           name: editName.trim(),
         },
-      }));
+      });
     }
     setEditingGroup(null);
     setEditName('');
   };
 
-  const toggleSignalExpand = (uniqueId: string) => {
+  const toggleSignalExpand = (unique_id: number) => {
     const newExpanded = new Set(expandedSignals);
-    if (newExpanded.has(uniqueId)) {
-      newExpanded.delete(uniqueId);
+    if (newExpanded.has(unique_id)) {
+      newExpanded.delete(unique_id);
     } else {
-      newExpanded.add(uniqueId);
+      newExpanded.add(unique_id);
     }
     setExpandedSignals(newExpanded);
   };
@@ -674,9 +641,9 @@ export function WaveformWindow({ signals, onSignalRemove }: WaveformWindowProps)
                     onClick={() => {
                       // Toggle selection: if already selected, deselect (set to root)
                       if (selectedGroup === group.id) {
-                        setSelectedGroup('root');
+                        onSelectedGroupUpdate('root');
                       } else {
-                        setSelectedGroup(group.id);
+                        onSelectedGroupUpdate(group.id);
                       }
                     }}
                     style={{ 
@@ -814,14 +781,14 @@ export function WaveformWindow({ signals, onSignalRemove }: WaveformWindowProps)
                 </div>
               );
             } else if (node.type === 'signal' && node.signal) {
-              const signal = node.signal as Signal & { uniqueId: string };
-              const isSelected = selectedSignal === signal.uniqueId;
-              
+              const signal = node.signal as Signal & { unique_id: number };
+              const isSelected = selectedSignal === signal.unique_id;
+
               return (
-                <div key={signal.uniqueId}>
+                <div key={signal.unique_id}>
                   <div
                     className={`waveform-signal-item ${isSelected ? 'selected' : ''}`}
-                    onClick={() => setSelectedSignal(signal.uniqueId)}
+                    onClick={() => setSelectedSignal(signal.unique_id)}
                     style={{ 
                       display: 'flex',
                       alignItems: 'center',
@@ -863,11 +830,11 @@ export function WaveformWindow({ signals, onSignalRemove }: WaveformWindowProps)
                       onClick={(e) => {
                         e.stopPropagation();
                         if (signal.bitWidth > 1) {
-                          toggleSignalExpand(signal.uniqueId);
+                          toggleSignalExpand(signal.unique_id);
                         }
                       }}
                       >
-                        {signal.bitWidth > 1 ? (expandedSignals.has(signal.uniqueId) ? '▼' : '▶') : ''}
+                        {signal.bitWidth > 1 ? (expandedSignals.has(signal.unique_id) ? '▼' : '▶') : ''}
                       </span>
                       
                       <span className="waveform-signal-name">
@@ -900,7 +867,7 @@ export function WaveformWindow({ signals, onSignalRemove }: WaveformWindowProps)
                     </span>
                   </div>
                   
-                  {expandedSignals.has(signal.uniqueId) && signal.bitWidth > 1 && (
+                  {expandedSignals.has(signal.unique_id) && signal.bitWidth > 1 && (
                     <div className="waveform-bus-bits">
                       {Array.from({ length: Math.min(signal.bitWidth, 32) }, (_, i) => {
                         const bitIndex = signal.msb - i;

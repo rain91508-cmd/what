@@ -3,6 +3,7 @@ import type { Instance } from '../types';
 
 interface DesignBrowserProps {
   onInstanceSelect: (instance: Instance) => void;
+  onInstanceDoubleClick?: (instance: Instance) => void;
   selectedInstance: Instance | null;
 }
 
@@ -112,7 +113,7 @@ const mockHierarchy: HierarchyNode[] = [
   },
 ];
 
-export function DesignBrowser({ onInstanceSelect, selectedInstance }: DesignBrowserProps) {
+export function DesignBrowser({ onInstanceSelect, onInstanceDoubleClick, selectedInstance }: DesignBrowserProps) {
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['top']));
   const [hierarchy] = useState<HierarchyNode[]>(mockHierarchy);
 
@@ -130,6 +131,12 @@ export function DesignBrowser({ onInstanceSelect, selectedInstance }: DesignBrow
     onInstanceSelect(node.instance);
   };
 
+  const handleNodeDoubleClick = (node: HierarchyNode) => {
+    if (onInstanceDoubleClick) {
+      onInstanceDoubleClick(node.instance);
+    }
+  };
+
   const renderTreeNode = (node: HierarchyNode, depth: number = 0) => {
     const isExpanded = expandedNodes.has(node.id);
     const hasChildren = node.children && node.children.length > 0;
@@ -141,6 +148,7 @@ export function DesignBrowser({ onInstanceSelect, selectedInstance }: DesignBrow
           className={`tree-node ${isSelected ? 'selected' : ''}`}
           style={{ paddingLeft: `${4 + depth * 12}px` }}
           onClick={() => handleNodeClick(node)}
+          onDoubleClick={() => handleNodeDoubleClick(node)}
         >
           {hasChildren && (
             <span

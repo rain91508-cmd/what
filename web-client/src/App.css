@@ -176,7 +176,10 @@ body {
 }
 
 .tab-button {
-  padding: 4px 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 12px;
   background: linear-gradient(to bottom, #f0f0f0, #e0e0e0);
   border: 1px solid #a0a0a0;
   border-bottom: none;
@@ -184,6 +187,7 @@ body {
   cursor: pointer;
   font-size: 11px;
   font-weight: 500;
+  user-select: none;
 }
 
 .tab-button:hover {
@@ -194,6 +198,58 @@ body {
   background: #fff;
   border-bottom: 1px solid #fff;
   margin-bottom: -1px;
+}
+
+.tab-label {
+  flex: 1;
+}
+
+.tab-close {
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  color: #666;
+  border-radius: 2px;
+}
+
+.tab-close:hover {
+  background: #d0d0d0;
+  color: #333;
+}
+
+.tab-rename-input {
+  width: 80px;
+  padding: 2px 4px;
+  font-size: 11px;
+  border: 1px solid #4080c0;
+  border-radius: 2px;
+  outline: none;
+}
+
+.tab-add-buttons {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  padding-left: 8px;
+}
+
+.tab-add-btn {
+  padding: 2px 8px;
+  background: linear-gradient(to bottom, #f8f8f8, #e0e0e0);
+  border: 1px solid #a0a0a0;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 500;
+  color: #333;
+}
+
+.tab-add-btn:hover {
+  background: linear-gradient(to bottom, #fff, #e8e8e8);
 }
 
 .tab-content {

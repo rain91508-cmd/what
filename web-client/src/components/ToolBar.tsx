@@ -3,9 +3,18 @@ interface ToolBarProps {
   onZoomOut: () => void;
   onZoomFit: () => void;
   onSearch: () => void;
+  onAddSourceTab?: () => void;
+  onAddWaveformTab?: () => void;
 }
 
-export function ToolBar({ onZoomIn, onZoomOut, onZoomFit, onSearch }: ToolBarProps) {
+export function ToolBar({ 
+  onZoomIn, 
+  onZoomOut, 
+  onZoomFit, 
+  onSearch,
+  onAddSourceTab,
+  onAddWaveformTab,
+}: ToolBarProps) {
   return (
     <div className="tool-bar">
       <button className="tool-bar-button" title="Zoom In" onClick={onZoomIn}>
@@ -21,11 +30,12 @@ export function ToolBar({ onZoomIn, onZoomOut, onZoomFit, onSearch }: ToolBarPro
       <button className="tool-bar-button" title="Search" onClick={onSearch}>
         🔍
       </button>
-      <button className="tool-bar-button" title="Add Signal">
-        ➕
+      <div className="tool-bar-separator"></div>
+      <button className="tool-bar-button" title="Add Source Tab" onClick={onAddSourceTab}>
+        📄+
       </button>
-      <button className="tool-bar-button" title="Remove Signal">
-        ➖
+      <button className="tool-bar-button" title="Add Waveform Tab" onClick={onAddWaveformTab}>
+        📊+
       </button>
       <div className="tool-bar-separator"></div>
       <button className="tool-bar-button" title="Previous">
