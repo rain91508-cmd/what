@@ -4,8 +4,11 @@ use std::path::PathBuf;
 use tokio::fs;
 use tracing::{debug, info, warn};
 
-/// 知识库文件魔数 (用于识别 KDB 文件)
+/// 知识库文件魔数 - 标准格式 (KDB\0)
 const KDB_MAGIC: &[u8] = b"KDB\x00";
+/// 知识库文件魔数 - interpreter 格式 (KDWC: KDB Web Compressed)
+/// 注意：interpreter 使用小端序存储，所以文件中实际是 "CWDK"
+const KDB_MAGIC_INTERPRETER: &[u8] = b"CWDK";
 
 /// 知识库文件最小大小 (魔数 + 版本信息)
 const KDB_MIN_SIZE: u64 = 16;
@@ -94,9 +97,10 @@ impl KdbService {
 
     /// 验证文件是否为有效的 KDB 文件
     /// 检查文件魔数和最小大小
+    /// 支持标准格式 (KDB\0) 和 interpreter 格式 (KDWC)
     pub async fn validate_kdb_file(&self, path: &PathBuf) -> Result<bool> {
         let metadata = fs::metadata(path).await?;
-        
+
         // 检查文件大小
         if metadata.len() < KDB_MIN_SIZE {
             return Ok(false);
@@ -104,13 +108,14 @@ impl KdbService {
 
         // 读取文件头检查魔数
         let file_content = fs::read(path).await?;
-        if file_content.len() < KDB_MAGIC.len() {
+        if file_content.len() < 4 {
             return Ok(false);
         }
 
-        // 检查魔数
-        let magic_match = &file_content[0..KDB_MAGIC.len()] == KDB_MAGIC;
-        
+        // 检查魔数 - 支持两种格式
+        let magic_match = &file_content[0..4] == KDB_MAGIC
+            || &file_content[0..4] == KDB_MAGIC_INTERPRETER;
+
         Ok(magic_match)
     }
 
