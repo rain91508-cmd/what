@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { waveformRenderer } from '../core/render/waveformRenderer';
 import { cursorRenderer } from '../core/render/cursorRenderer';
 import type { Viewport, Segment, Signal } from '../types';
@@ -6,7 +6,7 @@ import type { WaveformSignal, ColumnWidths, TimeConfig } from './TabPanel';
 import { psToDisplayValue } from './TabPanel';
 import { FilterInput } from './FilterInput';
 import { wildcardMatch } from '../utils/wildcardMatch';
-import { getOrCreateMockData, getValueAtTime, type SignalMockData } from '../utils/mockWaveformData';
+import { getOrCreateMockData, getValueAtTime } from '../utils/mockWaveformData';
 
 interface SignalGroup {
   id: string;
@@ -120,7 +120,10 @@ export function WaveformWindow({
   const signalPanelWidth = widths.panel;
 
   // Collect all display signals from all groups for rendering
-  const displaySignals = Object.values(groups).flatMap(g => g.signals);
+  // Use useMemo to avoid creating new array reference on every render
+  const displaySignals = useMemo(() => {
+    return Object.values(groups).flatMap(g => g.signals);
+  }, [groups]);
 
   // 处理待添加的信号队列 - 直接添加到选中的 group，然后通知父组件删除
   useEffect(() => {
@@ -1138,7 +1141,7 @@ export function WaveformWindow({
           )}
           
           {/* Mouse name and time - using debounced displayMouseX for value */}
-          {displayMouseX !== null && (
+          {displayMouseX !== null && mouseX !== null && (
             <span style={{
               position: 'absolute',
               left: `${(mouseX / (containerRef.current?.clientWidth || 1)) * 100}%`,

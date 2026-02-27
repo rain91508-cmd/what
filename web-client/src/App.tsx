@@ -20,7 +20,7 @@
 // │  Message Window                                                 │
 // └─────────────────────────────────────────────────────────────────┘
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import './App.css'
 
 // Core services
@@ -29,23 +29,26 @@ import { opfsManager } from './core/storage/opfs'
 import { apiService } from './services/api'
 
 // Modules
-import { wSignal } from './modules/wSignal'
+import { kdbManager } from './modules/knowledge/kdbManager'
+import { waveManager } from './modules/wSignal'
 
 // Components
 import { MenuBar } from './components/MenuBar'
 import { ToolBar } from './components/ToolBar'
 import { DesignBrowser } from './components/DesignBrowser'
-import { SignalList } from './components/SignalList'
-import { TabPanel, type Tab } from './components/TabPanel'
+import { SignalPanel } from './components/SignalPanel'
+import { TabPanel } from './components/TabPanel'
 import { SourceCodeWindow } from './components/SourceCodeWindow'
 import { WaveformWindow } from './components/WaveformWindow'
 import { MessageWindow } from './components/MessageWindow'
 import { ConnectionDialog } from './components/ConnectionDialog'
+import { KdbSelectionDialog } from './components/KdbSelectionDialog'
+import { WaveSelectionDialog } from './components/WaveSelectionDialog'
 import { Splitter } from './components/ResizablePanel'
 
 // Types
-import type { Instance, Signal } from './types'
-import type { WaveformSignal, ColumnWidths, TimeConfig } from './components/TabPanel'
+import type { Module, Signal, WaveformInfo } from './types/kdb'
+import type { WaveformSignal, ColumnWidths, TimeConfig, Tab } from './components/TabPanel'
 
 // 默认时间配置
 // 默认 10ns/px = 10,000 ps/px
@@ -59,10 +62,15 @@ function App() {
   const [initialized, setInitialized] = useState(false)
   const [connected, setConnected] = useState(false)
   const [showConnectionDialog, setShowConnectionDialog] = useState(false)
+  const [showKdbSelectionDialog, setShowKdbSelectionDialog] = useState(false)
+  const [showWaveSelectionDialog, setShowWaveSelectionDialog] = useState(false)
   const [messages, setMessages] = useState<string[]>([])
+  const [kdbLoaded, setKdbLoaded] = useState(false)
+  const [, setWaveforms] = useState<WaveformInfo[]>([])
+  const [, setCurrentWaveform] = useState<string | null>(null)
   
-  // Global selected instance for hierarchy/signal panel
-  const [selectedInstance, setSelectedInstance] = useState<Instance | null>(null)
+  // Global selected module for hierarchy/signal panel
+  const [selectedModule, setSelectedModule] = useState<Module | null>(null)
   
   // Global waveform signal ID counter - 用于生成全局唯一的信号 ID
   const nextWaveformSignalIdRef = useRef(1)
@@ -72,18 +80,18 @@ function App() {
     'root': {
       id: 'root',
       name: 'root',
-      parentId: null,
-      signals: [],
+      parentId: null as string | null,
+      signals: [] as Array<Signal & { unique_id: number }>,
       expanded: true,
       children: ['group_1'],
     },
     'group_1': {
       id: 'group_1',
       name: 'Group_1',
-      parentId: 'root',
-      signals: [],
+      parentId: 'root' as string | null,
+      signals: [] as Array<Signal & { unique_id: number }>,
       expanded: true,
-      children: [],
+      children: [] as string[],
     },
   });
 
@@ -121,13 +129,29 @@ function App() {
           await opfsManager.initialize()
         }
 
-        // Try to restore connection
+        // Try to restore connection and KDB from local storage
         const savedConfig = localStorage.getItem('serverConfig')
         if (savedConfig) {
           const config = JSON.parse(savedConfig)
           apiService.configure(config)
           const isConnected = await apiService.testConnection()
           setConnected(isConnected)
+          
+          if (isConnected) {
+            addMessage('Restored connection to server')
+            
+            // Try to load local KDB if available
+            const savedKdbId = localStorage.getItem('currentKdbId')
+            if (savedKdbId) {
+              // Just set the ID, data will be loaded on-demand
+              kdbManager.clear()
+              // We don't have the actual KDB ID stored, so we just mark as loaded
+              // The user will need to reconnect to load the KDB
+            }
+            
+            // Load waveform list
+            await loadWaveformList()
+          }
         }
 
         setInitialized(true)
@@ -135,14 +159,26 @@ function App() {
       } catch (error) {
         console.error('Initialization error:', error)
         addMessage(`Initialization error: ${error}`)
+        setInitialized(true)
       }
     }
 
     init()
   }, [])
 
-  const addMessage = (msg: string) => {
+  const addMessage = useCallback((msg: string) => {
     setMessages(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`])
+  }, [])
+
+  // Load waveform list from server
+  const loadWaveformList = async () => {
+    const waves = await waveManager.fetchWaveformList()
+    setWaveforms(waves)
+    if (waves.length > 0) {
+      waveManager.setCurrentWaveform(waves[0].name)
+      setCurrentWaveform(waves[0].name)
+      addMessage(`Loaded ${waves.length} waveform(s)`)
+    }
   }
 
   const handleConnect = async (host: string, port: number) => {
@@ -154,36 +190,121 @@ function App() {
       localStorage.setItem('serverConfig', JSON.stringify({ host, port, useHttps: false }))
       addMessage(`Connected to server at ${host}:${port}`)
 
-      // Load knowledge base
-      try {
-        const kdbData = await apiService.downloadKdb()
-        if (kdbData) {
-          addMessage('Knowledge base downloaded successfully')
-        }
-      } catch (error) {
-        addMessage(`Failed to download knowledge base: ${error}`)
-      }
+      // Load waveform list first
+      await loadWaveformList()
+
+      // Show KDB selection dialog
+      setShowKdbSelectionDialog(true)
     } else {
       addMessage(`Failed to connect to ${host}:${port}`)
     }
   }
 
-  const handleInstanceSelect = (instance: Instance) => {
-    // Update global selected instance for hierarchy/signal panel
-    setSelectedInstance(instance)
-    addMessage(`Selected instance: ${instance.fullPath}`)
+  // Handle KDB selection
+  const handleKdbSelect = async (kdbName: string) => {
+    setShowKdbSelectionDialog(false)
+    addMessage(`Selected KDB: ${kdbName}`)
+    
+    // Get KDB info first (basic info from server)
+    const kdbInfo = await apiService.getKdbInfo(kdbName)
+    if (kdbInfo.status === 'success' && kdbInfo.data?.kdb_info) {
+      const info = kdbInfo.data.kdb_info
+      addMessage(`KDB File: ${info.design_name}, Size: ${formatBytes(info.file_size)}`)
+    }
+    
+    addMessage(`Starting KDB download...`)
+    
+    // Download KDB with progress
+    const success = await kdbManager.downloadAndLoadKdb(
+      kdbName,
+      (downloaded, total) => {
+        const percent = Math.round((downloaded / total) * 100)
+        if (percent % 10 === 0) {
+          addMessage(`Downloading KDB: ${percent}%`)
+        }
+      }
+    )
+    
+    if (success) {
+      setKdbLoaded(true)
+      localStorage.setItem('currentKdbId', kdbName)
+      
+      // Get parsed KDB details (real data after WASM parsing)
+      const designName = await kdbManager.getDesignName()
+      const header = await kdbManager.getHeader()
+      
+      addMessage(`✓ KDB parsed successfully`)
+      addMessage(`  Design Name: ${designName}`)
+      if (header) {
+        addMessage(`  Version: ${header.version}`)
+        addMessage(`  Created: ${header.createdAt}`)
+      }
+      
+      // Force refresh of components
+      setSelectedModule(null)
+      
+      // Show waveform selection dialog
+      setShowWaveSelectionDialog(true)
+    } else {
+      addMessage('✗ Failed to load KDB')
+      addMessage('  Please check browser console for detailed error information')
+    }
   }
 
-  const handleInstanceDoubleClick = (instance: Instance) => {
-    // Update global selected instance
-    setSelectedInstance(instance)
-    // Find or create a source tab for this instance and switch to it
+  // Handle waveform selection
+  const handleWaveSelect = (waveName: string) => {
+    setShowWaveSelectionDialog(false)
+    waveManager.setCurrentWaveform(waveName)
+    setCurrentWaveform(waveName)
+    addMessage(`Selected waveform: ${waveName}`)
+  }
+
+  const handleDisconnect = () => {
+    setConnected(false)
+    setKdbLoaded(false)
+    setWaveforms([])
+    setCurrentWaveform(null)
+    setSelectedModule(null)
+    waveManager.clear()
+    kdbManager.clear()
+    localStorage.removeItem('serverConfig')
+    localStorage.removeItem('currentKdbId')
+    addMessage('Disconnected from server')
+  }
+
+
+
+  // Format bytes to human readable string
+  const formatBytes = (bytes: number): string => {
+    if (bytes === 0) return '0 Bytes'
+    const k = 1024
+    const sizes = ['Bytes', 'KB', 'MB', 'GB']
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+  }
+
+  const handleModuleSelect = (module: Module) => {
+    // Update global selected module for hierarchy/signal panel
+    setSelectedModule(module)
+    addMessage(`Selected module: ${module.fullName}`)
+  }
+
+  const handleModuleDoubleClick = (module: Module) => {
+    // Update global selected module
+    setSelectedModule(module)
+    // Find or create a source tab for this module and switch to it
     const existingSourceTab = tabs.find(t => t.type === 'source')
     if (existingSourceTab) {
-      // Update existing source tab with the new instance
+      // Update existing source tab with the new module
       setTabs(prev => prev.map(tab => 
         tab.id === existingSourceTab.id 
-          ? { ...tab, instance } 
+          ? { ...tab, instance: { 
+              name: module.name,
+              fullPath: module.fullName,
+              moduleName: module.name,
+              parentPath: '',
+              children: [],
+            }} 
           : tab
       ))
       setActiveTab(existingSourceTab.id)
@@ -194,12 +315,18 @@ function App() {
         id: newId,
         label: 'Source',
         type: 'source',
-        instance,
+        instance: {
+          name: module.name,
+          fullPath: module.fullName,
+          moduleName: module.name,
+          parentPath: '',
+          children: [],
+        },
       }
       setTabs(prev => [...prev, newTab])
       setActiveTab(newId)
     }
-    addMessage(`Open source for: ${instance.fullPath}`)
+    addMessage(`Open source for: ${module.fullName}`)
   }
 
   const handleSignalSelect = (_signal: Signal) => {
@@ -447,10 +574,7 @@ function App() {
       <MenuBar
         connected={connected}
         onConnect={() => setShowConnectionDialog(true)}
-        onDisconnect={() => {
-          setConnected(false)
-          addMessage('Disconnected from server')
-        }}
+        onDisconnect={handleDisconnect}
       />
 
       {/* Tool Bar */}
@@ -474,24 +598,24 @@ function App() {
           style={{ width: hierarchyWidth, minWidth: 180, maxWidth: 300 }}
         >
           <DesignBrowser
-            onInstanceSelect={handleInstanceSelect}
-            onInstanceDoubleClick={handleInstanceDoubleClick}
-            selectedInstance={selectedInstance}
+            key={kdbLoaded ? 'kdb-loaded' : 'no-kdb'}
+            onModuleSelect={handleModuleSelect}
+            onModuleDoubleClick={handleModuleDoubleClick}
+            selectedModuleId={selectedModule?.id || null}
+            kdbLoaded={kdbLoaded}
           />
         </div>
 
         {/* Splitter between hierarchy and signal panel */}
         <Splitter direction="horizontal" onDrag={handleHierarchyResize} />
 
-        {/* Middle Panel - Signal List */}
+        {/* Middle Panel - Signal Panel */}
         <div 
           className="signal-panel"
           style={{ width: signalWidth, minWidth: 160, maxWidth: 280 }}
         >
-          <SignalList
-            instance={selectedInstance}
-            onSignalSelect={handleSignalSelect}
-            onSignalAddToWaveform={handleSignalAddToWaveform}
+          <SignalPanel
+            selectedModule={selectedModule}
           />
         </div>
 
@@ -513,21 +637,21 @@ function App() {
                 key={activeTabData.id}
                 instance={activeTabData.instance || null}
               />
-            ) : (
+            ) : activeTabData ? (
               <WaveformWindow
                 key={activeTabData.id}
-                signals={activeTabData?.signals || []}
-                groups={activeTabData?.groups || createDefaultGroups()}
-                selectedGroup={activeTabData?.selectedGroup || 'group_1'}
-                columnWidths={activeTabData?.columnWidths}
-                timeConfig={activeTabData?.timeConfig}
+                signals={activeTabData.signals || []}
+                groups={activeTabData.groups || createDefaultGroups()}
+                selectedGroup={activeTabData.selectedGroup || 'group_1'}
+                columnWidths={activeTabData.columnWidths}
+                timeConfig={activeTabData.timeConfig}
                 onSignalRemove={handleSignalRemove}
                 onGroupsUpdate={(groups) => handleGroupsUpdate(activeTabData.id, groups)}
                 onSelectedGroupUpdate={(selectedGroup) => handleSelectedGroupUpdate(activeTabData.id, selectedGroup)}
                 onSignalsProcessed={(processedIds) => handleSignalsProcessed(activeTabData.id, processedIds)}
                 onColumnWidthsChange={(widths) => handleColumnWidthsChange(activeTabData.id, widths)}
               />
-            )}
+            ) : null}
           </TabPanel>
         </div>
       </div>
@@ -548,6 +672,22 @@ function App() {
         <ConnectionDialog
           onConnect={handleConnect}
           onClose={() => setShowConnectionDialog(false)}
+        />
+      )}
+
+      {/* KDB Selection Dialog */}
+      {showKdbSelectionDialog && (
+        <KdbSelectionDialog
+          onSelect={handleKdbSelect}
+          onCancel={() => setShowKdbSelectionDialog(false)}
+        />
+      )}
+
+      {/* Waveform Selection Dialog */}
+      {showWaveSelectionDialog && (
+        <WaveSelectionDialog
+          onSelect={handleWaveSelect}
+          onCancel={() => setShowWaveSelectionDialog(false)}
         />
       )}
     </div>

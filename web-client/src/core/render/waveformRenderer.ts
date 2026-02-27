@@ -11,7 +11,7 @@
 
 import type { RenderChunk, Segment, Viewport } from '../../types';
 import type { TimeUnit } from '../../components/TabPanel';
-import { psToDisplayValue, TIME_UNIT_MULTIPLIERS } from '../../components/TabPanel';
+import { psToDisplayValue } from '../../components/TabPanel';
 
 class WaveformRenderer {
   private canvas: HTMLCanvasElement | null = null;

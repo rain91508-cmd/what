@@ -5,7 +5,7 @@ interface SignalGroup {
   id: string;
   name: string;
   parentId: string | null;
-  signals: Array<Signal & { uniqueId: string }>;
+  signals: Array<Signal & { unique_id: number }>;
   expanded: boolean;
   children: string[];
 }

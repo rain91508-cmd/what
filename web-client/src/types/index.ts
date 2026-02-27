@@ -2,87 +2,8 @@
 // Hardware Design Analyzer - Core Types
 // ============================================
 
-// Knowledge Base Types
-export interface Signal {
-  handle: number;
-  name: string;
-  fullPath: string;
-  bitWidth: number;
-  msb: number;
-  lsb: number;
-  type: SignalType;
-  direction: SignalDirection;
-  filePath: string;
-  lineNumber: number;
-  column: number;
-}
-
-export enum SignalType {
-  WIRE = 0,
-  REG = 1,
-  LOGIC = 2,
-  BIT = 3,
-  INTEGER = 4,
-  REAL = 5,
-  ENUM = 6,
-  STRUCT = 7,
-  INTERFACE = 8,
-}
-
-export enum SignalDirection {
-  INPUT = 0,
-  OUTPUT = 1,
-  INOUT = 2,
-  INTERNAL = 3,
-}
-
-export interface Module {
-  name: string;
-  filePath: string;
-  startLine: number;
-  endLine: number;
-  ports: Port[];
-  parameters: Parameter[];
-}
-
-export interface Port {
-  name: string;
-  direction: SignalDirection;
-  type: SignalType;
-  bitWidth: number;
-}
-
-export interface Parameter {
-  name: string;
-  value: string;
-}
-
-export interface Instance {
-  name: string;
-  fullPath: string;
-  moduleName: string;
-  parentPath: string;
-  children: string[];
-}
-
-export interface Connection {
-  driverSignal: string;
-  loadSignal: string;
-  driverInstance: string;
-  loadInstance: string;
-  driverLine: number;
-  loadLine: number;
-}
-
-export interface KnowledgeBase {
-  version: number;
-  designName: string;
-  modules: Map<string, Module>;
-  signals: Map<string, Signal>;
-  instances: Map<string, Instance>;
-  connections: Connection[];
-  sourceFiles: Map<string, string>;
-}
+// Re-export KDB types from kdb.ts
+export * from './kdb';
 
 // Waveform Types
 export interface WaveformInfo {
@@ -274,4 +195,108 @@ export interface ServerConfig {
   host: string;
   port: number;
   useHttps: boolean;
+}
+
+// ============================================
+// Legacy Types (for backward compatibility)
+// ============================================
+
+/**
+ * @deprecated Use Signal from './kdb' instead
+ */
+export interface LegacySignal {
+  handle: number;
+  name: string;
+  fullPath: string;
+  bitWidth: number;
+  msb: number;
+  lsb: number;
+  type: LegacySignalType;
+  direction: LegacySignalDirection;
+  filePath: string;
+  lineNumber: number;
+  column: number;
+}
+
+export enum LegacySignalType {
+  WIRE = 0,
+  REG = 1,
+  LOGIC = 2,
+  BIT = 3,
+  INTEGER = 4,
+  REAL = 5,
+  ENUM = 6,
+  STRUCT = 7,
+  INTERFACE = 8,
+}
+
+export enum LegacySignalDirection {
+  INPUT = 0,
+  OUTPUT = 1,
+  INOUT = 2,
+  INTERNAL = 3,
+}
+
+/**
+ * @deprecated Use Module from './kdb' instead
+ */
+export interface LegacyModule {
+  id?: number;
+  name: string;
+  fullName?: string;
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  ports: LegacyPort[];
+  parameters: LegacyParameter[];
+  parentModuleId?: number;
+  fileId?: number;
+  declaration?: { fileId: number; line: number };
+  signals?: LegacySignal[];
+  isInstance?: boolean;
+}
+
+export interface LegacyPort {
+  name: string;
+  direction: LegacySignalDirection;
+  type: LegacySignalType;
+  bitWidth: number;
+}
+
+export interface LegacyParameter {
+  name: string;
+  value: string;
+}
+
+/**
+ * @deprecated Use hierarchical module tree from kdbManager instead
+ */
+export interface LegacyInstance {
+  name: string;
+  fullPath: string;
+  moduleName: string;
+  parentPath: string;
+  children: string[];
+}
+
+export interface LegacyConnection {
+  driverSignal: string;
+  loadSignal: string;
+  driverInstance: string;
+  loadInstance: string;
+  driverLine: number;
+  loadLine: number;
+}
+
+/**
+ * @deprecated Use new on-demand loading architecture instead
+ */
+export interface LegacyKnowledgeBase {
+  version: number;
+  designName: string;
+  modules: Map<string, LegacyModule>;
+  signals: Map<string, LegacySignal>;
+  instances: Map<string, LegacyInstance>;
+  connections: LegacyConnection[];
+  sourceFiles: Map<string, string>;
 }

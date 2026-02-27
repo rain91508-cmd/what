@@ -1,0 +1,27 @@
+[package]
+name = "hwda-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["console"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde-wasm-bindgen = "0.6"
+
+# Use ruzstd - pure Rust zstd decompressor (no C compiler needed)
+ruzstd = "0.7"
+
+# Protobuf support
+prost = { version = "0.12", default-features = false, features = ["prost-derive"] }
+bytes = { version = "1.5", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = true

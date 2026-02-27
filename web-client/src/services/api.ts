@@ -16,6 +16,32 @@ import type {
   WaveformSignal,
 } from '../types';
 
+interface KdbFileInfo {
+  name: string;
+  file_size: number;
+  is_valid: boolean;
+}
+
+interface KdbListResponse {
+  kdbs: KdbFileInfo[];
+  summary: {
+    total: number;
+    valid: number;
+    invalid: number;
+  };
+}
+
+interface KdbInfoResponse {
+  kdb_info: {
+    design_name: string;
+    version: string;
+    signal_count: number;
+    module_count: number;
+    file_size: number;
+    checksum: string;
+  };
+}
+
 class ApiService {
   private baseUrl: string = '';
   private connected = false;
@@ -52,7 +78,7 @@ class ApiService {
       }
 
       const data = await response.json();
-      return { status: 'success', data, error: null };
+      return { status: 'success', data: data.data, error: null };
     } catch (error) {
       const apiError: ApiError = {
         code: 'NETWORK_ERROR',
@@ -66,7 +92,7 @@ class ApiService {
   private async binaryRequest(
     endpoint: string,
     range?: { start: number; end: number }
-  ): Promise<{ data: ArrayBuffer; totalSize?: number } | null> {
+  ): Promise<{ data: ArrayBuffer; totalSize?: number; contentRange?: string } | null> {
     try {
       const headers: HeadersInit = {};
       if (range) {
@@ -80,7 +106,7 @@ class ApiService {
       }
 
       const data = await response.arrayBuffer();
-      const contentRange = response.headers.get('Content-Range');
+      const contentRange = response.headers.get('Content-Range') || undefined;
       let totalSize: number | undefined;
 
       if (contentRange) {
@@ -90,7 +116,7 @@ class ApiService {
         }
       }
 
-      return { data, totalSize };
+      return { data, totalSize, contentRange };
     } catch (error) {
       console.error('Binary request failed:', error);
       return null;
@@ -98,20 +124,26 @@ class ApiService {
   }
 
   // Knowledge Base APIs
-  async getKdbInfo(): Promise<ApiResponse<{ version: number; checksum: string; fileSize: number }>> {
-    return this.request('/api/kdb/info');
+  async getKdbList(): Promise<ApiResponse<KdbListResponse>> {
+    return this.request('/api/kdb');
+  }
+
+  async getKdbInfo(kdbName: string): Promise<ApiResponse<KdbInfoResponse>> {
+    return this.request(`/api/kdb/${kdbName}`);
   }
 
   async downloadKdb(
+    kdbName: string,
     onProgress?: (downloaded: number, total: number) => void
   ): Promise<ArrayBuffer | null> {
     // First, get file info
-    const info = await this.getKdbInfo();
+    const info = await this.getKdbInfo(kdbName);
     if (info.status !== 'success' || !info.data) {
+      console.error('[ApiService] Failed to get KDB info:', info);
       return null;
     }
 
-    const totalSize = info.data.fileSize;
+    const totalSize = info.data.kdb_info.file_size;
     const chunkSize = 64 * 1024; // 64KB chunks
     const chunks: ArrayBuffer[] = [];
     let downloaded = 0;
@@ -119,9 +151,10 @@ class ApiService {
     // Download in chunks
     for (let offset = 0; offset < totalSize; offset += chunkSize) {
       const end = Math.min(offset + chunkSize - 1, totalSize - 1);
-      const result = await this.binaryRequest('/api/kdb', { start: offset, end });
+      const result = await this.binaryRequest(`/api/kdb/${kdbName}/file`, { start: offset, end });
 
       if (!result) {
+        console.error('[ApiService] Failed to download chunk at offset:', offset);
         return null;
       }
 
@@ -199,9 +232,7 @@ class ApiService {
   // Connection test
   async testConnection(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/kdb/info`, {
-        method: 'HEAD',
-      });
+      const response = await fetch(`${this.baseUrl}/health`);
       this.connected = response.ok;
       return this.connected;
     } catch {

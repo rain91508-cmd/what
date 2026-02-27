@@ -565,3 +565,6 @@ class wSignalModuleImpl implements wSignalModule {
 // Singleton instance
 export const wSignal = new wSignalModuleImpl();
 export { wSignalModuleImpl };
+
+// Wave Manager for server communication
+export { waveManager } from './waveManager';

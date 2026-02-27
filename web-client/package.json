@@ -11,15 +11,16 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-window": "^1.8.10",
-    "react-arborist": "^3.4.0",
-    "regl": "^2.1.0",
     "comlink": "^4.4.1",
     "idb": "^8.0.0",
-    "zustand": "^4.5.0",
-    "protobufjs": "^7.2.6"
+    "protobufjs": "^7.5.4",
+    "react": "^18.2.0",
+    "react-arborist": "^3.4.0",
+    "react-dom": "^18.2.0",
+    "react-window": "^1.8.10",
+    "regl": "^2.1.0",
+    "zstd-codec": "^0.1.5",
+    "zustand": "^4.5.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.55",

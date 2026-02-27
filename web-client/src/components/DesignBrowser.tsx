@@ -1,186 +1,404 @@
-import { useState } from 'react';
-import type { Instance } from '../types';
+import { useState, useEffect, useCallback } from 'react';
+import { kdbManager, type TreeNode } from '../modules/knowledge/kdbManager';
+import type { Module } from '../types/kdb';
 
 interface DesignBrowserProps {
-  onInstanceSelect: (instance: Instance) => void;
-  onInstanceDoubleClick?: (instance: Instance) => void;
-  selectedInstance: Instance | null;
+  onModuleSelect: (module: Module) => void;
+  onModuleDoubleClick?: (module: Module) => void;
+  selectedModuleId: number | null;
+  kdbLoaded: boolean;
 }
 
-interface HierarchyNode {
-  id: string;
-  name: string;
-  moduleName: string;
-  type: 'instance';
-  children: HierarchyNode[];
-  expanded: boolean;
-  instance: Instance;
+interface TreeNodeState extends TreeNode {
+  childrenLoaded: boolean;
+  loading: boolean;
 }
 
-// Mock data for demonstration - 只显示instance层次结构
-const mockHierarchy: HierarchyNode[] = [
-  {
-    id: 'top',
-    name: 'top',
-    moduleName: 'top_module',
-    type: 'instance',
-    expanded: true,
-    instance: {
-      name: 'top',
-      fullPath: 'top',
-      moduleName: 'top_module',
-      parentPath: '',
-      children: ['top.u_cpu', 'top.u_mem', 'top.u_bus'],
-    },
-    children: [
-      {
-        id: 'top.u_cpu',
-        name: 'u_cpu',
-        moduleName: 'cpu',
-        type: 'instance',
-        expanded: false,
-        instance: {
-          name: 'u_cpu',
-          fullPath: 'top.u_cpu',
-          moduleName: 'cpu',
-          parentPath: 'top',
-          children: ['top.u_cpu.u_alu', 'top.u_cpu.u_regfile'],
-        },
-        children: [
-          {
-            id: 'top.u_cpu.u_alu',
-            name: 'u_alu',
-            moduleName: 'alu',
-            type: 'instance',
-            expanded: false,
-            instance: {
-              name: 'u_alu',
-              fullPath: 'top.u_cpu.u_alu',
-              moduleName: 'alu',
-              parentPath: 'top.u_cpu',
-              children: [],
-            },
-            children: [],
-          },
-          {
-            id: 'top.u_cpu.u_regfile',
-            name: 'u_regfile',
-            moduleName: 'regfile',
-            type: 'instance',
-            expanded: false,
-            instance: {
-              name: 'u_regfile',
-              fullPath: 'top.u_cpu.u_regfile',
-              moduleName: 'regfile',
-              parentPath: 'top.u_cpu',
-              children: [],
-            },
-            children: [],
-          },
-        ],
-      },
-      {
-        id: 'top.u_mem',
-        name: 'u_mem',
-        moduleName: 'memory',
-        type: 'instance',
-        expanded: false,
-        instance: {
-          name: 'u_mem',
-          fullPath: 'top.u_mem',
-          moduleName: 'memory',
-          parentPath: 'top',
-          children: [],
-        },
-        children: [],
-      },
-      {
-        id: 'top.u_bus',
-        name: 'u_bus',
-        moduleName: 'bus_arbiter',
-        type: 'instance',
-        expanded: false,
-        instance: {
-          name: 'u_bus',
-          fullPath: 'top.u_bus',
-          moduleName: 'bus_arbiter',
-          parentPath: 'top',
-          children: [],
-        },
-        children: [],
-      },
-    ],
-  },
-];
+export function DesignBrowser({ 
+  onModuleSelect, 
+  onModuleDoubleClick, 
+  selectedModuleId,
+  kdbLoaded 
+}: DesignBrowserProps) {
+  const [expandedNodes, setExpandedNodes] = useState<Set<number>>(new Set());
+  const [treeNodes, setTreeNodes] = useState<Map<number, TreeNodeState>>(new Map());
+  const [rootNodes, setRootNodes] = useState<number[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-export function DesignBrowser({ onInstanceSelect, onInstanceDoubleClick, selectedInstance }: DesignBrowserProps) {
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['top']));
-  const [hierarchy] = useState<HierarchyNode[]>(mockHierarchy);
+  // Load top-level modules on mount or when kdbLoaded changes
+  useEffect(() => {
+    loadTopLevelModules();
+  }, [kdbLoaded]);
 
-  const toggleNode = (nodeId: string) => {
+  const loadTopLevelModules = async () => {
+    console.log('[DesignBrowser] loadTopLevelModules called, kdbLoaded:', kdbLoaded);
+    try {
+      setLoading(true);
+      setError(null);
+
+      if (!kdbManager.isLoaded()) {
+        console.log('[DesignBrowser] kdbManager not loaded, skipping');
+        setLoading(false);
+        return;
+      }
+
+      console.log('[DesignBrowser] Fetching top-level modules...');
+      const topModules = await kdbManager.getTopLevelModules();
+      console.log('[DesignBrowser] Got top-level modules:', topModules.length, topModules);
+      
+      const nodesMap = new Map<number, TreeNodeState>();
+      const rootIds: number[] = [];
+
+      for (const module of topModules) {
+        nodesMap.set(module.id, {
+          ...module,
+          childrenLoaded: false,
+          loading: false,
+        });
+        rootIds.push(module.id);
+      }
+
+      console.log('[DesignBrowser] Setting treeNodes:', nodesMap.size, 'rootNodes:', rootIds.length);
+      setTreeNodes(nodesMap);
+      setRootNodes(rootIds);
+      setLoading(false);
+
+      // Auto-expand first root node if exists
+      if (rootIds.length > 0) {
+        console.log('[DesignBrowser] Auto-expanding first root node:', rootIds[0]);
+        setExpandedNodes(new Set([rootIds[0]]));
+        // Load children for first node
+        await loadChildren(rootIds[0], nodesMap);
+      }
+    } catch (err) {
+      console.error('[DesignBrowser] Failed to load top-level modules:', err);
+      setError('Failed to load design hierarchy');
+      setLoading(false);
+    }
+  };
+
+  const loadChildren = async (
+    parentId: number, 
+    currentMap: Map<number, TreeNodeState>
+  ): Promise<void> => {
+    const parentNode = currentMap.get(parentId);
+    if (!parentNode || parentNode.childrenLoaded || parentNode.loading) {
+      return;
+    }
+
+    // Mark as loading
+    currentMap.set(parentId, { ...parentNode, loading: true });
+    setTreeNodes(new Map(currentMap));
+
+    try {
+      const children = await kdbManager.getChildModules(parentId);
+      const newMap = new Map(currentMap);
+
+      // Mark parent as loaded
+      newMap.set(parentId, { ...parentNode, childrenLoaded: true, loading: false });
+
+      // Add children to map
+      for (const child of children) {
+        if (!newMap.has(child.id)) {
+          newMap.set(child.id, {
+            ...child,
+            childrenLoaded: false,
+            loading: false,
+          });
+        }
+      }
+
+      setTreeNodes(newMap);
+    } catch (err) {
+      console.error(`[DesignBrowser] Failed to load children for ${parentId}:`, err);
+      // Mark as not loading but not loaded
+      const newMap = new Map(currentMap);
+      newMap.set(parentId, { ...parentNode, loading: false, childrenLoaded: false });
+      setTreeNodes(newMap);
+    }
+  };
+
+  const toggleNode = useCallback(async (nodeId: number) => {
     const newExpanded = new Set(expandedNodes);
+    
     if (newExpanded.has(nodeId)) {
+      // Collapse
       newExpanded.delete(nodeId);
     } else {
+      // Expand - load children if needed
       newExpanded.add(nodeId);
+      const node = treeNodes.get(nodeId);
+      if (node && node.hasChildren && !node.childrenLoaded) {
+        await loadChildren(nodeId, treeNodes);
+      }
     }
+    
     setExpandedNodes(newExpanded);
-  };
+  }, [expandedNodes, treeNodes]);
 
-  const handleNodeClick = (node: HierarchyNode) => {
-    onInstanceSelect(node.instance);
-  };
+  const handleNodeClick = async (nodeId: number) => {
+    const node = treeNodes.get(nodeId);
+    if (!node) return;
 
-  const handleNodeDoubleClick = (node: HierarchyNode) => {
-    if (onInstanceDoubleClick) {
-      onInstanceDoubleClick(node.instance);
+    const module = await kdbManager.getModule(nodeId);
+    if (module) {
+      onModuleSelect(module);
     }
   };
 
-  const renderTreeNode = (node: HierarchyNode, depth: number = 0) => {
-    const isExpanded = expandedNodes.has(node.id);
-    const hasChildren = node.children && node.children.length > 0;
-    const isSelected = selectedInstance?.fullPath === node.instance.fullPath;
+  const handleNodeDoubleClick = async (nodeId: number) => {
+    if (!onModuleDoubleClick) return;
+    
+    const module = await kdbManager.getModule(nodeId);
+    if (module) {
+      onModuleDoubleClick(module);
+    }
+  };
+
+  const renderTreeNode = (nodeId: number, depth: number = 0) => {
+    const node = treeNodes.get(nodeId);
+    if (!node) return null;
+
+    const isExpanded = expandedNodes.has(nodeId);
+    const isSelected = selectedModuleId === nodeId;
+    const hasChildren = node.hasChildren;
+    const isLoading = node.loading;
 
     return (
-      <div key={node.id}>
+      <div key={nodeId}>
         <div
           className={`tree-node ${isSelected ? 'selected' : ''}`}
-          style={{ paddingLeft: `${4 + depth * 12}px` }}
-          onClick={() => handleNodeClick(node)}
-          onDoubleClick={() => handleNodeDoubleClick(node)}
+          style={{ 
+            paddingLeft: `${4 + depth * 12}px`,
+            paddingTop: '4px',
+            paddingBottom: '4px',
+            paddingRight: '8px',
+            display: 'flex',
+            alignItems: 'center',
+            cursor: 'pointer',
+            backgroundColor: isSelected ? '#e3f2fd' : 'transparent',
+            borderRadius: '4px',
+          }}
+          onClick={() => handleNodeClick(nodeId)}
+          onDoubleClick={() => handleNodeDoubleClick(nodeId)}
         >
-          {hasChildren && (
-            <span
-              className="tree-node-expand"
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleNode(node.id);
-              }}
-            >
-              {isExpanded ? '▼' : '▶'}
-            </span>
-          )}
-          {!hasChildren && <span className="tree-node-expand"></span>}
-          <span className="tree-node-icon">🔧</span>
-          <span title={`${node.name} (${node.moduleName})`}>
+          {/* Expand/Collapse button */}
+          <span
+            className="tree-node-expand"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleNode(nodeId);
+            }}
+            style={{
+              width: '16px',
+              height: '16px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: hasChildren ? 'pointer' : 'default',
+              marginRight: '4px',
+              fontSize: '10px',
+              color: hasChildren ? '#666' : 'transparent',
+            }}
+          >
+            {isLoading ? '⏳' : hasChildren ? (isExpanded ? '▼' : '▶') : ''}
+          </span>
+
+          {/* Icon */}
+          <span 
+            className="tree-node-icon"
+            style={{ marginRight: '6px', fontSize: '12px' }}
+          >
+            {node.isInstance ? '🔧' : '📦'}
+          </span>
+
+          {/* Name */}
+          <span 
+            title={node.fullName}
+            style={{
+              fontSize: '12px',
+              color: '#333',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
             {node.name}
           </span>
         </div>
+
+        {/* Render children if expanded */}
         {hasChildren && isExpanded && (
           <div>
-            {node.children!.map(child => renderTreeNode(child, depth + 1))}
+            {isLoading ? (
+              <div style={{ paddingLeft: `${4 + (depth + 1) * 12}px`, padding: '4px 8px', fontSize: '11px', color: '#999' }}>
+                Loading...
+              </div>
+            ) : (
+              // Find children by checking which nodes have this node as parent
+              // We need to get children from the node's childModuleIds
+              node.childModuleIds?.map(childId => renderTreeNode(childId, depth + 1))
+            )}
           </div>
         )}
       </div>
     );
   };
 
+  // Get child IDs for a node from the treeNodes map
+  // Children are nodes whose parent is this node
+  const getChildIds = (parentId: number): number[] => {
+    const parent = treeNodes.get(parentId);
+    if (!parent) {
+      console.log(`[DesignBrowser] getChildIds: parent ${parentId} not found in treeNodes`);
+      return [];
+    }
+    
+    // childModuleIds should be populated when children are loaded
+    const childIds = parent.childModuleIds || [];
+    console.log(`[DesignBrowser] getChildIds for ${parentId}:`, childIds, 'parent:', parent);
+    return childIds;
+  };
+
+  // Override render to use getChildIds
+  const renderTreeNodeWithChildren = (nodeId: number, depth: number = 0) => {
+    const node = treeNodes.get(nodeId);
+    if (!node) return null;
+
+    const isExpanded = expandedNodes.has(nodeId);
+    const isSelected = selectedModuleId === nodeId;
+    const hasChildren = node.hasChildren;
+    const isLoading = node.loading;
+    const childIds = getChildIds(nodeId);
+
+    return (
+      <div key={nodeId}>
+        <div
+          className={`tree-node ${isSelected ? 'selected' : ''}`}
+          style={{ 
+            paddingLeft: `${4 + depth * 12}px`,
+            paddingTop: '4px',
+            paddingBottom: '4px',
+            paddingRight: '8px',
+            display: 'flex',
+            alignItems: 'center',
+            cursor: 'pointer',
+            backgroundColor: isSelected ? '#e3f2fd' : 'transparent',
+            borderRadius: '4px',
+          }}
+          onClick={() => handleNodeClick(nodeId)}
+          onDoubleClick={() => handleNodeDoubleClick(nodeId)}
+        >
+          {/* Expand/Collapse button */}
+          <span
+            className="tree-node-expand"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleNode(nodeId);
+            }}
+            style={{
+              width: '16px',
+              height: '16px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: hasChildren ? 'pointer' : 'default',
+              marginRight: '4px',
+              fontSize: '10px',
+              color: hasChildren ? '#666' : 'transparent',
+            }}
+          >
+            {isLoading ? '⏳' : hasChildren ? (isExpanded ? '▼' : '▶') : ''}
+          </span>
+
+          {/* Icon */}
+          <span 
+            className="tree-node-icon"
+            style={{ marginRight: '6px', fontSize: '12px' }}
+          >
+            {node.isInstance ? '🔧' : '📦'}
+          </span>
+
+          {/* Name */}
+          <span 
+            title={node.fullName}
+            style={{
+              fontSize: '12px',
+              color: '#333',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {node.name}
+          </span>
+        </div>
+
+        {/* Render children if expanded */}
+        {hasChildren && isExpanded && (
+          <div>
+            {isLoading ? (
+              <div style={{ paddingLeft: `${4 + (depth + 1) * 12}px`, padding: '4px 8px', fontSize: '11px', color: '#999' }}>
+                Loading...
+              </div>
+            ) : (
+              childIds.map(childId => renderTreeNodeWithChildren(childId, depth + 1))
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  if (loading) {
+    return (
+      <div className="hierarchy-panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <div className="panel-header" style={{ padding: '8px 12px', borderBottom: '1px solid #e0e0e0', fontWeight: 'bold' }}>
+          Hierarchy
+        </div>
+        <div style={{ padding: '20px', textAlign: 'center', color: '#999', flex: 1 }}>
+          Loading...
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="hierarchy-panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <div className="panel-header" style={{ padding: '8px 12px', borderBottom: '1px solid #e0e0e0', fontWeight: 'bold' }}>
+          Hierarchy
+        </div>
+        <div style={{ padding: '20px', textAlign: 'center', color: '#d32f2f', flex: 1, fontSize: '12px' }}>
+          {error}
+        </div>
+      </div>
+    );
+  }
+
+  if (rootNodes.length === 0) {
+    return (
+      <div className="hierarchy-panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <div className="panel-header" style={{ padding: '8px 12px', borderBottom: '1px solid #e0e0e0', fontWeight: 'bold' }}>
+          Hierarchy
+        </div>
+        <div style={{ padding: '20px', textAlign: 'center', color: '#999', flex: 1, fontSize: '11px' }}>
+          {kdbManager.isLoaded() 
+            ? 'No design hierarchy available' 
+            : 'Connect to server to load design'}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="hierarchy-panel">
-      <div className="panel-header">Hierarchy</div>
-      <div className="tree-view">
-        {hierarchy.map(node => renderTreeNode(node))}
+    <div className="hierarchy-panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div className="panel-header" style={{ padding: '8px 12px', borderBottom: '1px solid #e0e0e0', fontWeight: 'bold' }}>
+        Hierarchy
+      </div>
+      <div className="tree-view" style={{ flex: 1, overflow: 'auto', padding: '4px' }}>
+        {rootNodes.map(nodeId => renderTreeNodeWithChildren(nodeId))}
       </div>
     </div>
   );

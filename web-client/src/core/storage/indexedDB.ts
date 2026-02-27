@@ -2,57 +2,59 @@
 // IndexedDB Storage - Knowledge Base & Metadata
 // ============================================
 // 
-// Responsibilities (per spec.md & hint3.md):
-// - Store Knowledge Base (.kdb) metadata
-// - Store design metadata (signal index, module info, hierarchy)
-// - Store source file cache
-// - Support structured queries and indexing
+// New Architecture (per kdb-refactor-plan.md):
+// - Store KDB data in hierarchical structure matching proto
+// - Support on-demand loading
+// - Use numeric IDs as keys (matching KDB proto)
 
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
-import type { KnowledgeBase, Signal, Module, Instance } from '../../types';
+import type { 
+  KnowledgeBase, 
+  Module, 
+  Signal, 
+  SourceFile,
+  DesignHierarchy 
+} from '../../types/kdb';
 
+// New schema matching KDB proto structure
 interface HWDBSchema extends DBSchema {
   'knowledge-base': {
     key: string;
     value: {
       id: string;
-      version: number;
-      data: KnowledgeBase;
-      checksum: string;
+      header: {
+        version: string;
+        projectName: string;
+        createdAt: string;
+      };
+      topModuleIds: number[];
+      hierarchies: DesignHierarchy[];
       timestamp: number;
     };
-    indexes: { 'by-version': number; 'by-timestamp': number };
-  };
-  'signals': {
-    key: string;
-    value: {
-      fullPath: string;
-      signal: Signal;
-      kdbId: string;
-    };
-    indexes: { 'by-kdb': string; 'by-name': string };
+    indexes: { 'by-timestamp': number };
   };
   'modules': {
-    key: string;
+    key: number;  // module id (numeric, matching proto)
     value: {
+      id: number;
       name: string;
-      module: Module;
+      fullName: string;
+      parentModuleId: number;
+      fileId: number;
+      isInstance: boolean;
+      signals: Signal[];
+      childModuleIds: number[];
       kdbId: string;
     };
-    indexes: { 'by-kdb': string };
-  };
-  'instances': {
-    key: string;
-    value: {
-      fullPath: string;
-      instance: Instance;
-      kdbId: string;
+    indexes: { 
+      'by-kdb': string;
+      'by-full-name': string;
     };
-    indexes: { 'by-kdb': string; 'by-parent': string };
   };
   'source-files': {
-    key: string;
+    key: number;  // file id (numeric, matching proto)
     value: {
+      id: number;
       path: string;
       content: string;
       kdbId: string;
@@ -71,7 +73,7 @@ interface HWDBSchema extends DBSchema {
 }
 
 const DB_NAME = 'hwda-database';
-const DB_VERSION = 1;
+const DB_VERSION = 2;  // Increment version for schema change
 
 class IndexedDBManager {
   private db: IDBPDatabase<HWDBSchema> | null = null;
@@ -81,37 +83,49 @@ class IndexedDBManager {
     if (this.initialized) return;
 
     this.db = await openDB<HWDBSchema>(DB_NAME, DB_VERSION, {
-      upgrade(db) {
-        // Knowledge Base store
+      upgrade(db, oldVersion, newVersion) {
+        // Delete old stores if upgrading from v1
+        if (oldVersion < 2) {
+          // Delete old stores
+          if (db.objectStoreNames.contains('signals')) {
+            db.deleteObjectStore('signals');
+          }
+          if (db.objectStoreNames.contains('instances')) {
+            db.deleteObjectStore('instances');
+          }
+          if (db.objectStoreNames.contains('modules')) {
+            db.deleteObjectStore('modules');
+          }
+          if (db.objectStoreNames.contains('knowledge-base')) {
+            db.deleteObjectStore('knowledge-base');
+          }
+          if (db.objectStoreNames.contains('source-files')) {
+            db.deleteObjectStore('source-files');
+          }
+        }
+
+        // Knowledge Base store - stores header and hierarchies only
         const kdbStore = db.createObjectStore('knowledge-base', { keyPath: 'id' });
-        kdbStore.createIndex('by-version', 'version');
         kdbStore.createIndex('by-timestamp', 'timestamp');
 
-        // Signals store
-        const signalStore = db.createObjectStore('signals', { keyPath: 'fullPath' });
-        signalStore.createIndex('by-kdb', 'kdbId');
-        signalStore.createIndex('by-name', 'signal.name');
-
-        // Modules store
-        const moduleStore = db.createObjectStore('modules', { keyPath: 'name' });
+        // Modules store - key is numeric id (matching proto)
+        const moduleStore = db.createObjectStore('modules', { keyPath: 'id' });
         moduleStore.createIndex('by-kdb', 'kdbId');
+        moduleStore.createIndex('by-full-name', 'fullName');
 
-        // Instances store
-        const instanceStore = db.createObjectStore('instances', { keyPath: 'fullPath' });
-        instanceStore.createIndex('by-kdb', 'kdbId');
-        instanceStore.createIndex('by-parent', 'instance.parentPath');
-
-        // Source files store
-        const sourceStore = db.createObjectStore('source-files', { keyPath: 'path' });
+        // Source files store - key is numeric id (matching proto)
+        const sourceStore = db.createObjectStore('source-files', { keyPath: 'id' });
         sourceStore.createIndex('by-kdb', 'kdbId');
 
         // Metadata store
-        db.createObjectStore('metadata', { keyPath: 'key' });
+        if (!db.objectStoreNames.contains('metadata')) {
+          db.createObjectStore('metadata', { keyPath: 'key' });
+        }
       },
     });
 
     this.initialized = true;
-    console.log('[IndexedDB] Initialized successfully');
+    console.log('[IndexedDB] Initialized successfully (v2)');
   }
 
   isInitialized(): boolean {
@@ -125,154 +139,182 @@ class IndexedDBManager {
     return this.db;
   }
 
-  // Knowledge Base operations
+  // ============================================
+  // Knowledge Base Operations
+  // ============================================
+  
   async storeKnowledgeBase(
     id: string,
-    data: KnowledgeBase,
-    checksum: string
+    header: { version: string; projectName: string; createdAt: string },
+    topModuleIds: number[],
+    hierarchies: DesignHierarchy[]
   ): Promise<void> {
     const db = this.getDB();
-    const tx = db.transaction('knowledge-base', 'readwrite');
-    
-    await tx.store.put({
+    await db.put('knowledge-base', {
       id,
-      version: data.version,
-      data,
-      checksum,
+      header,
+      topModuleIds,
+      hierarchies,
       timestamp: Date.now(),
     });
-
-    // Store signals
-    const signalTx = db.transaction('signals', 'readwrite');
-    for (const [fullPath, signal] of data.signals) {
-      await signalTx.store.put({
-        fullPath,
-        signal,
-        kdbId: id,
-      });
-    }
-    await signalTx.done;
-
-    // Store modules
-    const moduleTx = db.transaction('modules', 'readwrite');
-    for (const [name, module] of data.modules) {
-      await moduleTx.store.put({
-        name,
-        module,
-        kdbId: id,
-      });
-    }
-    await moduleTx.done;
-
-    // Store instances
-    const instanceTx = db.transaction('instances', 'readwrite');
-    for (const [fullPath, instance] of data.instances) {
-      await instanceTx.store.put({
-        fullPath,
-        instance,
-        kdbId: id,
-      });
-    }
-    await instanceTx.done;
-
-    // Store source files
-    const sourceTx = db.transaction('source-files', 'readwrite');
-    for (const [path, content] of data.sourceFiles) {
-      await sourceTx.store.put({
-        path,
-        content,
-        kdbId: id,
-        timestamp: Date.now(),
-      });
-    }
-    await sourceTx.done;
-
-    await tx.done;
   }
 
-  async getKnowledgeBase(id: string): Promise<KnowledgeBase | null> {
-    const db = this.getDB();
-    const result = await db.get('knowledge-base', id);
-    return result?.data || null;
-  }
-
-  async getKnowledgeBaseInfo(id: string): Promise<{ version: number; checksum: string; timestamp: number } | null> {
+  async getKnowledgeBase(id: string): Promise<{
+    header: { version: string; projectName: string; createdAt: string };
+    topModuleIds: number[];
+    hierarchies: DesignHierarchy[];
+  } | null> {
     const db = this.getDB();
     const result = await db.get('knowledge-base', id);
     if (!result) return null;
     return {
-      version: result.version,
-      checksum: result.checksum,
-      timestamp: result.timestamp,
+      header: result.header,
+      topModuleIds: result.topModuleIds,
+      hierarchies: result.hierarchies,
     };
   }
 
-  // Signal queries
-  async getSignal(fullPath: string): Promise<Signal | null> {
+  async getKnowledgeBaseHeader(id: string): Promise<{ version: string; projectName: string; createdAt: string } | null> {
     const db = this.getDB();
-    const result = await db.get('signals', fullPath);
-    return result?.signal || null;
+    const result = await db.get('knowledge-base', id);
+    return result?.header || null;
   }
 
-  async querySignalsByKdb(kdbId: string): Promise<Signal[]> {
+  async getKnowledgeBaseHierarchies(id: string): Promise<DesignHierarchy[] | null> {
     const db = this.getDB();
-    const results = await db.getAllFromIndex('signals', 'by-kdb', kdbId);
-    return results.map(r => r.signal);
+    const result = await db.get('knowledge-base', id);
+    return result?.hierarchies || null;
   }
 
-  async searchSignalsByName(kdbId: string, pattern: string): Promise<Signal[]> {
+  async getTopModuleIds(id: string): Promise<number[] | null> {
+    console.log('[IndexedDBManager] getTopModuleIds for:', id);
     const db = this.getDB();
-    const allSignals = await db.getAllFromIndex('signals', 'by-kdb', kdbId);
-    const regex = new RegExp(pattern, 'i');
-    return allSignals
-      .filter(r => regex.test(r.signal.name))
-      .map(r => r.signal);
+    const result = await db.get('knowledge-base', id);
+    console.log('[IndexedDBManager] knowledge-base result:', result);
+    return result?.topModuleIds || null;
   }
 
-  // Module queries
-  async getModule(name: string): Promise<Module | null> {
+  // ============================================
+  // Module Operations
+  // ============================================
+  
+  async storeModule(module: Module, kdbId: string): Promise<void> {
     const db = this.getDB();
-    const result = await db.get('modules', name);
-    return result?.module || null;
+    await db.put('modules', {
+      ...module,
+      kdbId,
+    });
   }
 
-  async getAllModules(kdbId: string): Promise<Module[]> {
+  async getModule(id: number): Promise<Module | null> {
+    const db = this.getDB();
+    const result = await db.get('modules', id);
+    if (!result) return null;
+    const { kdbId, ...module } = result;
+    return module as Module;
+  }
+
+  async getModulesByIds(ids: number[]): Promise<Module[]> {
+    const db = this.getDB();
+    const modules: Module[] = [];
+    for (const id of ids) {
+      const result = await db.get('modules', id);
+      if (result) {
+        const { kdbId, ...module } = result;
+        modules.push(module as Module);
+      }
+    }
+    return modules;
+  }
+
+  async getModulesByKdb(kdbId: string): Promise<Module[]> {
     const db = this.getDB();
     const results = await db.getAllFromIndex('modules', 'by-kdb', kdbId);
-    return results.map(r => r.module);
+    return results.map(r => {
+      const { kdbId, ...module } = r;
+      return module as Module;
+    });
   }
 
-  // Instance queries
-  async getInstance(fullPath: string): Promise<Instance | null> {
+  async getModuleByFullName(fullName: string): Promise<Module | null> {
     const db = this.getDB();
-    const result = await db.get('instances', fullPath);
-    return result?.instance || null;
+    const result = await db.getFromIndex('modules', 'by-full-name', fullName);
+    if (!result) return null;
+    const { kdbId, ...module } = result;
+    return module as Module;
   }
 
-  async getChildInstances(parentPath: string): Promise<Instance[]> {
+  // ============================================
+  // Source File Operations
+  // ============================================
+  
+  async storeSourceFile(file: SourceFile, kdbId: string): Promise<void> {
     const db = this.getDB();
-    const results = await db.getAllFromIndex('instances', 'by-parent', parentPath);
-    return results.map(r => r.instance);
+    await db.put('source-files', {
+      ...file,
+      kdbId,
+      timestamp: Date.now(),
+    });
   }
 
-  // Source file operations
-  async getSourceFile(path: string): Promise<string | null> {
+  async getSourceFile(id: number): Promise<SourceFile | null> {
     const db = this.getDB();
-    const result = await db.get('source-files', path);
-    return result?.content || null;
+    const result = await db.get('source-files', id);
+    if (!result) return null;
+    const { kdbId, timestamp, ...file } = result;
+    return file as SourceFile;
   }
 
-  async getAllSourceFiles(kdbId: string): Promise<Map<string, string>> {
+  async getSourceFilesByKdb(kdbId: string): Promise<SourceFile[]> {
     const db = this.getDB();
     const results = await db.getAllFromIndex('source-files', 'by-kdb', kdbId);
-    const map = new Map<string, string>();
-    for (const r of results) {
-      map.set(r.path, r.content);
-    }
-    return map;
+    return results.map(r => {
+      const { kdbId, timestamp, ...file } = r;
+      return file as SourceFile;
+    });
   }
 
-  // Metadata operations
+  // ============================================
+  // Cleanup Operations
+  // ============================================
+  
+  async clearKdbData(kdbId: string): Promise<void> {
+    const db = this.getDB();
+
+    // Clear knowledge base
+    await db.delete('knowledge-base', kdbId);
+
+    // Clear modules
+    const moduleIndex = db.transaction('modules').store.index('by-kdb');
+    let cursor = await moduleIndex.openCursor(kdbId);
+    const moduleIds: number[] = [];
+    while (cursor) {
+      moduleIds.push(cursor.value.id);
+      cursor = await cursor.continue();
+    }
+    for (const id of moduleIds) {
+      await db.delete('modules', id);
+    }
+
+    // Clear source files
+    const fileIndex = db.transaction('source-files').store.index('by-kdb');
+    cursor = await fileIndex.openCursor(kdbId);
+    const fileIds: number[] = [];
+    while (cursor) {
+      fileIds.push(cursor.value.id);
+      cursor = await cursor.continue();
+    }
+    for (const id of fileIds) {
+      await db.delete('source-files', id);
+    }
+
+    console.log(`[IndexedDB] Cleared data for KDB: ${kdbId}`);
+  }
+
+  // ============================================
+  // Metadata Operations
+  // ============================================
+  
   async setMetadata(key: string, value: unknown): Promise<void> {
     const db = this.getDB();
     await db.put('metadata', {
@@ -282,23 +324,11 @@ class IndexedDBManager {
     });
   }
 
-  async getMetadata<T>(key: string): Promise<T | null> {
+  async getMetadata(key: string): Promise<unknown | null> {
     const db = this.getDB();
     const result = await db.get('metadata', key);
-    return (result?.value as T) || null;
-  }
-
-  // Clear all data
-  async clear(): Promise<void> {
-    const db = this.getDB();
-    await db.clear('knowledge-base');
-    await db.clear('signals');
-    await db.clear('modules');
-    await db.clear('instances');
-    await db.clear('source-files');
-    await db.clear('metadata');
+    return result?.value || null;
   }
 }
 
-// Singleton instance
 export const indexedDBManager = new IndexedDBManager();

@@ -32,7 +32,7 @@ class CursorRenderer {
   private ctx: CanvasRenderingContext2D | null = null;
   private animationId: number | null = null;
   private state: RenderState | null = null;
-  private dirty = false;
+  private dirty = false;  // Flag to track if canvas needs redraw
 
   async initialize(canvas: HTMLCanvasElement): Promise<void> {
     this.canvas = canvas;
@@ -65,11 +65,11 @@ class CursorRenderer {
 
   private startRenderLoop(): void {
     const loop = () => {
-      // Always render if we have state (canvas is cleared each frame)
-      if (this.state) {
+      // Only render when dirty flag is set
+      if (this.state && this.dirty) {
         this.render();
+        this.dirty = false;
       }
-      this.dirty = false;
       this.animationId = requestAnimationFrame(loop);
     };
     this.animationId = requestAnimationFrame(loop);
@@ -79,7 +79,7 @@ class CursorRenderer {
     if (!this.ctx || !this.canvas || !this.state) return;
 
     const { width, height } = this.canvas;
-    const { cursor, mouseX, viewport, timeUnit, rulerHeight } = this.state;
+    const { cursor, mouseX, viewport, rulerHeight } = this.state;
 
     // Clear only the necessary area (transparent)
     this.ctx.clearRect(0, 0, width, height);
