@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { waveformRenderer } from '../core/render/waveformRenderer';
+import { cursorRenderer } from '../core/render/cursorRenderer';
 import type { Viewport, Segment, Signal } from '../types';
 import type { WaveformSignal, ColumnWidths, TimeConfig } from './TabPanel';
 import { psToDisplayValue } from './TabPanel';
@@ -72,6 +73,7 @@ export function WaveformWindow({
   onColumnWidthsChange,
 }: WaveformWindowProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const cursorCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const signalPanelRef = useRef<HTMLDivElement>(null);
   const [canvasWidth, setCanvasWidth] = useState(0);
@@ -145,29 +147,34 @@ export function WaveformWindow({
   }, [signals, selectedGroup, onGroupsUpdate, onSignalsProcessed]);
 
   useEffect(() => {
-    const initRenderer = async () => {
-      if (canvasRef.current) {
+    const initRenderers = async () => {
+      if (canvasRef.current && cursorCanvasRef.current) {
         await waveformRenderer.initialize(canvasRef.current);
+        await cursorRenderer.initialize(cursorCanvasRef.current);
         renderWaveform();
       }
     };
 
-    initRenderer();
+    initRenderers();
 
     return () => {
       waveformRenderer.dispose();
+      cursorRenderer.dispose();
     };
   }, []);
 
   // 监听窗口大小变化，更新 canvas 尺寸和 viewport
   useEffect(() => {
     const handleResize = () => {
-      if (containerRef.current && canvasRef.current) {
+      if (containerRef.current && canvasRef.current && cursorCanvasRef.current) {
         const { width, height } = containerRef.current.getBoundingClientRect();
         setCanvasWidth(width);
         canvasRef.current.width = width;
         canvasRef.current.height = height;
+        cursorCanvasRef.current.width = width;
+        cursorCanvasRef.current.height = height;
         waveformRenderer.resize(width, height);
+        cursorRenderer.resize(width, height);
         // 根据新宽度重新计算 viewport
         setViewport(calculateViewport(width));
         renderWaveform();
@@ -264,33 +271,24 @@ export function WaveformWindow({
 
     // Reserve space for time ruler at top
     const rulerHeight = 20;
-    
+
     // Set current time unit for renderer
     waveformRenderer.setTimeUnit(timeConfig.unit);
-    
+
     waveformRenderer.render(segments, viewport, width, height, rulerHeight);
 
-    const ctx = canvasRef.current.getContext('2d');
-    if (ctx && cursor.visible) {
-      const cursorX = ((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * width;
-      ctx.strokeStyle = '#ff00ff';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([5, 5]);
-      ctx.beginPath();
-      ctx.moveTo(cursorX, rulerHeight);
-      ctx.lineTo(cursorX, height);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    if (mouseX !== null && ctx) {
-      ctx.strokeStyle = '#00aa00';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(mouseX, rulerHeight);
-      ctx.lineTo(mouseX, height);
-      ctx.stroke();
-    }
+    // Update cursor renderer state (lightweight, just updates state)
+    cursorRenderer.updateState({
+      cursor,
+      mouseX: displayMouseX,
+      viewport: {
+        timeStart: viewport.timeStart,
+        timeEnd: viewport.timeEnd,
+      },
+      timeUnit: timeConfig.unit,
+      containerWidth: width,
+      rulerHeight,
+    });
   };
 
   const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -301,29 +299,48 @@ export function WaveformWindow({
     setCursor({ position: Math.round(time), visible: true });
   }, [viewport]);
 
+  // Use refs for mouse position to avoid re-renders
+  const mousePosRef = useRef<number | null>(null);
+  const mouseDirtyRef = useRef(false);
+
+  // RequestAnimationFrame loop for smooth cursor updates
+  useEffect(() => {
+    let animationId: number;
+
+    const updateCursor = () => {
+      if (mouseDirtyRef.current && mousePosRef.current !== null) {
+        // Update displayMouseX only when needed
+        setDisplayMouseX(mousePosRef.current);
+        mouseDirtyRef.current = false;
+      }
+      animationId = requestAnimationFrame(updateCursor);
+    };
+
+    animationId = requestAnimationFrame(updateCursor);
+
+    return () => {
+      cancelAnimationFrame(animationId);
+    };
+  }, []);
+
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
     const newMouseX = e.clientX - rect.left;
+
+    // Update ref immediately (no re-render)
+    mousePosRef.current = newMouseX;
+    mouseDirtyRef.current = true;
+
+    // Also update mouseX for other purposes (like click handling)
     setMouseX(newMouseX);
-    
-    // Clear existing timeout
-    if (mouseTimeoutRef.current) {
-      clearTimeout(mouseTimeoutRef.current);
-    }
-    
-    // Set new timeout to update display value after mouse stops moving
-    mouseTimeoutRef.current = setTimeout(() => {
-      setDisplayMouseX(newMouseX);
-    }, 100); // 100ms delay
   }, []);
 
   const handleCanvasMouseLeave = useCallback(() => {
+    mousePosRef.current = null;
+    mouseDirtyRef.current = true;
     setMouseX(null);
     setDisplayMouseX(null);
-    if (mouseTimeoutRef.current) {
-      clearTimeout(mouseTimeoutRef.current);
-    }
   }, []);
 
   const handleColumnResize = (column: 'hierarchy' | 'name' | 'value', e: React.MouseEvent) => {
@@ -1046,7 +1063,7 @@ export function WaveformWindow({
       </div>
 
       <div className="waveform-canvas-container" ref={containerRef} style={{ display: 'flex', flexDirection: 'column' }}>
-        {/* Cursor/Marker info bar - corresponds to left filter bar (30px) */}
+        {/* Time ruler area - only shows time ruler, cursor/mouse time shown on canvas overlay */}
         <div style={{
           height: '30px',
           background: '#1a1a1a',
@@ -1054,81 +1071,46 @@ export function WaveformWindow({
           flexShrink: 0,
           position: 'relative',
           boxSizing: 'border-box',
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 12px',
-          fontSize: '13px',
-          fontFamily: 'Consolas, Monaco, monospace',
         }}>
-          {/* Cursor vertical line */}
-          {cursor.visible && (
-            <div style={{
-              position: 'absolute',
-              left: `${((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * 100}%`,
-              top: 0,
-              bottom: 0,
-              width: '1px',
-              background: '#ff00ff',
-              zIndex: 1,
-            }} />
-          )}
-          
-          {/* Mouse vertical line */}
-          {mouseX !== null && (
-            <div style={{
-              position: 'absolute',
-              left: `${(mouseX / (containerRef.current?.clientWidth || 1)) * 100}%`,
-              top: 0,
-              bottom: 0,
-              width: '1px',
-              background: '#00ffff',
-              zIndex: 1,
-            }} />
-          )}
-          
-          {/* Cursor name and time */}
-          {cursor.visible && (
-            <span style={{
-              position: 'absolute',
-              left: `${((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * 100}%`,
-              transform: 'translateX(4px)',
-              color: '#ffffff',
-              fontWeight: 'bold',
-              zIndex: 2,
-            }}>
-              Cursor: {Math.round(psToDisplayValue(cursor.position, timeConfig.unit))} {timeConfig.unit}
-            </span>
-          )}
-          
-          {/* Mouse name and time - using debounced displayMouseX for value */}
-          {displayMouseX !== null && (
-            <span style={{
-              position: 'absolute',
-              left: `${(mouseX / (containerRef.current?.clientWidth || 1)) * 100}%`,
-              transform: 'translateX(4px)',
-              color: '#00ffff',
-              fontWeight: 'bold',
-              zIndex: 2,
-            }}>
-              Mouse: {Math.round(psToDisplayValue(viewport.timeStart + (displayMouseX / (containerRef.current?.clientWidth || 1)) * (viewport.timeEnd - viewport.timeStart), timeConfig.unit))} {timeConfig.unit}
-            </span>
-          )}
+          {/* Cursor and mouse lines are drawn on the cursor canvas overlay */}
+          {/* Time labels are shown on the waveform canvas ruler */}
         </div>
         
-        {/* Waveform canvas */}
-        <canvas
-          ref={canvasRef}
-          className="waveform-canvas"
-          style={{ 
-            display: 'block',
-            cursor: 'crosshair',
-            background: selectedSignal ? '#f8f8ff' : '#fff',
-            flex: 1,
-          }}
-          onClick={handleCanvasClick}
-          onMouseMove={handleCanvasMouseMove}
-          onMouseLeave={handleCanvasMouseLeave}
-        />
+        {/* Waveform canvas layers - double buffered for performance */}
+        <div style={{ position: 'relative', flex: 1 }}>
+          {/* Waveform layer (bottom) - heavy rendering */}
+          <canvas
+            ref={canvasRef}
+            className="waveform-canvas"
+            style={{ 
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
+              display: 'block',
+              cursor: 'crosshair',
+              background: selectedSignal ? '#f8f8ff' : '#fff',
+            }}
+            onClick={handleCanvasClick}
+            onMouseMove={handleCanvasMouseMove}
+            onMouseLeave={handleCanvasMouseLeave}
+          />
+          {/* Cursor layer (top) - lightweight overlay */}
+          <canvas
+            ref={cursorCanvasRef}
+            className="cursor-canvas"
+            style={{ 
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
+              display: 'block',
+              pointerEvents: 'none', // Let events pass through to waveform canvas
+            }}
+          />
+        </div>
       </div>
     </div>
   );
