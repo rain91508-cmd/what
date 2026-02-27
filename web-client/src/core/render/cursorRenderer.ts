@@ -65,10 +65,11 @@ class CursorRenderer {
 
   private startRenderLoop(): void {
     const loop = () => {
-      if (this.dirty && this.state) {
+      // Always render if we have state (canvas is cleared each frame)
+      if (this.state) {
         this.render();
-        this.dirty = false;
       }
+      this.dirty = false;
       this.animationId = requestAnimationFrame(loop);
     };
     this.animationId = requestAnimationFrame(loop);

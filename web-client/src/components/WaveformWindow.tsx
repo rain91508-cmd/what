@@ -278,18 +278,7 @@ export function WaveformWindow({
 
     waveformRenderer.render(segments, viewport, width, height, rulerHeight);
 
-    // Update cursor renderer state (lightweight, just updates state)
-    cursorRenderer.updateState({
-      cursor,
-      mouseX: displayMouseX,
-      viewport: {
-        timeStart: viewport.timeStart,
-        timeEnd: viewport.timeEnd,
-      },
-      timeUnit: timeConfig.unit,
-      containerWidth: width,
-      rulerHeight,
-    });
+    // Note: cursorRenderer is updated separately in the rAF loop for smooth mouse following
   };
 
   const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -300,20 +289,51 @@ export function WaveformWindow({
     setCursor({ position: Math.round(time), visible: true });
   }, [viewport]);
 
-  // Use refs for mouse position to avoid re-renders
+  // Use refs for all cursor state to avoid dependency on React state in rAF loop
   const mousePosRef = useRef<number | null>(null);
-  const mouseDirtyRef = useRef(false);
+  const cursorRef = useRef(cursor);
+  const viewportRef = useRef(viewport);
+  const timeConfigRef = useRef(timeConfig);
+  const canvasWidthRef = useRef(canvasWidth);
+
+  // Keep refs in sync with state
+  useEffect(() => {
+    cursorRef.current = cursor;
+  }, [cursor]);
+
+  useEffect(() => {
+    viewportRef.current = viewport;
+  }, [viewport]);
+
+  useEffect(() => {
+    timeConfigRef.current = timeConfig;
+  }, [timeConfig]);
+
+  useEffect(() => {
+    canvasWidthRef.current = canvasWidth;
+  }, [canvasWidth]);
 
   // RequestAnimationFrame loop for smooth cursor updates
+  // This loop directly updates cursorRenderer using refs (no React state dependency)
   useEffect(() => {
     let animationId: number;
 
     const updateCursor = () => {
-      if (mouseDirtyRef.current && mousePosRef.current !== null) {
-        // Update displayMouseX only when needed
-        setDisplayMouseX(mousePosRef.current);
-        mouseDirtyRef.current = false;
+      // Always update cursorRenderer with latest refs
+      if (cursorRenderer.isInitialized()) {
+        cursorRenderer.updateState({
+          cursor: cursorRef.current,
+          mouseX: mousePosRef.current,
+          viewport: {
+            timeStart: viewportRef.current.timeStart,
+            timeEnd: viewportRef.current.timeEnd,
+          },
+          timeUnit: timeConfigRef.current.unit,
+          containerWidth: canvasWidthRef.current,
+          rulerHeight: 20,
+        });
       }
+
       animationId = requestAnimationFrame(updateCursor);
     };
 
@@ -322,7 +342,7 @@ export function WaveformWindow({
     return () => {
       cancelAnimationFrame(animationId);
     };
-  }, []);
+  }, []); // No dependencies - uses refs for all state
 
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current) return;
@@ -331,15 +351,14 @@ export function WaveformWindow({
 
     // Update ref immediately (no re-render)
     mousePosRef.current = newMouseX;
-    mouseDirtyRef.current = true;
 
-    // Also update mouseX for other purposes (like click handling)
+    // Also update mouseX for other purposes (like click handling and info bar)
     setMouseX(newMouseX);
+    setDisplayMouseX(newMouseX);
   }, []);
 
   const handleCanvasMouseLeave = useCallback(() => {
     mousePosRef.current = null;
-    mouseDirtyRef.current = true;
     setMouseX(null);
     setDisplayMouseX(null);
   }, []);
