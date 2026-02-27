@@ -418,6 +418,7 @@ function App() {
             tabs={tabs}
             onTabClose={handleCloseTab}
             onTabRename={handleRenameTab}
+            onTabsReorder={setTabs}
           >
             {activeTabData?.type === 'source' ? (
               <SourceCodeWindow
