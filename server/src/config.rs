@@ -60,6 +60,10 @@ pub struct ServerConfig {
     /// FST 读取后端 (fstapi, wavefst)
     #[arg(long, default_value = "fstapi")]
     pub fst_backend: String,
+
+    /// Web 客户端静态文件目录（如果提供，将启用静态文件服务）
+    #[arg(long)]
+    pub web_dir: Option<PathBuf>,
 }
 
 impl ServerConfig {
@@ -141,6 +145,7 @@ impl Default for ServerConfig {
             auth_token: None,
             rate_limit: 100,
             fst_backend: "fstapi".to_string(),
+            web_dir: None,
         }
     }
 }

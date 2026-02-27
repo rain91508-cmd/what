@@ -7,6 +7,7 @@ use tower_http::{
     cors::{Any, CorsLayer},
     limit::RequestBodyLimitLayer,
     trace::TraceLayer,
+    services::ServeDir,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -31,6 +32,11 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("知识库目录：{:?}", config.kdb_dir);
     tracing::info!("波形文件目录：{:?}", config.wave_dir);
     tracing::info!("日志级别：{}", config.log_level);
+    
+    // 如果配置了 web 目录，记录信息
+    if let Some(ref web_dir) = config.web_dir {
+        tracing::info!("Web 客户端目录：{:?}", web_dir);
+    }
 
     // 创建 CORS 层
     let cors = if config.enable_cors {
@@ -47,14 +53,31 @@ async fn main() -> anyhow::Result<()> {
         CorsLayer::new() // 使用默认的 CORS 配置
     };
 
-    // 构建路由
-    let app = create_router(state.clone())
-        .layer(cors)
-        .layer(TraceLayer::new_for_http())
-        .layer(RequestBodyLimitLayer::new(
-            (config.cache_capacity_bytes() / 10) as usize, // 限制请求体大小为缓存的 10%
-        ))
-        .with_state(state);
+    // 构建 API 路由
+    let api_router = create_router(state.clone());
+    
+    // 构建完整路由（包含静态文件服务）
+    let app = if let Some(ref web_dir) = config.web_dir {
+        // 如果配置了 web 目录，添加静态文件服务
+        // API 路由优先，未匹配的路径尝试从静态文件服务
+        api_router
+            .fallback_service(ServeDir::new(web_dir))
+            .layer(cors)
+            .layer(TraceLayer::new_for_http())
+            .layer(RequestBodyLimitLayer::new(
+                (config.cache_capacity_bytes() / 10) as usize,
+            ))
+            .with_state(state)
+    } else {
+        // 没有配置 web 目录，只提供 API 服务
+        api_router
+            .layer(cors)
+            .layer(TraceLayer::new_for_http())
+            .layer(RequestBodyLimitLayer::new(
+                (config.cache_capacity_bytes() / 10) as usize,
+            ))
+            .with_state(state)
+    };
 
     // 启动服务器
     let listener = tokio::net::TcpListener::bind(&config.bind_address()).await?;
