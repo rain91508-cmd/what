@@ -23,6 +23,47 @@ export interface ColumnWidths {
   panel: number;      // 信号面板宽度
 }
 
+// 时间单位类型
+export type TimeUnit = 'ps' | 'ns' | 'us' | 'ms' | 's';
+
+// 时间单位转换乘数（转换为 ps）
+export const TIME_UNIT_MULTIPLIERS: Record<TimeUnit, number> = {
+  ps: 1,
+  ns: 1000,
+  us: 1000000,
+  ms: 1000000000,
+  s: 1000000000000,
+};
+
+// 时间配置
+// 内部存储的单位时间始终是整数 ps
+// 显示时根据 unit 进行转换
+export interface TimeConfig {
+  unitTimePs: number;    // 单位时间（整数 ps/px）
+  unit: TimeUnit;        // 显示用的时间单位
+  pixelsPerUnit: number; // 每个时间单位的像素宽度（固定为10）
+}
+
+/**
+ * 将显示值转换为 ps
+ * @param displayValue 显示的值（根据 unit）
+ * @param unit 时间单位
+ * @returns 对应的 ps 值（整数）
+ */
+export function displayValueToPs(displayValue: number, unit: TimeUnit): number {
+  return Math.max(1, Math.floor(displayValue * TIME_UNIT_MULTIPLIERS[unit]));
+}
+
+/**
+ * 将 ps 转换为显示值
+ * @param psValue ps 值
+ * @param unit 目标时间单位
+ * @returns 显示值
+ */
+export function psToDisplayValue(psValue: number, unit: TimeUnit): number {
+  return psValue / TIME_UNIT_MULTIPLIERS[unit];
+}
+
 export interface Tab {
   id: string;
   label: string;
@@ -33,6 +74,7 @@ export interface Tab {
   groups?: Record<string, SignalGroup>;  // For waveform tabs - group structure
   selectedGroup?: string;       // For waveform tabs - currently selected group
   columnWidths?: ColumnWidths;  // For waveform tabs - 列宽配置
+  timeConfig?: TimeConfig;      // For waveform tabs - 时间配置
 }
 
 interface TabPanelProps {

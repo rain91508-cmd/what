@@ -45,7 +45,15 @@ import { Splitter } from './components/ResizablePanel'
 
 // Types
 import type { Instance, Signal } from './types'
-import type { WaveformSignal, ColumnWidths } from './components/TabPanel'
+import type { WaveformSignal, ColumnWidths, TimeConfig } from './components/TabPanel'
+
+// 默认时间配置
+// 默认 10ns/px = 10,000 ps/px
+const DEFAULT_TIME_CONFIG: TimeConfig = {
+  unitTimePs: 10000,  // 默认 10,000 ps/px (10 ns/px)
+  unit: 'ns',
+  pixelsPerUnit: 10,  // 固定 10 像素每单位
+}
 
 function App() {
   const [initialized, setInitialized] = useState(false)
@@ -89,6 +97,7 @@ function App() {
       signals: [],
       groups: createDefaultGroups(),
       selectedGroup: 'group_1',
+      timeConfig: { ...DEFAULT_TIME_CONFIG },
     },
   ])
   const [activeTab, setActiveTab] = useState('source-1')
@@ -273,10 +282,86 @@ function App() {
       signals: type === 'waveform' ? [] : undefined,
       groups: type === 'waveform' ? createDefaultGroups() : undefined,
       selectedGroup: type === 'waveform' ? 'group_1' : undefined,
+      timeConfig: type === 'waveform' ? { ...DEFAULT_TIME_CONFIG } : undefined,
     }
     setTabs(prev => [...prev, newTab])
     setActiveTab(newId)
     addMessage(`Added new ${type} tab`)
+  }
+
+  // Update time configuration for a specific tab
+  const handleTimeConfigChange = (tabId: string, timeConfig: TimeConfig) => {
+    setTabs(prev => prev.map(tab =>
+      tab.id === tabId ? { ...tab, timeConfig } : tab
+    ))
+  }
+
+  // Zoom in (decrease unit time by half, but not below minUnitTime)
+  const handleZoomIn = () => {
+    const currentTab = tabs.find(t => t.id === activeTab)
+    if (currentTab?.type === 'waveform' && currentTab.timeConfig) {
+      // Calculate new unit time (half of current, but at least 1 ps)
+      const newUnitTimePs = Math.max(1, Math.floor(currentTab.timeConfig.unitTimePs / 2))
+      
+      // Check if we can zoom in further
+      if (newUnitTimePs < currentTab.timeConfig.unitTimePs) {
+        handleTimeConfigChange(activeTab, {
+          ...currentTab.timeConfig,
+          unitTimePs: newUnitTimePs,
+        })
+        addMessage(`Zoom in: ${newUnitTimePs} ps/px`)
+      } else {
+        addMessage('Already at maximum zoom')
+      }
+    }
+  }
+
+  // Zoom out (increase unit time by double, but not beyond max time range)
+  const handleZoomOut = () => {
+    const currentTab = tabs.find(t => t.id === activeTab)
+    if (currentTab?.type === 'waveform' && currentTab.timeConfig) {
+      // Get max time from mock data (assume 1,000,000 ps = 1000 ns for now)
+      const maxTimePs = 1000000
+      
+      // Calculate new unit time (double of current)
+      const newUnitTimePs = currentTab.timeConfig.unitTimePs * 2
+      
+      // Calculate current viewport width (assume 800px for now)
+      const viewportWidth = 800
+      const newTimeRange = (viewportWidth / currentTab.timeConfig.pixelsPerUnit) * newUnitTimePs
+      
+      // Check if new time range would exceed max time
+      if (newTimeRange <= maxTimePs) {
+        handleTimeConfigChange(activeTab, {
+          ...currentTab.timeConfig,
+          unitTimePs: newUnitTimePs,
+        })
+        addMessage(`Zoom out: ${newUnitTimePs} ps/px`)
+      } else {
+        addMessage('Already at minimum zoom (max time range reached)')
+      }
+    }
+  }
+
+  // Zoom to fit - set viewport to 0 to max time
+  const handleZoomFit = () => {
+    const currentTab = tabs.find(t => t.id === activeTab)
+    if (currentTab?.type === 'waveform' && currentTab.timeConfig) {
+      // Get max time from mock data
+      const maxTimePs = 1000000
+      
+      // Calculate viewport width (assume 800px for now)
+      const viewportWidth = 800
+      
+      // Calculate unit time to fit entire waveform: maxTime / (width / pixelsPerUnit)
+      const newUnitTimePs = Math.floor(maxTimePs / (viewportWidth / currentTab.timeConfig.pixelsPerUnit))
+      
+      handleTimeConfigChange(activeTab, {
+        ...currentTab.timeConfig,
+        unitTimePs: Math.max(1, newUnitTimePs),
+      })
+      addMessage('Zoom to fit: 0 to 1000 ns')
+    }
   }
 
   // Update groups for a specific tab
@@ -370,12 +455,15 @@ function App() {
 
       {/* Tool Bar */}
       <ToolBar
-        onZoomIn={() => wSignal.zoomIn()}
-        onZoomOut={() => wSignal.zoomOut()}
-        onZoomFit={() => wSignal.zoomToFit()}
+        onZoomIn={handleZoomIn}
+        onZoomOut={handleZoomOut}
+        onZoomFit={handleZoomFit}
         onSearch={() => {}}
         onAddSourceTab={() => handleAddTab('source')}
         onAddWaveformTab={() => handleAddTab('waveform')}
+        timeConfig={activeTabData?.timeConfig}
+        onTimeConfigChange={(config) => handleTimeConfigChange(activeTab, config)}
+        maxWaveformTimePs={1000000}
       />
 
       {/* Main Content */}
@@ -432,6 +520,7 @@ function App() {
                 groups={activeTabData?.groups || createDefaultGroups()}
                 selectedGroup={activeTabData?.selectedGroup || 'group_1'}
                 columnWidths={activeTabData?.columnWidths}
+                timeConfig={activeTabData?.timeConfig}
                 onSignalRemove={handleSignalRemove}
                 onGroupsUpdate={(groups) => handleGroupsUpdate(activeTabData.id, groups)}
                 onSelectedGroupUpdate={(selectedGroup) => handleSelectedGroupUpdate(activeTabData.id, selectedGroup)}

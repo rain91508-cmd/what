@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { waveformRenderer } from '../core/render/waveformRenderer';
 import type { Viewport, Segment, Signal } from '../types';
-import type { WaveformSignal, ColumnWidths } from './TabPanel';
+import type { WaveformSignal, ColumnWidths, TimeConfig } from './TabPanel';
 import { FilterInput } from './FilterInput';
 import { wildcardMatch } from '../utils/wildcardMatch';
+import { getOrCreateMockData, getValueAtTime, type SignalMockData } from '../utils/mockWaveformData';
 
 interface SignalGroup {
   id: string;
@@ -19,6 +20,7 @@ interface WaveformWindowProps {
   groups: Record<string, SignalGroup>;
   selectedGroup: string;
   columnWidths?: ColumnWidths;  // 列宽配置
+  timeConfig?: TimeConfig;      // 时间配置
   onSignalRemove: (signal: Signal & { unique_id: number }) => void;
   onGroupsUpdate: (groups: Record<string, SignalGroup>) => void;
   onSelectedGroupUpdate: (selectedGroup: string) => void;
@@ -48,11 +50,20 @@ const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
   panel: 200,
 };
 
+// 默认时间配置
+// 默认 10ns/px = 10,000 ps/px
+const DEFAULT_TIME_CONFIG: TimeConfig = {
+  unitTimePs: 10000,  // 默认 10,000 ps/px (10 ns/px)
+  unit: 'ns',
+  pixelsPerUnit: 10,  // 固定 10 像素每单位
+};
+
 export function WaveformWindow({
   signals,
   groups,
   selectedGroup,
   columnWidths,
+  timeConfig = DEFAULT_TIME_CONFIG,
   onSignalRemove,
   onGroupsUpdate,
   onSelectedGroupUpdate,
@@ -62,14 +73,23 @@ export function WaveformWindow({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const signalPanelRef = useRef<HTMLDivElement>(null);
-  const [viewport] = useState<Viewport>({
-    timeStart: 0,
-    timeEnd: 1000,
-    signalStart: 0,
-    signalEnd: 10,
-    pixelsPerTime: 1,
-    pixelsPerSignal: 24,
-  });
+  const [canvasWidth, setCanvasWidth] = useState(0);
+  
+  // 根据 canvas 宽度和时间配置计算 viewport
+  const calculateViewport = useCallback((width: number): Viewport => {
+    // 时间范围 = 宽度 / 每单位像素 * 单位时间(ps)
+    const timeRange = (width / timeConfig.pixelsPerUnit) * timeConfig.unitTimePs;
+    return {
+      timeStart: 0,
+      timeEnd: timeRange,
+      signalStart: 0,
+      signalEnd: 10,
+      pixelsPerTime: 1,
+      pixelsPerSignal: 24,
+    };
+  }, [timeConfig]);
+  
+  const [viewport, setViewport] = useState<Viewport>(() => calculateViewport(800));
   const [signalValues] = useState<Record<string, string>>({
     'top.clk': '1',
     'top.rst_n': '0',
@@ -136,13 +156,17 @@ export function WaveformWindow({
     };
   }, []);
 
+  // 监听窗口大小变化，更新 canvas 尺寸和 viewport
   useEffect(() => {
     const handleResize = () => {
       if (containerRef.current && canvasRef.current) {
         const { width, height } = containerRef.current.getBoundingClientRect();
+        setCanvasWidth(width);
         canvasRef.current.width = width;
         canvasRef.current.height = height;
         waveformRenderer.resize(width, height);
+        // 根据新宽度重新计算 viewport
+        setViewport(calculateViewport(width));
         renderWaveform();
       }
     };
@@ -150,16 +174,23 @@ export function WaveformWindow({
     handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [groups, cursor, mouseX, selectedSignal, displaySignals]);
+  }, [groups, cursor, mouseX, selectedSignal, displaySignals, calculateViewport]);
+
+  // 监听时间配置变化，更新 viewport
+  useEffect(() => {
+    if (canvasWidth > 0) {
+      setViewport(calculateViewport(canvasWidth));
+      renderWaveform();
+    }
+  }, [timeConfig, canvasWidth, calculateViewport]);
 
   const renderWaveform = () => {
     if (!canvasRef.current) return;
 
     const { width, height } = canvasRef.current;
 
-    // Generate mock segments - only for visible signals in treeNodes
+    // Generate segments from mock data - only for visible signals in treeNodes
     const segments: Segment[] = [];
-    const timeStep = (viewport.timeEnd - viewport.timeStart) / 20;
 
     // Calculate row index for each signal, considering group rows
     let currentRow = 0;
@@ -168,21 +199,52 @@ export function WaveformWindow({
         // Group row - no waveform, just increment row counter
         currentRow++;
       } else if (node.type === 'signal' && node.signal) {
-        // Signal row - render waveform
-        let currentTime = viewport.timeStart;
-        let currentValue = 0;
-
-        while (currentTime < viewport.timeEnd) {
-          const nextTime = currentTime + timeStep;
+        // Signal row - render waveform from mock data
+        const signalPath = node.signal.fullPath || node.signal.name;
+        const mockData = getOrCreateMockData(signalPath);
+        
+        // Get transitions within the viewport time range
+        const visibleTransitions = mockData.transitions.filter(
+          t => t.time >= viewport.timeStart && t.time <= viewport.timeEnd
+        );
+        
+        if (visibleTransitions.length === 0) {
+          // No transitions in viewport, show constant value
+          const value = getValueAtTime(mockData, viewport.timeStart);
           segments.push({
-            t0: currentTime,
-            t1: nextTime,
+            t0: viewport.timeStart,
+            t1: viewport.timeEnd,
             row: currentRow,
-            value: currentValue,
+            value,
           });
-
-          currentTime = nextTime;
-          currentValue = currentValue === 0 ? 1 : 0;
+        } else {
+          // Render transitions within viewport
+          let lastTime = viewport.timeStart;
+          let lastValue = getValueAtTime(mockData, viewport.timeStart);
+          
+          for (const transition of visibleTransitions) {
+            // Add segment from lastTime to transition time
+            if (lastTime < transition.time) {
+              segments.push({
+                t0: lastTime,
+                t1: transition.time,
+                row: currentRow,
+                value: lastValue,
+              });
+            }
+            lastTime = transition.time;
+            lastValue = transition.value;
+          }
+          
+          // Add final segment to timeEnd
+          if (lastTime < viewport.timeEnd) {
+            segments.push({
+              t0: lastTime,
+              t1: viewport.timeEnd,
+              row: currentRow,
+              value: lastValue,
+            });
+          }
         }
         currentRow++;
       }
