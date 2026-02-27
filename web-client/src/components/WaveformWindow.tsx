@@ -1063,7 +1063,7 @@ export function WaveformWindow({
       </div>
 
       <div className="waveform-canvas-container" ref={containerRef} style={{ display: 'flex', flexDirection: 'column' }}>
-        {/* Time ruler area - only shows time ruler, cursor/mouse time shown on canvas overlay */}
+        {/* Cursor/Marker info bar - corresponds to left filter bar (30px) */}
         <div style={{
           height: '30px',
           background: '#1a1a1a',
@@ -1071,9 +1071,65 @@ export function WaveformWindow({
           flexShrink: 0,
           position: 'relative',
           boxSizing: 'border-box',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 12px',
+          fontSize: '13px',
+          fontFamily: 'Consolas, Monaco, monospace',
         }}>
-          {/* Cursor and mouse lines are drawn on the cursor canvas overlay */}
-          {/* Time labels are shown on the waveform canvas ruler */}
+          {/* Cursor vertical line */}
+          {cursor.visible && (
+            <div style={{
+              position: 'absolute',
+              left: `${((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * 100}%`,
+              top: 0,
+              bottom: 0,
+              width: '1px',
+              background: '#ff00ff',
+              zIndex: 1,
+            }} />
+          )}
+          
+          {/* Mouse vertical line */}
+          {mouseX !== null && (
+            <div style={{
+              position: 'absolute',
+              left: `${(mouseX / (containerRef.current?.clientWidth || 1)) * 100}%`,
+              top: 0,
+              bottom: 0,
+              width: '1px',
+              background: '#00ffff',
+              zIndex: 1,
+            }} />
+          )}
+          
+          {/* Cursor name and time */}
+          {cursor.visible && (
+            <span style={{
+              position: 'absolute',
+              left: `${((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * 100}%`,
+              transform: 'translateX(4px)',
+              color: '#ffffff',
+              fontWeight: 'bold',
+              zIndex: 2,
+            }}>
+              Cursor: {Math.round(psToDisplayValue(cursor.position, timeConfig.unit))} {timeConfig.unit}
+            </span>
+          )}
+          
+          {/* Mouse name and time - using debounced displayMouseX for value */}
+          {displayMouseX !== null && (
+            <span style={{
+              position: 'absolute',
+              left: `${(mouseX / (containerRef.current?.clientWidth || 1)) * 100}%`,
+              transform: 'translateX(4px)',
+              color: '#00ffff',
+              fontWeight: 'bold',
+              zIndex: 2,
+            }}>
+              Mouse: {Math.round(psToDisplayValue(viewport.timeStart + (displayMouseX / (containerRef.current?.clientWidth || 1)) * (viewport.timeEnd - viewport.timeStart), timeConfig.unit))} {timeConfig.unit}
+            </span>
+          )}
         </div>
         
         {/* Waveform canvas layers - double buffered for performance */}
