@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { waveformRenderer } from '../core/render/waveformRenderer';
 import type { Viewport, Segment, Signal } from '../types';
 import type { WaveformSignal, ColumnWidths } from './TabPanel';
+import { FilterInput } from './FilterInput';
+import { wildcardMatch } from '../utils/wildcardMatch';
 
 interface SignalGroup {
   id: string;
@@ -421,11 +423,12 @@ export function WaveformWindow({
   };
 
   const getHierarchyDisplay = (signal: Signal): string => {
-    // Extract hierarchy from fullPath
+    // 返回完整信号路径（去掉信号名本身）
     const parts = signal.fullPath.split('.');
     if (parts.length <= 1) return '-';
-    // Return the second to last part (parent instance)
-    return parts[parts.length - 2] || '-';
+    // 去掉最后一部分（信号名），保留前面的路径
+    parts.pop();
+    return parts.join('.') || '-';
   };
 
   const matchesIOFilter = (signal: Signal): boolean => {
@@ -439,9 +442,9 @@ export function WaveformWindow({
 
   const matchesNameFilter = (signal: Signal): boolean => {
     if (!nameFilter.trim()) return true;
-    const pattern = nameFilter.toLowerCase();
-    return signal.name.toLowerCase().includes(pattern) ||
-           signal.fullPath.toLowerCase().includes(pattern);
+    const pattern = nameFilter;
+    return wildcardMatch(pattern, signal.name) ||
+           wildcardMatch(pattern, signal.fullPath);
   };
 
   // Build tree structure - hide root, but show its direct children (top-level groups)
@@ -554,18 +557,11 @@ export function WaveformWindow({
           alignItems: 'center',
           boxSizing: 'border-box',
         }}>
-          <input
-            type="text"
-            placeholder="Filter..."
+          <FilterInput
             value={nameFilter}
-            onChange={(e) => setNameFilter(e.target.value)}
-            style={{
-              flex: 1,
-              padding: '2px 4px',
-              fontSize: '10px',
-              border: '1px solid #c0c0c0',
-              borderRadius: '2px',
-            }}
+            onChange={setNameFilter}
+            placeholder="Filter..."
+            storageKey="waveform_filter_history"
           />
           <select
             value={ioFilter}
@@ -628,7 +624,21 @@ export function WaveformWindow({
         </div>
         
         {/* Group and signal list */}
-        <div className="waveform-signal-list">
+        <div
+          className="waveform-signal-list"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Delete' && selectedSignal) {
+              // Find the selected signal and remove it
+              const signalToRemove = displaySignals.find(s => s.unique_id === selectedSignal);
+              if (signalToRemove) {
+                handleRemoveSignal(signalToRemove);
+                setSelectedSignal(null);
+              }
+            }
+          }}
+          style={{ outline: 'none' }}
+        >
           {treeNodes.map((node) => {
             if (node.type === 'group' && node.group) {
               const group = node.group;
@@ -795,17 +805,21 @@ export function WaveformWindow({
                       paddingLeft: '4px',
                     }}
                   >
-                    {/* Scope column */}
-                    <span 
-                      style={{ 
+                    {/* Scope column - 右对齐，显示完整路径，字体加大黑色 */}
+                    <span
+                      style={{
                         width: hierarchyColumnWidth,
-                        fontSize: '10px',
-                        color: '#666',
+                        fontSize: '12px',
+                        color: '#000',
+                        fontWeight: 500,
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
                         borderRight: '1px solid #e0e0e0',
                         height: '100%',
+                        textAlign: 'right',
+                        paddingRight: '4px',
+                        direction: 'rtl',
                       }}
                       title={getHierarchyDisplay(signal)}
                     >
@@ -842,27 +856,24 @@ export function WaveformWindow({
                       </span>
                     </span>
                     
-                    {/* Value column */}
-                    <span 
+                    {/* Value column - 右对齐，字体加大黑色 */}
+                    <span
                       className="waveform-signal-value"
-                      style={{ 
+                      style={{
                         flex: 1,
                         display: 'flex',
-                        justifyContent: 'space-between',
+                        justifyContent: 'flex-end',
                         alignItems: 'center',
+                        paddingRight: '8px',
                       }}
                     >
-                      <span></span>
-                      <span>{getSignalValue(signal)}</span>
-                      <span
-                        className="waveform-signal-remove"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRemoveSignal(signal);
-                        }}
-                        title="Remove signal"
-                      >
-                        ×
+                      <span style={{
+                        textAlign: 'right',
+                        fontSize: '12px',
+                        color: '#000',
+                        fontWeight: 500,
+                      }}>
+                        {getSignalValue(signal)}
                       </span>
                     </span>
                   </div>

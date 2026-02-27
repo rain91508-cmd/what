@@ -1,5 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { Instance, Signal } from '../types';
+import { FilterInput } from './FilterInput';
+import { wildcardMatch } from '../utils/wildcardMatch';
 
 interface SignalListProps {
   instance: Instance | null;
@@ -98,12 +100,12 @@ export function SignalList({ instance, onSignalSelect, onSignalAddToWaveform }: 
     // Filter by IO direction
     result = result.filter(matchesIOFilter);
 
-    // Filter by name pattern
+    // Filter by name pattern (支持通配符 * 和 ?)
     if (nameFilter.trim()) {
-      const pattern = nameFilter.toLowerCase();
-      result = result.filter(signal => 
-        signal.name.toLowerCase().includes(pattern) ||
-        signal.fullPath.toLowerCase().includes(pattern)
+      const pattern = nameFilter;
+      result = result.filter(signal =>
+        wildcardMatch(pattern, signal.name) ||
+        wildcardMatch(pattern, signal.fullPath)
       );
     }
 
@@ -139,17 +141,14 @@ export function SignalList({ instance, onSignalSelect, onSignalAddToWaveform }: 
         gap: '4px',
         alignItems: 'center',
       }}>
-        <input
-          type="text"
-          placeholder="Filter signals..."
+        <FilterInput
           value={nameFilter}
-          onChange={(e) => setNameFilter(e.target.value)}
+          onChange={setNameFilter}
+          placeholder="Filter signals..."
+          storageKey="signal_list_filter_history"
           style={{
-            flex: 1,
             padding: '3px 6px',
             fontSize: '11px',
-            border: '1px solid #c0c0c0',
-            borderRadius: '2px',
           }}
         />
         <select

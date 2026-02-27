@@ -35,7 +35,7 @@ export function ToolBar({
         📄+
       </button>
       <button className="tool-bar-button" title="Add Waveform Tab" onClick={onAddWaveformTab}>
-        📊+
+        <span style={{ fontSize: '12px', fontFamily: 'monospace' }}>⌇+</span>
       </button>
       <div className="tool-bar-separator"></div>
       <button className="tool-bar-button" title="Previous">
