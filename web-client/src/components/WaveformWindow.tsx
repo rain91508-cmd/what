@@ -184,7 +184,8 @@ export function WaveformWindow({
     handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [groups, cursor, mouseX, selectedSignal, displaySignals, calculateViewport]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups, selectedSignal, displaySignals]);
 
   // 监听时间配置变化，更新 viewport
   useEffect(() => {
