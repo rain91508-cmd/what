@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { kdbManager } from '../modules/knowledge/kdbManager';
 import type { Signal, Module } from '../types/kdb';
 import { SignalType, PortDirection } from '../types/kdb';
@@ -18,8 +18,21 @@ export function SignalPanel({ selectedModule }: SignalPanelProps) {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [ioFilter, setIoFilter] = useState<'all' | 'input' | 'output' | 'inout' | 'internal'>('all');
+  const [ioFilters, setIoFilters] = useState<Set<string>>(new Set(['all']));
+  const [showIoDropdown, setShowIoDropdown] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['ports', 'internal']));
+  const ioDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (ioDropdownRef.current && !ioDropdownRef.current.contains(event.target as Node)) {
+        setShowIoDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Load signals when selected module changes
   useEffect(() => {
@@ -82,6 +95,30 @@ export function SignalPanel({ selectedModule }: SignalPanelProps) {
     return new RegExp(`^${escaped}$`, 'i');
   };
 
+  // Toggle IO filter
+  const toggleIoFilter = (filter: string) => {
+    const newFilters = new Set(ioFilters);
+    if (filter === 'all') {
+      // If clicking 'all', clear other selections and select 'all'
+      setIoFilters(new Set(['all']));
+    } else {
+      // Remove 'all' if selecting a specific filter
+      newFilters.delete('all');
+      if (newFilters.has(filter)) {
+        newFilters.delete(filter);
+        // If no filters selected, default to 'all'
+        if (newFilters.size === 0) {
+          setIoFilters(new Set(['all']));
+        } else {
+          setIoFilters(newFilters);
+        }
+      } else {
+        newFilters.add(filter);
+        setIoFilters(newFilters);
+      }
+    }
+  };
+
   // Filter signals by search term and IO type
   const filterSignals = (signalList: Signal[]): Signal[] => {
     return signalList.filter(s => {
@@ -106,22 +143,12 @@ export function SignalPanel({ selectedModule }: SignalPanelProps) {
         }
       }
       
-      // IO filter
-      if (ioFilter !== 'all') {
+      // IO filter (multi-select)
+      if (!ioFilters.has('all')) {
         const dirNum = Number(s.direction);
-        switch (ioFilter) {
-          case 'input':
-            if (dirNum !== 1) return false;
-            break;
-          case 'output':
-            if (dirNum !== 2) return false;
-            break;
-          case 'inout':
-            if (dirNum !== 3) return false;
-            break;
-          case 'internal':
-            if (dirNum !== 0) return false;
-            break;
+        const dirName = dirNum === 1 ? 'input' : dirNum === 2 ? 'output' : dirNum === 3 ? 'inout' : 'internal';
+        if (!ioFilters.has(dirName)) {
+          return false;
         }
       }
       
@@ -224,27 +251,69 @@ export function SignalPanel({ selectedModule }: SignalPanelProps) {
             height: '24px',
           }}
         />
-        <select
-          value={ioFilter}
-          onChange={(e) => setIoFilter(e.target.value as any)}
-          style={{
-            padding: '4px 6px',
-            border: '1px solid #ddd',
-            borderRadius: '3px',
-            fontSize: '11px',
-            outline: 'none',
-            backgroundColor: 'white',
-            height: '24px',
-            boxSizing: 'border-box',
-            flexShrink: 0,
-          }}
-        >
-          <option value="all">All</option>
-          <option value="input">In</option>
-          <option value="output">Out</option>
-          <option value="inout">IO</option>
-          <option value="internal">Int</option>
-        </select>
+        <div ref={ioDropdownRef} style={{ position: 'relative', flexShrink: 0 }}>
+          <div
+            onClick={() => setShowIoDropdown(!showIoDropdown)}
+            style={{
+              padding: '4px 6px',
+              border: '1px solid #ddd',
+              borderRadius: '3px',
+              fontSize: '11px',
+              backgroundColor: 'white',
+              height: '24px',
+              boxSizing: 'border-box',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              minWidth: '60px',
+              justifyContent: 'space-between',
+            }}
+          >
+            <span>{ioFilters.has('all') ? 'All' : Array.from(ioFilters).map(f => f.charAt(0).toUpperCase() + f.slice(1, 3)).join(', ')}</span>
+            <span style={{ fontSize: '8px' }}>▼</span>
+          </div>
+          {showIoDropdown && (
+            <div
+              style={{
+                position: 'absolute',
+                top: '100%',
+                right: 0,
+                marginTop: '2px',
+                backgroundColor: 'white',
+                border: '1px solid #ddd',
+                borderRadius: '3px',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                zIndex: 1000,
+                minWidth: '100px',
+              }}
+            >
+              {['all', 'input', 'output', 'inout', 'internal'].map(filter => (
+                <div
+                  key={filter}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleIoFilter(filter);
+                  }}
+                  style={{
+                    padding: '4px 8px',
+                    fontSize: '11px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    backgroundColor: ioFilters.has(filter) ? '#e3f2fd' : 'white',
+                  }}
+                >
+                  <span style={{ width: '12px', textAlign: 'center' }}>
+                    {ioFilters.has(filter) ? '✓' : ''}
+                  </span>
+                  <span>{filter === 'all' ? 'All' : filter === 'inout' ? 'InOut' : filter.charAt(0).toUpperCase() + filter.slice(1)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
 

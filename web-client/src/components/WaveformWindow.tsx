@@ -108,7 +108,9 @@ export function WaveformWindow({
   const [displayMouseX, setDisplayMouseX] = useState<number | null>(null); // Debounced for display
   const mouseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [nameFilter, setNameFilter] = useState('');
-  const [ioFilter, setIoFilter] = useState<'all' | 'input' | 'output' | 'inout' | 'internal'>('all');
+  const [ioFilters, setIoFilters] = useState<Set<string>>(new Set(['all']));
+  const [showIoDropdown, setShowIoDropdown] = useState(false);
+  const ioDropdownRef = useRef<HTMLDivElement>(null);
   const [editingGroup, setEditingGroup] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
 
@@ -118,6 +120,38 @@ export function WaveformWindow({
   const nameColumnWidth = widths.name;
   const valueColumnWidth = widths.value;
   const signalPanelWidth = widths.panel;
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (ioDropdownRef.current && !ioDropdownRef.current.contains(event.target as Node)) {
+        setShowIoDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Toggle IO filter
+  const toggleIoFilter = (filter: string) => {
+    const newFilters = new Set(ioFilters);
+    if (filter === 'all') {
+      setIoFilters(new Set(['all']));
+    } else {
+      newFilters.delete('all');
+      if (newFilters.has(filter)) {
+        newFilters.delete(filter);
+        if (newFilters.size === 0) {
+          setIoFilters(new Set(['all']));
+        } else {
+          setIoFilters(newFilters);
+        }
+      } else {
+        newFilters.add(filter);
+        setIoFilters(newFilters);
+      }
+    }
+  };
 
   // Collect all display signals from all groups for rendering
   // Use useMemo to avoid creating new array reference on every render
@@ -565,12 +599,9 @@ export function WaveformWindow({
   };
 
   const matchesIOFilter = (signal: Signal): boolean => {
-    if (ioFilter === 'all') return true;
-    if (ioFilter === 'input') return signal.direction === 0;
-    if (ioFilter === 'output') return signal.direction === 1;
-    if (ioFilter === 'inout') return signal.direction === 2;
-    if (ioFilter === 'internal') return signal.direction === 3;
-    return true;
+    if (ioFilters.has('all')) return true;
+    const dirName = signal.direction === 0 ? 'input' : signal.direction === 1 ? 'output' : signal.direction === 2 ? 'inout' : 'internal';
+    return ioFilters.has(dirName);
   };
 
   const matchesNameFilter = (signal: Signal): boolean => {
@@ -700,26 +731,69 @@ export function WaveformWindow({
               fontSize: '11px',
             }}
           />
-          <select
-            value={ioFilter}
-            onChange={(e) => setIoFilter(e.target.value as any)}
-            style={{
-              padding: '2px 4px',
-              fontSize: '11px',
-              border: '1px solid #c0c0c0',
-              borderRadius: '2px',
-              width: '70px',
-              height: '22px',
-              boxSizing: 'border-box',
-              flexShrink: 0,
-            }}
-          >
-            <option value="all">All</option>
-            <option value="input">Input</option>
-            <option value="output">Output</option>
-            <option value="inout">InOut</option>
-            <option value="internal">Internal</option>
-          </select>
+          <div ref={ioDropdownRef} style={{ position: 'relative', flexShrink: 0 }}>
+            <div
+              onClick={() => setShowIoDropdown(!showIoDropdown)}
+              style={{
+                padding: '2px 4px',
+                fontSize: '11px',
+                border: '1px solid #c0c0c0',
+                borderRadius: '2px',
+                height: '22px',
+                boxSizing: 'border-box',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                minWidth: '70px',
+                justifyContent: 'space-between',
+                backgroundColor: 'white',
+              }}
+            >
+              <span>{ioFilters.has('all') ? 'All' : Array.from(ioFilters).map(f => f.charAt(0).toUpperCase() + f.slice(1, 3)).join(', ')}</span>
+              <span style={{ fontSize: '8px' }}>▼</span>
+            </div>
+            {showIoDropdown && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '100%',
+                  right: 0,
+                  marginTop: '2px',
+                  backgroundColor: 'white',
+                  border: '1px solid #c0c0c0',
+                  borderRadius: '2px',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                  zIndex: 1000,
+                  minWidth: '100px',
+                }}
+              >
+                {['all', 'input', 'output', 'inout', 'internal'].map(filter => (
+                  <div
+                    key={filter}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleIoFilter(filter);
+                    }}
+                    style={{
+                      padding: '4px 8px',
+                      fontSize: '11px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      backgroundColor: ioFilters.has(filter) ? '#e3f2fd' : 'white',
+                    }}
+                  >
+                    <span style={{ width: '12px', textAlign: 'center' }}>
+                      {ioFilters.has(filter) ? '✓' : ''}
+                    </span>
+                    <span>{filter === 'all' ? 'All' : filter === 'inout' ? 'InOut' : filter.charAt(0).toUpperCase() + filter.slice(1)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Header with 3 columns and visible dividers */}
