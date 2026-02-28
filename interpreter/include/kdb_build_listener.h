@@ -29,6 +29,9 @@ public:
     void enterModule_inst(const UHDM::module_inst* object, vpiHandle handle) override;
     void leaveModule_inst(const UHDM::module_inst* object, vpiHandle handle) override;
     
+    // Post-processing: link instances to their definition modules
+    void linkInstancesToDefinitions();
+    
     size_t getTotalModules() const { return totalModules_; }
     size_t getTotalSignals() const { return totalSignals_; }
     
@@ -49,6 +52,9 @@ private:
     
     std::unordered_map<std::string, uint64_t> currentModuleSignalMap_;
     std::vector<std::pair<std::string, uint64_t>> currentModuleInstances_;
+    
+    // Store instance info for post-processing (defName -> instance module ID)
+    std::vector<std::pair<std::string, uint32_t>> instanceDefNames_;
     
     DriverAnalyzer* driverAnalyzer_;
 };

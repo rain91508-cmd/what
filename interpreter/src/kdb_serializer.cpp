@@ -53,7 +53,8 @@ void KdbSerializer::writeModules(std::vector<uint8_t>& buffer, const std::vector
         writeString(buffer, mod.name);
         writeString(buffer, mod.fullName);
         writeUint64(buffer, mod.id);
-        writeUint64(buffer, mod.fileId);
+        // Note: fileId removed, use definition.fileId instead
+        writeUint64(buffer, mod.definition.fileId);
         
         // Count and write port signals (those with direction != UNKNOWN)
         uint32_t portCount = 0;

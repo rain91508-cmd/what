@@ -72,11 +72,12 @@ message Module {
   string name = 2;
   string full_name = 3;
   uint32 parent_module_id = 4;  // Changed from uint64 to uint32
-  uint32 file_id = 5;  // Changed from uint64 to uint32
-  ModuleSourceLocation definition = 6;
-  repeated Signal signals = 7;  // Contains both ports and internal signals
-  bool is_instance = 8;
-  repeated uint32 child_module_ids = 9;  // Direct child module IDs for hierarchy traversal
+  // Note: file_id removed, use definition.file_id instead
+  ModuleSourceLocation definition = 5;
+  repeated Signal signals = 6;  // Contains both ports and internal signals
+  bool is_instance = 7;
+  repeated uint32 child_module_ids = 8;  // Direct child module IDs for hierarchy traversal
+  uint32 def_module_id = 9;  // Definition module ID for instances (0 if this is a definition)
 }
 
 message DesignHierarchy {

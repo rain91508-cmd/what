@@ -122,6 +122,9 @@ bool SurelogParser::buildKnowledgeBase(KdbBuilder& builder) {
         KdbBuildListener listener(builder, filePathToId_);
         listener.listenDesigns({static_cast<vpiHandle>(vpiDesign_)});
         
+        // Post-processing: link instances to their definition modules
+        listener.linkInstancesToDefinitions();
+        
         totalModules_ = listener.getTotalModules();
         totalSignals_ = listener.getTotalSignals();
         

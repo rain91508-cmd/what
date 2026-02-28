@@ -432,9 +432,10 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
         protoMod->set_name(mod->name);
         protoMod->set_full_name(mod->fullName);
         protoMod->set_parent_module_id(mod->parentModuleId);
-        protoMod->set_file_id(mod->fileId);
+        // Note: file_id removed, use definition.file_id instead
         protoMod->set_is_instance(mod->isInstance);
-        
+        protoMod->set_def_module_id(mod->defModuleId);
+
         if (mod->definition.fileId != 0) {
             auto* decl = protoMod->mutable_definition();
             decl->set_file_id(mod->definition.fileId);
@@ -520,8 +521,9 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
         mod->name = protoMod.name();
         mod->fullName = protoMod.full_name();
         mod->parentModuleId = protoMod.parent_module_id();
-        mod->fileId = protoMod.file_id();
+        // Note: file_id removed, use definition.file_id instead
         mod->isInstance = protoMod.is_instance();
+        mod->defModuleId = protoMod.def_module_id();
         
         if (protoMod.has_definition()) {
             mod->definition.fileId = protoMod.definition().file_id();

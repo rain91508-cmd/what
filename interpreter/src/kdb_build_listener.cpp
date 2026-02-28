@@ -28,10 +28,12 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     std::string instName(object->VpiName());
     std::string defName(object->VpiDefName());
     std::string fullName(object->VpiFullName());
+    int32_t objType = object->VpiType();
     
     std::cerr << "DEBUG: enterModule_inst - instName='" << instName 
               << "', defName='" << defName 
-              << "', fullName='" << fullName << "'\n";
+              << "', fullName='" << fullName 
+              << "', vpiType=" << objType << "\n";
     std::cerr << "DEBUG:   currentModuleStack_ size=" << currentModuleStack_.size() << "\n";
     
     driverAnalyzer_->clear();
@@ -41,13 +43,15 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     ModuleInfo moduleInfo;
     moduleInfo.id = 0;
     moduleInfo.parentModuleId = 0;
-    moduleInfo.fileId = 0;
     moduleInfo.name = defName.empty() ? instName : defName;
     moduleInfo.fullName = fullName.empty() ? moduleInfo.name : fullName;
+    // Determine if this is an instance: instance has non-empty VpiName()
     moduleInfo.isInstance = !instName.empty();
-    
+    moduleInfo.defModuleId = 0;  // Default: no definition module (for definitions)
+
     // First, ensure the file is in the mapping before extracting location
     std::string filePath(object->VpiFile());
+    uint32_t fileId = 0;
     if (!filePath.empty()) {
         auto it = filePathToId_.find(filePath);
         if (it == filePathToId_.end()) {
@@ -58,15 +62,17 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
                 buffer << fileStream.rdbuf();
                 content = buffer.str();
             }
-            moduleInfo.fileId = builder_.addSourceFile(filePath, content);
-            filePathToId_[filePath] = moduleInfo.fileId;
+            fileId = builder_.addSourceFile(filePath, content);
+            filePathToId_[filePath] = fileId;
         } else {
-            moduleInfo.fileId = it->second;
+            fileId = it->second;
         }
     }
-    
+
     // Now extract module location (fileId will be found in the mapping)
     moduleInfo.definition = extractModuleLocation(object, moduleInfo.isInstance);
+    // Set definition fileId from the file mapping
+    moduleInfo.definition.fileId = fileId;
     
     auto ports = object->Ports();
     if (ports) {
@@ -123,6 +129,11 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     currentModuleStack_.push_back(moduleId);
     totalModules_++;
     std::cerr << "DEBUG:   After push, currentModuleStack_ size=" << currentModuleStack_.size() << "\n";
+    
+    // Store instance info for post-processing
+    if (moduleInfo.isInstance && !defName.empty()) {
+        instanceDefNames_.push_back({defName, static_cast<uint32_t>(moduleId)});
+    }
     
     for (const auto& sig : moduleInfo.signals) {
         const SignalInfo* addedSignal = builder_.findSignalByName(sig.fullName);
@@ -344,6 +355,38 @@ PortDirection KdbBuildListener::convertPortDirection(int direction) {
         case vpiOutput: return PortDirection::OUTPUT;
         case vpiInout: return PortDirection::INOUT;
         default: return PortDirection::UNKNOWN;
+    }
+}
+
+void KdbBuildListener::linkInstancesToDefinitions() {
+    std::cerr << "DEBUG: Linking instances to definitions, count=" << instanceDefNames_.size() << "\n";
+    
+    for (const auto& [defName, instanceId] : instanceDefNames_) {
+        // defName may or may not have "work@" prefix, handle both cases
+        std::string defFullName;
+        if (defName.find("work@") == 0) {
+            // defName already has work@ prefix
+            defFullName = defName;
+        } else {
+            // Add work@ prefix
+            defFullName = "work@" + defName;
+        }
+        
+        // Find definition module
+        const ModuleInfo* defModule = builder_.findModuleByName(defFullName);
+        if (defModule) {
+            // Update instance's defModuleId
+            ModuleInfo* instanceModule = const_cast<ModuleInfo*>(builder_.findModuleById(instanceId));
+            if (instanceModule) {
+                instanceModule->defModuleId = defModule->id;
+                std::cerr << "DEBUG: Linked instance id=" << instanceId 
+                          << " -> definition id=" << defModule->id 
+                          << " (" << defFullName << ")\n";
+            }
+        } else {
+            std::cerr << "DEBUG: Definition module not found: " << defFullName 
+                      << " for instance id=" << instanceId << "\n";
+        }
     }
 }
 

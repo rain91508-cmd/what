@@ -72,6 +72,9 @@ void printModules(const KdbBuilder& builder, bool verbose) {
         std::cout << "      Ports: " << portCount << "\n";
             std::cout << "      Signals: " << module->signals.size() << "\n";
             std::cout << "      File: " << module->definition.fileId << ", Start Line: " << module->definition.startLine << ", End Line: " << module->definition.endLine << "\n";
+            if (module->isInstance && module->defModuleId != 0) {
+                std::cout << "      Definition Module ID: " << module->defModuleId << "\n";
+            }
         }
     }
 }
@@ -148,7 +151,6 @@ void printModuleWithSource(const KdbBuilder& builder, const std::string& moduleN
     std::cout << "\n=== Module: " << module->name << " ===\n";
     std::cout << "  ID: " << module->id << "\n";
     std::cout << "  Full Name: " << module->fullName << "\n";
-    std::cout << "  File ID: " << module->fileId << "\n";
     std::cout << "  Definition: File " << module->definition.fileId << ", Start Line " << module->definition.startLine;
     std::cout << ", End Line " << module->definition.endLine << "\n";
     
@@ -216,7 +218,6 @@ void printModuleDetails(const KdbBuilder& builder, const std::string& moduleName
     std::cout << "\n=== Module: " << module->name << " ===\n";
     std::cout << "  ID: " << module->id << "\n";
     std::cout << "  Full Name: " << module->fullName << "\n";
-    std::cout << "  File ID: " << module->fileId << "\n";
     std::cout << "  Definition: File " << module->definition.fileId << ", Start Line " << module->definition.startLine;
     std::cout << ", End Line " << module->definition.endLine << "\n";
     
@@ -369,8 +370,11 @@ void printJson(const KdbBuilder& builder) {
                 std::cout << "      \"parent_module_full_name\": \"" << parentModule->fullName << "\",\n";
             }
         }
-        std::cout << "      \"file_id\": " << module->fileId << ",\n";
+        // Note: file_id removed, use definition.file_id instead
         std::cout << "      \"is_instance\": " << (module->isInstance ? "true" : "false") << ",\n";
+        if (module->isInstance) {
+            std::cout << "      \"def_module_id\": " << module->defModuleId << ",\n";
+        }
         std::cout << "      \"definition\": {\n";
         std::cout << "        \"file_id\": " << module->definition.fileId << ",\n";
         std::cout << "        \"start_line\": " << module->definition.startLine << ",\n";

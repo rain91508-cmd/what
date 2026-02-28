@@ -101,9 +101,10 @@ struct ModuleInfo {
 	std::vector<SignalInfo> signals;  // Contains both ports and internal signals
 	std::vector<ModuleInstanceInfo> instances;
 	uint32_t parentModuleId;  // Changed from uint64_t to uint32_t
-	uint32_t fileId;  // Changed from uint64_t to uint32_t
+	// Note: fileId removed, use definition.fileId instead
 	bool isInstance;
 	std::vector<uint32_t> childModuleIds;  // Direct child module IDs for hierarchy traversal
+	uint32_t defModuleId;  // Definition module ID for instances (0 if this is a definition)
 };
 
 class KdbBuilder {
