@@ -41,7 +41,7 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     currentModuleInstances_.clear();
     
     ModuleInfo moduleInfo;
-    moduleInfo.id = 0;
+    // Note: id removed, use array index + 1 as implicit ID
     moduleInfo.parentModuleId = 0;
     // Instance: name = VpiName() (e.g., "u_dut")
     // Definition: name = VpiDefName() (e.g., "work@dut")
@@ -107,7 +107,8 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
         parentFullName = fullName.substr(0, lastDot);
         const ModuleInfo* parentModule = builder_.findModuleByName(parentFullName);
         if (parentModule) {
-            moduleInfo.parentModuleId = parentModule->id;
+            // Use getModuleId to get ID from pointer
+            moduleInfo.parentModuleId = builder_.getModuleId(parentModule);
         }
     }
 
@@ -379,13 +380,14 @@ void KdbBuildListener::linkInstancesToDefinitions() {
             // Update instance's defModuleId
             ModuleInfo* instanceModule = const_cast<ModuleInfo*>(builder_.findModuleById(instanceId));
             if (instanceModule) {
-                instanceModule->defModuleId = defModule->id;
-                std::cerr << "DEBUG: Linked instance id=" << instanceId 
-                          << " -> definition id=" << defModule->id 
+                // Use getModuleId to get ID from pointer
+                instanceModule->defModuleId = builder_.getModuleId(defModule);
+                std::cerr << "DEBUG: Linked instance id=" << instanceId
+                          << " -> definition id=" << builder_.getModuleId(defModule)
                           << " (" << defFullName << ")\n";
             }
         } else {
-            std::cerr << "DEBUG: Definition module not found: " << defFullName 
+            std::cerr << "DEBUG: Definition module not found: " << defFullName
                       << " for instance id=" << instanceId << "\n";
         }
     }

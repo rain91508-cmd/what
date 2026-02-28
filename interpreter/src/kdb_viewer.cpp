@@ -81,7 +81,8 @@ void printModules(const KdbBuilder& builder, bool verbose) {
     
     for (const auto* module : modules) {
         std::string fullName = buildFullName(module, builder);
-        std::cout << "  [" << module->id << "] " << module->name;
+        // Use getModuleId to get ID from pointer
+        std::cout << "  [" << builder.getModuleId(module) << "] " << module->name;
         if (!fullName.empty() && fullName != module->name) {
             std::cout << " (" << fullName << ")";
         }
@@ -177,7 +178,8 @@ void printModuleWithSource(const KdbBuilder& builder, const std::string& moduleN
     
     std::string fullName = buildFullName(module, builder);
     std::cout << "\n=== Module: " << module->name << " ===\n";
-    std::cout << "  ID: " << module->id << "\n";
+    // Use getModuleId to get ID from pointer
+    std::cout << "  ID: " << builder.getModuleId(module) << "\n";
     std::cout << "  Full Name: " << fullName << "\n";
     std::cout << "  Definition: File " << module->definition.fileId << ", Start Line " << module->definition.startLine;
     std::cout << ", End Line " << module->definition.endLine << "\n";
@@ -245,7 +247,8 @@ void printModuleDetails(const KdbBuilder& builder, const std::string& moduleName
     
     std::string fullName = buildFullName(module, builder);
     std::cout << "\n=== Module: " << module->name << " ===\n";
-    std::cout << "  ID: " << module->id << "\n";
+    // Use getModuleId to get ID from pointer
+    std::cout << "  ID: " << builder.getModuleId(module) << "\n";
     std::cout << "  Full Name: " << fullName << "\n";
     std::cout << "  Definition: File " << module->definition.fileId << ", Start Line " << module->definition.startLine;
     std::cout << ", End Line " << module->definition.endLine << "\n";
@@ -354,7 +357,8 @@ void printHierarchyTree(const KdbBuilder& builder, uint64_t moduleId, int depth)
 
     auto children = builder.getChildModules(moduleId);
     for (const auto* child : children) {
-        printHierarchyTree(builder, child->id, depth + 1);
+        // Use getModuleId to get ID from pointer
+        printHierarchyTree(builder, builder.getModuleId(child), depth + 1);
     }
 }
 
@@ -391,7 +395,8 @@ void printJson(const KdbBuilder& builder) {
         first = false;
         std::cout << "    {\n";
         std::string fullName = buildFullName(module, builder);
-        std::cout << "      \"id\": " << module->id << ",\n";
+        // Use getModuleId to get ID from pointer
+        std::cout << "      \"id\": " << builder.getModuleId(module) << ",\n";
         std::cout << "      \"name\": \"" << module->name << "\",\n";
         // Note: full_name removed, reconstruct from hierarchy if needed
         std::cout << "      \"parent_module_id\": " << module->parentModuleId << ",\n";

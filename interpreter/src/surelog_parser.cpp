@@ -135,7 +135,8 @@ bool SurelogParser::buildKnowledgeBase(KdbBuilder& builder) {
         if (!topModuleName_.empty()) {
             const ModuleInfo* topModule = builder.findModuleByName(topModuleName_);
             if (topModule) {
-                builder.addHierarchy(topModule->id);
+                // Use getModuleId to get ID from pointer
+                builder.addHierarchy(builder.getModuleId(topModule));
             }
         } else {
             // Otherwise, find top modules: modules with no parent (parentModuleId == 0) that are definitions (not instances)
@@ -145,7 +146,8 @@ bool SurelogParser::buildKnowledgeBase(KdbBuilder& builder) {
                 if (mod->parentModuleId == 0 && !mod->isInstance) {
                     if (addedTopModules.find(mod->name) == addedTopModules.end()) {
                         addedTopModules.insert(mod->name);
-                        builder.addHierarchy(mod->id);
+                        // Use getModuleId to get ID from pointer
+                        builder.addHierarchy(builder.getModuleId(mod));
                     }
                 }
             }
@@ -157,7 +159,8 @@ bool SurelogParser::buildKnowledgeBase(KdbBuilder& builder) {
                     if (mod->parentModuleId == 0 && !mod->isInstance) {
                         if (fallbackAddedTopModules.find(mod->name) == fallbackAddedTopModules.end()) {
                             fallbackAddedTopModules.insert(mod->name);
-                            builder.addHierarchy(mod->id);
+                            // Use getModuleId to get ID from pointer
+                            builder.addHierarchy(builder.getModuleId(mod));
                         }
                     }
                 }

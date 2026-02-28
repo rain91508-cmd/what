@@ -94,13 +94,13 @@ struct ModuleInstanceInfo {
 };
 
 struct ModuleInfo {
-	uint32_t id;  // Changed from uint64_t to uint32_t
+	// Note: id removed, use array index + 1 as implicit ID
 	std::string name;  // Instance: VpiName(), Definition: VpiDefName()
 	// Note: fullName removed, reconstruct from hierarchy if needed
 	KdbModuleSourceLocation definition;
 	std::vector<SignalInfo> signals;  // Contains both ports and internal signals
 	std::vector<ModuleInstanceInfo> instances;
-	uint32_t parentModuleId;  // Changed from uint64_t to uint32_t
+	uint32_t parentModuleId;  // 0 for top-level modules
 	// Note: fileId removed, use definition.fileId instead
 	bool isInstance;
 	std::vector<uint32_t> childModuleIds;  // Direct child module IDs for hierarchy traversal
@@ -141,6 +141,10 @@ public:
     const SignalInfo* findSignalById(uint64_t id) const;
     const SourceFileInfo* findFileByPath(const std::string& path) const;
     const SourceFileInfo* findFileById(uint32_t id) const;  // Changed parameter type
+    
+    // Helper methods to get ID from pointer (for future optimization)
+    uint32_t getModuleId(const ModuleInfo* module) const;
+    uint32_t getSignalId(const ModuleInfo* module, const SignalInfo* signal) const;
     
     std::vector<const ModuleInfo*> getAllModules() const;
     std::vector<const SignalInfo*> getAllSignals() const;

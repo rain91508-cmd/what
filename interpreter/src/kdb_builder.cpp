@@ -34,24 +34,25 @@ uint32_t KdbBuilder::addModule(const ModuleInfo& module, const std::string& full
     if (it != moduleNameToId_.end()) {
         return it->second;
     }
-    
+
     auto mod = std::make_unique<ModuleInfo>(module);
-    mod->id = nextModuleId_++;
-    
+    // Note: id is now implicit (array index + 1)
+
     for (auto& sig : mod->signals) {
         sig.id = nextSignalId_++;
-        sig.parentModuleId = mod->id;
+        // Note: parentModuleId is now implicit (module is the parent)
         signalFullNameToId_[sig.fullName] = sig.id;
         signalIdToIndex_[sig.id] = mod->signals.size() - 1;
     }
-    
-    uint32_t id = mod->id;
+
+    // Calculate ID from array index (ID = index + 1)
+    uint32_t id = static_cast<uint32_t>(modules_.size()) + 1;
     uint32_t parentModuleId = mod->parentModuleId;  // Save before move
-    
+
     moduleNameToId_[fullName] = id;
     moduleIdToIndex_[id] = modules_.size();
     modules_.push_back(std::move(mod));
-    
+
     // Update parent's childModuleIds if this module has a parent
     if (parentModuleId != 0) {
         auto* parentMod = const_cast<ModuleInfo*>(findModuleById(parentModuleId));
@@ -89,7 +90,8 @@ void KdbBuilder::addHierarchy(uint32_t topModuleId) {
         hierarchy.moduleIds.push_back(moduleId);
         auto children = getChildModules(moduleId);
         for (const auto* child : children) {
-            collectModules(child->id);
+            // Use getModuleId to get ID from pointer
+            collectModules(getModuleId(child));
         }
     };
     collectModules(topModuleId);
@@ -259,11 +261,11 @@ const ModuleInfo* KdbBuilder::findModuleByName(const std::string& name) const {
 }
 
 const ModuleInfo* KdbBuilder::findModuleById(uint32_t id) const {
-    auto it = moduleIdToIndex_.find(id);
-    if (it != moduleIdToIndex_.end() && it->second < modules_.size()) {
-        return modules_[it->second].get();
+    // Use array index directly (ID = index + 1)
+    if (id == 0 || id > modules_.size()) {
+        return nullptr;
     }
-    return nullptr;
+    return modules_[id - 1].get();
 }
 
 const SignalInfo* KdbBuilder::findSignalByName(const std::string& fullName) const {
@@ -283,6 +285,25 @@ const SignalInfo* KdbBuilder::findSignalById(uint64_t id) const {
         }
     }
     return nullptr;
+}
+
+// Helper methods to get ID from pointer (for future optimization)
+uint32_t KdbBuilder::getModuleId(const ModuleInfo* module) const {
+    if (!module || modules_.empty()) return 0;
+    // Calculate ID from pointer offset (ID = index + 1)
+    // Note: modules_ stores unique_ptr<ModuleInfo>, so we need to compare raw pointers
+    for (size_t i = 0; i < modules_.size(); ++i) {
+        if (modules_[i].get() == module) {
+            return static_cast<uint32_t>(i) + 1;
+        }
+    }
+    return 0;  // Not found
+}
+
+uint32_t KdbBuilder::getSignalId(const ModuleInfo* module, const SignalInfo* signal) const {
+    if (!module || !signal || module->signals.empty()) return 0;
+    // Calculate ID from pointer offset (ID = index + 1)
+    return static_cast<uint32_t>(signal - &module->signals[0]) + 1;
 }
 
 const SourceFileInfo* KdbBuilder::findFileByPath(const std::string& path) const {
@@ -428,7 +449,7 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
     
     for (const auto& mod : modules_) {
         auto* protoMod = kdb->add_modules();
-        protoMod->set_id(mod->id);
+        // Note: id removed, use array index + 1 as implicit ID
         protoMod->set_name(mod->name);
         // Note: full_name removed
         protoMod->set_parent_module_id(mod->parentModuleId);
@@ -517,20 +538,20 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
     
     for (const auto& protoMod : kdb.modules()) {
         auto mod = std::make_unique<ModuleInfo>();
-        mod->id = protoMod.id();
+        // Note: id removed, use array index + 1 as implicit ID
         mod->name = protoMod.name();
         // Note: full_name removed
         mod->parentModuleId = protoMod.parent_module_id();
         // Note: file_id removed, use definition.file_id instead
         mod->isInstance = protoMod.is_instance();
         mod->defModuleId = protoMod.def_module_id();
-        
+
         if (protoMod.has_definition()) {
             mod->definition.fileId = protoMod.definition().file_id();
             mod->definition.startLine = protoMod.definition().start_line();
             mod->definition.endLine = protoMod.definition().end_line();
         }
-        
+
         for (const auto& protoSig : protoMod.signals()) {
             SignalInfo sig;
             sig.id = protoSig.id();
@@ -572,11 +593,12 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
         for (uint32_t childId : protoMod.child_module_ids()) {
             mod->childModuleIds.push_back(childId);
         }
-        
-        nextModuleId_ = std::max(nextModuleId_, mod->id + 1);
+
+        // Note: id is implicit (array index + 1)
+        uint32_t id = static_cast<uint32_t>(modules_.size()) + 1;
         // Note: moduleNameToId_ not rebuilt here since fullName is removed
         // Rebuild indices if needed by traversing parent chain
-        moduleIdToIndex_[mod->id] = modules_.size();
+        moduleIdToIndex_[id] = modules_.size();
         modules_.push_back(std::move(mod));
     }
     

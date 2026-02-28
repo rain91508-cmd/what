@@ -52,7 +52,7 @@ void KdbSerializer::writeModules(std::vector<uint8_t>& buffer, const std::vector
     for (const auto& mod : modules) {
         writeString(buffer, mod.name);
         // Note: fullName removed, reconstruct from hierarchy if needed
-        writeUint64(buffer, mod.id);
+        // Note: id removed, use array index + 1 as implicit ID
         // Note: fileId removed, use definition.fileId instead
         writeUint64(buffer, mod.definition.fileId);
         
