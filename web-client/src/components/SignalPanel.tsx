@@ -8,19 +8,12 @@ interface SignalPanelProps {
   selectedModule: Module | null;
 }
 
-interface SignalGroup {
-  name: string;
-  signals: Signal[];
-  expanded: boolean;
-}
-
 export function SignalPanel({ selectedModule }: SignalPanelProps) {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [ioFilters, setIoFilters] = useState<Set<string>>(new Set(['all']));
   const [showIoDropdown, setShowIoDropdown] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['ports', 'internal']));
   const ioDropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown when clicking outside
@@ -58,32 +51,6 @@ export function SignalPanel({ selectedModule }: SignalPanelProps) {
     } finally {
       setLoading(false);
     }
-  };
-
-  // Group signals by type
-  const getGroupedSignals = (): SignalGroup[] => {
-    const ports = signals.filter(s => s.direction !== PortDirection.Internal);
-    const internal = signals.filter(s => s.direction === PortDirection.Internal);
-
-    const groups: SignalGroup[] = [];
-
-    if (ports.length > 0) {
-      groups.push({
-        name: 'ports',
-        signals: ports,
-        expanded: expandedGroups.has('ports'),
-      });
-    }
-
-    if (internal.length > 0) {
-      groups.push({
-        name: 'internal',
-        signals: internal,
-        expanded: expandedGroups.has('internal'),
-      });
-    }
-
-    return groups;
   };
 
   // Convert wildcard pattern to regex
@@ -156,16 +123,6 @@ export function SignalPanel({ selectedModule }: SignalPanelProps) {
     });
   };
 
-  const toggleGroup = (groupName: string) => {
-    const newExpanded = new Set(expandedGroups);
-    if (newExpanded.has(groupName)) {
-      newExpanded.delete(groupName);
-    } else {
-      newExpanded.add(groupName);
-    }
-    setExpandedGroups(newExpanded);
-  };
-
   const getSignalTypeLabel = (type: SignalType): string => {
     // Use numeric comparison to handle both enum and raw number values
     const typeNum = Number(type);
@@ -203,24 +160,12 @@ export function SignalPanel({ selectedModule }: SignalPanelProps) {
     return getSignalTypeLabel(signal.signalType);
   };
 
-  const getDirectionIcon = (direction: PortDirection): string => {
-    const dirNum = Number(direction);
-    switch (dirNum) {
-      case 1: return '➡️';
-      case 2: return '⬅️';
-      case 3: return '↔️';
-      default: return '•';
-    }
-  };
-
   const formatSignalWidth = (signal: Signal): string => {
     if (signal.msb === signal.lsb) {
       return '';
     }
     return `[${signal.msb}:${signal.lsb}]`;
   };
-
-  const groupedSignals = getGroupedSignals();
 
   return (
     <div className="signal-panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -359,87 +304,38 @@ export function SignalPanel({ selectedModule }: SignalPanelProps) {
           </div>
         ) : (
           <div>
-            {groupedSignals.map(group => {
-              const filteredSignals = filterSignals(group.signals);
-              if (filteredSignals.length === 0) return null;
+            {filterSignals(signals).map((signal, index) => (
+              <div
+                key={`${signal.id}-${index}`}
+                style={{
+                  padding: '6px 12px',
+                  borderBottom: '1px solid #f0f0f0',
+                  fontSize: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+              >
+                {/* Signal name with bit range */}
+                <span style={{ 
+                  flex: 1,
+                  color: '#333',
+                  fontFamily: 'monospace',
+                }}>
+                  {signal.name}{formatSignalWidth(signal)}
+                </span>
 
-              const isExpanded = expandedGroups.has(group.name);
-
-              return (
-                <div key={group.name}>
-                  {/* Group header */}
-                  <div
-                    onClick={() => toggleGroup(group.name)}
-                    style={{
-                      padding: '6px 12px',
-                      backgroundColor: '#f0f0f0',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      fontSize: '11px',
-                      fontWeight: 'bold',
-                      color: '#555',
-                      textTransform: 'uppercase',
-                    }}
-                  >
-                    <span style={{ marginRight: '6px', fontSize: '10px' }}>
-                      {isExpanded ? '▼' : '▶'}
-                    </span>
-                    <span>{group.name}</span>
-                    <span style={{ 
-                      marginLeft: 'auto', 
-                      fontWeight: 'normal',
-                      color: '#888',
-                    }}>
-                      {filteredSignals.length}
-                    </span>
-                  </div>
-
-                  {/* Signal items */}
-                  {isExpanded && (
-                    <div>
-                      {filteredSignals.map((signal, index) => (
-                        <div
-                          key={`${group.name}-${signal.id}-${index}`}
-                          style={{
-                            padding: '6px 12px 6px 24px',
-                            borderBottom: '1px solid #f0f0f0',
-                            fontSize: '12px',
-                            display: 'flex',
-                            alignItems: 'center',
-                          }}
-                        >
-                          {/* Direction icon */}
-                          <span style={{ marginRight: '6px', fontSize: '10px' }}>
-                            {getDirectionIcon(signal.direction)}
-                          </span>
-
-                          {/* Signal name with bit range */}
-                          <span style={{ 
-                            flex: 1,
-                            color: '#333',
-                            fontFamily: 'monospace',
-                          }}>
-                            {signal.name}{formatSignalWidth(signal)}
-                          </span>
-
-                          {/* Type badge */}
-                          <span style={{
-                            padding: '1px 6px',
-                            backgroundColor: '#e3f2fd',
-                            color: '#1976d2',
-                            borderRadius: '3px',
-                            fontSize: '10px',
-                          }}>
-                            {getSignalDisplayLabel(signal)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                {/* Type badge */}
+                <span style={{
+                  padding: '1px 6px',
+                  backgroundColor: '#e3f2fd',
+                  color: '#1976d2',
+                  borderRadius: '3px',
+                  fontSize: '10px',
+                }}>
+                  {getSignalDisplayLabel(signal)}
+                </span>
+              </div>
+            ))}
           </div>
         )}
       </div>
