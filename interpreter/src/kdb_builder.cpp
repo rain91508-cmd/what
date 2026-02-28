@@ -29,8 +29,8 @@ KdbBuilder::KdbBuilder()
     , nextInstanceId_(1) {
 }
 
-uint32_t KdbBuilder::addModule(const ModuleInfo& module) {
-    auto it = moduleNameToId_.find(module.fullName);
+uint32_t KdbBuilder::addModule(const ModuleInfo& module, const std::string& fullName) {
+    auto it = moduleNameToId_.find(fullName);
     if (it != moduleNameToId_.end()) {
         return it->second;
     }
@@ -48,7 +48,7 @@ uint32_t KdbBuilder::addModule(const ModuleInfo& module) {
     uint32_t id = mod->id;
     uint32_t parentModuleId = mod->parentModuleId;  // Save before move
     
-    moduleNameToId_[mod->fullName] = id;
+    moduleNameToId_[fullName] = id;
     moduleIdToIndex_[id] = modules_.size();
     modules_.push_back(std::move(mod));
     
@@ -430,7 +430,7 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
         auto* protoMod = kdb->add_modules();
         protoMod->set_id(mod->id);
         protoMod->set_name(mod->name);
-        protoMod->set_full_name(mod->fullName);
+        // Note: full_name removed
         protoMod->set_parent_module_id(mod->parentModuleId);
         // Note: file_id removed, use definition.file_id instead
         protoMod->set_is_instance(mod->isInstance);
@@ -519,7 +519,7 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
         auto mod = std::make_unique<ModuleInfo>();
         mod->id = protoMod.id();
         mod->name = protoMod.name();
-        mod->fullName = protoMod.full_name();
+        // Note: full_name removed
         mod->parentModuleId = protoMod.parent_module_id();
         // Note: file_id removed, use definition.file_id instead
         mod->isInstance = protoMod.is_instance();
@@ -574,7 +574,8 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
         }
         
         nextModuleId_ = std::max(nextModuleId_, mod->id + 1);
-        moduleNameToId_[mod->fullName] = mod->id;
+        // Note: moduleNameToId_ not rebuilt here since fullName is removed
+        // Rebuild indices if needed by traversing parent chain
         moduleIdToIndex_[mod->id] = modules_.size();
         modules_.push_back(std::move(mod));
     }

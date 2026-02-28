@@ -43,8 +43,9 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     ModuleInfo moduleInfo;
     moduleInfo.id = 0;
     moduleInfo.parentModuleId = 0;
-    moduleInfo.name = defName.empty() ? instName : defName;
-    moduleInfo.fullName = fullName.empty() ? moduleInfo.name : fullName;
+    // Instance: name = VpiName() (e.g., "u_dut")
+    // Definition: name = VpiDefName() (e.g., "work@dut")
+    moduleInfo.name = instName.empty() ? defName : instName;
     // Determine if this is an instance: instance has non-empty VpiName()
     moduleInfo.isInstance = !instName.empty();
     moduleInfo.defModuleId = 0;  // Default: no definition module (for definitions)
@@ -101,18 +102,18 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     }
     
     std::string parentFullName;
-    size_t lastDot = moduleInfo.fullName.rfind('.');
+    size_t lastDot = fullName.rfind('.');
     if (lastDot != std::string::npos) {
-        parentFullName = moduleInfo.fullName.substr(0, lastDot);
+        parentFullName = fullName.substr(0, lastDot);
         const ModuleInfo* parentModule = builder_.findModuleByName(parentFullName);
         if (parentModule) {
             moduleInfo.parentModuleId = parentModule->id;
         }
     }
-    
+
     std::cerr << "DEBUG:   parentModuleId=" << moduleInfo.parentModuleId << "\n";
-    
-    bool moduleExists = builder_.hasModule(moduleInfo.fullName);
+
+    bool moduleExists = builder_.hasModule(fullName);
     std::cerr << "DEBUG:   moduleExists=" << (moduleExists ? "true" : "false") << "\n";
     
     if (moduleExists) {
@@ -124,7 +125,7 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     // Push true to indicate we will push to currentModuleStack_
     moduleStackMarkers_.push_back(true);
     
-    uint64_t moduleId = builder_.addModule(moduleInfo);
+    uint64_t moduleId = builder_.addModule(moduleInfo, fullName);
     std::cerr << "DEBUG:   Added module with id=" << moduleId << ", isInstance=" << (moduleInfo.isInstance ? "true" : "false") << "\n";
     currentModuleStack_.push_back(moduleId);
     totalModules_++;

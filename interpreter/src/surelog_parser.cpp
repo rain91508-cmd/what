@@ -143,20 +143,20 @@ bool SurelogParser::buildKnowledgeBase(KdbBuilder& builder) {
             std::unordered_set<std::string> addedTopModules;
             for (const auto* mod : modules) {
                 if (mod->parentModuleId == 0 && !mod->isInstance) {
-                    if (addedTopModules.find(mod->fullName) == addedTopModules.end()) {
-                        addedTopModules.insert(mod->fullName);
+                    if (addedTopModules.find(mod->name) == addedTopModules.end()) {
+                        addedTopModules.insert(mod->name);
                         builder.addHierarchy(mod->id);
                     }
                 }
             }
-            
+
             // If no top modules found, fall back to all parentModuleId == 0 (definitions)
             if (builder.getTopModuleIds().empty()) {
                 std::unordered_set<std::string> fallbackAddedTopModules;
                 for (const auto* mod : modules) {
                     if (mod->parentModuleId == 0 && !mod->isInstance) {
-                        if (fallbackAddedTopModules.find(mod->fullName) == fallbackAddedTopModules.end()) {
-                            fallbackAddedTopModules.insert(mod->fullName);
+                        if (fallbackAddedTopModules.find(mod->name) == fallbackAddedTopModules.end()) {
+                            fallbackAddedTopModules.insert(mod->name);
                             builder.addHierarchy(mod->id);
                         }
                     }

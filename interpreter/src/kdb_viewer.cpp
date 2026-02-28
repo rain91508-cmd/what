@@ -49,14 +49,41 @@ std::string portDirectionToString(PortDirection dir) {
     }
 }
 
+// Build full name from parent chain
+std::string buildFullName(const ModuleInfo* module, const KdbBuilder& builder) {
+    if (!module) return "";
+    
+    std::vector<std::string> names;
+    const ModuleInfo* current = module;
+    
+    while (current != nullptr) {
+        names.push_back(current->name);
+        if (current->parentModuleId == 0) break;
+        current = builder.findModuleById(current->parentModuleId);
+    }
+    
+    // Reverse to get root-to-leaf order
+    std::reverse(names.begin(), names.end());
+    
+    // Join with "."
+    std::string fullName;
+    for (size_t i = 0; i < names.size(); ++i) {
+        if (i > 0) fullName += ".";
+        fullName += names[i];
+    }
+    
+    return fullName;
+}
+
 void printModules(const KdbBuilder& builder, bool verbose) {
     auto modules = builder.getAllModules();
     std::cout << "\n=== Modules (" << modules.size() << ") ===\n";
     
     for (const auto* module : modules) {
+        std::string fullName = buildFullName(module, builder);
         std::cout << "  [" << module->id << "] " << module->name;
-        if (!module->fullName.empty() && module->fullName != module->name) {
-            std::cout << " (" << module->fullName << ")";
+        if (!fullName.empty() && fullName != module->name) {
+            std::cout << " (" << fullName << ")";
         }
         std::cout << ", Parent: " << module->parentModuleId;
         std::cout << ", IsInstance: " << (module->isInstance ? "true" : "false") << "\n";
@@ -148,9 +175,10 @@ void printModuleWithSource(const KdbBuilder& builder, const std::string& moduleN
         return;
     }
     
+    std::string fullName = buildFullName(module, builder);
     std::cout << "\n=== Module: " << module->name << " ===\n";
     std::cout << "  ID: " << module->id << "\n";
-    std::cout << "  Full Name: " << module->fullName << "\n";
+    std::cout << "  Full Name: " << fullName << "\n";
     std::cout << "  Definition: File " << module->definition.fileId << ", Start Line " << module->definition.startLine;
     std::cout << ", End Line " << module->definition.endLine << "\n";
     
@@ -215,12 +243,13 @@ void printModuleDetails(const KdbBuilder& builder, const std::string& moduleName
         return;
     }
     
+    std::string fullName = buildFullName(module, builder);
     std::cout << "\n=== Module: " << module->name << " ===\n";
     std::cout << "  ID: " << module->id << "\n";
-    std::cout << "  Full Name: " << module->fullName << "\n";
+    std::cout << "  Full Name: " << fullName << "\n";
     std::cout << "  Definition: File " << module->definition.fileId << ", Start Line " << module->definition.startLine;
     std::cout << ", End Line " << module->definition.endLine << "\n";
-    
+
     // Print port signals (those with direction != UNKNOWN)
     int portCount = 0;
     for (const auto& sig : module->signals) {
@@ -314,14 +343,15 @@ void printSignalLoadTrace(const KdbBuilder& builder, const std::string& signalNa
 void printHierarchyTree(const KdbBuilder& builder, uint64_t moduleId, int depth) {
     const auto* module = builder.findModuleById(moduleId);
     if (!module) return;
-    
+
     std::string indent(depth * 2, ' ');
+    std::string fullName = buildFullName(module, builder);
     std::cout << indent << module->name;
-    if (!module->fullName.empty()) {
-        std::cout << " (" << module->fullName << ")";
+    if (!fullName.empty()) {
+        std::cout << " (" << fullName << ")";
     }
     std::cout << "\n";
-    
+
     auto children = builder.getChildModules(moduleId);
     for (const auto* child : children) {
         printHierarchyTree(builder, child->id, depth + 1);
@@ -360,14 +390,16 @@ void printJson(const KdbBuilder& builder) {
         if (!first) std::cout << ",\n";
         first = false;
         std::cout << "    {\n";
+        std::string fullName = buildFullName(module, builder);
         std::cout << "      \"id\": " << module->id << ",\n";
         std::cout << "      \"name\": \"" << module->name << "\",\n";
-        std::cout << "      \"full_name\": \"" << module->fullName << "\",\n";
+        // Note: full_name removed, reconstruct from hierarchy if needed
         std::cout << "      \"parent_module_id\": " << module->parentModuleId << ",\n";
         if (module->parentModuleId != 0) {
             const auto* parentModule = builder.findModuleById(module->parentModuleId);
             if (parentModule) {
-                std::cout << "      \"parent_module_full_name\": \"" << parentModule->fullName << "\",\n";
+                std::string parentFullName = buildFullName(parentModule, builder);
+                std::cout << "      \"parent_module_full_name\": \"" << parentFullName << "\",\n";
             }
         }
         // Note: file_id removed, use definition.file_id instead
@@ -434,8 +466,9 @@ void printJson(const KdbBuilder& builder) {
             if (!childModule) continue;
             if (!firstInstance) std::cout << ",\n";
             firstInstance = false;
+            std::string childFullName = buildFullName(childModule, builder);
             std::cout << "        {\n";
-            std::cout << "          \"full_name\": \"" << childModule->fullName << "\"\n";
+            std::cout << "          \"full_name\": \"" << childFullName << "\"\n";
             std::cout << "        }";
         }
         std::cout << "\n      ]\n";

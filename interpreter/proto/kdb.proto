@@ -69,15 +69,15 @@ message Signal {
 
 message Module {
   uint32 id = 1;  // Changed from uint64 to uint32
-  string name = 2;
-  string full_name = 3;
-  uint32 parent_module_id = 4;  // Changed from uint64 to uint32
+  string name = 2;  // Instance: VpiName(), Definition: VpiDefName()
+  // Note: full_name removed, reconstruct from hierarchy if needed
+  uint32 parent_module_id = 3;  // Changed from uint64 to uint32
   // Note: file_id removed, use definition.file_id instead
-  ModuleSourceLocation definition = 5;
-  repeated Signal signals = 6;  // Contains both ports and internal signals
-  bool is_instance = 7;
-  repeated uint32 child_module_ids = 8;  // Direct child module IDs for hierarchy traversal
-  uint32 def_module_id = 9;  // Definition module ID for instances (0 if this is a definition)
+  ModuleSourceLocation definition = 4;
+  repeated Signal signals = 5;  // Contains both ports and internal signals
+  bool is_instance = 6;
+  repeated uint32 child_module_ids = 7;  // Direct child module IDs for hierarchy traversal
+  uint32 def_module_id = 8;  // Definition module ID for instances (0 if this is a definition)
 }
 
 message DesignHierarchy {

@@ -95,8 +95,8 @@ struct ModuleInstanceInfo {
 
 struct ModuleInfo {
 	uint32_t id;  // Changed from uint64_t to uint32_t
-	std::string name;
-	std::string fullName;
+	std::string name;  // Instance: VpiName(), Definition: VpiDefName()
+	// Note: fullName removed, reconstruct from hierarchy if needed
 	KdbModuleSourceLocation definition;
 	std::vector<SignalInfo> signals;  // Contains both ports and internal signals
 	std::vector<ModuleInstanceInfo> instances;
@@ -123,7 +123,7 @@ public:
                                uint32_t endLine, uint32_t endCol) const;  // Changed parameter type
     std::string getSourceFileContent(uint32_t fileId) const;  // Changed parameter type
     
-    uint32_t addModule(const ModuleInfo& module);  // Changed return type
+    uint32_t addModule(const ModuleInfo& module, const std::string& fullName);  // Changed return type, fullName for deduplication
     bool hasModule(const std::string& fullName) const;
     
     uint64_t addSignal(uint32_t moduleId, const SignalInfo& signal);  // Changed parameter type
