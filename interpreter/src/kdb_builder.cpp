@@ -829,14 +829,11 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
     
     for (const auto& mod : modules_) {
         auto* protoMod = kdb->add_modules();
-        protoMod->set_name(mod->name);
-        protoMod->set_parent_module_id(mod->parentModuleId);
-        protoMod->set_is_instance(mod->isInstance);
-        protoMod->set_def_module_id(mod->defModuleId);
-        // Note: def_name removed from proto - can be obtained from def_module_id's module name
-        protoMod->set_signal_insts_start_id(mod->signalInstsStartId);
-        // Note: signal_insts_count removed from proto - derived from signal_defs.size()
-
+        // Note: id removed - use array index + 1 as implicit ID
+        protoMod->set_name(mod->name);  // field 1
+        protoMod->set_parent_module_id(mod->parentModuleId);  // field 2
+        
+        // definition (field 3)
         if (mod->definition.fileId != 0) {
             auto* decl = protoMod->mutable_definition();
             decl->set_file_id(mod->definition.fileId);
@@ -844,7 +841,7 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
             decl->set_end_line(mod->definition.endLine);
         }
         
-        // Serialize SignalDefs
+        // signal_defs (field 4)
         for (const auto& def : mod->signalDefs) {
             auto* protoDef = protoMod->add_signal_defs();
             protoDef->set_name(def.name);
@@ -857,11 +854,20 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
                 decl->set_line(def.declaration.line);
             }
         }
-
-        // Add child module IDs
+        
+        // Note: signal_insts moved to KnowledgeBase level (field 5 in old format, now removed)
+        
+        protoMod->set_is_instance(mod->isInstance);  // field 6
+        
+        // child_module_ids (field 7)
         for (uint32_t childId : mod->childModuleIds) {
             protoMod->add_child_module_ids(childId);
         }
+        
+        protoMod->set_def_module_id(mod->defModuleId);  // field 8
+        // Note: def_name removed - can be obtained from def_module_id's module name
+        protoMod->set_signal_insts_start_id(mod->signalInstsStartId);  // field 9
+        // Note: signal_insts_count removed - derived from signal_defs.size()
     }
     
     // Serialize global signal instances
