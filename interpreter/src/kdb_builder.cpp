@@ -40,7 +40,7 @@ uint32_t KdbBuilder::addModule(const ModuleInfo& module, const std::string& full
 
     // Process signals: assign IDs and build indices
     // Signals are already in signalDefs and signalInsts from the input module
-    // Match signalDefs and signalInsts by name (since IDs may be 0)
+    // Match signalDefs and signalInsts by index (they are added in pairs by addSignal)
     for (size_t i = 0; i < mod->signalInsts.size() && i < mod->signalDefs.size(); ++i) {
         auto& inst = mod->signalInsts[i];
         auto& def = mod->signalDefs[i];

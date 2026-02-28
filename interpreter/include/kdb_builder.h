@@ -6,6 +6,7 @@
 #include <vector>
 #include <unordered_map>
 #include <memory>
+#include <iostream>
 
 namespace hwda {
 namespace kdb {
@@ -163,10 +164,10 @@ struct ModuleInfo {
 
 	// Transition helper: Add signal by splitting into Def and Inst
 	void addSignal(const SignalInfo& sig) {
-		// Add to signalDefs if not exists
+		// Add to signalDefs if not exists (check by name for new signals with id=0)
 		bool defExists = false;
 		for (const auto& d : signalDefs) {
-			if (d.id == sig.id) {
+			if (d.name == sig.name) {
 				defExists = true;
 				break;
 			}

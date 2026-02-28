@@ -80,6 +80,7 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
         for (auto* port : *ports) {
             if (!port) continue;
             SignalInfo signalInfo;
+            signalInfo.id = 0;  // Initialize id to 0 (will be assigned later)
             signalInfo.name = std::string(port->VpiName());
             signalInfo.fullName = fullName + "." + signalInfo.name;
             signalInfo.type = SignalType::WIRE;
