@@ -695,16 +695,23 @@ export function WaveformWindow({
             onChange={setNameFilter}
             placeholder="Filter..."
             storageKey="waveform_filter_history"
+            style={{
+              height: '22px',
+              fontSize: '11px',
+            }}
           />
           <select
             value={ioFilter}
             onChange={(e) => setIoFilter(e.target.value as any)}
             style={{
               padding: '2px 4px',
-              fontSize: '10px',
+              fontSize: '11px',
               border: '1px solid #c0c0c0',
               borderRadius: '2px',
               width: '70px',
+              height: '22px',
+              boxSizing: 'border-box',
+              flexShrink: 0,
             }}
           >
             <option value="all">All</option>

@@ -262,7 +262,7 @@ export function DesignBrowser({
   };
 
   // Override render to use getChildIds
-  const renderTreeNodeWithChildren = (nodeId: number, depth: number = 0) => {
+  const renderTreeNodeWithChildren = (nodeId: number, depth: number = 0, isLast: boolean = true, parentChain: boolean[] = []) => {
     const node = treeNodes.get(nodeId);
     if (!node) return null;
 
@@ -272,24 +272,80 @@ export function DesignBrowser({
     const isLoading = node.loading;
     const childIds = getChildIds(nodeId);
 
+    const indentWidth = 16; // Width per depth level
+    const lineHeight = 24; // Line height for vertical alignment
+    const lineLeft = 7; // Left position of vertical line (aligned with expand arrow)
+
     return (
       <div key={nodeId}>
         <div
           className={`tree-node ${isSelected ? 'selected' : ''}`}
           style={{ 
-            paddingLeft: `${4 + depth * 12}px`,
-            paddingTop: '4px',
-            paddingBottom: '4px',
-            paddingRight: '8px',
             display: 'flex',
             alignItems: 'center',
+            height: `${lineHeight}px`,
             cursor: 'pointer',
             backgroundColor: isSelected ? '#e3f2fd' : 'transparent',
-            borderRadius: '4px',
           }}
           onClick={() => handleNodeClick(nodeId)}
           onDoubleClick={() => handleNodeDoubleClick(nodeId)}
         >
+          {/* Indent with connection lines */}
+          <div style={{ display: 'flex', alignItems: 'stretch', height: '100%' }}>
+            {/* Parent chain vertical lines */}
+            {parentChain.map((parentIsLast, index) => (
+              <div
+                key={index}
+                style={{
+                  width: `${indentWidth}px`,
+                  height: '100%',
+                  position: 'relative',
+                }}
+              >
+                {!parentIsLast && (
+                  <div style={{ 
+                    position: 'absolute',
+                    left: `${lineLeft}px`,
+                    top: 0,
+                    bottom: 0,
+                    width: '1px',
+                    borderLeft: '1px dashed #999',
+                  }} />
+                )}
+              </div>
+            ))}
+            
+            {/* Current level connector */}
+            <div style={{ 
+              width: `${indentWidth}px`,
+              height: '100%',
+              position: 'relative',
+            }}>
+              {depth > 0 && (
+                <>
+                  {/* Vertical line (full height for non-last, half for last) */}
+                  <div style={{
+                    position: 'absolute',
+                    left: `${lineLeft}px`,
+                    top: 0,
+                    height: isLast ? '50%' : '100%',
+                    width: '1px',
+                    borderLeft: '1px dashed #999',
+                  }} />
+                  {/* Horizontal line to connect to node */}
+                  <div style={{
+                    position: 'absolute',
+                    left: `${lineLeft}px`,
+                    top: '50%',
+                    width: `${indentWidth - lineLeft}px`,
+                    height: '1px',
+                    borderTop: '1px dashed #999',
+                  }} />
+                </>
+              )}
+            </div>
+          </div>
+
           {/* Expand/Collapse button */}
           <span
             className="tree-node-expand"
@@ -307,17 +363,10 @@ export function DesignBrowser({
               marginRight: '4px',
               fontSize: '10px',
               color: hasChildren ? '#666' : 'transparent',
+              flexShrink: 0,
             }}
           >
             {isLoading ? '⏳' : hasChildren ? (isExpanded ? '▼' : '▶') : ''}
-          </span>
-
-          {/* Icon */}
-          <span 
-            className="tree-node-icon"
-            style={{ marginRight: '6px', fontSize: '12px' }}
-          >
-            {node.isInstance ? '🔧' : '📦'}
           </span>
 
           {/* Name */}
@@ -329,6 +378,7 @@ export function DesignBrowser({
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
+              paddingRight: '8px',
             }}
           >
             {node.name}
@@ -339,11 +389,19 @@ export function DesignBrowser({
         {hasChildren && isExpanded && (
           <div>
             {isLoading ? (
-              <div style={{ paddingLeft: `${4 + (depth + 1) * 12}px`, padding: '4px 8px', fontSize: '11px', color: '#999' }}>
+              <div style={{ paddingLeft: `${(depth + 1) * indentWidth + 20}px`, padding: '4px 8px', fontSize: '11px', color: '#999' }}>
                 Loading...
               </div>
             ) : (
-              childIds.map(childId => renderTreeNodeWithChildren(childId, depth + 1))
+              childIds.map((childId, index) => {
+                const childIsLast = index === childIds.length - 1;
+                return renderTreeNodeWithChildren(
+                  childId, 
+                  depth + 1, 
+                  childIsLast,
+                  [...parentChain, isLast]
+                );
+              })
             )}
           </div>
         )}

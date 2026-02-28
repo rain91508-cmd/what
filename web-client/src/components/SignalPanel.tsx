@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { kdbManager } from '../modules/knowledge/kdbManager';
 import type { Signal, Module } from '../types/kdb';
 import { SignalType, PortDirection } from '../types/kdb';
+import { FilterInput } from './FilterInput';
 
 interface SignalPanelProps {
   selectedModule: Module | null;
@@ -72,15 +73,36 @@ export function SignalPanel({ selectedModule }: SignalPanelProps) {
     return groups;
   };
 
+  // Convert wildcard pattern to regex
+  const wildcardToRegex = (pattern: string): RegExp => {
+    const escaped = pattern
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*/g, '.*')
+      .replace(/\?/g, '.');
+    return new RegExp(`^${escaped}$`, 'i');
+  };
+
   // Filter signals by search term and IO type
   const filterSignals = (signalList: Signal[]): Signal[] => {
     return signalList.filter(s => {
-      // Name filter
+      // Name filter with wildcard support
       if (searchTerm) {
-        const term = searchTerm.toLowerCase();
-        if (!s.name.toLowerCase().includes(term) && 
-            !s.fullName.toLowerCase().includes(term)) {
-          return false;
+        const term = searchTerm.trim();
+        if (term) {
+          // Check if pattern contains wildcards
+          if (term.includes('*') || term.includes('?')) {
+            const regex = wildcardToRegex(term);
+            if (!regex.test(s.name) && !regex.test(s.fullName)) {
+              return false;
+            }
+          } else {
+            // Simple substring match
+            const lowerTerm = term.toLowerCase();
+            if (!s.name.toLowerCase().includes(lowerTerm) && 
+                !s.fullName.toLowerCase().includes(lowerTerm)) {
+              return false;
+            }
+          }
         }
       }
       
@@ -183,38 +205,45 @@ export function SignalPanel({ selectedModule }: SignalPanelProps) {
       </div>
 
       {/* Filter bar */}
-      <div style={{ padding: '8px 12px', borderBottom: '1px solid #e0e0e0', display: 'flex', gap: '8px' }}>
-        <input
-          type="text"
-          placeholder="Search signals..."
+      <div style={{ 
+        padding: '6px 8px', 
+        borderBottom: '1px solid #e0e0e0', 
+        display: 'flex', 
+        gap: '6px',
+        alignItems: 'center',
+        flexShrink: 0,
+      }}>
+        <FilterInput
           value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
+          onChange={setSearchTerm}
+          placeholder="Search (* wildcard)..."
+          storageKey="signal_panel_search_history"
           style={{
-            flex: 1,
-            padding: '6px 10px',
-            border: '1px solid #ddd',
-            borderRadius: '4px',
+            padding: '4px 8px',
             fontSize: '12px',
-            outline: 'none',
+            height: '24px',
           }}
         />
         <select
           value={ioFilter}
           onChange={(e) => setIoFilter(e.target.value as any)}
           style={{
-            padding: '6px 10px',
+            padding: '4px 6px',
             border: '1px solid #ddd',
-            borderRadius: '4px',
-            fontSize: '12px',
+            borderRadius: '3px',
+            fontSize: '11px',
             outline: 'none',
             backgroundColor: 'white',
+            height: '24px',
+            boxSizing: 'border-box',
+            flexShrink: 0,
           }}
         >
           <option value="all">All</option>
-          <option value="input">Input</option>
-          <option value="output">Output</option>
-          <option value="inout">InOut</option>
-          <option value="internal">Internal</option>
+          <option value="input">In</option>
+          <option value="output">Out</option>
+          <option value="inout">IO</option>
+          <option value="internal">Int</option>
         </select>
       </div>
 
