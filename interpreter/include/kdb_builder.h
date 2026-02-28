@@ -131,33 +131,28 @@ struct ModuleInfo {
 	uint32_t defModuleId;  // Definition module ID for instances (0 if this is a definition)
 
 	// Transition helper: Build SignalInfo vector from signalDefs and signalInsts
+	// Optimized: signalDefs and signalInsts are added in pairs by addSignal(),
+	// so they have the same size and order, and corresponding elements have the same id
 	std::vector<SignalInfo> getSignals() const {
 		std::vector<SignalInfo> result;
-		result.reserve(signalInsts.size());
-		for (const auto& inst : signalInsts) {
-			// Find corresponding definition
-			const SignalDefInfo* def = nullptr;
-			for (const auto& d : signalDefs) {
-				if (d.id == inst.id) {
-					def = &d;
-					break;
-				}
-			}
-			if (def) {
-				SignalInfo sig;
-				sig.id = inst.id;
-				sig.name = def->name;
-				sig.fullName = inst.fullName;
-				sig.type = def->type;
-				sig.direction = def->direction;
-				sig.msb = inst.msb;
-				sig.lsb = inst.lsb;
-				sig.declaration = def->declaration;
-				sig.parentModuleId = inst.parentModuleId;
-				sig.driverSignalIds = inst.driverSignalIds;
-				sig.driverLines = inst.driverLines;
-				result.push_back(std::move(sig));
-			}
+		size_t count = std::min(signalDefs.size(), signalInsts.size());
+		result.reserve(count);
+		for (size_t i = 0; i < count; ++i) {
+			const auto& def = signalDefs[i];
+			const auto& inst = signalInsts[i];
+			SignalInfo sig;
+			sig.id = inst.id;
+			sig.name = def.name;
+			sig.fullName = inst.fullName;
+			sig.type = def.type;
+			sig.direction = def.direction;
+			sig.msb = inst.msb;
+			sig.lsb = inst.lsb;
+			sig.declaration = def.declaration;
+			sig.parentModuleId = inst.parentModuleId;
+			sig.driverSignalIds = inst.driverSignalIds;
+			sig.driverLines = inst.driverLines;
+			result.push_back(std::move(sig));
 		}
 		return result;
 	}
