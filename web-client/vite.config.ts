@@ -3,6 +3,9 @@ import react from '@vitejs/plugin-react'
 import wasm from 'vite-plugin-wasm'
 import { resolve } from 'path'
 
+// https://github.com/vdesjs/vite-plugin-monaco-editor
+// Note: Using @monaco-editor/react which handles its own loading
+
 export default defineConfig({
   plugins: [react(), wasm()],
   resolve: {
@@ -40,5 +43,10 @@ export default defineConfig({
   },
   worker: {
     format: 'es',
+  },
+  // Configure Monaco editor loader to use local files
+  define: {
+    // Use local monaco instead of CDN
+    'process.env.MONACO_EDITOR_LOADER_URL': JSON.stringify('/node_modules/monaco-editor/min/vs/loader.js'),
   },
 })

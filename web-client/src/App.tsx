@@ -38,7 +38,7 @@ import { ToolBar } from './components/ToolBar'
 import { DesignBrowser } from './components/DesignBrowser'
 import { SignalPanel } from './components/SignalPanel'
 import { TabPanel } from './components/TabPanel'
-import { SourceCodeWindow } from './components/SourceCodeWindow'
+import { MonacoSourceCodeWindow } from './components/MonacoSourceCodeWindow'
 import { WaveformWindow } from './components/WaveformWindow'
 import { MessageWindow } from './components/MessageWindow'
 import { ConnectionDialog } from './components/ConnectionDialog'
@@ -623,7 +623,7 @@ function App() {
             onTabsReorder={setTabs}
           >
             {activeTabData?.type === 'source' ? (
-              <SourceCodeWindow
+              <MonacoSourceCodeWindow
                 key={activeTabData.id}
                 moduleIndex={activeTabData.moduleIndex || null}
               />
