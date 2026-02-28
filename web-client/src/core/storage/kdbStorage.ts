@@ -88,25 +88,19 @@ async function store_module(id: number, data: any, kdbId: string): Promise<void>
 
 /**
  * Store source file
- * WASM stores: { id, path, content }
+ * WASM calls: store_source_file(id, path, content, kdbId)
  */
-async function store_source_file(id: number, data: any, kdbId: string): Promise<void> {
+async function store_source_file(id: number, path: string, content: string, kdbId: string): Promise<void> {
   await indexedDBManager.initialize();
   const db = (indexedDBManager as any).db;
   if (!db) throw new Error('IndexedDB not initialized');
   
-  // Handle both Map (from serde_wasm_bindgen) and plain object
-  const getValue = (key: string) => {
-    if (data instanceof Map) {
-      return data.get(key);
-    }
-    return data[key];
-  };
+  console.log('[KdbStorage] Storing source file:', id, 'path:', path, 'content length:', content?.length || 0);
   
   await db.put('source-files', {
     id,
-    path: getValue('path'),
-    content: getValue('content'),
+    path,
+    content,
     kdbId,
   });
 }

@@ -290,24 +290,23 @@ function App() {
   }
 
   const handleModuleDoubleClick = (module: Module) => {
+    console.log('[App] handleModuleDoubleClick called, module:', module);
+    
     // Update global selected module
     setSelectedModule(module)
     // Find or create a source tab for this module and switch to it
     const existingSourceTab = tabs.find(t => t.type === 'source')
+    console.log('[App] Existing source tab:', existingSourceTab);
+    
     if (existingSourceTab) {
       // Update existing source tab with the new module
       setTabs(prev => prev.map(tab => 
         tab.id === existingSourceTab.id 
-          ? { ...tab, instance: { 
-              name: module.name,
-              fullPath: module.fullName,
-              moduleName: module.name,
-              parentPath: '',
-              children: [],
-            }} 
+          ? { ...tab, module } 
           : tab
       ))
       setActiveTab(existingSourceTab.id)
+      console.log('[App] Updated existing source tab, set active to:', existingSourceTab.id);
     } else {
       // Create a new source tab
       const newId = `source-${tabCounter.current++}`
@@ -315,16 +314,12 @@ function App() {
         id: newId,
         label: 'Source',
         type: 'source',
-        instance: {
-          name: module.name,
-          fullPath: module.fullName,
-          moduleName: module.name,
-          parentPath: '',
-          children: [],
-        },
+        module,
       }
+      console.log('[App] Creating new source tab:', newTab);
       setTabs(prev => [...prev, newTab])
       setActiveTab(newId)
+      console.log('[App] Created new source tab, set active to:', newId);
     }
     addMessage(`Open source for: ${module.fullName}`)
   }
@@ -575,6 +570,8 @@ function App() {
         connected={connected}
         onConnect={() => setShowConnectionDialog(true)}
         onDisconnect={handleDisconnect}
+        onOpenKdbList={() => setShowKdbSelectionDialog(true)}
+        onOpenWaveList={() => setShowWaveSelectionDialog(true)}
       />
 
       {/* Tool Bar */}
@@ -635,7 +632,7 @@ function App() {
             {activeTabData?.type === 'source' ? (
               <SourceCodeWindow
                 key={activeTabData.id}
-                instance={activeTabData.instance || null}
+                module={activeTabData.module || null}
               />
             ) : activeTabData ? (
               <WaveformWindow

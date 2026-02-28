@@ -1,5 +1,5 @@
 import { ReactNode, useState, useRef, useEffect } from 'react';
-import type { Instance, Signal } from '../types';
+import type { Signal, Module } from '../types';
 
 interface SignalGroup {
   id: string;
@@ -69,7 +69,7 @@ export interface Tab {
   label: string;
   type: 'source' | 'waveform';
   // Tab-specific data
-  instance?: Instance | null;  // For source tabs
+  module?: Module | null;  // For source tabs
   signals?: WaveformSignal[];  // For waveform tabs - 待添加到 group 的信号队列
   groups?: Record<string, SignalGroup>;  // For waveform tabs - group structure
   selectedGroup?: string;       // For waveform tabs - currently selected group

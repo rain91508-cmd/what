@@ -148,9 +148,13 @@ export function DesignBrowser({
   };
 
   const handleNodeDoubleClick = async (nodeId: number) => {
+    console.log('[DesignBrowser] handleNodeDoubleClick called, nodeId:', nodeId, 'onModuleDoubleClick:', !!onModuleDoubleClick);
+    
     if (!onModuleDoubleClick) return;
     
     const module = await kdbManager.getModule(nodeId);
+    console.log('[DesignBrowser] Got module:', module);
+    
     if (module) {
       onModuleDoubleClick(module);
     }
