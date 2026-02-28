@@ -621,13 +621,22 @@ wSignal是波形查看和分析工具，用于显示和分析仿真结果，支�
 **Requirement: IN-002 知识库内容**
 知识库应包含以下信息：
 
-| 信息类型 | 内容描述           |
-| ---- | -------------- |
-| 信号信息 | 名称、位置、位宽、类型、方向 |
-| 模块信息 | 模块定义、端口列表、参数   |
-| 实例信息 | 实例名称、层次路径、模块引用 |
-| 连接关系 | 信号驱动关系、负载关系    |
-| 代码原文 | 源代码文本、文件路径、行号  |
+| 信息类型 | 内容描述                              |
+| ---- | ----------------------------------- |
+| 信号信息 | 名称、完整路径、位宽、类型、方向、驱动关系、声明位置 |
+| 模块信息 | 模块定义/实例、父模块、子模块、定义位置、源文件ID   |
+| 层次关系 | 模块父子关系、实例与定义的关联                   |
+| 代码原文 | 源代码文本、文件路径、行号                     |
+
+**Module 结构设计原则：**
+
+| 字段 | Definition | Instance | 说明 |
+|------|------------|----------|------|
+| `name` | `VpiDefName()` (e.g., "work@dut") | `VpiName()` (e.g., "u_dut") | 区分定义和实例 |
+| `is_instance` | `false` | `true` | 标识模块类型 |
+| `def_module_id` | `0` | 指向 Definition 的 ID | 实例关联到其定义 |
+| `definition` | 定义的位置范围 | 实例的位置（通常只有 start_line） | 源代码定位 |
+| `full_name` | **已移除**，通过 parent 链动态构建 | **已移除**，通过 parent 链动态构建 | 减少冗余存储 |
 
 **Requirement: IN-003 知识库存储格式**
 知识库应采用高效的二进制压缩格式。
@@ -646,48 +655,97 @@ wSignal是波形查看和分析工具，用于显示和分析仿真结果，支�
 
 ```protobuf
 // 知识库数据结构定义
-message KnowledgeBase {
-    repeated Module modules = 1;
-    repeated Signal signals = 2;
-    repeated Instance instances = 3;
-    repeated Connection connections = 4;
-    SourceFiles source_files = 5;
+syntax = "proto3";
+
+package hwda.kdb;
+
+// 知识库头部信息
+message KDBHeader {
+  string version = 1;
+  string project_name = 2;
+  string created_at = 3;
 }
 
-message Module {
-    string name = 1;
-    string file_path = 2;
-    int32 start_line = 3;
-    int32 end_line = 4;
-    repeated Port ports = 5;
-    repeated Parameter parameters = 6;
+// 源文件信息
+message SourceFile {
+  uint32 id = 1;
+  string path = 2;
+  string content = 3;
 }
 
+// 源代码位置
+message SourceLocation {
+  uint32 file_id = 1;
+  uint32 line = 2;
+}
+
+// 模块定义位置（文件范围）
+message ModuleSourceLocation {
+  uint32 file_id = 1;
+  uint32 start_line = 2;
+  uint32 end_line = 3;
+}
+
+// 信号类型
+enum SignalType {
+  SIGNAL_TYPE_UNKNOWN = 0;
+  SIGNAL_TYPE_WIRE = 1;
+  SIGNAL_TYPE_REG = 2;
+  SIGNAL_TYPE_LOGIC = 3;
+  SIGNAL_TYPE_BIT = 4;
+  SIGNAL_TYPE_INTEGER = 5;
+  SIGNAL_TYPE_REAL = 6;
+  SIGNAL_TYPE_PARAMETER = 7;
+  SIGNAL_TYPE_LOCALPARAM = 8;
+}
+
+// 端口方向
+enum PortDirection {
+  PORT_DIR_UNKNOWN = 0;
+  PORT_DIR_INPUT = 1;
+  PORT_DIR_OUTPUT = 2;
+  PORT_DIR_INOUT = 3;
+}
+
+// 信号定义
 message Signal {
-    string name = 1;
-    string full_path = 2;
-    int32 bit_width = 3;
-    SignalType type = 4;
-    SignalDirection direction = 5;
-    string file_path = 6;
-    int32 line_number = 7;
-    int32 column = 8;
-    // 位宽信息
-    int32 msb = 9;  // 最高有效位
-    int32 lsb = 10; // 最低有效位
+  uint64 id = 1;
+  string name = 2;
+  string full_name = 3;  // 完整层次路径
+  SignalType type = 4;
+  uint32 msb = 5;
+  uint32 lsb = 6;
+  uint32 parent_module_id = 7;
+  SourceLocation declaration = 8;
+  repeated uint64 driver_signal_ids = 9;
+  PortDirection direction = 10;
+  repeated SourceLocation driver_lines = 11;
 }
 
-message Connection {
-    string driver_signal = 1;
-    string load_signal = 2;
-    string driver_instance = 3;
-    string load_instance = 4;
-    int32 driver_line = 5;
-    int32 load_line = 6;
+// 模块定义
+message Module {
+  uint32 id = 1;
+  string name = 2;  // Instance: VpiName(), Definition: VpiDefName()
+  uint32 parent_module_id = 3;
+  ModuleSourceLocation definition = 4;
+  repeated Signal signals = 5;
+  bool is_instance = 6;
+  repeated uint32 child_module_ids = 7;
+  uint32 def_module_id = 8;  // Definition module ID for instances (0 if definition)
 }
 
-message SourceFiles {
-    map<string, string> file_contents = 1;  // file_path -> content
+// 设计层次
+message DesignHierarchy {
+  uint32 top_module_id = 1;
+  repeated uint32 module_ids = 2;
+}
+
+// 知识库
+message KnowledgeBase {
+  KDBHeader header = 1;
+  repeated SourceFile files = 2;
+  repeated Module modules = 3;
+  repeated DesignHierarchy hierarchies = 4;
 }
 ```
 
@@ -992,15 +1050,17 @@ chunk_000000.bin:
 
 **压缩算法：**
 
-| 算法 | ID | 特点 | 适用场景 |
-|------|-----|------|----------|
-| None | 0 | 无压缩，直接透传 | 小数据量、低延迟要求 |
-| Zstd | 1 | 高压缩比，速度中等 | 大数据量、带宽受限 |
-| Lz4 | 2 | 超快压缩，压缩比较低 | 实时性要求高 |
+| 算法   | ID | 特点         | 适用场景       |
+| ---- | -- | ---------- | ---------- |
+| None | 0  | 无压缩，直接透传   | 小数据量、低延迟要求 |
+| Zstd | 1  | 高压缩比，速度中等  | 大数据量、带宽受限  |
+| Lz4  | 2  | 超快压缩，压缩比较低 | 实时性要求高     |
 
 **客户端自动解压：**
-- 根据 SignalBlockHeader.compression 字段自动选择解压算法
-- 解压后恢复为原始 SoA 格式供 WebGL 使用
+
+* 根据 SignalBlockHeader.compression 字段自动选择解压算法
+
+* 解压后恢复为原始 SoA 格式供 WebGL 使用
 
 **Requirement: SV-003-5 LOD金字塔生成算法**
 
@@ -1048,13 +1108,13 @@ fn generate_lod_level(input: &WaveData, level: u32) -> WaveData {
 
 如果没有实测数据，使用以下默认值：
 
-| 参数 | 推荐值 | 说明 |
-|------|--------|------|
-| base window (L0) | 1-10 μs | 最精细层级的时间窗口 |
-| levels | 6-10 | LOD金字塔层数 |
-| chunk size | 64KB-512KB | 单个chunk文件大小 |
-| max points per screen | 50k | 单屏最大绘制点数 |
-| OPFS cache size | 1-5GB | 本地缓存上限 |
+| 参数                    | 推荐值        | 说明          |
+| --------------------- | ---------- | ----------- |
+| base window (L0)      | 1-10 μs    | 最精细层级的时间窗口  |
+| levels                | 6-10       | LOD金字塔层数    |
+| chunk size            | 64KB-512KB | 单个chunk文件大小 |
+| max points per screen | 50k        | 单屏最大绘制点数    |
+| OPFS cache size       | 1-5GB      | 本地缓存上限      |
 
 **判断是否合理的指标：**
 
@@ -1287,17 +1347,20 @@ Examples:
 
 **后端选择建议：**
 
-| 后端 | 特点 | 适用场景 |
-|------|------|----------|
-| fstapi | GTKWave C API，功能完整 | 生产环境，复杂FST文件 |
-| wavefst | 纯Rust实现，轻量 | 简单FST文件，避免C依赖 |
+| 后端      | 特点                 | 适用场景          |
+| ------- | ------------------ | ------------- |
+| fstapi  | GTKWave C API，功能完整 | 生产环境，复杂FST文件  |
+| wavefst | 纯Rust实现，轻量         | 简单FST文件，避免C依赖 |
 
 **静态文件服务：**
 
 当指定 `--web-dir` 时，Server 会自动提供静态文件服务：
-- API 路由 (`/api/*`) 优先处理
-- 未匹配的路径回退到静态文件服务
-- 适合部署时同时提供 API 和 Web 客户端
+
+* API 路由 (`/api/*`) 优先处理
+
+* 未匹配的路径回退到静态文件服务
+
+* 适合部署时同时提供 API 和 Web 客户端
 
 ### 6.6 性能要求
 
