@@ -188,8 +188,14 @@ uint32_t KdbBuilder::addModule(const ModuleInfo& module, const std::string& full
 
     moduleNameToId_[fullName] = id;
     moduleIdToIndex_[id] = modules_.size();
+    
+    // Update all signalInsts parentModuleId (they were 0 when added to local moduleInfo)
+    for (auto& inst : mod->signalInsts) {
+        inst.parentModuleId = id;
+    }
+    
     modules_.push_back(std::move(mod));
-
+    
     // Update parent's childModuleIds if this module has a parent
     if (parentModuleId != 0) {
         auto* parentMod = const_cast<ModuleInfo*>(findModuleById(parentModuleId));
