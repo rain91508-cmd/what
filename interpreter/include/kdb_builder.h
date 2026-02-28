@@ -40,28 +40,14 @@ enum class PortDirection {
     INOUT = 3
 };
 
-struct SourceLinkInfo {
-    uint32_t line;
-    uint32_t columnStart;
-    uint32_t columnEnd;
-    uint32_t targetId;  // Changed from uint64_t to uint32_t for non-signal IDs
-};
-
 struct SourceFileInfo {
     uint32_t id;  // Changed from uint64_t to uint32_t
     std::string path;
     std::string content;
-    std::vector<SourceLinkInfo> signalLinks;  // Contains both port and internal signal links
-    std::vector<SourceLinkInfo> submodLinks;
-    // Note: portLinks removed - ports are now stored in signals with direction != UNKNOWN
     
     std::string getLine(uint32_t lineNum) const;
     std::string getRange(uint32_t startLine, uint32_t startCol, 
                          uint32_t endLine, uint32_t endCol) const;
-    uint64_t getSignalAtPosition(uint32_t line, uint32_t column) const;
-    std::vector<const SourceLinkInfo*> getSignalLinksAtLine(uint32_t line) const;
-    std::vector<const SourceLinkInfo*> getSubmodLinksAtLine(uint32_t line) const;
-    // Note: getPortLinksAtLine removed - port links are now in signalLinks
     uint64_t getLineCount() const;
 };
 
@@ -126,15 +112,6 @@ public:
     uint32_t addSourceFile(const std::string& path, const std::string& content);  // Changed return type
     
     bool setSourceFileContent(uint32_t fileId, const std::string& content);  // Changed parameter type
-    
-    bool addSignalLink(uint32_t fileId, uint32_t line, uint32_t columnStart, 
-                       uint32_t columnEnd, uint64_t signalId);
-    bool addSignalLink(uint32_t fileId, const SourceLinkInfo& link);  // Changed parameter type
-    
-    bool addSubmodLink(uint32_t fileId, uint32_t line, uint32_t columnStart,
-                       uint32_t columnEnd, uint32_t moduleId);  // Changed parameter types
-    bool addSubmodLink(uint32_t fileId, const SourceLinkInfo& link);  // Changed parameter type
-    // Note: addPortLink removed - use addSignalLink for both ports and internal signals
     
     std::string getSourceLine(uint32_t fileId, uint32_t line) const;  // Changed parameter type
     std::string getSourceRange(uint32_t fileId, uint32_t startLine, uint32_t startCol,

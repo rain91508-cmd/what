@@ -122,29 +122,11 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     totalModules_++;
     std::cerr << "DEBUG:   After push, currentModuleStack_ size=" << currentModuleStack_.size() << "\n";
     
-    if (moduleInfo.declaration.fileId != 0) {
-        SourceLinkInfo link;
-        link.line = moduleInfo.declaration.line;
-        link.columnStart = 0;
-        link.columnEnd = 0;
-        link.targetId = moduleId;
-        builder_.addSubmodLink(moduleInfo.declaration.fileId, link);
-    }
-    
     for (const auto& sig : moduleInfo.signals) {
         const SignalInfo* addedSignal = builder_.findSignalByName(sig.fullName);
         if (addedSignal) {
             currentModuleSignalMap_[sig.fullName] = addedSignal->id;
             driverAnalyzer_->getSignalMap()[sig.fullName] = addedSignal->id;
-            
-            if (sig.direction != PortDirection::UNKNOWN && sig.declaration.fileId != 0) {
-                SourceLinkInfo link;
-                link.line = sig.declaration.line;
-                link.columnStart = 0;
-                link.columnEnd = 0;
-                link.targetId = addedSignal->id;
-                builder_.addSignalLink(sig.declaration.fileId, link);
-            }
         }
     }
     
@@ -183,15 +165,6 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
             
             currentModuleSignalMap_[signalInfo.fullName] = signalId;
             driverAnalyzer_->getSignalMap()[signalInfo.fullName] = signalId;
-            
-            if (signalInfo.declaration.fileId != 0) {
-                SourceLinkInfo link;
-                link.line = signalInfo.declaration.line;
-                link.columnStart = 0;
-                link.columnEnd = 0;
-                link.targetId = signalId;
-                builder_.addSignalLink(signalInfo.declaration.fileId, link);
-            }
         }
     }
     
@@ -210,15 +183,6 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
             
             currentModuleSignalMap_[signalInfo.fullName] = signalId;
             driverAnalyzer_->getSignalMap()[signalInfo.fullName] = signalId;
-            
-            if (signalInfo.declaration.fileId != 0) {
-                SourceLinkInfo link;
-                link.line = signalInfo.declaration.line;
-                link.columnStart = 0;
-                link.columnEnd = 0;
-                link.targetId = signalId;
-                builder_.addSignalLink(signalInfo.declaration.fileId, link);
-            }
         }
     }
     

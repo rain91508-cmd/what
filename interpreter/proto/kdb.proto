@@ -10,20 +10,10 @@ message KDBHeader {
   string created_at = 3;
 }
 
-message SourceLink {
-  uint32 line = 1;
-  uint32 column_start = 2;
-  uint32 column_end = 3;
-  uint32 target_id = 4;  // Changed from uint64 to uint32 for non-signal IDs
-}
-
 message SourceFile {
   uint32 id = 1;  // Changed from uint64 to uint32
   string path = 2;
   string content = 3;
-  repeated SourceLink signal_links = 4;  // Contains both port and internal signal links
-  repeated SourceLink submod_links = 5;
-  // Note: port_links removed - ports are now stored in signals with direction != UNKNOWN
 }
 
 message SourceLocation {
