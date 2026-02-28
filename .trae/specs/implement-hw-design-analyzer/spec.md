@@ -605,275 +605,73 @@ wSignal是波形查看和分析工具，用于显示和分析仿真结果，支�
 
 ### 5.1 功能概述
 
-设计解释器负责将Verilog/SystemVerilog源代码转换为内部知识库，供nTrace和nWave模块使用。
+设计解释器负责将Verilog/SystemVerilog源代码转换为内部知识库（.kdb），供wHDL和wSignal模块使用。
 
 ### 5.2 技术方案
 
 **Requirement: IN-001 解析器选择**
-系统应采用成熟的开源SystemVerilog解析器。
-
-| 方案   | 描述                                                   |
-| ---- | ---------------------------------------------------- |
-| 推荐方案 | Surelog (<https://github.com/chipsalliance/Surelog>) |
-| 备选方案 | Verilator, Icarus Verilog                            |
-| 语言   | C/C++                                                |
+采用Surelog解析器，输出UHDM数据模型。
 
 **Requirement: IN-002 知识库内容**
-知识库应包含以下信息：
-
-| 信息类型 | 内容描述                              |
+| 信息类型 | 内容描述 |
 | ---- | ----------------------------------- |
-| 信号信息 | 名称、完整路径、位宽、类型、方向、驱动关系、声明位置 |
-| 模块信息 | 模块定义/实例、父模块、子模块、定义位置、源文件ID   |
-| 层次关系 | 模块父子关系、实例与定义的关联                   |
-| 代码原文 | 源代码文本、文件路径、行号                     |
+| 信号信息 | 名称、位宽、类型、方向、驱动关系、声明位置 |
+| 模块信息 | 定义/实例、父模块、子模块、定义位置、源文件ID |
+| 层次关系 | 模块父子关系、实例与定义的关联 |
+| 代码原文 | 源代码文本、文件路径、行号 |
 
 **Module 结构设计原则：**
+| 字段 | Definition | Instance |
+|------|------------|----------|
+| `name` | `VpiDefName()` | `VpiName()` |
+| `is_instance` | `false` | `true` |
+| `def_module_id` | `0` | 指向Definition的ID |
+| `full_name` | **已移除**，动态构建 | **已移除**，动态构建 |
 
-| 字段 | Definition | Instance | 说明 |
-|------|------------|----------|------|
-| `name` | `VpiDefName()` (e.g., "work@dut") | `VpiName()` (e.g., "u_dut") | 区分定义和实例 |
-| `is_instance` | `false` | `true` | 标识模块类型 |
-| `def_module_id` | `0` | 指向 Definition 的 ID | 实例关联到其定义 |
-| `definition` | 定义的位置范围 | 实例的位置（通常只有 start_line） | 源代码定位 |
-| `full_name` | **已移除**，通过 parent 链动态构建 | **已移除**，通过 parent 链动态构建 | 减少冗余存储 |
-
-**Requirement: IN-003 知识库存储格式**
-知识库应采用高效的二进制压缩格式。
-
-| 要求   | 描述                             |
-| ---- | ------------------------------ |
-| 格式   | Protocol Buffers 或 FlatBuffers |
-| 压缩   | 支持gzip/zstd压缩                  |
-| 索引   | 支持快速随机访问                       |
-| 增量更新 | 支持增量更新知识库                      |
+**Requirement: IN-003 存储格式**
+Protocol Buffers + zstd压缩，文件扩展名.kdb。
 
 ### 5.3 知识库数据结构
 
-**Requirement: IN-004 知识库数据结构定义**
-知识库应采用Protocol Buffers定义数据结构，使用zstd压缩存储。
+详见实现细节文档：`interpreter-implementation.md`
 
-```protobuf
-// 知识库数据结构定义
-syntax = "proto3";
+核心设计：SignalDef/SignalInst分离架构
+- **SignalDef**: 存储在Definition模块，包含静态信息（名称、位宽、方向等）
+- **SignalInst**: 存储在所有模块，包含动态信息（driver关系）
+- Instance模块通过`externalSignalDefs`指针引用Definition的signalDefs，节省内存
 
-package hwda.kdb;
+### 5.4 位宽提取
 
-// 知识库头部信息
-message KDBHeader {
-  string version = 1;
-  string project_name = 2;
-  string created_at = 3;
-}
+**Requirement: IN-004 信号位宽提取**
+支持直接位宽、参数化位宽、标量、数组等场景。
 
-// 源文件信息
-message SourceFile {
-  uint32 id = 1;
-  string path = 2;
-  string content = 3;
-}
+**实现路径**：`port -> Typespec() -> Actual_typespec() -> logic_typespec -> Ranges()`
 
-// 源代码位置
-message SourceLocation {
-  uint32 file_id = 1;
-  uint32 line = 2;
-}
-
-// 模块定义位置（文件范围）
-message ModuleSourceLocation {
-  uint32 file_id = 1;
-  uint32 start_line = 2;
-  uint32 end_line = 3;
-}
-
-// 信号类型
-enum SignalType {
-  SIGNAL_TYPE_UNKNOWN = 0;
-  SIGNAL_TYPE_WIRE = 1;
-  SIGNAL_TYPE_REG = 2;
-  SIGNAL_TYPE_LOGIC = 3;
-  SIGNAL_TYPE_BIT = 4;
-  SIGNAL_TYPE_INTEGER = 5;
-  SIGNAL_TYPE_REAL = 6;
-  SIGNAL_TYPE_PARAMETER = 7;
-  SIGNAL_TYPE_LOCALPARAM = 8;
-}
-
-// 端口方向
-enum PortDirection {
-  PORT_DIR_UNKNOWN = 0;
-  PORT_DIR_INPUT = 1;
-  PORT_DIR_OUTPUT = 2;
-  PORT_DIR_INOUT = 3;
-}
-
-// 信号定义
-message Signal {
-  uint64 id = 1;
-  string name = 2;
-  string full_name = 3;  // 完整层次路径
-  SignalType type = 4;
-  uint32 msb = 5;
-  uint32 lsb = 6;
-  uint32 parent_module_id = 7;
-  SourceLocation declaration = 8;
-  repeated uint64 driver_signal_ids = 9;
-  PortDirection direction = 10;
-  repeated SourceLocation driver_lines = 11;
-}
-
-// 模块定义
-message Module {
-  uint32 id = 1;
-  string name = 2;  // Instance: VpiName(), Definition: VpiDefName()
-  uint32 parent_module_id = 3;
-  ModuleSourceLocation definition = 4;
-  repeated Signal signals = 5;
-  bool is_instance = 6;
-  repeated uint32 child_module_ids = 7;
-  uint32 def_module_id = 8;  // Definition module ID for instances (0 if definition)
-}
-
-// 设计层次
-message DesignHierarchy {
-  uint32 top_module_id = 1;
-  repeated uint32 module_ids = 2;
-}
-
-// 知识库
-message KnowledgeBase {
-  KDBHeader header = 1;
-  repeated SourceFile files = 2;
-  repeated Module modules = 3;
-  repeated DesignHierarchy hierarchies = 4;
-}
-```
-
-### 5.4 位宽提取实现
-
-**Requirement: IN-005 信号位宽提取**
-设计解释器应正确提取信号的位宽信息（MSB/LSB）。
-
-| 提取场景   | 实现方法                  | 说明                      |
-| ------ | --------------------- | ----------------------- |
-| 直接位宽声明 | `logic [7:0] a`       | 从port的Typespec获取range信息 |
-| 参数化位宽  | `logic [WIDTH-1:0] a` | 使用ExprEval在模块上下文中计算表达式  |
-| 标量信号   | `logic a`             | MSB=LSB=0               |
-| 数组信号   | `logic [7:0] a [3:0]` | 支持packed和unpacked range |
-
-**实现细节：**
-
-1. **UHDM数据结构路径**：`port -> Typespec() -> Actual_typespec() -> logic_typespec -> Ranges()`
-2. **表达式计算**：使用`UHDM::ExprEval::reduceExpr()`在模块实例上下文中计算参数表达式
-3. **上下文传递**：将模块实例指针作为`inst`参数传递给`reduceExpr`，以解析参数值
-
-**示例代码：**
-
-```cpp
-// 从port提取位宽
-if (auto* port = obj->Cast<UHDM::port>()) {
-    if (auto* ref_typespec = port->Typespec()) {
-        if (auto* actual_typespec = ref_typespec->Actual_typespec()) {
-            if (auto* logic_typespec = actual_typespec->Cast<UHDM::logic_typespec>()) {
-                auto ranges = logic_typespec->Ranges();
-                if (ranges && !ranges->empty()) {
-                    auto* range = ranges->at(0);
-                    // 使用上下文计算表达式
-                    UHDM::ExprEval eval;
-                    bool invalidValue = false;
-                    UHDM::expr* reducedLeft = eval.reduceExpr(
-                        range->Left_expr(), invalidValue, module_inst, nullptr);
-                    uint64_t msb = eval.getValue(reducedLeft);
-                }
-            }
-        }
-    }
-}
-```
+**参数化位宽**：使用`UHDM::ExprEval::reduceExpr()`在模块上下文中计算表达式。
 
 ### 5.5 知识库构建流程
 
-**Requirement: IN-006 知识库构建流程**
-设计解释器应实现完整的知识库构建流程。
-
 ```
-Verilog Source Files
-        │
-        ▼
-┌───────────────────┐
-│   Surelog Parser  │  ← 解析Verilog/SystemVerilog
-│  (with elaboration)│  ← 参数展开、层次展开
-└───────────────────┘
-        │
-        ▼
-┌───────────────────┐
-│   UHDM Database   │  ← 统一硬件数据模型
-│  (uhdmTopModules) │  ← 展开后的模块实例
-└───────────────────┘
-        │
-        ▼
-┌───────────────────┐
-│  VpiListener遍历  │  ← 遍历UHDM对象树
-│  (KdbBuildListener)│
-└───────────────────┘
-        │
-        ▼
-┌───────────────────┐
-│  KnowledgeBase    │  ← 提取模块、信号、连接关系
-│   Builder         │
-└───────────────────┘
-        │
-        ▼
-┌───────────────────┐
-│ Protocol Buffers  │  ← 序列化
-│   Serialization   │
-└───────────────────┘
-        │
-        ▼
-┌───────────────────┐
-│    zstd Compress  │  ← 压缩
-└───────────────────┘
-        │
-        ▼
-    .kdb File
+Verilog → Surelog Parser → UHDM → VpiListener遍历 → KnowledgeBase Builder → Protobuf序列化 → zstd压缩 → .kdb
 ```
 
 ### 5.6 实现组件
 
-**Requirement: IN-007 核心组件列表**
-设计解释器包含以下核心组件：
-
-| 组件                   | 文件                        | 职责                  |
+| 组件 | 文件 | 职责 |
 | -------------------- | ------------------------- | ------------------- |
-| SurelogParser        | `surelog_parser.cpp`      | Surelog解析器封装，配置解析选项 |
-| KdbBuildListener     | `kdb_build_listener.cpp`  | UHDM遍历监听器，提取设计信息    |
-| BitWidthExtractor    | `bit_width_extractor.cpp` | 信号位宽提取，支持参数化位宽      |
-| KnowledgeBaseBuilder | `kdb_builder.cpp`         | 知识库构建器，管理KDB数据结构    |
-| KdbSerializer        | `kdb_serializer.cpp`      | 知识库序列化/反序列化         |
-| KdbViewer            | `kdb_viewer.cpp`          | 知识库查看工具（CLI）        |
+| SurelogParser | `surelog_parser.cpp` | Surelog解析器封装 |
+| KdbBuildListener | `kdb_build_listener.cpp` | UHDM遍历监听器 |
+| BitWidthExtractor | `bit_width_extractor.cpp` | 信号位宽提取 |
+| KnowledgeBaseBuilder | `kdb_builder.cpp` | 知识库构建器 |
+| KdbSerializer | `kdb_serializer.cpp` | 序列化/反序列化 |
+| KdbViewer | `kdb_viewer.cpp` | 知识库查看工具（CLI） |
 
-**Requirement: IN-008 Surelog解析配置**
-Surelog解析器应配置以下选项：
+**Surelog配置**：启用parse、elaborate、elabUhdm，禁用debugUhdm。
 
-| 配置项                   | 值  | 说明                  |
-| --------------------- | -- | ------------------- |
-| setParse(true)        | 启用 | 启用语法解析              |
-| setElaborate(true)    | 启用 | 启用设计展开（elaboration） |
-| setElabUhdm(true)     | 启用 | 生成展开后的UHDM          |
-| setDebugUhdm(false)   | 禁用 | 禁用UHDM调试输出          |
-| setCacheAllowed(true) | 启用 | 启用解析缓存              |
-
-**Requirement: IN-009 命令行接口**
-设计解释器应提供命令行接口：
+### 5.7 命令行接口
 
 ```bash
-# 基本用法
 hwda_interpreter <verilog_files...> --output <output.kdb>
-
-# 示例
-hwda_interpreter tests/simple.v --output design.kdb
-
-# 查看知识库
 kdb_viewer design.kdb --json
 ```
 

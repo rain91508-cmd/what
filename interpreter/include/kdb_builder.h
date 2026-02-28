@@ -244,6 +244,10 @@ public:
     const SourceFileInfo* findFileByPath(const std::string& path) const;
     const SourceFileInfo* findFileById(uint32_t id) const;  // Changed parameter type
     
+    // Add driver to a signal by name (directly modifies signalInsts)
+    bool addDriverToSignal(const std::string& signalFullName, uint64_t driverSignalId);
+    bool addDriverLineToSignal(const std::string& signalFullName, const KdbSourceLocation& location);
+    
     // Helper methods to get ID from pointer (for future optimization)
     uint32_t getModuleId(const ModuleInfo* module) const;
     uint32_t getSignalId(const ModuleInfo* module, const SignalInfo* signal) const;

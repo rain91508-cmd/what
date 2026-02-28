@@ -311,12 +311,6 @@ void DriverAnalyzer::extractRhsSignals(const UHDM::expr* expr, const std::string
 void DriverAnalyzer::applyDriverRelationships() {
     // First apply driver signal relationships
     for (auto& [drivenSignalName, driverInfos] : signalToDriverNames_) {
-        const SignalInfo* drivenSignal = builder_.findSignalByName(drivenSignalName);
-        if (!drivenSignal) {
-            std::cerr << "DEBUG: Could not find driven signal: " << drivenSignalName << "\n";
-            continue;
-        }
-        
         for (auto& [driverSignalName, driverLocation] : driverInfos) {
             // First try to find driver signal ID in current module's signal map
             auto it = currentModuleSignalMap_.find(driverSignalName);
@@ -333,19 +327,8 @@ void DriverAnalyzer::applyDriverRelationships() {
             }
             
             if (driverSignalId != 0) {
-                SignalInfo* signal = const_cast<SignalInfo*>(drivenSignal);
-                
-                // Check if this driver is already added (avoid duplicates)
-                bool alreadyExists = false;
-                for (auto id : signal->driverSignalIds) {
-                    if (id == driverSignalId) {
-                        alreadyExists = true;
-                        break;
-                    }
-                }
-                
-                if (!alreadyExists) {
-                    signal->driverSignalIds.push_back(driverSignalId);
+                // Use the new method to directly add driver to signalInsts
+                if (builder_.addDriverToSignal(drivenSignalName, driverSignalId)) {
                     std::cerr << "DEBUG: Added driver " << driverSignalName << " (id=" << driverSignalId 
                               << ") to " << drivenSignalName << "\n";
                 }
@@ -357,26 +340,12 @@ void DriverAnalyzer::applyDriverRelationships() {
     
     // Then apply driver lines (including those without RHS signals)
     for (auto& [signalName, locations] : signalDriverLines_) {
-        const SignalInfo* signal = builder_.findSignalByName(signalName);
-        if (!signal) {
-            std::cerr << "DEBUG: Could not find signal for driver lines: " << signalName << "\n";
-            continue;
-        }
-        
-        SignalInfo* mutableSignal = const_cast<SignalInfo*>(signal);
         for (const auto& loc : locations) {
-            // Check if this line is already recorded
-            bool alreadyExists = false;
-            for (const auto& existingLoc : mutableSignal->driverLines) {
-                if (existingLoc.fileId == loc.fileId && existingLoc.line == loc.line) {
-                    alreadyExists = true;
-                    break;
-                }
-            }
-            
-            if (!alreadyExists) {
-                mutableSignal->driverLines.push_back(loc);
+            // Use the new method to directly add driver line to signalInsts
+            if (builder_.addDriverLineToSignal(signalName, loc)) {
                 std::cerr << "DEBUG: Added driver line " << loc.line << " to " << signalName << "\n";
+            } else {
+                std::cerr << "DEBUG: Could not find signal for driver lines: " << signalName << "\n";
             }
         }
     }
