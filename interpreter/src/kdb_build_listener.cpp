@@ -49,6 +49,10 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     // Determine if this is an instance: instance has non-empty VpiName()
     moduleInfo.isInstance = !instName.empty();
     moduleInfo.defModuleId = 0;  // Default: no definition module (for definitions)
+    // For instances, store the definition name for later lookup
+    if (moduleInfo.isInstance) {
+        moduleInfo.defName = defName;
+    }
 
     // First, ensure the file is in the mapping before extracting location
     std::string filePath(object->VpiFile());
@@ -391,6 +395,7 @@ void KdbBuildListener::linkInstancesToDefinitions() {
                 std::cerr << "DEBUG: Linked instance id=" << instanceId
                           << " -> definition id=" << builder_.getModuleId(defModule)
                           << " (" << defFullName << ")\n";
+                // Note: Signal ID sync is now done in addModule
             }
         } else {
             std::cerr << "DEBUG: Definition module not found: " << defFullName

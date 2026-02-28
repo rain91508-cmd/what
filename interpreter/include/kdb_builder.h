@@ -129,21 +129,29 @@ struct ModuleInfo {
 	bool isInstance;
 	std::vector<uint32_t> childModuleIds;  // Direct child module IDs for hierarchy traversal
 	uint32_t defModuleId;  // Definition module ID for instances (0 if this is a definition)
-	
-	// Pointer to external signalDefs (for Instance modules, points to Definition's signalDefs)
-	// This is set by KdbBuilder::addModule after linking instances to definitions
+	std::string defName;   // Definition name for instances (e.g., "work@dut"), empty for definitions
 	const std::vector<SignalDefInfo>* externalSignalDefs = nullptr;
 
+	// Get signalDefs - for Definition use own, for Instance use external (from Definition)
+	const std::vector<SignalDefInfo>& getSignalDefs() const {
+		if (isInstance && externalSignalDefs) {
+			return *externalSignalDefs;
+		}
+		return signalDefs;
+	}
+
 	// Transition helper: Build SignalInfo vector from signalDefs and signalInsts
-	// Note: signalInsts may have more entries than signalDefs if multiple instances
-	// share the same definition. We look up the definition by id for each instance.
+	// Automatically handles Definition vs Instance using getSignalDefs()
 	std::vector<SignalInfo> getSignals() const {
 		std::vector<SignalInfo> result;
 		result.reserve(signalInsts.size());
+		
+		const auto& defsToUse = getSignalDefs();
+		
 		for (const auto& inst : signalInsts) {
 			// Find corresponding definition by id
 			const SignalDefInfo* def = nullptr;
-			for (const auto& d : signalDefs) {
+			for (const auto& d : defsToUse) {
 				if (d.id == inst.id) {
 					def = &d;
 					break;

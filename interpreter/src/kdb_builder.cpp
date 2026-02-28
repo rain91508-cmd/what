@@ -38,18 +38,71 @@ uint32_t KdbBuilder::addModule(const ModuleInfo& module, const std::string& full
     auto mod = std::make_unique<ModuleInfo>(module);
     // Note: id is now implicit (array index + 1)
 
+    // For Instance modules, find Definition and sync signal IDs
+    const ModuleInfo* defModule = nullptr;
+    if (mod->isInstance && !mod->defName.empty()) {
+        // Build full definition name
+        std::string defFullName = mod->defName;
+        if (defFullName.find("work@") != 0) {
+            defFullName = "work@" + defFullName;
+        }
+        defModule = findModuleByName(defFullName);
+        if (defModule) {
+            mod->defModuleId = getModuleId(defModule);
+        }
+    }
+
     // Process signals: assign IDs and build indices
-    // Signals are already in signalDefs and signalInsts from the input module
-    // Match signalDefs and signalInsts by index (they are added in pairs by addSignal)
-    for (size_t i = 0; i < mod->signalInsts.size() && i < mod->signalDefs.size(); ++i) {
-        auto& inst = mod->signalInsts[i];
-        auto& def = mod->signalDefs[i];
-        uint64_t newId = nextSignalId_++;
-        inst.id = newId;
-        def.id = newId;
-        // Note: parentModuleId is now implicit (module is the parent)
-        signalFullNameToId_[inst.fullName] = newId;
-        signalIdToIndex_[newId] = newId;  // Use signal ID as index
+    // For Definition modules: assign new IDs
+    // For Instance modules: use Definition's signal IDs
+    if (!mod->isInstance) {
+        // Definition module: assign new IDs
+        for (size_t i = 0; i < mod->signalInsts.size() && i < mod->signalDefs.size(); ++i) {
+            auto& inst = mod->signalInsts[i];
+            auto& def = mod->signalDefs[i];
+            uint64_t newId = nextSignalId_++;
+            inst.id = newId;
+            def.id = newId;
+            signalFullNameToId_[inst.fullName] = newId;
+            signalIdToIndex_[newId] = newId;
+        }
+    } else if (defModule) {
+        // Instance module: use Definition's signal IDs
+        // Match signals by name
+        for (auto& inst : mod->signalInsts) {
+            // Extract signal name from fullName (e.g., "work@tb_top.u_dut.mem_arvalid" -> "mem_arvalid")
+            std::string sigName;
+            size_t lastDot = inst.fullName.rfind('.');
+            if (lastDot != std::string::npos) {
+                sigName = inst.fullName.substr(lastDot + 1);
+            } else {
+                sigName = inst.fullName;
+            }
+            
+            // Find matching signal in Definition
+            for (const auto& defSig : defModule->signalDefs) {
+                if (defSig.name == sigName) {
+                    inst.id = defSig.id;
+                    signalFullNameToId_[inst.fullName] = inst.id;
+                    signalIdToIndex_[inst.id] = inst.id;
+                    break;
+                }
+            }
+        }
+        // Set externalSignalDefs to point to Definition's signalDefs
+        // This allows Instance to share Definition's signal definitions
+        mod->externalSignalDefs = &defModule->signalDefs;
+    } else {
+        // Instance module but no Definition found: assign new IDs (fallback)
+        for (size_t i = 0; i < mod->signalInsts.size() && i < mod->signalDefs.size(); ++i) {
+            auto& inst = mod->signalInsts[i];
+            auto& def = mod->signalDefs[i];
+            uint64_t newId = nextSignalId_++;
+            inst.id = newId;
+            def.id = newId;
+            signalFullNameToId_[inst.fullName] = newId;
+            signalIdToIndex_[newId] = newId;
+        }
     }
 
     // Calculate ID from array index (ID = index + 1)
@@ -480,6 +533,8 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
         }
         
         // Serialize SignalDefs
+        // Note: Instance modules serialize their own signalDefs (may be empty if sharing)
+        // The sharing is restored during deserialization via externalSignalDefs
         for (const auto& def : mod->signalDefs) {
             auto* protoDef = protoMod->add_signal_defs();
             protoDef->set_id(def.id);
@@ -618,6 +673,19 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
         // Rebuild indices if needed by traversing parent chain
         moduleIdToIndex_[id] = modules_.size();
         modules_.push_back(std::move(mod));
+    }
+    
+    // Second pass: link Instance modules to Definition modules' signalDefs
+    for (auto& mod : modules_) {
+        if (mod->isInstance && mod->defModuleId != 0) {
+            const ModuleInfo* defModule = findModuleById(mod->defModuleId);
+            if (defModule) {
+                // Instance shares Definition's signalDefs
+                mod->externalSignalDefs = &defModule->signalDefs;
+                // Clear Instance's own signalDefs to save memory
+                mod->signalDefs.clear();
+            }
+        }
     }
     
     topModuleIds_.clear();
