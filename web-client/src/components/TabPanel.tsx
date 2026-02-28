@@ -15,6 +15,15 @@ export interface WaveformSignal extends Signal {
   unique_id: number;  // 全局唯一 ID，用于标识信号实例
 }
 
+// Waveform info from server
+export interface WaveformInfo {
+  name: string;
+  file: string;
+  timeRange: { start: number; end: number };
+  timeUnit: number;
+  signalCount: number;
+}
+
 // 列宽配置
 export interface ColumnWidths {
   hierarchy: number;  // Scope 列宽

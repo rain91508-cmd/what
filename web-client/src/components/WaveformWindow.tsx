@@ -257,7 +257,7 @@ export function WaveformWindow({
         currentRow++;
       } else if (node.type === 'signal' && node.signal) {
         // Signal row - render waveform from mock data
-        const signalPath = node.signal.fullPath || node.signal.name;
+        const signalPath = node.signal.fullName || node.signal.name;
         const mockData = getOrCreateMockData(signalPath);
         
         // Get transitions within the viewport time range
@@ -579,19 +579,19 @@ export function WaveformWindow({
   };
 
   const getSignalDisplayName = (signal: Signal) => {
-    if (signal.bitWidth > 1) {
+    if (signal.msb !== signal.lsb) {
       return `${signal.name}[${signal.msb}:${signal.lsb}]`;
     }
     return signal.name;
   };
 
   const getSignalValue = (signal: Signal) => {
-    return signalValues[signal.fullPath] || '0x0';
+    return signalValues[signal.fullName] || '0x0';
   };
 
   const getHierarchyDisplay = (signal: Signal): string => {
     // 返回完整信号路径（去掉信号名本身）
-    const parts = signal.fullPath.split('.');
+    const parts = signal.fullName.split('.');
     if (parts.length <= 1) return '-';
     // 去掉最后一部分（信号名），保留前面的路径
     parts.pop();
@@ -608,7 +608,7 @@ export function WaveformWindow({
     if (!nameFilter.trim()) return true;
     const pattern = nameFilter;
     return wildcardMatch(pattern, signal.name) ||
-           wildcardMatch(pattern, signal.fullPath);
+           wildcardMatch(pattern, signal.fullName);
   };
 
   // Build tree structure - hide root, but show its direct children (top-level groups)
@@ -1053,16 +1053,16 @@ export function WaveformWindow({
                       
                       <span style={{ 
                         width: '14px',
-                        cursor: signal.bitWidth > 1 ? 'pointer' : 'default'
+                        cursor: signal.msb !== signal.lsb ? 'pointer' : 'default'
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (signal.bitWidth > 1) {
+                        if (signal.msb !== signal.lsb) {
                           toggleSignalExpand(signal.unique_id);
                         }
                       }}
                       >
-                        {signal.bitWidth > 1 ? (expandedSignals.has(signal.unique_id) ? '▼' : '▶') : ''}
+                        {signal.msb !== signal.lsb ? (expandedSignals.has(signal.unique_id) ? '▼' : '▶') : ''}
                       </span>
                       
                       <span className="waveform-signal-name">
@@ -1092,9 +1092,9 @@ export function WaveformWindow({
                     </span>
                   </div>
                   
-                  {expandedSignals.has(signal.unique_id) && signal.bitWidth > 1 && (
+                  {expandedSignals.has(signal.unique_id) && signal.msb !== signal.lsb && (
                     <div className="waveform-bus-bits">
-                      {Array.from({ length: Math.min(signal.bitWidth, 32) }, (_, i) => {
+                      {Array.from({ length: Math.min(signal.msb - signal.lsb + 1, 32) }, (_, i) => {
                         const bitIndex = signal.msb - i;
                         return (
                           <div
@@ -1122,7 +1122,7 @@ export function WaveformWindow({
                               borderRight: '1px solid #e0e0e0',
                               height: '100%',
                             }}>
-                              {renderTreeConnectors([...node.parentNodes, { level: node.level, isLast: i === Math.min(signal.bitWidth, 32) - 1 }])}
+                              {renderTreeConnectors([...node.parentNodes, { level: node.level, isLast: i === Math.min(signal.msb - signal.lsb + 1, 32) - 1 }])}
                               <span style={{ width: '14px' }}></span>
                               <span className="waveform-signal-name">
                                 {signal.name}[{bitIndex}]

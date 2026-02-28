@@ -187,7 +187,7 @@ class wSignalModuleImpl implements wSignalModule {
 
   // Signal management
   addSignal(signal: Signal | WaveformSignal): void {
-    const id = 'fullPath' in signal ? signal.fullPath : signal.name;
+    const id = 'fullName' in signal ? signal.fullName : signal.name;
     const displayedSignal: DisplayedSignal = {
       id,
       signal,

@@ -1,19 +1,21 @@
 import { useState, useEffect, useRef } from 'react';
 import { kdbManager } from '../modules/knowledge/kdbManager';
 import type { Signal, Module } from '../types/kdb';
-import { SignalType, PortDirection } from '../types/kdb';
+import { SignalType } from '../types/kdb';
 import { FilterInput } from './FilterInput';
 
 interface SignalPanelProps {
   selectedModule: Module | null;
+  onSignalAddToWaveform?: (signal: Signal) => void;
 }
 
-export function SignalPanel({ selectedModule }: SignalPanelProps) {
+export function SignalPanel({ selectedModule, onSignalAddToWaveform }: SignalPanelProps) {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [ioFilters, setIoFilters] = useState<Set<string>>(new Set(['all']));
   const [showIoDropdown, setShowIoDropdown] = useState(false);
+  const [selectedSignalId, setSelectedSignalId] = useState<number | null>(null);
   const ioDropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown when clicking outside
@@ -136,17 +138,6 @@ export function SignalPanel({ selectedModule }: SignalPanelProps) {
       case 7: return 'param';
       case 8: return 'localparam';
       default: return `unknown(${type})`;
-    }
-  };
-
-  const getDirectionLabel = (direction: PortDirection): string => {
-    const dirNum = Number(direction);
-    switch (dirNum) {
-      case 1: return 'input';
-      case 2: return 'output';
-      case 3: return 'inout';
-      case 0: return 'internal';
-      default: return '';
     }
   };
 
@@ -313,13 +304,24 @@ export function SignalPanel({ selectedModule }: SignalPanelProps) {
                   fontSize: '12px',
                   display: 'flex',
                   alignItems: 'center',
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  backgroundColor: selectedSignalId === signal.id ? '#e3f2fd' : 'transparent',
                 }}
+                onClick={() => setSelectedSignalId(signal.id)}
+                onDoubleClick={() => {
+                  if (onSignalAddToWaveform) {
+                    onSignalAddToWaveform(signal);
+                  }
+                }}
+                title={onSignalAddToWaveform ? 'Double-click to add to waveform' : undefined}
               >
                 {/* Signal name with bit range */}
                 <span style={{ 
                   flex: 1,
                   color: '#333',
                   fontFamily: 'monospace',
+                  pointerEvents: 'none',
                 }}>
                   {signal.name}{formatSignalWidth(signal)}
                 </span>
@@ -331,6 +333,7 @@ export function SignalPanel({ selectedModule }: SignalPanelProps) {
                   color: '#1976d2',
                   borderRadius: '3px',
                   fontSize: '10px',
+                  pointerEvents: 'none',
                 }}>
                   {getSignalDisplayLabel(signal)}
                 </span>

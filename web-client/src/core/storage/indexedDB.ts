@@ -9,7 +9,6 @@
 
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import type { 
-  KnowledgeBase, 
   Module, 
   Signal, 
   SourceFile,
@@ -83,25 +82,18 @@ class IndexedDBManager {
     if (this.initialized) return;
 
     this.db = await openDB<HWDBSchema>(DB_NAME, DB_VERSION, {
-      upgrade(db, oldVersion, newVersion) {
+      upgrade(db, oldVersion, _newVersion) {
         // Delete old stores if upgrading from v1
         if (oldVersion < 2) {
-          // Delete old stores
-          if (db.objectStoreNames.contains('signals')) {
-            db.deleteObjectStore('signals');
-          }
-          if (db.objectStoreNames.contains('instances')) {
-            db.deleteObjectStore('instances');
-          }
-          if (db.objectStoreNames.contains('modules')) {
-            db.deleteObjectStore('modules');
-          }
-          if (db.objectStoreNames.contains('knowledge-base')) {
-            db.deleteObjectStore('knowledge-base');
-          }
-          if (db.objectStoreNames.contains('source-files')) {
-            db.deleteObjectStore('source-files');
-          }
+          // Delete old stores - cast to any to avoid type errors with old store names
+          const storeNames = Array.from(db.objectStoreNames);
+          storeNames.forEach(name => {
+            try {
+              db.deleteObjectStore(name);
+            } catch (e) {
+              // Ignore errors for non-existent stores
+            }
+          });
         }
 
         // Knowledge Base store - stores header and hierarchies only
@@ -298,11 +290,11 @@ class IndexedDBManager {
 
     // Clear source files
     const fileIndex = db.transaction('source-files').store.index('by-kdb');
-    cursor = await fileIndex.openCursor(kdbId);
+    let fileCursor = await fileIndex.openCursor(kdbId);
     const fileIds: number[] = [];
-    while (cursor) {
-      fileIds.push(cursor.value.id);
-      cursor = await cursor.continue();
+    while (fileCursor) {
+      fileIds.push(fileCursor.value.id);
+      fileCursor = await fileCursor.continue();
     }
     for (const id of fileIds) {
       await db.delete('source-files', id);

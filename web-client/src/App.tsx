@@ -47,8 +47,8 @@ import { WaveSelectionDialog } from './components/WaveSelectionDialog'
 import { Splitter } from './components/ResizablePanel'
 
 // Types
-import type { Module, Signal, WaveformInfo } from './types/kdb'
-import type { WaveformSignal, ColumnWidths, TimeConfig, Tab } from './components/TabPanel'
+import type { Module, Signal } from './types/kdb'
+import type { WaveformInfo, ColumnWidths, TimeConfig, Tab } from './components/TabPanel'
 
 // 默认时间配置
 // 默认 10ns/px = 10,000 ps/px
@@ -72,9 +72,6 @@ function App() {
   // Global selected module for hierarchy/signal panel
   const [selectedModule, setSelectedModule] = useState<Module | null>(null)
   
-  // Global waveform signal ID counter - 用于生成全局唯一的信号 ID
-  const nextWaveformSignalIdRef = useRef(1)
-  
   // Helper function to create default groups
   const createDefaultGroups = () => ({
     'root': {
@@ -97,7 +94,7 @@ function App() {
 
   // Dynamic tabs state - each tab has its own data
   const [tabs, setTabs] = useState<Tab[]>([
-    { id: 'source-1', label: 'Source', type: 'source', instance: null },
+    { id: 'source-1', label: 'Source', type: 'source', module: null },
     { 
       id: 'waveform-1', 
       label: 'Waveform', 
@@ -110,6 +107,9 @@ function App() {
   ])
   const [activeTab, setActiveTab] = useState('source-1')
   const tabCounter = useRef(2)
+  
+  // Global counter for waveform signal unique_id (starts from 1, increments forever)
+  const nextWaveformSignalIdRef = useRef(1)
   
   // Get current active tab data
   const activeTabData = tabs.find(t => t.id === activeTab)
@@ -338,57 +338,30 @@ function App() {
     addMessage(`Open source for: ${module.fullName}`)
   }
 
-  const handleSignalSelect = (_signal: Signal) => {
-    // Just select the signal, don't add to waveform
-    // This is called on single click
-  }
-
   const handleSignalAddToWaveform = (signal: Signal) => {
-    // 生成全局唯一的信号 ID
+    // Generate unique_id for this signal instance
     const unique_id = nextWaveformSignalIdRef.current++
-    const waveformSignal: WaveformSignal = { ...signal, unique_id }
     
-    // Add signal to the active waveform tab, or create one if none exists
-    const activeWaveformTab = tabs.find(t => t.id === activeTab && t.type === 'waveform')
+    // Create waveform signal with unique_id
+    const waveformSignal: Signal & { unique_id: number } = {
+      ...signal,
+      unique_id,
+    }
     
-    if (activeWaveformTab) {
-      // Add to current active waveform tab
-      setTabs(prev => prev.map(tab => {
-        if (tab.id === activeTab && tab.type === 'waveform') {
-          const currentSignals = tab.signals || []
+    // Add signal to the active waveform tab
+    setTabs(prev => prev.map(tab => {
+      if (tab.id === activeTab && tab.type === 'waveform') {
+        const currentSignals = tab.signals || []
+        // Check if signal already exists (by fullName)
+        const exists = currentSignals.some(s => s.fullName === signal.fullName)
+        if (!exists) {
           return { ...tab, signals: [...currentSignals, waveformSignal] }
         }
-        return tab
-      }))
-      addMessage(`Added signal to waveform: ${signal.name}`)
-    } else {
-      // No active waveform tab, find any waveform tab or create new one
-      const anyWaveformTab = tabs.find(t => t.type === 'waveform')
-      if (anyWaveformTab) {
-        // Add to existing waveform tab and switch to it
-        setTabs(prev => prev.map(tab => {
-          if (tab.id === anyWaveformTab.id) {
-            const currentSignals = tab.signals || []
-            return { ...tab, signals: [...currentSignals, waveformSignal] }
-          }
-          return tab
-        }))
-        setActiveTab(anyWaveformTab.id)
-        addMessage(`Added signal to waveform: ${signal.name}`)
-      } else {
-        // Create a new waveform tab
-        const newId = `waveform-${tabCounter.current++}`
-        const newTab: Tab = {
-          id: newId,
-          label: 'Waveform',
-          type: 'waveform',
-          signals: [waveformSignal],
-        }
-        setTabs(prev => [...prev, newTab])
-        setActiveTab(newId)
-        addMessage(`Created new waveform tab with signal: ${signal.name}`)
       }
-    }
+      return tab
+    }))
+    
+    addMessage(`Added signal to waveform: ${signal.name} (ID: ${unique_id})`)
   }
 
   const handleSignalRemove = (signal: Signal & { unique_id: number }) => {
@@ -414,7 +387,7 @@ function App() {
       id: newId,
       label: type === 'source' ? `Source ${tabCounter.current - 1}` : `Waveform ${tabCounter.current - 1}`,
       type,
-      instance: type === 'source' ? null : undefined,
+      module: type === 'source' ? null : undefined,
       signals: type === 'waveform' ? [] : undefined,
       groups: type === 'waveform' ? createDefaultGroups() : undefined,
       selectedGroup: type === 'waveform' ? 'group_1' : undefined,
@@ -627,6 +600,7 @@ function App() {
         >
           <SignalPanel
             selectedModule={selectedModule}
+            onSignalAddToWaveform={handleSignalAddToWaveform}
           />
         </div>
 

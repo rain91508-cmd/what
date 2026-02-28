@@ -10,7 +10,7 @@
 // - Active Annotation (signal value overlay)
 // - Bookmark management
 
-import type { Signal, Instance } from '../../types';
+import type { Signal, Module } from '../../types';
 
 // Code position for navigation
 export interface CodePosition {
@@ -66,7 +66,7 @@ export interface TraceResult {
 
 export interface DriverInfo {
   signal: Signal;
-  instance: Instance;
+  module: Module;
   line: number;
   type: DriverType;
 }
@@ -79,7 +79,7 @@ export enum DriverType {
 
 export interface LoadInfo {
   signal: Signal;
-  instance: Instance;
+  module: Module;
   line: number;
   type: LoadType;
 }

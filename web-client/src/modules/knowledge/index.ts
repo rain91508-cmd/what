@@ -20,7 +20,3 @@ export {
   store_source_file,
   clear_kdb_data,
 } from '../../core/storage/kdbStorage';
-
-// Legacy exports (for backward compatibility during migration)
-// These will be removed in a future update
-export { knowledgeManager, KnowledgeManagerImpl } from './knowledgeManager';

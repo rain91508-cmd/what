@@ -40,9 +40,9 @@ export function SourceCodeWindow({ module }: SourceCodeWindowProps) {
         setFilePath(sourceFile.path || '');
         
         // Set highlight line from declaration
-        if (module.declaration?.startLine) {
-          console.log('[SourceCodeWindow] Highlight line:', module.declaration.startLine);
-          setHighlightLine(module.declaration.startLine);
+        if (module.declaration?.line) {
+          console.log('[SourceCodeWindow] Highlight line:', module.declaration.line);
+          setHighlightLine(module.declaration.line);
         } else {
           setHighlightLine(null);
         }

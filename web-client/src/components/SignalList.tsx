@@ -1,12 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
-import type { Instance, Signal } from '../types';
+import type { Module, Signal } from '../types';
 import { FilterInput } from './FilterInput';
 import { wildcardMatch } from '../utils/wildcardMatch';
 import { kdbManager } from '../modules/knowledge';
 import { waveManager } from '../modules/wSignal';
 
 interface SignalListProps {
-  instance: Instance | null;
+  module: Module | null;
   onSignalSelect: (signal: Signal) => void;
   onSignalAddToWaveform: (signal: Signal) => void;
 }
@@ -22,7 +22,7 @@ const isIOSignal = (signal: Signal): boolean => {
   return signal.direction === 0 || signal.direction === 1 || signal.direction === 2;
 };
 
-export function SignalList({ instance, onSignalSelect, onSignalAddToWaveform }: SignalListProps) {
+export function SignalList({ module, onSignalSelect, onSignalAddToWaveform }: SignalListProps) {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [selectedSignal, setSelectedSignal] = useState<Signal | null>(null);
   const [ioFilter, setIoFilter] = useState<'all' | 'input' | 'output' | 'inout' | 'internal'>('all');
@@ -30,16 +30,20 @@ export function SignalList({ instance, onSignalSelect, onSignalAddToWaveform }: 
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (instance && kdbManager.isLoaded()) {
+    if (module && kdbManager.isLoaded()) {
       setLoading(true);
-      // Get signals from KDB for this instance
-      const instanceSignals = kdbManager.getSignalsForInstance(instance.fullPath);
-      setSignals(instanceSignals);
-      setLoading(false);
+      // Get signals from KDB for this module
+      kdbManager.getModuleSignals(module.id).then(moduleSignals => {
+        setSignals(moduleSignals);
+        setLoading(false);
+      }).catch(() => {
+        setSignals([]);
+        setLoading(false);
+      });
     } else {
       setSignals([]);
     }
-  }, [instance]);
+  }, [module]);
 
   const matchesIOFilter = (signal: Signal): boolean => {
     if (ioFilter === 'all') return true;
@@ -61,7 +65,7 @@ export function SignalList({ instance, onSignalSelect, onSignalAddToWaveform }: 
       const pattern = nameFilter;
       result = result.filter(signal =>
         wildcardMatch(pattern, signal.name) ||
-        wildcardMatch(pattern, signal.fullPath)
+        wildcardMatch(pattern, signal.fullName)
       );
     }
 
@@ -77,9 +81,9 @@ export function SignalList({ instance, onSignalSelect, onSignalAddToWaveform }: 
     // Check if signal exists in current waveform before adding
     const currentWaveform = waveManager.getCurrentWaveform();
     if (currentWaveform) {
-      const exists = await waveManager.checkSignalExists(currentWaveform, signal.fullPath);
+      const exists = await waveManager.checkSignalExists(currentWaveform, signal.fullName);
       if (!exists) {
-        console.warn(`Signal ${signal.fullPath} not found in waveform ${currentWaveform}`);
+        console.warn(`Signal ${signal.fullName} not found in waveform ${currentWaveform}`);
         // Still add it - the waveform viewer will show it as unavailable
       }
     }
@@ -87,13 +91,13 @@ export function SignalList({ instance, onSignalSelect, onSignalAddToWaveform }: 
   };
 
   const getSignalDisplayName = (signal: Signal) => {
-    if (signal.bitWidth > 1) {
+    if (signal.msb !== signal.lsb) {
       return `${signal.name}[${signal.msb}:${signal.lsb}]`;
     }
     return signal.name;
   };
 
-  if (!instance) {
+  if (!module) {
     return (
       <div className="signal-panel">
         <div className="panel-header">Signals</div>
@@ -103,7 +107,7 @@ export function SignalList({ instance, onSignalSelect, onSignalAddToWaveform }: 
           color: '#999',
           fontSize: '11px'
         }}>
-          Select an instance to view signals
+          Select a module to view signals
         </div>
       </div>
     );
@@ -177,16 +181,16 @@ export function SignalList({ instance, onSignalSelect, onSignalAddToWaveform }: 
             color: '#999',
             fontSize: '11px'
           }}>
-            {signals.length === 0 ? 'No signals found for this instance' : 'No signals match filter'}
+            {signals.length === 0 ? 'No signals found for this module' : 'No signals match filter'}
           </div>
         ) : (
           filteredSignals.map(signal => (
             <div
-              key={signal.handle}
-              className={`signal-item ${selectedSignal?.handle === signal.handle ? 'selected' : ''}`}
+              key={signal.id}
+              className={`signal-item ${selectedSignal?.id === signal.id ? 'selected' : ''}`}
               onClick={() => handleSignalClick(signal)}
               onDoubleClick={() => handleDoubleClick(signal)}
-              title={`Double-click to add to waveform\n${signal.fullPath}`}
+              title={`Double-click to add to waveform\n${signal.fullName}`}
             >
               <span className="signal-name">
                 {getSignalDisplayName(signal)}
