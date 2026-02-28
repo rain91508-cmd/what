@@ -1,37 +1,50 @@
 import { useState, useEffect } from 'react';
 import { kdbManager } from '../modules/knowledge/kdbManager';
-import type { Module } from '../types/kdb';
 
 interface SourceCodeWindowProps {
-  module: Module | null;
+  moduleIndex: number | null;  // 1-based module index
 }
 
-export function SourceCodeWindow({ module }: SourceCodeWindowProps) {
+export function SourceCodeWindow({ moduleIndex }: SourceCodeWindowProps) {
   const [content, setContent] = useState<string>('');
   const [filePath, setFilePath] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [highlightLine, setHighlightLine] = useState<number | null>(null);
+  const [moduleName, setModuleName] = useState<string>('');
 
   useEffect(() => {
     loadSourceFile();
-  }, [module]);
+  }, [moduleIndex]);
 
   const loadSourceFile = async () => {
-    console.log('[SourceCodeWindow] loadSourceFile called, module:', module);
+    console.log('[SourceCodeWindow] loadSourceFile called, moduleIndex:', moduleIndex);
     
-    if (!module) {
+    if (!moduleIndex) {
       setContent('');
       setFilePath('');
       setHighlightLine(null);
+      setModuleName('');
       return;
     }
 
     try {
       setLoading(true);
-      console.log('[SourceCodeWindow] Loading source file for module:', module.name, 'fileId:', module.fileId);
       
-      // Get source file from KDB
-      const sourceFile = await kdbManager.getSourceFile(module.fileId);
+      // Get module from KDB
+      const module = kdbManager.getModuleById(moduleIndex);
+      if (!module) {
+        setContent('// Module not found');
+        setFilePath('');
+        setHighlightLine(null);
+        setModuleName('');
+        return;
+      }
+      
+      setModuleName(module.name);
+      console.log('[SourceCodeWindow] Loading source file for module:', module.name, 'fileId:', module.definition?.fileId);
+      
+      // Get source file from KDB using definition.fileId
+      const sourceFile = await kdbManager.getSourceFile(module.definition.fileId);
       console.log('[SourceCodeWindow] Source file result:', sourceFile);
       
       if (sourceFile) {
@@ -39,16 +52,16 @@ export function SourceCodeWindow({ module }: SourceCodeWindowProps) {
         setContent(sourceFile.content || '');
         setFilePath(sourceFile.path || '');
         
-        // Set highlight line from declaration
-        if (module.declaration?.line) {
-          console.log('[SourceCodeWindow] Highlight line:', module.declaration.line);
-          setHighlightLine(module.declaration.line);
+        // Set highlight line from definition (ModuleSourceLocation)
+        if (module.definition?.startLine) {
+          console.log('[SourceCodeWindow] Highlight line:', module.definition.startLine);
+          setHighlightLine(module.definition.startLine);
         } else {
           setHighlightLine(null);
         }
       } else {
-        console.log('[SourceCodeWindow] Source file not found for fileId:', module.fileId);
-        setContent(`// Source file not found for module: ${module.name}\n// File ID: ${module.fileId}`);
+        console.log('[SourceCodeWindow] Source file not found for fileId:', module.definition?.fileId);
+        setContent(`// Source file not found for module: ${module.name}\n// File ID: ${module.definition?.fileId}`);
         setFilePath('');
         setHighlightLine(null);
       }
@@ -88,7 +101,7 @@ export function SourceCodeWindow({ module }: SourceCodeWindowProps) {
           color: '#999',
           fontSize: '12px',
         }}>
-          {module ? `No source file for: ${module.name}` : 'Select an instance to view source code'}
+          {moduleName ? `No source file for: ${moduleName}` : 'Select an instance to view source code'}
         </div>
       );
     }
@@ -163,7 +176,7 @@ export function SourceCodeWindow({ module }: SourceCodeWindowProps) {
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
       }}>
-        {filePath ? `Source: ${filePath}` : module ? `Source: ${module.name}` : 'Source Code'}
+        {filePath ? `Source: ${filePath}` : moduleName ? `Source: ${moduleName}` : 'Source Code'}
       </div>
       {renderCode()}
     </div>

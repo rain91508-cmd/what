@@ -2,16 +2,24 @@
 // Knowledge Base Manager - KDB Download & Storage
 // ============================================
 //
-// New Architecture (per kdb-refactor-plan.md):
-// - On-demand loading: only load what's needed for display
-// - Use numeric IDs as keys (matching KDB proto)
-// - Tree traversal using childModuleIds
+// New Architecture (per interpreter-implementation.md):
+// - Module.id removed, use array index + 1
+// - Module.fullName removed, calculate dynamically
+// - Signal split into SignalDef and SignalInst
+// - SignalInst stored in global allSignalInsts
 //
 
 import { apiService } from '../../services/api';
 import { indexedDBManager } from '../../core/storage/indexedDB';
 import { parseKdbWithWasm } from './kdbWasmParser';
-import type { Module, Signal, SourceFile, DesignHierarchy } from '../../types/kdb';
+import type { 
+  Module, 
+  Signal, 
+  SignalDef, 
+  SignalInst,
+  SourceFile, 
+  DesignHierarchy
+} from '../../types/kdb';
 
 // Tree node for UI display
 export interface TreeNode {
@@ -27,17 +35,19 @@ export interface TreeNode {
 class KdbManager {
   private currentKdbId: string | null = null;
   private downloading = false;
+  // Cache for modules and signal instances (loaded on demand)
+  private modules: Module[] = [];
+  private allSignalInsts: SignalInst[] = [];
 
   /**
    * Check if KDB is available on server
-   * Only returns valid KDBs (is_valid = true)
    */
   async checkServerKdb(): Promise<{ available: boolean; name?: string; size?: number }> {
     try {
       const response = await apiService.getKdbList();
       if (response.status === 'success' && response.data && response.data.kdbs && response.data.kdbs.length > 0) {
-        // Filter only valid KDBs
-        const validKdbs = response.data.kdbs.filter((kdb: any) => kdb.is_valid);
+        const kdbs = response.data.kdbs as any[];
+        const validKdbs = kdbs.filter((kdb: any) => kdb.is_valid);
         if (validKdbs.length > 0) {
           const kdb = validKdbs[0];
           return {
@@ -56,7 +66,6 @@ class KdbManager {
 
   /**
    * Download and load KDB from server
-   * Uses HTTP Range for resumable download
    */
   async downloadAndLoadKdb(
     kdbName: string,
@@ -70,7 +79,6 @@ class KdbManager {
     this.downloading = true;
 
     try {
-      // Download KDB file
       const kdbData = await apiService.downloadKdb(kdbName, onProgress);
       if (!kdbData) {
         throw new Error('Failed to download KDB');
@@ -78,13 +86,14 @@ class KdbManager {
 
       console.log('[KdbManager] Download complete, starting WASM parsing...');
 
-      // Parse KDB using WASM - it will store data directly to IndexedDB
       const success = await this.parseKdb(kdbData, kdbName, (msg) => {
         console.log('[KdbManager]', msg);
       });
 
       if (success) {
         this.currentKdbId = kdbName;
+        // Load modules and signal instances into memory
+        await this.loadKdbData();
         console.log('[KdbManager] KDB loaded successfully:', kdbName);
         return true;
       }
@@ -99,20 +108,31 @@ class KdbManager {
   }
 
   /**
+   * Load KDB data from IndexedDB into memory
+   */
+  private async loadKdbData(): Promise<void> {
+    if (!this.currentKdbId) return;
+    
+    // Load all modules
+    this.modules = await indexedDBManager.getAllModules(this.currentKdbId);
+    
+    // Load all signal instances
+    this.allSignalInsts = await indexedDBManager.getAllSignalInsts(this.currentKdbId);
+    
+    console.log(`[KdbManager] Loaded ${this.modules.length} modules and ${this.allSignalInsts.length} signal instances`);
+  }
+
+  /**
    * Parse KDB binary data and store to IndexedDB via WASM
-   * Supports both 'KDB\x00' and 'CWDK' magic numbers
    */
   private async parseKdb(data: ArrayBuffer, kdbId: string, onMessage?: (msg: string) => void): Promise<boolean> {
-    // Check magic number
     const view = new DataView(data);
-    const magic = view.getUint32(0, true); // little-endian
+    const magic = view.getUint32(0, true);
 
-    // Support CWDK format (zstd compressed)
     if (magic === 0x4B445743) { // "CWDK"
       console.log('[KdbManager] Detected CWDK format, using WASM parser');
       onMessage?.('Detected CWDK format (zstd compressed)');
       
-      // Use WASM parser - it will store data directly to IndexedDB
       const success = await parseKdbWithWasm(kdbId, data, onMessage);
       if (success) {
         console.log('[KdbManager] WASM parsing successful, data stored to IndexedDB');
@@ -125,83 +145,192 @@ class KdbManager {
       return false;
     }
 
-    // Legacy KDB\x00 format
     const magicStr = String.fromCharCode(...new Uint8Array(data, 0, 4));
-    if (magicStr === 'KDB\x00') {
-      console.log('[KdbManager] Detected legacy KDB format');
-      onMessage?.('Detected legacy KDB format (not supported)');
-      return false;
-    }
-
     console.warn('[KdbManager] Invalid KDB magic number:', magicStr || magic.toString(16));
     onMessage?.(`Invalid KDB magic number: ${magicStr || magic.toString(16)}`);
     return false;
+  }
+
+  // ==================== Dynamic Calculation Helpers ====================
+
+  /**
+   * Calculate module's full hierarchical name from parent chain
+   * Computed on demand, not stored
+   */
+  calculateModuleFullName(moduleIndex: number): string {
+    const names: string[] = [];
+    let currentId = moduleIndex;
+    
+    while (currentId > 0) {
+      const module = this.getModuleById(currentId);
+      if (!module) break;
+      
+      names.push(module.name);
+      if (module.parentModuleId === 0) break;
+      currentId = module.parentModuleId;
+    }
+    
+    return names.reverse().join('.');
+  }
+
+  /**
+   * Calculate signal's full hierarchical name
+   * Computed on demand when needed
+   */
+  calculateSignalFullName(parentModuleId: number, signalName: string): string {
+    const moduleFullName = this.calculateModuleFullName(parentModuleId);
+    return moduleFullName ? `${moduleFullName}.${signalName}` : signalName;
+  }
+
+  /**
+   * Get module by ID (1-based)
+   * Uses in-memory cache for fast access
+   */
+  getModuleById(id: number): Module | null {
+    if (id <= 0 || id > this.modules.length) return null;
+    return this.modules[id - 1];
+  }
+
+  /**
+   * Get signal instance by global ID (0-based index in allSignalInsts)
+   */
+  getSignalInstByGlobalId(globalId: number): SignalInst | null {
+    if (globalId < 0 || globalId >= this.allSignalInsts.length) return null;
+    return this.allSignalInsts[globalId];
+  }
+
+  /**
+   * Get signal definition for a module
+   * For instances, gets from definition module
+   */
+  getSignalDefs(moduleId: number): SignalDef[] {
+    const module = this.getModuleById(moduleId);
+    if (!module) return [];
+    
+    if (module.isInstance && module.defModuleId > 0) {
+      // Instance: get signal defs from definition module
+      const defModule = this.getModuleById(module.defModuleId);
+      return defModule?.signalDefs || [];
+    }
+    
+    // Definition: use own signal defs
+    return module.signalDefs || [];
+  }
+
+  /**
+   * Build complete Signal object from SignalDef + SignalInst
+   * Computed on demand for UI display
+   */
+  buildSignal(globalId: number): Signal | null {
+    const inst = this.getSignalInstByGlobalId(globalId);
+    if (!inst) return null;
+    
+    const module = this.getModuleById(inst.parentModuleId);
+    if (!module) return null;
+    
+    // Get signal defs
+    const signalDefs = this.getSignalDefs(inst.parentModuleId);
+    
+    // Calculate local index within module
+    const localIndex = globalId - module.signalInstsStartId;
+    if (localIndex < 0 || localIndex >= signalDefs.length) return null;
+    
+    const def = signalDefs[localIndex];
+    
+    return {
+      globalId,
+      localIndex,
+      name: def.name,
+      fullName: this.calculateSignalFullName(inst.parentModuleId, def.name),
+      signalType: def.type,
+      direction: def.direction,
+      msb: inst.msb,
+      lsb: inst.lsb,
+      declaration: def.declaration,
+      driverSignalGlobalIds: inst.driverSignalGlobalIds,
+      driverLines: inst.driverLines,
+      parentModuleId: inst.parentModuleId,
+    };
   }
 
   // ==================== On-Demand Loading API ====================
 
   /**
    * Get top-level modules for tree root
-   * Returns tree nodes for display
    */
   async getTopLevelModules(): Promise<TreeNode[]> {
-    console.log('[KdbManager] getTopLevelModules called, currentKdbId:', this.currentKdbId);
-    if (!this.currentKdbId) return [];
+    console.log('[KdbManager] getTopLevelModules called');
+    if (!this.currentKdbId || this.modules.length === 0) return [];
     
-    const topModuleIds = await indexedDBManager.getTopModuleIds(this.currentKdbId);
-    console.log('[KdbManager] topModuleIds:', topModuleIds);
-    if (!topModuleIds || topModuleIds.length === 0) return [];
+    // Find top-level modules (parentModuleId === 0)
+    const topModules = this.modules
+      .map((m, index) => ({ module: m, id: index + 1 }))
+      .filter(({ module }) => module.parentModuleId === 0);
     
-    const modules = await indexedDBManager.getModulesByIds(topModuleIds);
-    console.log('[KdbManager] modules from DB:', modules);
-    return modules.map(m => this.moduleToTreeNode(m));
+    console.log('[KdbManager] top modules:', topModules.length);
+    return topModules.map(({ module, id }) => this.moduleToTreeNode(module, id));
   }
 
   /**
    * Get child modules for lazy loading
-   * @param parentId - Parent module ID
    */
   async getChildModules(parentId: number): Promise<TreeNode[]> {
     console.log('[KdbManager] getChildModules called for parentId:', parentId);
-    if (!this.currentKdbId) return [];
+    if (!this.currentKdbId || this.modules.length === 0) return [];
     
-    const parent = await indexedDBManager.getModule(parentId);
-    console.log('[KdbManager] parent module:', parent);
+    const parent = this.getModuleById(parentId);
     if (!parent || !parent.childModuleIds || parent.childModuleIds.length === 0) {
-      console.log('[KdbManager] No child modules found');
       return [];
     }
     
-    console.log('[KdbManager] childModuleIds:', parent.childModuleIds);
-    const children = await indexedDBManager.getModulesByIds(parent.childModuleIds);
-    console.log('[KdbManager] children from DB:', children);
-    return children.map(m => this.moduleToTreeNode(m));
+    return parent.childModuleIds.map(childId => {
+      const child = this.getModuleById(childId);
+      return child ? this.moduleToTreeNode(child, childId) : null;
+    }).filter((node): node is TreeNode => node !== null);
   }
 
   /**
    * Get module details by ID
    */
   async getModule(id: number): Promise<Module | null> {
-    return indexedDBManager.getModule(id);
+    return this.getModuleById(id);
   }
 
   /**
-   * Get module by full name
+   * Get module by full name (searches all modules)
    */
   async getModuleByFullName(fullName: string): Promise<Module | null> {
-    return indexedDBManager.getModuleByFullName(fullName);
+    for (let i = 1; i <= this.modules.length; i++) {
+      const moduleFullName = this.calculateModuleFullName(i);
+      if (moduleFullName === fullName) {
+        return this.getModuleById(i);
+      }
+    }
+    return null;
   }
 
   /**
    * Get signals for a module
-   * Signals are embedded in module, so this just returns module.signals
+   * Builds Signal objects on demand from SignalDef + SignalInst
    */
   async getModuleSignals(moduleId: number): Promise<Signal[]> {
     console.log('[KdbManager] getModuleSignals called for moduleId:', moduleId);
-    const module = await indexedDBManager.getModule(moduleId);
-    console.log('[KdbManager] module from DB:', module);
-    console.log('[KdbManager] module.signals:', module?.signals);
-    return module?.signals || [];
+    const module = this.getModuleById(moduleId);
+    if (!module) return [];
+    
+    const signalDefs = this.getSignalDefs(moduleId);
+    const signals: Signal[] = [];
+    
+    for (let i = 0; i < signalDefs.length; i++) {
+      const globalId = module.signalInstsStartId + i;
+      const signal = this.buildSignal(globalId);
+      if (signal) {
+        signals.push(signal);
+      }
+    }
+    
+    console.log(`[KdbManager] Built ${signals.length} signals for module ${moduleId}`);
+    return signals;
   }
 
   /**
@@ -212,7 +341,7 @@ class KdbManager {
   }
 
   /**
-   * Get source file by path (using index lookup)
+   * Get source file by path
    */
   async getSourceFileByPath(path: string): Promise<SourceFile | null> {
     if (!this.currentKdbId) return null;
@@ -248,7 +377,7 @@ class KdbManager {
    * Check if KDB is loaded
    */
   isLoaded(): boolean {
-    return this.currentKdbId !== null;
+    return this.currentKdbId !== null && this.modules.length > 0;
   }
 
   /**
@@ -265,18 +394,19 @@ class KdbManager {
    */
   async clear(): Promise<void> {
     this.currentKdbId = null;
-    // Clear all IndexedDB data
+    this.modules = [];
+    this.allSignalInsts = [];
     await indexedDBManager.clearAll();
     console.log('[KdbManager] Cleared all data');
   }
 
   // ==================== Private Helpers ====================
 
-  private moduleToTreeNode(module: Module): TreeNode {
+  private moduleToTreeNode(module: Module, id: number): TreeNode {
     return {
-      id: module.id,
+      id,
       name: module.name,
-      fullName: module.fullName,
+      fullName: this.calculateModuleFullName(id),
       isInstance: module.isInstance,
       hasChildren: module.childModuleIds.length > 0,
       childModuleIds: module.childModuleIds,

@@ -1,5 +1,11 @@
 // Manual protobuf message definitions for KDB
-// Based on interpreter/proto/kdb.proto
+// Based on interpreter/proto/kdb.proto - Updated for new structure
+// Changes:
+// - Signal split into SignalDef and SignalInst
+// - Module.id removed (use array index + 1)
+// - Module.full_name removed (calculate dynamically)
+// - Module.file_id removed (use definition.file_id)
+// - Module.declaration replaced with definition (ModuleSourceLocation)
 
 use prost::Message;
 
@@ -14,19 +20,6 @@ pub struct KDBHeader {
     pub created_at: String,
 }
 
-/// Source Link
-#[derive(Clone, PartialEq, Message)]
-pub struct SourceLink {
-    #[prost(uint32, tag = "1")]
-    pub line: u32,
-    #[prost(uint32, tag = "2")]
-    pub column_start: u32,
-    #[prost(uint32, tag = "3")]
-    pub column_end: u32,
-    #[prost(uint32, tag = "4")]
-    pub target_id: u32,
-}
-
 /// Source File
 #[derive(Clone, PartialEq, Message)]
 pub struct SourceFile {
@@ -36,10 +29,6 @@ pub struct SourceFile {
     pub path: String,
     #[prost(string, tag = "3")]
     pub content: String,
-    #[prost(message, repeated, tag = "4")]
-    pub signal_links: Vec<SourceLink>,
-    #[prost(message, repeated, tag = "5")]
-    pub submod_links: Vec<SourceLink>,
 }
 
 /// Source Location
@@ -49,6 +38,17 @@ pub struct SourceLocation {
     pub file_id: u32,
     #[prost(uint32, tag = "2")]
     pub line: u32,
+}
+
+/// Module Source Location (with start/end line)
+#[derive(Clone, PartialEq, Message)]
+pub struct ModuleSourceLocation {
+    #[prost(uint32, tag = "1")]
+    pub file_id: u32,
+    #[prost(uint32, tag = "2")]
+    pub start_line: u32,
+    #[prost(uint32, tag = "3")]
+    pub end_line: u32,
 }
 
 /// Signal Type Enum
@@ -76,54 +76,67 @@ pub enum PortDirection {
     Inout = 3,
 }
 
-/// Signal
+/// Signal Definition (stored in Definition modules)
+/// Contains static information shared among all instances
+/// Note: id removed, use array index as local index
 #[derive(Clone, PartialEq, Message)]
-pub struct Signal {
-    #[prost(uint64, tag = "1")]
-    pub id: u64,
+pub struct SignalDef {
+    // Note: id field removed - use array index as local index
     #[prost(string, tag = "2")]
     pub name: String,
-    #[prost(string, tag = "3")]
-    pub full_name: String,
-    #[prost(enumeration = "SignalType", tag = "4")]
+    #[prost(enumeration = "SignalType", tag = "3")]
     pub r#type: i32,
-    #[prost(uint32, tag = "5")]
-    pub msb: u32,
-    #[prost(uint32, tag = "6")]
-    pub lsb: u32,
-    #[prost(uint32, tag = "7")]
-    pub parent_module_id: u32,
-    #[prost(message, optional, tag = "8")]
+    #[prost(message, optional, tag = "4")]
     pub declaration: Option<SourceLocation>,
-    #[prost(uint64, repeated, tag = "9")]
-    pub driver_signal_ids: Vec<u64>,
-    #[prost(enumeration = "PortDirection", tag = "10")]
+    #[prost(enumeration = "PortDirection", tag = "5")]
     pub direction: i32,
-    #[prost(message, repeated, tag = "11")]
+}
+
+/// Signal Instance (stored in global all_signal_insts array)
+/// Contains instance-specific information
+/// Note: id removed, use global array index
+/// Note: full_name removed - dynamically reconstructed
+#[derive(Clone, PartialEq, Message)]
+pub struct SignalInst {
+    // Note: id field removed - use global array index
+    // Note: full_name removed - dynamically reconstructed from module hierarchy + signal name
+    #[prost(uint32, tag = "3")]
+    pub msb: u32,
+    #[prost(uint32, tag = "4")]
+    pub lsb: u32,
+    #[prost(uint32, tag = "5")]
+    pub parent_module_id: u32,
+    #[prost(uint64, repeated, tag = "6")]
+    pub driver_signal_global_ids: Vec<u64>,
+    #[prost(message, repeated, tag = "7")]
     pub driver_lines: Vec<SourceLocation>,
 }
 
-/// Module
+/// Module - can be a module definition or an instance
+/// Note: id is implicit (array index + 1)
+/// Note: full_name is calculated dynamically from parent chain
 #[derive(Clone, PartialEq, Message)]
 pub struct Module {
-    #[prost(uint32, tag = "1")]
-    pub id: u32,
-    #[prost(string, tag = "2")]
+    // Note: id removed - use array index + 1 as implicit ID
+    #[prost(string, tag = "1")]
     pub name: String,
-    #[prost(string, tag = "3")]
-    pub full_name: String,
-    #[prost(uint32, tag = "4")]
+    // Note: full_name removed - calculate dynamically
+    #[prost(uint32, tag = "2")]
     pub parent_module_id: u32,
-    #[prost(uint32, tag = "5")]
-    pub file_id: u32,
-    #[prost(message, optional, tag = "6")]
-    pub declaration: Option<SourceLocation>,
-    #[prost(message, repeated, tag = "7")]
-    pub signals: Vec<Signal>,
-    #[prost(bool, tag = "8")]
+    // Note: file_id removed - use definition.file_id instead
+    #[prost(message, optional, tag = "3")]
+    pub definition: Option<ModuleSourceLocation>,
+    #[prost(message, repeated, tag = "4")]
+    pub signal_defs: Vec<SignalDef>,
+    #[prost(bool, tag = "6")]
     pub is_instance: bool,
-    #[prost(uint32, repeated, tag = "9")]
+    #[prost(uint32, repeated, tag = "7")]
     pub child_module_ids: Vec<u32>,
+    #[prost(uint32, tag = "8")]
+    pub def_module_id: u32,  // 0 if this is a definition
+    #[prost(uint32, tag = "9")]
+    pub signal_insts_start_id: u32,  // Start index in all_signal_insts
+    // Note: signal_insts_count removed - derived from signal_defs.len() or def_module's signal_defs.len()
 }
 
 /// Design Hierarchy
@@ -135,7 +148,7 @@ pub struct DesignHierarchy {
     pub module_ids: Vec<u32>,
 }
 
-/// Knowledge Base
+/// Knowledge Base - Complete design representation
 #[derive(Clone, PartialEq, Message)]
 pub struct KnowledgeBase {
     #[prost(message, optional, tag = "1")]
@@ -146,4 +159,7 @@ pub struct KnowledgeBase {
     pub modules: Vec<Module>,
     #[prost(message, repeated, tag = "4")]
     pub hierarchies: Vec<DesignHierarchy>,
+    // New: Global signal instances array for memory optimization
+    #[prost(message, repeated, tag = "5")]
+    pub all_signal_insts: Vec<SignalInst>,
 }

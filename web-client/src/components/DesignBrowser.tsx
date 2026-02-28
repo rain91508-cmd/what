@@ -1,11 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { kdbManager, type TreeNode } from '../modules/knowledge/kdbManager';
-import type { Module } from '../types/kdb';
 
 interface DesignBrowserProps {
-  onModuleSelect: (module: Module) => void;
-  onModuleDoubleClick?: (module: Module) => void;
-  selectedModuleId: number | null;
+  onModuleSelect: (moduleIndex: number) => void;
+  onModuleDoubleClick?: (moduleIndex: number) => void;
+  selectedModuleIndex: number | null;
   kdbLoaded: boolean;
 }
 
@@ -17,7 +16,7 @@ interface TreeNodeState extends TreeNode {
 export function DesignBrowser({ 
   onModuleSelect, 
   onModuleDoubleClick, 
-  selectedModuleId,
+  selectedModuleIndex,
   kdbLoaded 
 }: DesignBrowserProps) {
   const [expandedNodes, setExpandedNodes] = useState<Set<number>>(new Set());
@@ -141,10 +140,8 @@ export function DesignBrowser({
     const node = treeNodes.get(nodeId);
     if (!node) return;
 
-    const module = await kdbManager.getModule(nodeId);
-    if (module) {
-      onModuleSelect(module);
-    }
+    // Pass module index (1-based) to parent
+    onModuleSelect(nodeId);
   };
 
   const handleNodeDoubleClick = async (nodeId: number) => {
@@ -152,12 +149,8 @@ export function DesignBrowser({
     
     if (!onModuleDoubleClick) return;
     
-    const module = await kdbManager.getModule(nodeId);
-    console.log('[DesignBrowser] Got module:', module);
-    
-    if (module) {
-      onModuleDoubleClick(module);
-    }
+    // Pass module index (1-based) to parent
+    onModuleDoubleClick(nodeId);
   };
 
   const renderTreeNode = (nodeId: number, depth: number = 0) => {
@@ -165,7 +158,7 @@ export function DesignBrowser({
     if (!node) return null;
 
     const isExpanded = expandedNodes.has(nodeId);
-    const isSelected = selectedModuleId === nodeId;
+    const isSelected = selectedModuleIndex === nodeId;
     const hasChildren = node.hasChildren;
     const isLoading = node.loading;
 
@@ -271,7 +264,7 @@ export function DesignBrowser({
     if (!node) return null;
 
     const isExpanded = expandedNodes.has(nodeId);
-    const isSelected = selectedModuleId === nodeId;
+    const isSelected = selectedModuleIndex === nodeId;
     const hasChildren = node.hasChildren;
     const isLoading = node.loading;
     const childIds = getChildIds(nodeId);

@@ -47,7 +47,7 @@ import { WaveSelectionDialog } from './components/WaveSelectionDialog'
 import { Splitter } from './components/ResizablePanel'
 
 // Types
-import type { Module, Signal } from './types/kdb'
+import type { Signal } from './types/kdb'
 import type { WaveformInfo, ColumnWidths, TimeConfig, Tab } from './components/TabPanel'
 
 // 默认时间配置
@@ -69,8 +69,8 @@ function App() {
   const [, setWaveforms] = useState<WaveformInfo[]>([])
   const [, setCurrentWaveform] = useState<string | null>(null)
   
-  // Global selected module for hierarchy/signal panel
-  const [selectedModule, setSelectedModule] = useState<Module | null>(null)
+  // Global selected module index for hierarchy/signal panel (1-based)
+  const [selectedModuleIndex, setSelectedModuleIndex] = useState<number | null>(null)
   
   // Helper function to create default groups
   const createDefaultGroups = () => ({
@@ -94,7 +94,7 @@ function App() {
 
   // Dynamic tabs state - each tab has its own data
   const [tabs, setTabs] = useState<Tab[]>([
-    { id: 'source-1', label: 'Source', type: 'source', module: null },
+    { id: 'source-1', label: 'Source', type: 'source', moduleIndex: null },
     { 
       id: 'waveform-1', 
       label: 'Waveform', 
@@ -241,7 +241,7 @@ function App() {
       }
       
       // Force refresh of components
-      setSelectedModule(null)
+      setSelectedModuleIndex(null)
       
       // Show waveform selection dialog
       setShowWaveSelectionDialog(true)
@@ -264,7 +264,7 @@ function App() {
     setKdbLoaded(false)
     setWaveforms([])
     setCurrentWaveform(null)
-    setSelectedModule(null)
+    setSelectedModuleIndex(null)
     
     // Clear managers (this clears IndexedDB data)
     await kdbManager.clear()
@@ -297,26 +297,29 @@ function App() {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
   }
 
-  const handleModuleSelect = (module: Module) => {
-    // Update global selected module for hierarchy/signal panel
-    setSelectedModule(module)
-    addMessage(`Selected module: ${module.fullName}`)
+  const handleModuleSelect = (moduleIndex: number) => {
+    // Update global selected module index for hierarchy/signal panel
+    setSelectedModuleIndex(moduleIndex)
+    // Calculate fullName on demand
+    const fullName = kdbManager.calculateModuleFullName(moduleIndex)
+    addMessage(`Selected module: ${fullName}`)
   }
 
-  const handleModuleDoubleClick = (module: Module) => {
-    console.log('[App] handleModuleDoubleClick called, module:', module);
+  const handleModuleDoubleClick = (moduleIndex: number) => {
+    console.log('[App] handleModuleDoubleClick called, moduleIndex:', moduleIndex);
     
-    // Update global selected module
-    setSelectedModule(module)
+    // Update global selected module index
+    setSelectedModuleIndex(moduleIndex)
+    
     // Find or create a source tab for this module and switch to it
     const existingSourceTab = tabs.find(t => t.type === 'source')
     console.log('[App] Existing source tab:', existingSourceTab);
     
     if (existingSourceTab) {
-      // Update existing source tab with the new module
+      // Update existing source tab with the new module index
       setTabs(prev => prev.map(tab => 
         tab.id === existingSourceTab.id 
-          ? { ...tab, module } 
+          ? { ...tab, moduleIndex } 
           : tab
       ))
       setActiveTab(existingSourceTab.id)
@@ -328,14 +331,16 @@ function App() {
         id: newId,
         label: 'Source',
         type: 'source',
-        module,
+        moduleIndex,
       }
       console.log('[App] Creating new source tab:', newTab);
       setTabs(prev => [...prev, newTab])
       setActiveTab(newId)
       console.log('[App] Created new source tab, set active to:', newId);
     }
-    addMessage(`Open source for: ${module.fullName}`)
+    // Calculate fullName on demand
+    const fullName = kdbManager.calculateModuleFullName(moduleIndex)
+    addMessage(`Open source for: ${fullName}`)
   }
 
   const handleSignalAddToWaveform = (signal: Signal) => {
@@ -387,7 +392,7 @@ function App() {
       id: newId,
       label: type === 'source' ? `Source ${tabCounter.current - 1}` : `Waveform ${tabCounter.current - 1}`,
       type,
-      module: type === 'source' ? null : undefined,
+      moduleIndex: type === 'source' ? null : undefined,
       signals: type === 'waveform' ? [] : undefined,
       groups: type === 'waveform' ? createDefaultGroups() : undefined,
       selectedGroup: type === 'waveform' ? 'group_1' : undefined,
@@ -585,7 +590,7 @@ function App() {
             key={kdbLoaded ? 'kdb-loaded' : 'no-kdb'}
             onModuleSelect={handleModuleSelect}
             onModuleDoubleClick={handleModuleDoubleClick}
-            selectedModuleId={selectedModule?.id || null}
+            selectedModuleIndex={selectedModuleIndex}
             kdbLoaded={kdbLoaded}
           />
         </div>
@@ -599,7 +604,7 @@ function App() {
           style={{ width: signalWidth, minWidth: 160, maxWidth: 280 }}
         >
           <SignalPanel
-            selectedModule={selectedModule}
+            selectedModuleIndex={selectedModuleIndex}
             onSignalAddToWaveform={handleSignalAddToWaveform}
           />
         </div>
@@ -620,7 +625,7 @@ function App() {
             {activeTabData?.type === 'source' ? (
               <SourceCodeWindow
                 key={activeTabData.id}
-                module={activeTabData.module || null}
+                moduleIndex={activeTabData.moduleIndex || null}
               />
             ) : activeTabData ? (
               <WaveformWindow

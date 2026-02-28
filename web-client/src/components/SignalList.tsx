@@ -1,12 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
-import type { Module, Signal } from '../types';
+import type { Signal } from '../types';
 import { FilterInput } from './FilterInput';
 import { wildcardMatch } from '../utils/wildcardMatch';
 import { kdbManager } from '../modules/knowledge';
 import { waveManager } from '../modules/wSignal';
 
 interface SignalListProps {
-  module: Module | null;
+  moduleIndex: number | null;  // 1-based module index
   onSignalSelect: (signal: Signal) => void;
   onSignalAddToWaveform: (signal: Signal) => void;
 }
@@ -22,7 +22,7 @@ const isIOSignal = (signal: Signal): boolean => {
   return signal.direction === 0 || signal.direction === 1 || signal.direction === 2;
 };
 
-export function SignalList({ module, onSignalSelect, onSignalAddToWaveform }: SignalListProps) {
+export function SignalList({ moduleIndex, onSignalSelect, onSignalAddToWaveform }: SignalListProps) {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [selectedSignal, setSelectedSignal] = useState<Signal | null>(null);
   const [ioFilter, setIoFilter] = useState<'all' | 'input' | 'output' | 'inout' | 'internal'>('all');
@@ -30,10 +30,10 @@ export function SignalList({ module, onSignalSelect, onSignalAddToWaveform }: Si
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (module && kdbManager.isLoaded()) {
+    if (moduleIndex && kdbManager.isLoaded()) {
       setLoading(true);
       // Get signals from KDB for this module
-      kdbManager.getModuleSignals(module.id).then(moduleSignals => {
+      kdbManager.getModuleSignals(moduleIndex).then(moduleSignals => {
         setSignals(moduleSignals);
         setLoading(false);
       }).catch(() => {
@@ -43,7 +43,7 @@ export function SignalList({ module, onSignalSelect, onSignalAddToWaveform }: Si
     } else {
       setSignals([]);
     }
-  }, [module]);
+  }, [moduleIndex]);
 
   const matchesIOFilter = (signal: Signal): boolean => {
     if (ioFilter === 'all') return true;
@@ -186,8 +186,8 @@ export function SignalList({ module, onSignalSelect, onSignalAddToWaveform }: Si
         ) : (
           filteredSignals.map(signal => (
             <div
-              key={signal.id}
-              className={`signal-item ${selectedSignal?.id === signal.id ? 'selected' : ''}`}
+              key={signal.globalId}
+              className={`signal-item ${selectedSignal?.globalId === signal.globalId ? 'selected' : ''}`}
               onClick={() => handleSignalClick(signal)}
               onDoubleClick={() => handleDoubleClick(signal)}
               title={`Double-click to add to waveform\n${signal.fullName}`}

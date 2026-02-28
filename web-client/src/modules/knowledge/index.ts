@@ -17,6 +17,7 @@ export { parseKdbWithWasm, isWasmAvailable } from './kdbWasmParser';
 export {
   store_knowledge_base,
   store_module,
+  store_signal_inst,
   store_source_file,
   clear_kdb_data,
 } from '../../core/storage/kdbStorage';

@@ -1,21 +1,21 @@
 import { useState, useEffect, useRef } from 'react';
 import { kdbManager } from '../modules/knowledge/kdbManager';
-import type { Signal, Module } from '../types/kdb';
+import type { Signal } from '../types/kdb';
 import { SignalType } from '../types/kdb';
 import { FilterInput } from './FilterInput';
 
 interface SignalPanelProps {
-  selectedModule: Module | null;
+  selectedModuleIndex: number | null;  // 1-based module index
   onSignalAddToWaveform?: (signal: Signal) => void;
 }
 
-export function SignalPanel({ selectedModule, onSignalAddToWaveform }: SignalPanelProps) {
+export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform }: SignalPanelProps) {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [ioFilters, setIoFilters] = useState<Set<string>>(new Set(['all']));
   const [showIoDropdown, setShowIoDropdown] = useState(false);
-  const [selectedSignalId, setSelectedSignalId] = useState<number | null>(null);
+  const [selectedSignalGlobalId, setSelectedSignalGlobalId] = useState<number | null>(null);
   const ioDropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown when clicking outside
@@ -32,19 +32,19 @@ export function SignalPanel({ selectedModule, onSignalAddToWaveform }: SignalPan
   // Load signals when selected module changes
   useEffect(() => {
     loadSignals();
-  }, [selectedModule]);
+  }, [selectedModuleIndex]);
 
   const loadSignals = async () => {
-    console.log('[SignalPanel] loadSignals called, selectedModule:', selectedModule);
-    if (!selectedModule) {
+    console.log('[SignalPanel] loadSignals called, selectedModuleIndex:', selectedModuleIndex);
+    if (!selectedModuleIndex) {
       setSignals([]);
       return;
     }
 
     try {
       setLoading(true);
-      console.log('[SignalPanel] Fetching signals for module id:', selectedModule.id);
-      const moduleSignals = await kdbManager.getModuleSignals(selectedModule.id);
+      console.log('[SignalPanel] Fetching signals for module index:', selectedModuleIndex);
+      const moduleSignals = await kdbManager.getModuleSignals(selectedModuleIndex);
       console.log('[SignalPanel] Got signals:', moduleSignals);
       setSignals(moduleSignals);
     } catch (err) {
@@ -170,7 +170,7 @@ export function SignalPanel({ selectedModule, onSignalAddToWaveform }: SignalPan
         alignItems: 'center',
       }}>
         <span>Signals</span>
-        {selectedModule && (
+        {selectedModuleIndex && (
           <span style={{ fontSize: '11px', color: '#666', fontWeight: 'normal' }}>
             {signals.length} signals
           </span>
@@ -266,7 +266,7 @@ export function SignalPanel({ selectedModule, onSignalAddToWaveform }: SignalPan
 
       {/* Signal list */}
       <div style={{ flex: 1, overflow: 'auto' }}>
-        {!selectedModule ? (
+        {!selectedModuleIndex ? (
           <div style={{ 
             padding: '40px 20px', 
             textAlign: 'center', 
@@ -297,7 +297,7 @@ export function SignalPanel({ selectedModule, onSignalAddToWaveform }: SignalPan
           <div>
             {filterSignals(signals).map((signal, index) => (
               <div
-                key={`${signal.id}-${index}`}
+                key={`${signal.globalId}-${index}`}
                 style={{
                   padding: '6px 12px',
                   borderBottom: '1px solid #f0f0f0',
@@ -306,9 +306,9 @@ export function SignalPanel({ selectedModule, onSignalAddToWaveform }: SignalPan
                   alignItems: 'center',
                   cursor: 'pointer',
                   userSelect: 'none',
-                  backgroundColor: selectedSignalId === signal.id ? '#e3f2fd' : 'transparent',
+                  backgroundColor: selectedSignalGlobalId === signal.globalId ? '#e3f2fd' : 'transparent',
                 }}
-                onClick={() => setSelectedSignalId(signal.id)}
+                onClick={() => setSelectedSignalGlobalId(signal.globalId)}
                 onDoubleClick={() => {
                   if (onSignalAddToWaveform) {
                     onSignalAddToWaveform(signal);

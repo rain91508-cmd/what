@@ -27,6 +27,9 @@ extern "C" {
     fn store_module(id: u32, data: &JsValue, kdb_id: &str) -> js_sys::Promise;
     
     #[wasm_bindgen(js_namespace = window)]
+    fn store_signal_inst(global_index: u32, data: &JsValue, kdb_id: &str) -> js_sys::Promise;
+    
+    #[wasm_bindgen(js_namespace = window)]
     fn store_source_file(id: u32, path: &str, content: &str, kdb_id: &str) -> js_sys::Promise;
     
     #[wasm_bindgen(js_namespace = window)]
@@ -76,7 +79,9 @@ pub async fn parse_and_store_kdb(kdb_id: &str, data: &[u8]) -> Result<String, Js
     // Parse protobuf data
     let kdb_data = match parse_kdb_protobuf(&decompressed) {
         Ok(data) => {
-            console_log!("[WASM] Parsed KDB: {} modules, {} hierarchies", data.modules.len(), data.hierarchies.len());
+            let module_count = data.modules.len();
+            let signal_inst_count = data.all_signal_insts.len();
+            console_log!("[WASM] Parsed KDB: {} modules, {} signal instances", module_count, signal_inst_count);
             console_log!("[WASM] Hierarchies: {:?}", data.hierarchies.iter().map(|h| h.top_module_id).collect::<Vec<_>>());
             data
         }
@@ -100,31 +105,94 @@ pub async fn parse_and_store_kdb(kdb_id: &str, data: &[u8]) -> Result<String, Js
 }
 
 /// Decompress zstd data using pure Rust ruzstd
-fn decompress_zstd(compressed: &[u8], _original_size: usize) -> Result<Vec<u8>, String> {
-    let mut decoder = match StreamingDecoder::new(compressed) {
-        Ok(d) => d,
-        Err(e) => return Err(format!("Failed to create zstd decoder: {:?}", e)),
-    };
+fn decompress_zstd(compressed: &[u8], original_size: usize) -> Result<Vec<u8>, String> {
+    console_log!("[WASM] Decompressing {} bytes (expected: {})...", compressed.len(), original_size);
     
-    let mut decompressed = Vec::new();
-    match decoder.read_to_end(&mut decompressed) {
-        Ok(_) => Ok(decompressed),
-        Err(e) => Err(format!("Failed to decompress: {}", e)),
+    // Try to decode with FrameDecoder
+    use ruzstd::frame_decoder::FrameDecoder;
+    
+    let mut decompressed = Vec::with_capacity(original_size);
+    let mut decoder = FrameDecoder::new();
+    
+    match decoder.decode_all(compressed, &mut decompressed) {
+        Ok(_) => {
+            console_log!("[WASM] Decompressed {} bytes", decompressed.len());
+            if decompressed.len() != original_size {
+                console_log!("[WASM] WARNING: Decompressed size mismatch (expected {}, got {})", 
+                    original_size, decompressed.len());
+            }
+            Ok(decompressed)
+        }
+        Err(e) => {
+            console_log!("[WASM] FrameDecoder failed: {:?}", e);
+            // Try streaming decoder as fallback
+            console_log!("[WASM] Trying StreamingDecoder...");
+            let mut decoder = match StreamingDecoder::new(compressed) {
+                Ok(d) => d,
+                Err(e) => return Err(format!("Failed to create zstd decoder: {:?}", e)),
+            };
+            
+            let mut decompressed2 = Vec::with_capacity(original_size);
+            match decoder.read_to_end(&mut decompressed2) {
+                Ok(_) => {
+                    console_log!("[WASM] StreamingDecoder decompressed {} bytes", decompressed2.len());
+                    Ok(decompressed2)
+                }
+                Err(e) => Err(format!("Failed to decompress: {}", e))
+            }
+        }
     }
 }
 
 /// Parse protobuf data using prost
 fn parse_kdb_protobuf(data: &[u8]) -> Result<KnowledgeBase, String> {
     console_log!("[WASM] Parsing protobuf data...");
+    console_log!("[WASM] Data size: {} bytes", data.len());
+    
+    // Print first 100 bytes in hex
+    let hex_str: String = data.iter().take(100).map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
+    console_log!("[WASM] First 100 bytes: {}", hex_str);
 
+    // Try to parse KnowledgeBase
     match KnowledgeBase::decode(data) {
         Ok(kdb_data) => {
             let module_count = kdb_data.modules.len();
-            let signal_count: usize = kdb_data.modules.iter().map(|m| m.signals.len()).sum();
-            console_log!("[WASM] Parsed KDB: {} modules, {} signals", module_count, signal_count);
+            let signal_inst_count = kdb_data.all_signal_insts.len();
+            console_log!("[WASM] SUCCESS! Parsed KDB: {} modules, {} signal instances", module_count, signal_inst_count);
+            
+            // Debug: print first module info
+            if let Some(first_mod) = kdb_data.modules.first() {
+                console_log!("[WASM] First module: name='{}', parent_id={}, is_instance={}", 
+                    first_mod.name, first_mod.parent_module_id, first_mod.is_instance);
+            }
+            
             Ok(kdb_data)
         }
-        Err(e) => Err(format!("Failed to decode protobuf: {}", e)),
+        Err(e) => {
+            console_log!("[WASM] ERROR: Protobuf decode failed: {}", e);
+            
+            // Try to decode header separately for debugging
+            match KDBHeader::decode(data) {
+                Ok(header) => {
+                    console_log!("[WASM] Header OK: version='{}', project='{}'", 
+                        header.version, header.project_name);
+                }
+                Err(header_err) => {
+                    console_log!("[WASM] Header also failed: {}", header_err);
+                }
+            }
+            
+            // Try to manually parse first few fields
+            console_log!("[WASM] Manual parse attempt:");
+            if data.len() >= 2 {
+                let tag = data[0];
+                let field_num = tag >> 3;
+                let wire_type = tag & 0x07;
+                console_log!("[WASM]   Byte 0: tag=0x{:02x}, field={}, wire_type={}", tag, field_num, wire_type);
+            }
+            
+            Err(format!("Failed to decode protobuf: {}", e))
+        }
     }
 }
 
@@ -139,7 +207,7 @@ async fn store_kdb_to_indexeddb(kdb_data: &KnowledgeBase, kdb_id: &str) -> Resul
         .collect();
     console_log!("[WASM] Extracted top_module_ids: {:?}", top_module_ids);
     
-    // 1. Store knowledge base metadata (header + hierarchies only)
+    // 1. Store knowledge base metadata (header + hierarchies only, no topModuleIds)
     let header = kdb_data.header.as_ref();
     let kb_data = serde_json::json!({
         "id": kdb_id,
@@ -148,7 +216,6 @@ async fn store_kdb_to_indexeddb(kdb_data: &KnowledgeBase, kdb_id: &str) -> Resul
             "projectName": header.map(|h| h.project_name.clone()).unwrap_or_else(|| kdb_id.to_string()),
             "createdAt": header.map(|h| h.created_at.clone()).unwrap_or_default(),
         },
-        "topModuleIds": top_module_ids,
         "hierarchies": kdb_data.hierarchies.iter().map(|h| serde_json::json!({
             "topModuleId": h.top_module_id,
             "moduleIds": h.module_ids.clone(),
@@ -157,8 +224,6 @@ async fn store_kdb_to_indexeddb(kdb_data: &KnowledgeBase, kdb_id: &str) -> Resul
     });
     
     let kb_value = serde_wasm_bindgen::to_value(&kb_data)?;
-    console_log!("[WASM] Storing knowledge base with topModuleIds: {:?}", top_module_ids);
-    console_log!("[WASM] kb_data JSON: {}", kb_data.to_string());
     console_log!("[WASM] Storing knowledge base...");
     
     let kb_promise = store_knowledge_base(kdb_id, &kb_value);
@@ -170,47 +235,65 @@ async fn store_kdb_to_indexeddb(kdb_data: &KnowledgeBase, kdb_id: &str) -> Resul
         }
     }
     
-    // 2. Store modules with their signals (key is numeric id)
+    // 2. Store modules (key is 1-based index)
     console_log!("[WASM] Storing {} modules...", kdb_data.modules.len());
-    for module in &kdb_data.modules {
+    for (index, module) in kdb_data.modules.iter().enumerate() {
+        let module_id = (index + 1) as u32;  // 1-based ID
+        
         let module_data = serde_json::json!({
-            "id": module.id,
             "name": &module.name,
-            "fullName": &module.full_name,
             "parentModuleId": module.parent_module_id,
-            "fileId": module.file_id,
-            "isInstance": module.is_instance,
-            "signals": module.signals.iter().map(|s| serde_json::json!({
-                "id": s.id,
+            "definition": module.definition.as_ref().map(|d| serde_json::json!({
+                "fileId": d.file_id,
+                "startLine": d.start_line,
+                "endLine": d.end_line,
+            })),
+            "signalDefs": module.signal_defs.iter().map(|s| serde_json::json!({
                 "name": &s.name,
-                "fullName": &s.full_name,
-                "signalType": s.r#type,
-                "msb": s.msb,
-                "lsb": s.lsb,
-                "parentModuleId": s.parent_module_id,
+                "type": s.r#type,
                 "declaration": s.declaration.as_ref().map(|d| serde_json::json!({
                     "fileId": d.file_id,
                     "line": d.line,
                 })),
-                "driverSignalIds": s.driver_signal_ids.clone(),
                 "direction": s.direction,
-                "driverLines": s.driver_lines.iter().map(|d| serde_json::json!({
-                    "fileId": d.file_id,
-                    "line": d.line,
-                })).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
+            "isInstance": module.is_instance,
             "childModuleIds": module.child_module_ids.clone(),
+            "defModuleId": module.def_module_id,
+            "signalInstsStartId": module.signal_insts_start_id,
         });
         let module_value = serde_wasm_bindgen::to_value(&module_data)?;
         
-        let module_promise = store_module(module.id, &module_value, kdb_id);
+        let module_promise = store_module(module_id, &module_value, kdb_id);
         if let Err(e) = wasm_bindgen_futures::JsFuture::from(module_promise).await {
-            console_log!("[WASM] Failed to store module {}: {:?}", module.id, e);
+            console_log!("[WASM] Failed to store module {}: {:?}", module_id, e);
         }
     }
     console_log!("[WASM] Stored {} modules", kdb_data.modules.len());
     
-    // 3. Store source files (key is numeric id)
+    // 3. Store signal instances (key is global index 0-based)
+    console_log!("[WASM] Storing {} signal instances...", kdb_data.all_signal_insts.len());
+    for (global_index, signal_inst) in kdb_data.all_signal_insts.iter().enumerate() {
+        let inst_data = serde_json::json!({
+            "msb": signal_inst.msb,
+            "lsb": signal_inst.lsb,
+            "parentModuleId": signal_inst.parent_module_id,
+            "driverSignalGlobalIds": signal_inst.driver_signal_global_ids.clone(),
+            "driverLines": signal_inst.driver_lines.iter().map(|d| serde_json::json!({
+                "fileId": d.file_id,
+                "line": d.line,
+            })).collect::<Vec<_>>(),
+        });
+        let inst_value = serde_wasm_bindgen::to_value(&inst_data)?;
+        
+        let inst_promise = store_signal_inst(global_index as u32, &inst_value, kdb_id);
+        if let Err(e) = wasm_bindgen_futures::JsFuture::from(inst_promise).await {
+            console_log!("[WASM] Failed to store signal instance {}: {:?}", global_index, e);
+        }
+    }
+    console_log!("[WASM] Stored {} signal instances", kdb_data.all_signal_insts.len());
+    
+    // 4. Store source files (key is numeric id)
     console_log!("[WASM] Storing {} source files...", kdb_data.files.len());
     for file in &kdb_data.files {
         let file_promise = store_source_file(file.id, &file.path, &file.content, kdb_id);
@@ -236,97 +319,80 @@ fn create_mock_kdb_data(kdb_id: &str) -> KnowledgeBase {
                 id: 1,
                 path: "top.v".to_string(),
                 content: "module top();\nendmodule".to_string(),
-                signal_links: vec![],
-                submod_links: vec![],
             }
         ],
         modules: vec![
             Module {
-                id: 3,
                 name: "work@tb_top".to_string(),
-                full_name: "work@tb_top".to_string(),
                 parent_module_id: 0,
-                file_id: 1,
-                declaration: Some(SourceLocation { file_id: 1, line: 1 }),
-                signals: vec![],
+                definition: Some(ModuleSourceLocation {
+                    file_id: 1,
+                    start_line: 1,
+                    end_line: 10,
+                }),
+                signal_defs: vec![],
                 is_instance: false,
-                child_module_ids: vec![4],
+                child_module_ids: vec![2],
+                def_module_id: 0,
+                signal_insts_start_id: 0,
             },
             Module {
-                id: 4,
-                name: "work@dut".to_string(),
-                full_name: "work@tb_top.u_dut".to_string(),
-                parent_module_id: 3,
-                file_id: 1,
-                declaration: Some(SourceLocation { file_id: 1, line: 1 }),
-                signals: vec![
-                    Signal {
-                        id: 1,
+                name: "u_dut".to_string(),
+                parent_module_id: 1,
+                definition: Some(ModuleSourceLocation {
+                    file_id: 1,
+                    start_line: 5,
+                    end_line: 8,
+                }),
+                signal_defs: vec![
+                    SignalDef {
                         name: "clk".to_string(),
-                        full_name: "work@tb_top.u_dut.clk".to_string(),
                         r#type: SignalType::Wire as i32,
-                        msb: 0,
-                        lsb: 0,
-                        parent_module_id: 4,
-                        declaration: Some(SourceLocation { file_id: 1, line: 2 }),
-                        driver_signal_ids: vec![],
+                        declaration: Some(SourceLocation { file_id: 1, line: 6 }),
                         direction: PortDirection::Input as i32,
-                        driver_lines: vec![],
-                    },
-                    Signal {
-                        id: 2,
-                        name: "rst".to_string(),
-                        full_name: "work@tb_top.u_dut.rst".to_string(),
-                        r#type: SignalType::Wire as i32,
-                        msb: 0,
-                        lsb: 0,
-                        parent_module_id: 4,
-                        declaration: Some(SourceLocation { file_id: 1, line: 3 }),
-                        driver_signal_ids: vec![],
-                        direction: PortDirection::Input as i32,
-                        driver_lines: vec![],
-                    },
-                ],
-                is_instance: true,
-                child_module_ids: vec![5],
-            },
-            Module {
-                id: 5,
-                name: "work@cluster0".to_string(),
-                full_name: "work@tb_top.u_dut.u_cluster0".to_string(),
-                parent_module_id: 4,
-                file_id: 1,
-                declaration: Some(SourceLocation { file_id: 1, line: 1 }),
-                signals: vec![
-                    Signal {
-                        id: 3,
-                        name: "data_in".to_string(),
-                        full_name: "work@tb_top.u_dut.u_cluster0.data_in".to_string(),
-                        r#type: SignalType::Wire as i32,
-                        msb: 31,
-                        lsb: 0,
-                        parent_module_id: 5,
-                        declaration: Some(SourceLocation { file_id: 1, line: 2 }),
-                        driver_signal_ids: vec![],
-                        direction: PortDirection::Input as i32,
-                        driver_lines: vec![],
                     },
                 ],
                 is_instance: true,
                 child_module_ids: vec![],
+                def_module_id: 3,
+                signal_insts_start_id: 0,
+            },
+            Module {
+                name: "work@dut".to_string(),
+                parent_module_id: 0,
+                definition: Some(ModuleSourceLocation {
+                    file_id: 1,
+                    start_line: 1,
+                    end_line: 20,
+                }),
+                signal_defs: vec![
+                    SignalDef {
+                        name: "clk".to_string(),
+                        r#type: SignalType::Wire as i32,
+                        declaration: Some(SourceLocation { file_id: 1, line: 2 }),
+                        direction: PortDirection::Input as i32,
+                    },
+                ],
+                is_instance: false,
+                child_module_ids: vec![],
+                def_module_id: 0,
+                signal_insts_start_id: 0,
             },
         ],
         hierarchies: vec![
             DesignHierarchy {
-                top_module_id: 3,
-                module_ids: vec![3, 4, 5],
+                top_module_id: 1,
+                module_ids: vec![1, 2, 3],
             }
         ],
+        all_signal_insts: vec![
+            SignalInst {
+                msb: 0,
+                lsb: 0,
+                parent_module_id: 2,
+                driver_signal_global_ids: vec![],
+                driver_lines: vec![],
+            },
+        ],
     }
-}
-
-/// Initialize WASM module
-#[wasm_bindgen(start)]
-pub fn start() {
-    console_log!("[WASM] HWDA WASM module initialized");
 }
