@@ -9,6 +9,11 @@ interface ToolBarProps {
   onSearch: () => void;
   onAddSourceTab?: () => void;
   onAddWaveformTab?: () => void;
+  // Source navigation history
+  onNavigatePrevious?: () => void;
+  onNavigateNext?: () => void;
+  canNavigatePrevious?: boolean;
+  canNavigateNext?: boolean;
   // Time configuration for waveform tabs
   timeConfig?: TimeConfig;
   onTimeConfigChange?: (config: TimeConfig) => void;
@@ -23,6 +28,10 @@ export function ToolBar({
   onSearch,
   onAddSourceTab,
   onAddWaveformTab,
+  onNavigatePrevious,
+  onNavigateNext,
+  canNavigatePrevious = false,
+  canNavigateNext = false,
   timeConfig,
   onTimeConfigChange,
   maxWaveformTimePs = 1000000, // Default 1,000,000 ps = 1000 ns
@@ -201,10 +210,22 @@ export function ToolBar({
         <span style={{ fontSize: '12px', fontFamily: 'monospace' }}>⌇+</span>
       </button>
       <div className="tool-bar-separator"></div>
-      <button className="tool-bar-button" title="Previous">
+      <button 
+        className="tool-bar-button" 
+        title="Previous Location"
+        onClick={onNavigatePrevious}
+        disabled={!canNavigatePrevious}
+        style={{ opacity: canNavigatePrevious ? 1 : 0.3 }}
+      >
         ◀
       </button>
-      <button className="tool-bar-button" title="Next">
+      <button 
+        className="tool-bar-button" 
+        title="Next Location"
+        onClick={onNavigateNext}
+        disabled={!canNavigateNext}
+        style={{ opacity: canNavigateNext ? 1 : 0.3 }}
+      >
         ▶
       </button>
     </div>

@@ -73,6 +73,13 @@ export function psToDisplayValue(psValue: number, unit: TimeUnit): number {
   return psValue / TIME_UNIT_MULTIPLIERS[unit];
 }
 
+// Navigation history entry for source tabs
+export interface NavigationHistoryEntry {
+  fileId: number;
+  line: number;
+  timestamp: number;
+}
+
 export interface Tab {
   id: string;
   label: string;
@@ -81,6 +88,9 @@ export interface Tab {
   moduleIndex?: number | null;  // For source tabs - 1-based module index
   startFromLine1?: boolean;     // For source tabs - open from line 1 instead of module start line
   signalDeclarationLine?: number; // For source tabs - jump to signal declaration line
+  // Source navigation history
+  navigationHistory?: NavigationHistoryEntry[];
+  navigationPointer?: number;   // Points to next insertion position
   signals?: WaveformSignal[];  // For waveform tabs - 待添加到 group 的信号队列
   groups?: Record<string, SignalGroup>;  // For waveform tabs - group structure
   selectedGroup?: string;       // For waveform tabs - currently selected group

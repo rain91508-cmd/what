@@ -48,7 +48,7 @@ import { Splitter } from './components/ResizablePanel'
 
 // Types
 import type { Signal } from './types/kdb'
-import type { WaveformInfo, ColumnWidths, TimeConfig, Tab } from './components/TabPanel'
+import type { WaveformInfo, ColumnWidths, TimeConfig, Tab, NavigationHistoryEntry } from './components/TabPanel'
 
 // 默认时间配置
 // 默认 10ns/px = 10,000 ps/px
@@ -169,6 +169,124 @@ function App() {
   const addMessage = useCallback((msg: string) => {
     setMessages(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`])
   }, [])
+
+  // ============================================
+  // Source Navigation History Management
+  // ============================================
+  
+  // Add a navigation entry to the active source tab
+  const addNavigationEntry = useCallback((fileId: number, line: number) => {
+    setTabs(prev => prev.map(tab => {
+      if (tab.id !== activeTab || tab.type !== 'source') return tab;
+      
+      const history = tab.navigationHistory || [];
+      const pointer = tab.navigationPointer || 0;
+      
+      // Create new entry
+      const newEntry: NavigationHistoryEntry = {
+        fileId,
+        line,
+        timestamp: Date.now()
+      };
+      
+      // Remove entries after pointer (if any)
+      const newHistory = history.slice(0, pointer);
+      
+      // Add new entry and increment pointer
+      newHistory.push(newEntry);
+      
+      return {
+        ...tab,
+        navigationHistory: newHistory,
+        navigationPointer: newHistory.length
+      };
+    }));
+  }, [activeTab]);
+
+  // Navigate to previous location in history
+  const navigatePrevious = useCallback(() => {
+    const activeTabData = tabs.find(t => t.id === activeTab);
+    if (!activeTabData || activeTabData.type !== 'source') return;
+    
+    const pointer = activeTabData.navigationPointer || 0;
+    if (pointer <= 1) return; // Can't go back if at start
+    
+    const newPointer = pointer - 1;
+    const history = activeTabData.navigationHistory || [];
+    const entry = history[newPointer - 1]; // -1 because pointer is 1-based for next insertion
+    
+    if (!entry) return;
+    
+    // Find module that uses this file
+    const modules = kdbManager.getAllModules();
+    const moduleIndex = modules.findIndex(m => m.definition?.fileId === entry.fileId);
+    
+    if (moduleIndex >= 0) {
+      const moduleIdx = moduleIndex + 1;
+      setTabs(prev => prev.map(tab => 
+        tab.id === activeTab 
+          ? { 
+              ...tab, 
+              moduleIndex: moduleIdx,
+              signalDeclarationLine: entry.line,
+              navigationPointer: newPointer
+            } 
+          : tab
+      ));
+      addMessage(`Navigate back to line ${entry.line}`);
+    }
+  }, [activeTab, tabs, addMessage]);
+
+  // Navigate to next location in history
+  const navigateNext = useCallback(() => {
+    const activeTabData = tabs.find(t => t.id === activeTab);
+    if (!activeTabData || activeTabData.type !== 'source') return;
+    
+    const pointer = activeTabData.navigationPointer || 0;
+    const history = activeTabData.navigationHistory || [];
+    
+    if (pointer >= history.length) return; // Can't go forward if at end
+    
+    const newPointer = pointer + 1;
+    const entry = history[newPointer - 1]; // -1 because pointer is 1-based for next insertion
+    
+    if (!entry) return;
+    
+    // Find module that uses this file
+    const modules = kdbManager.getAllModules();
+    const moduleIndex = modules.findIndex(m => m.definition?.fileId === entry.fileId);
+    
+    if (moduleIndex >= 0) {
+      const moduleIdx = moduleIndex + 1;
+      setTabs(prev => prev.map(tab => 
+        tab.id === activeTab 
+          ? { 
+              ...tab, 
+              moduleIndex: moduleIdx,
+              signalDeclarationLine: entry.line,
+              navigationPointer: newPointer
+            } 
+          : tab
+      ));
+      addMessage(`Navigate forward to line ${entry.line}`);
+    }
+  }, [activeTab, tabs, addMessage]);
+
+  // Check if navigation is possible
+  const canNavigatePrevious = useCallback(() => {
+    const activeTabData = tabs.find(t => t.id === activeTab);
+    if (!activeTabData || activeTabData.type !== 'source') return false;
+    const pointer = activeTabData.navigationPointer || 0;
+    return pointer > 1;
+  }, [activeTab, tabs]);
+
+  const canNavigateNext = useCallback(() => {
+    const activeTabData = tabs.find(t => t.id === activeTab);
+    if (!activeTabData || activeTabData.type !== 'source') return false;
+    const pointer = activeTabData.navigationPointer || 0;
+    const history = activeTabData.navigationHistory || [];
+    return pointer < history.length;
+  }, [activeTab, tabs]);
 
   // Load waveform list from server
   const loadWaveformList = async () => {
@@ -311,6 +429,11 @@ function App() {
     // Update global selected module index
     setSelectedModuleIndex(moduleIndex)
     
+    // Get module info for navigation history
+    const module = kdbManager.getModuleById(moduleIndex);
+    const fileId = module?.definition?.fileId;
+    const line = module?.definition?.startLine || 1;
+    
     // Find or create a source tab for this module and switch to it
     const existingSourceTab = tabs.find(t => t.type === 'source')
     console.log('[App] Existing source tab:', existingSourceTab);
@@ -325,6 +448,11 @@ function App() {
       ))
       setActiveTab(existingSourceTab.id)
       console.log('[App] Updated existing source tab, set active to:', existingSourceTab.id);
+      
+      // Add navigation entry
+      if (fileId) {
+        addNavigationEntry(fileId, line);
+      }
     } else {
       // Create a new source tab
       const newId = `source-${tabCounter.current++}`
@@ -338,6 +466,11 @@ function App() {
       setTabs(prev => [...prev, newTab])
       setActiveTab(newId)
       console.log('[App] Created new source tab, set active to:', newId);
+      
+      // Add navigation entry after tab is created and active
+      if (fileId) {
+        setTimeout(() => addNavigationEntry(fileId, line), 0);
+      }
     }
     // Calculate fullName on demand
     const fullName = kdbManager.calculateModuleFullName(moduleIndex)
@@ -370,6 +503,9 @@ function App() {
             : tab
         ))
         setActiveTab(existingSourceTab.id)
+        
+        // Add navigation entry (line 1 for file mode)
+        addNavigationEntry(fileId, 1);
       } else {
         // Create a new source tab
         const newId = `source-${tabCounter.current++}`
@@ -382,6 +518,9 @@ function App() {
         }
         setTabs(prev => [...prev, newTab])
         setActiveTab(newId)
+        
+        // Add navigation entry after tab is created
+        setTimeout(() => addNavigationEntry(fileId, 1), 0);
       }
       addMessage(`Open file from line 1`)
     }
@@ -395,6 +534,9 @@ function App() {
       return
     }
     
+    const line = signal.declaration.line;
+    const fileId = signal.declaration.fileId;
+    
     // Check if there's an active source tab
     const activeSourceTab = tabs.find(t => t.type === 'source' && t.id === activeTab)
     
@@ -405,12 +547,15 @@ function App() {
           ? { 
               ...tab, 
               moduleIndex: moduleIndex,
-              signalDeclarationLine: signal.declaration!.line 
+              signalDeclarationLine: line 
             } 
           : tab
       ))
       setActiveTab(activeSourceTab.id)
-      addMessage(`Jump to ${signal.name} declaration (line ${signal.declaration.line})`)
+      
+      // Add navigation entry
+      addNavigationEntry(fileId, line);
+      addMessage(`Jump to ${signal.name} declaration (line ${line})`)
     } else {
       // No active source tab, create one
       const newId = `source-${tabCounter.current++}`
@@ -419,11 +564,14 @@ function App() {
         label: 'Source',
         type: 'source',
         moduleIndex: moduleIndex,
-        signalDeclarationLine: signal.declaration.line,
+        signalDeclarationLine: line,
       }
       setTabs(prev => [...prev, newTab])
       setActiveTab(newId)
-      addMessage(`Open source at ${signal.name} declaration (line ${signal.declaration.line})`)
+      
+      // Add navigation entry after tab is created
+      setTimeout(() => addNavigationEntry(fileId, line), 0);
+      addMessage(`Open source at ${signal.name} declaration (line ${line})`)
     }
   }
 
@@ -658,6 +806,10 @@ function App() {
         onSearch={() => {}}
         onAddSourceTab={() => handleAddTab('source')}
         onAddWaveformTab={() => handleAddTab('waveform')}
+        onNavigatePrevious={navigatePrevious}
+        onNavigateNext={navigateNext}
+        canNavigatePrevious={canNavigatePrevious()}
+        canNavigateNext={canNavigateNext()}
         timeConfig={activeTabData?.timeConfig}
         onTimeConfigChange={(config) => handleTimeConfigChange(activeTab, config)}
         maxWaveformTimePs={1000000}
