@@ -34,7 +34,6 @@ The Design Interpreter is responsible for converting Verilog/SystemVerilog sourc
 | `name` | `VpiDefName()` (e.g., "work@dut") | `VpiName()` (e.g., "u_dut") | Distinguish definition and instance |
 | `is_instance` | `false` | `true` | Identify module type |
 | `def_module_id` | `0` | Points to Definition's ID | Instance links to its definition |
-| `def_name` | Empty | Definition name (e.g., "work@dut") | For Definition lookup |
 | `definition` | Definition's file range | Instance's location | Source code positioning |
 | `full_name` | **Removed**, built dynamically from parent chain | **Removed**, built dynamically from parent chain | Reduce redundant storage |
 
@@ -50,8 +49,9 @@ To optimize memory usage, signals are split into two structures:
 
 **SignalInst (Instance Module)**
 - Stored in global array `allSignalInsts` for memory efficiency
-- Contains instance-specific information: full hierarchical name, driver relationships, driver line numbers, bit width
+- Contains instance-specific information: driver relationships, driver line numbers, bit width
 - **Note: `id` field removed** - use `signalInstsStartId + localIndex` as global ID
+- **Note: `full_name` not serialized** - dynamically reconstructed from module hierarchy + signal name
 
 ```cpp
 struct SignalDefInfo {
@@ -160,37 +160,11 @@ The following fields have been removed to reduce memory usage:
 | `id` | SignalDef, SignalInst | Use array index instead |
 | `signal_insts_count` | Module | Derived from `signal_defs.size()` |
 | `full_name` | Module | Built dynamically from parent chain |
-| `def_name` | Module | Obtained from `def_module_id`'s module name |
-| `full_name` (serialized) | SignalInst | Dynamically reconstructed from module hierarchy |
 
 **Memory Savings:**
 - SignalDef: 8 bytes per signal (removed `id`)
 - SignalInst: 4 bytes per signal (replaced `id` with `localIndex`)
 - Module: 4 bytes per module (removed `signal_insts_count`)
-- Module: ~20 bytes per instance (removed `def_name` string)
-- KDB File: ~30-50 bytes per signal (removed `full_name` from serialization)
-
-**Getting Definition Name:**
-```cpp
-// Use KdbBuilder::getDefName() to get definition name for an instance
-std::string defName = builder.getDefName(module);
-```
-
-**Dynamic Full Name Calculation:**
-```cpp
-// Calculate module's full hierarchical name
-std::string moduleFullName = builder.calculateModuleFullName(module);
-// Result: "work@top.u_adder"
-
-// Calculate signal's full hierarchical name
-std::string signalFullName = builder.calculateSignalFullName(module, "sum");
-// Result: "work@top.u_adder.sum"
-```
-
-**Serialization Strategy:**
-- `fullName` is kept in memory (SignalInstInfo) for fast access
-- `fullName` is NOT serialized to reduce file size
-- During deserialization, `fullName` is reconstructed from module hierarchy + signal name
 
 ## 4. Two-Phase Build Process
 
@@ -228,64 +202,70 @@ void KdbBuildListener::finishBuild() {
 **Entry Point:** Start from `DesignHierarchy` or top-level modules.
 
 ```javascript
-// Get all top-level modules
-const topModules = kdb.hierarchies.map(h => h.top_module_id);
+// Method 1: Get top module IDs from hierarchies, then index into allModules
+const topModuleIds = kdb.hierarchies.map(h => h.top_module_id);
+const topModules = topModuleIds.map(id => kdb.allModules[id - 1]);  // ID is 1-based
 
-// Or get all modules directly
-const allModules = kdb.modules;
+// Method 2: Directly index allModules array
+const allModules = kdb.allModules;  // Array index 0 = module ID 1
 
-// Find top modules (parent_module_id === 0)
-const topModules = kdb.modules.filter(m => m.parent_module_id === 0);
+// Method 3: Find top modules by checking parent_module_id
+const topModules = kdb.allModules.filter(m => m.parent_module_id === 0);
 ```
 
 ### 5.2 Traversing Module Hierarchy
 
-**Get child modules:**
+**Get child modules using child_module_ids:**
 ```javascript
-function getChildModules(moduleId, kdb) {
-    return kdb.modules.filter(m => m.parent_module_id === moduleId);
+function getChildModules(module, kdb) {
+    // Use child_module_ids to directly index into allModules
+    return module.child_module_ids.map(childId => kdb.allModules[childId - 1]);
 }
 
-// Recursive traversal
+// Recursive traversal using array index
 function traverseHierarchy(moduleId, kdb, depth = 0) {
-    const module = kdb.modules.find(m => m.id === moduleId);
+    const module = kdb.allModules[moduleId - 1];  // ID is 1-based
     console.log('  '.repeat(depth) + module.name);
     
-    const children = getChildModules(moduleId, kdb);
-    children.forEach(child => traverseHierarchy(child.id, kdb, depth + 1));
+    // Use child_module_ids for O(1) access to children
+    module.child_module_ids.forEach(childId => {
+        traverseHierarchy(childId, kdb, depth + 1);
+    });
 }
 ```
 
 ### 5.3 Getting Module Information
 
-**Module basic info:**
+**Module basic info using array index:**
 ```javascript
-const module = kdb.modules.find(m => m.id === moduleId);
+// Direct array index access (ID is 1-based)
+const module = kdb.allModules[moduleId - 1];
 
 // Check if it's an instance or definition
 const isInstance = module.is_instance;
 
-// For instances, get the definition
+// For instances, get the definition using array index
 if (isInstance) {
-    const definition = kdb.modules.find(m => m.id === module.def_module_id);
+    const definition = kdb.allModules[module.def_module_id - 1];
 }
 
 // Get source location
 const { file_id, start_line, end_line } = module.definition;
-const sourceFile = kdb.files.find(f => f.id === file_id);
+const sourceFile = kdb.files[file_id - 1];  // File ID is also 1-based
 ```
 
 ### 5.4 Getting Module Signals
 
-**Get all signals in a module:**
+**Get all signals in a module using array index:**
 ```javascript
 function getModuleSignals(moduleId, kdb) {
-    const module = kdb.modules.find(m => m.id === moduleId);
+    // Direct array index access (ID is 1-based)
+    const module = kdb.allModules[moduleId - 1];
     
     // Get signal definitions
     const signalDefs = module.signal_defs;
     
-    // Get signal instances from global array
+    // Get signal instances from global array using start_id
     const startId = module.signal_insts_start_id;
     const count = signalDefs.length;  // Instance count equals def count
     
@@ -296,7 +276,7 @@ function getModuleSignals(moduleId, kdb) {
         
         signals.push({
             name: def.name,
-            fullName: inst.full_name,
+            fullName: calculateSignalFullName(module, def.name),  // Dynamic calculation
             type: def.type,
             direction: def.direction,
             bitWidth: {
@@ -311,21 +291,44 @@ function getModuleSignals(moduleId, kdb) {
     
     return signals;
 }
+
+// Helper: Calculate signal's full hierarchical name
+function calculateSignalFullName(module, signalName) {
+    const moduleFullName = calculateModuleFullName(module);
+    return moduleFullName ? `${moduleFullName}.${signalName}` : signalName;
+}
+
+// Helper: Calculate module's full hierarchical name
+function calculateModuleFullName(module) {
+    const names = [];
+    let current = module;
+    while (current) {
+        names.push(current.name);
+        if (current.parent_module_id === 0) break;
+        current = kdb.allModules[current.parent_module_id - 1];
+    }
+    return names.reverse().join('.');
+}
 ```
 
 ### 5.5 Finding Signal by Full Name
 
 ```javascript
 function findSignalByFullName(fullName, kdb) {
-    // Search in all_signal_insts
-    for (const inst of kdb.all_signal_insts) {
-        if (inst.full_name === fullName) {
-            // Find the module
-            const module = kdb.modules.find(m => m.id === inst.parent_module_id);
-            // Find the definition
-            const defIndex = inst.localIndex || 0;
-            const def = module.signal_defs[defIndex];
-            
+    // Search in all_signal_insts and reconstruct fullName for comparison
+    for (let globalId = 0; globalId < kdb.all_signal_insts.length; globalId++) {
+        const inst = kdb.all_signal_insts[globalId];
+        const module = kdb.allModules[inst.parent_module_id - 1];
+        
+        // Find signal definition to get name
+        const count = module.signal_defs.length;
+        const localIdx = globalId - module.signal_insts_start_id;
+        if (localIdx < 0 || localIdx >= count) continue;
+        
+        const def = module.signal_defs[localIdx];
+        const reconstructedFullName = calculateSignalFullName(module, def.name);
+        
+        if (reconstructedFullName === fullName) {
             return {
                 instance: inst,
                 definition: def,
@@ -339,19 +342,21 @@ function findSignalByFullName(fullName, kdb) {
 
 ### 5.6 Getting Signal Drivers
 
-**Get driver signals for a given signal:**
+**Get driver signals for a given signal using array index:**
 ```javascript
 function getSignalDrivers(signalInst, kdb) {
     const drivers = [];
     
     for (const driverGlobalId of signalInst.driver_signal_global_ids) {
         const driverInst = kdb.all_signal_insts[driverGlobalId];
-        const driverModule = kdb.modules.find(m => m.id === driverInst.parent_module_id);
-        const driverDefIndex = driverInst.localIndex || 0;
-        const driverDef = driverModule.signal_defs[driverDefIndex];
+        const driverModule = kdb.allModules[driverInst.parent_module_id - 1];
+        
+        // Calculate local index within the module
+        const localIdx = driverGlobalId - driverModule.signal_insts_start_id;
+        const driverDef = driverModule.signal_defs[localIdx];
         
         drivers.push({
-            fullName: driverInst.full_name,
+            fullName: calculateSignalFullName(driverModule, driverDef.name),
             name: driverDef.name,
             module: driverModule.name
         });
@@ -363,10 +368,11 @@ function getSignalDrivers(signalInst, kdb) {
 
 ### 5.7 Getting Source Code
 
-**Get source line or range:**
+**Get source line or range using array index:**
 ```javascript
 function getSourceLine(fileId, lineNum, kdb) {
-    const file = kdb.files.find(f => f.id === fileId);
+    // Direct array index access (file ID is 1-based)
+    const file = kdb.files[fileId - 1];
     if (!file) return null;
     
     const lines = file.content.split('\n');
@@ -374,7 +380,8 @@ function getSourceLine(fileId, lineNum, kdb) {
 }
 
 function getSourceRange(fileId, startLine, endLine, kdb) {
-    const file = kdb.files.find(f => f.id === fileId);
+    // Direct array index access (file ID is 1-based)
+    const file = kdb.files[fileId - 1];
     if (!file) return null;
     
     const lines = file.content.split('\n');
@@ -389,7 +396,8 @@ function buildModuleTree(kdb) {
     const tree = [];
     
     function buildNode(moduleId, depth = 0) {
-        const module = kdb.modules.find(m => m.id === moduleId);
+        // Direct array index access (ID is 1-based)
+        const module = kdb.allModules[moduleId - 1];
         const signals = getModuleSignals(moduleId, kdb);
         
         const node = {
@@ -404,17 +412,16 @@ function buildModuleTree(kdb) {
             children: []
         };
         
-        // Recursively add children
-        const children = kdb.modules.filter(m => m.parent_module_id === moduleId);
-        children.forEach(child => {
-            node.children.push(buildNode(child.id, depth + 1));
+        // Recursively add children using child_module_ids
+        module.child_module_ids.forEach(childId => {
+            node.children.push(buildNode(childId, depth + 1));
         });
         
         return node;
     }
     
     // Start from top-level modules
-    const topModules = kdb.modules.filter(m => m.parent_module_id === 0);
+    const topModules = kdb.allModules.filter(m => m.parent_module_id === 0);
     topModules.forEach(m => tree.push(buildNode(m.id)));
     
     return tree;
