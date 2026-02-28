@@ -351,6 +351,21 @@ class KdbManager {
   }
 
   /**
+   * Get all source files in current KDB
+   */
+  async getAllSourceFiles(): Promise<SourceFile[]> {
+    if (!this.currentKdbId) return [];
+    return indexedDBManager.getSourceFilesByKdb(this.currentKdbId);
+  }
+
+  /**
+   * Get all modules
+   */
+  getAllModules(): Module[] {
+    return this.modules;
+  }
+
+  /**
    * Get KDB header info
    */
   async getHeader(): Promise<{ version: string; projectName: string; createdAt: string } | null> {

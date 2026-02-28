@@ -79,6 +79,8 @@ export interface Tab {
   type: 'source' | 'waveform';
   // Tab-specific data
   moduleIndex?: number | null;  // For source tabs - 1-based module index
+  startFromLine1?: boolean;     // For source tabs - open from line 1 instead of module start line
+  signalDeclarationLine?: number; // For source tabs - jump to signal declaration line
   signals?: WaveformSignal[];  // For waveform tabs - 待添加到 group 的信号队列
   groups?: Record<string, SignalGroup>;  // For waveform tabs - group structure
   selectedGroup?: string;       // For waveform tabs - currently selected group

@@ -21,19 +21,21 @@ loader.init().catch((err) => {
 
 interface MonacoSourceCodeWindowProps {
   moduleIndex: number | null;
+  startFromLine1?: boolean;
+  signalDeclarationLine?: number;
 }
 
 const modelCache = new Map<string, editor.ITextModel>();
 
-export function MonacoSourceCodeWindow({ moduleIndex }: MonacoSourceCodeWindowProps) {
+export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDeclarationLine }: MonacoSourceCodeWindowProps) {
   const [content, setContent] = useState<string>('');
   const [filePath, setFilePath] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [highlightLine, setHighlightLine] = useState<number | null>(null);
   const [moduleName, setModuleName] = useState<string>('');
-  const [editorReady, setEditorReady] = useState(false);
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const pendingHighlightRef = useRef<number | null>(null);
+  const decorationsRef = useRef<string[]>([]);
   const monacoInstance = useMonaco();
 
   // Apply highlight to a specific line
@@ -48,8 +50,14 @@ export function MonacoSourceCodeWindow({ moduleIndex }: MonacoSourceCodeWindowPr
     // Use Monaco's built-in line highlighting via selection
     editor.setSelection(new monaco.Range(line, 1, line, 1));
     
+    // Clear previous decorations
+    if (decorationsRef.current.length > 0) {
+      editor.deltaDecorations(decorationsRef.current, []);
+      decorationsRef.current = [];
+    }
+    
     // Add decoration for persistent highlighting
-    editor.deltaDecorations([], [
+    decorationsRef.current = editor.deltaDecorations([], [
       {
         range: new monaco.Range(line, 1, line, 1),
         options: {
@@ -64,7 +72,6 @@ export function MonacoSourceCodeWindow({ moduleIndex }: MonacoSourceCodeWindowPr
   // Handle editor mount
   const handleEditorDidMount = useCallback((editor: editor.IStandaloneCodeEditor) => {
     editorRef.current = editor;
-    setEditorReady(true);
     console.log('[MonacoSourceCodeWindow] Editor mounted');
     
     // Check if there's a pending highlight to apply
@@ -78,10 +85,10 @@ export function MonacoSourceCodeWindow({ moduleIndex }: MonacoSourceCodeWindowPr
     }, 100);
   }, [highlightLine, applyHighlight]);
 
-  // Load source file when module changes
+  // Load source file when module or highlight settings change
   useEffect(() => {
     loadSourceFile();
-  }, [moduleIndex]);
+  }, [moduleIndex, startFromLine1, signalDeclarationLine]);
 
   // Register Verilog language
   useEffect(() => {
@@ -182,6 +189,15 @@ export function MonacoSourceCodeWindow({ moduleIndex }: MonacoSourceCodeWindowPr
     }
   }, [highlightLine, applyHighlight]);
 
+  // Handle signalDeclarationLine change (when jumping to different signal in same file)
+  useEffect(() => {
+    if (editorRef.current && signalDeclarationLine && content) {
+      console.log('[MonacoSourceCodeWindow] signalDeclarationLine changed to:', signalDeclarationLine);
+      setHighlightLine(signalDeclarationLine);
+      applyHighlight(editorRef.current, signalDeclarationLine);
+    }
+  }, [signalDeclarationLine, content, applyHighlight]);
+
   const loadSourceFile = async () => {
     console.log('[MonacoSourceCodeWindow] loadSourceFile called, moduleIndex:', moduleIndex);
     
@@ -216,7 +232,14 @@ export function MonacoSourceCodeWindow({ moduleIndex }: MonacoSourceCodeWindowPr
         setContent(sourceFile.content || '');
         setFilePath(sourceFile.path || '');
         
-        if (module.definition?.startLine) {
+        // Priority: signalDeclarationLine > startFromLine1 > module.startLine
+        if (signalDeclarationLine) {
+          console.log('[MonacoSourceCodeWindow] Jumping to signal declaration line:', signalDeclarationLine);
+          setHighlightLine(signalDeclarationLine);
+        } else if (startFromLine1) {
+          console.log('[MonacoSourceCodeWindow] Opening from line 1 (file mode)');
+          setHighlightLine(1);
+        } else if (module.definition?.startLine) {
           console.log('[MonacoSourceCodeWindow] Highlight line:', module.definition.startLine);
           setHighlightLine(module.definition.startLine);
         } else {

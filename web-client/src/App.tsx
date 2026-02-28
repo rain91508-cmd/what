@@ -317,9 +317,10 @@ function App() {
     
     if (existingSourceTab) {
       // Update existing source tab with the new module index
+      // Clear startFromLine1 and signalDeclarationLine to use module's startLine
       setTabs(prev => prev.map(tab => 
         tab.id === existingSourceTab.id 
-          ? { ...tab, moduleIndex } 
+          ? { ...tab, moduleIndex, startFromLine1: undefined, signalDeclarationLine: undefined } 
           : tab
       ))
       setActiveTab(existingSourceTab.id)
@@ -341,6 +342,89 @@ function App() {
     // Calculate fullName on demand
     const fullName = kdbManager.calculateModuleFullName(moduleIndex)
     addMessage(`Open source for: ${fullName}`)
+  }
+
+  const handleFileDoubleClick = (fileId: number) => {
+    console.log('[App] handleFileDoubleClick called, fileId:', fileId);
+    
+    // Open file directly - find a module that uses this file
+    // and open it from line 1 (not from module's start line)
+    const modules = kdbManager.getAllModules();
+    const moduleIndex = modules.findIndex(m => m.definition?.fileId === fileId);
+    
+    if (moduleIndex >= 0) {
+      const moduleIdx = moduleIndex + 1; // Convert to 1-based index
+      
+      // Update global selected module index
+      setSelectedModuleIndex(moduleIdx)
+      
+      // Find or create a source tab for this file and switch to it
+      const existingSourceTab = tabs.find(t => t.type === 'source')
+      
+      if (existingSourceTab) {
+        // Update existing source tab with the new module index
+        // Clear signalDeclarationLine to ensure startFromLine1 takes effect
+        setTabs(prev => prev.map(tab => 
+          tab.id === existingSourceTab.id 
+            ? { ...tab, moduleIndex: moduleIdx, startFromLine1: true, signalDeclarationLine: undefined } 
+            : tab
+        ))
+        setActiveTab(existingSourceTab.id)
+      } else {
+        // Create a new source tab
+        const newId = `source-${tabCounter.current++}`
+        const newTab: Tab = {
+          id: newId,
+          label: 'Source',
+          type: 'source',
+          moduleIndex: moduleIdx,
+          startFromLine1: true,
+        }
+        setTabs(prev => [...prev, newTab])
+        setActiveTab(newId)
+      }
+      addMessage(`Open file from line 1`)
+    }
+  }
+
+  const handleSignalDoubleClick = (signal: Signal, moduleIndex: number) => {
+    console.log('[App] handleSignalDoubleClick called, signal:', signal.name, 'declaration:', signal.declaration, 'moduleIndex:', moduleIndex)
+    
+    if (!signal.declaration) {
+      addMessage(`No declaration info for ${signal.name}`)
+      return
+    }
+    
+    // Check if there's an active source tab
+    const activeSourceTab = tabs.find(t => t.type === 'source' && t.id === activeTab)
+    
+    if (activeSourceTab) {
+      // Update the active source tab to jump to signal declaration
+      setTabs(prev => prev.map(tab => 
+        tab.id === activeSourceTab.id 
+          ? { 
+              ...tab, 
+              moduleIndex: moduleIndex,
+              signalDeclarationLine: signal.declaration!.line 
+            } 
+          : tab
+      ))
+      setActiveTab(activeSourceTab.id)
+      addMessage(`Jump to ${signal.name} declaration (line ${signal.declaration.line})`)
+    } else {
+      // No active source tab, create one
+      const newId = `source-${tabCounter.current++}`
+      const newTab: Tab = {
+        id: newId,
+        label: 'Source',
+        type: 'source',
+        moduleIndex: moduleIndex,
+        signalDeclarationLine: signal.declaration.line,
+      }
+      setTabs(prev => [...prev, newTab])
+      setActiveTab(newId)
+      addMessage(`Open source at ${signal.name} declaration (line ${signal.declaration.line})`)
+    }
   }
 
   const handleSignalAddToWaveform = (signal: Signal) => {
@@ -590,6 +674,7 @@ function App() {
             key={kdbLoaded ? 'kdb-loaded' : 'no-kdb'}
             onModuleSelect={handleModuleSelect}
             onModuleDoubleClick={handleModuleDoubleClick}
+            onFileDoubleClick={handleFileDoubleClick}
             selectedModuleIndex={selectedModuleIndex}
             kdbLoaded={kdbLoaded}
           />
@@ -606,6 +691,7 @@ function App() {
           <SignalPanel
             selectedModuleIndex={selectedModuleIndex}
             onSignalAddToWaveform={handleSignalAddToWaveform}
+            onSignalDoubleClick={handleSignalDoubleClick}
           />
         </div>
 
@@ -626,6 +712,8 @@ function App() {
               <MonacoSourceCodeWindow
                 key={activeTabData.id}
                 moduleIndex={activeTabData.moduleIndex || null}
+                startFromLine1={activeTabData.startFromLine1}
+                signalDeclarationLine={activeTabData.signalDeclarationLine}
               />
             ) : activeTabData ? (
               <WaveformWindow

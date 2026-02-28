@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { kdbManager, type TreeNode } from '../modules/knowledge/kdbManager';
+import type { SourceFile } from '../types/kdb';
 
 interface DesignBrowserProps {
   onModuleSelect: (moduleIndex: number) => void;
   onModuleDoubleClick?: (moduleIndex: number) => void;
+  onFileDoubleClick?: (fileId: number) => void;
   selectedModuleIndex: number | null;
   kdbLoaded: boolean;
 }
@@ -13,21 +15,31 @@ interface TreeNodeState extends TreeNode {
   loading: boolean;
 }
 
+type TabType = 'hierarchy' | 'files';
+
 export function DesignBrowser({ 
   onModuleSelect, 
   onModuleDoubleClick, 
+  onFileDoubleClick,
   selectedModuleIndex,
   kdbLoaded 
 }: DesignBrowserProps) {
+  const [activeTab, setActiveTab] = useState<TabType>('hierarchy');
   const [expandedNodes, setExpandedNodes] = useState<Set<number>>(new Set());
   const [treeNodes, setTreeNodes] = useState<Map<number, TreeNodeState>>(new Map());
   const [rootNodes, setRootNodes] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Files tab state
+  const [files, setFiles] = useState<SourceFile[]>([]);
+  const [fileFilter, setFileFilter] = useState('');
+  const [filesLoading, setFilesLoading] = useState(false);
 
   // Load top-level modules on mount or when kdbLoaded changes
   useEffect(() => {
     loadTopLevelModules();
+    loadFiles();
   }, [kdbLoaded]);
 
   const loadTopLevelModules = async () => {
@@ -74,6 +86,25 @@ export function DesignBrowser({
       console.error('[DesignBrowser] Failed to load top-level modules:', err);
       setError('Failed to load design hierarchy');
       setLoading(false);
+    }
+  };
+
+  const loadFiles = async () => {
+    try {
+      setFilesLoading(true);
+      if (!kdbManager.isLoaded()) {
+        setFiles([]);
+        setFilesLoading(false);
+        return;
+      }
+
+      const allFiles = await kdbManager.getAllSourceFiles();
+      setFiles(allFiles);
+      setFilesLoading(false);
+    } catch (err) {
+      console.error('[DesignBrowser] Failed to load files:', err);
+      setFiles([]);
+      setFilesLoading(false);
     }
   };
 
@@ -139,126 +170,44 @@ export function DesignBrowser({
   const handleNodeClick = async (nodeId: number) => {
     const node = treeNodes.get(nodeId);
     if (!node) return;
-
-    // Pass module index (1-based) to parent
     onModuleSelect(nodeId);
   };
 
   const handleNodeDoubleClick = async (nodeId: number) => {
     console.log('[DesignBrowser] handleNodeDoubleClick called, nodeId:', nodeId, 'onModuleDoubleClick:', !!onModuleDoubleClick);
-    
     if (!onModuleDoubleClick) return;
-    
-    // Pass module index (1-based) to parent
     onModuleDoubleClick(nodeId);
   };
 
-  const renderTreeNode = (nodeId: number, depth: number = 0) => {
-    const node = treeNodes.get(nodeId);
-    if (!node) return null;
-
-    const isExpanded = expandedNodes.has(nodeId);
-    const isSelected = selectedModuleIndex === nodeId;
-    const hasChildren = node.hasChildren;
-    const isLoading = node.loading;
-
-    return (
-      <div key={nodeId}>
-        <div
-          className={`tree-node ${isSelected ? 'selected' : ''}`}
-          style={{ 
-            paddingLeft: `${4 + depth * 12}px`,
-            paddingTop: '4px',
-            paddingBottom: '4px',
-            paddingRight: '8px',
-            display: 'flex',
-            alignItems: 'center',
-            cursor: 'pointer',
-            backgroundColor: isSelected ? '#e3f2fd' : 'transparent',
-            borderRadius: '4px',
-          }}
-          onClick={() => handleNodeClick(nodeId)}
-          onDoubleClick={() => handleNodeDoubleClick(nodeId)}
-        >
-          {/* Expand/Collapse button */}
-          <span
-            className="tree-node-expand"
-            onClick={(e) => {
-              e.stopPropagation();
-              toggleNode(nodeId);
-            }}
-            style={{
-              width: '16px',
-              height: '16px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: hasChildren ? 'pointer' : 'default',
-              marginRight: '4px',
-              fontSize: '10px',
-              color: hasChildren ? '#666' : 'transparent',
-            }}
-          >
-            {isLoading ? '⏳' : hasChildren ? (isExpanded ? '▼' : '▶') : ''}
-          </span>
-
-          {/* Icon */}
-          <span 
-            className="tree-node-icon"
-            style={{ marginRight: '6px', fontSize: '12px' }}
-          >
-            {node.isInstance ? '🔧' : '📦'}
-          </span>
-
-          {/* Name */}
-          <span 
-            title={node.fullName}
-            style={{
-              fontSize: '12px',
-              color: '#333',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {node.name}
-          </span>
-        </div>
-
-        {/* Render children if expanded */}
-        {hasChildren && isExpanded && (
-          <div>
-            {isLoading ? (
-              <div style={{ paddingLeft: `${4 + (depth + 1) * 12}px`, padding: '4px 8px', fontSize: '11px', color: '#999' }}>
-                Loading...
-              </div>
-            ) : (
-              // Find children by checking which nodes have this node as parent
-              // We need to get children from the node's childModuleIds
-              node.childModuleIds?.map(childId => renderTreeNode(childId, depth + 1))
-            )}
-          </div>
-        )}
-      </div>
-    );
+  const handleFileDoubleClick = (file: SourceFile) => {
+    // Open file directly from first line (not from module's start line)
+    if (onFileDoubleClick) {
+      onFileDoubleClick(file.id);
+    }
   };
 
-  // Get child IDs for a node from the treeNodes map
-  // Children are nodes whose parent is this node
+  // Simple wildcard matching (* matches any characters)
+  const matchWildcard = (pattern: string, text: string): boolean => {
+    const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$', 'i');
+    return regex.test(text);
+  };
+
+  const filteredFiles = files.filter(file => {
+    if (!fileFilter) return true;
+    return matchWildcard(fileFilter, file.path);
+  });
+
   const getChildIds = (parentId: number): number[] => {
     const parent = treeNodes.get(parentId);
     if (!parent) {
       console.log(`[DesignBrowser] getChildIds: parent ${parentId} not found in treeNodes`);
       return [];
     }
-    
-    // childModuleIds should be populated when children are loaded
     const childIds = parent.childModuleIds || [];
     console.log(`[DesignBrowser] getChildIds for ${parentId}:`, childIds, 'parent:', parent);
     return childIds;
   };
 
-  // Override render to use getChildIds
   const renderTreeNodeWithChildren = (nodeId: number, depth: number = 0, isLast: boolean = true, parentChain: boolean[] = []) => {
     const node = treeNodes.get(nodeId);
     if (!node) return null;
@@ -269,9 +218,9 @@ export function DesignBrowser({
     const isLoading = node.loading;
     const childIds = getChildIds(nodeId);
 
-    const indentWidth = 16; // Width per depth level
-    const lineHeight = 24; // Line height for vertical alignment
-    const lineLeft = 7; // Left position of vertical line (aligned with expand arrow)
+    const indentWidth = 16;
+    const lineHeight = 24;
+    const lineLeft = 7;
 
     return (
       <div key={nodeId}>
@@ -287,9 +236,7 @@ export function DesignBrowser({
           onClick={() => handleNodeClick(nodeId)}
           onDoubleClick={() => handleNodeDoubleClick(nodeId)}
         >
-          {/* Indent with connection lines */}
           <div style={{ display: 'flex', alignItems: 'stretch', height: '100%' }}>
-            {/* Parent chain vertical lines */}
             {parentChain.map((parentIsLast, index) => (
               <div
                 key={index}
@@ -312,7 +259,6 @@ export function DesignBrowser({
               </div>
             ))}
             
-            {/* Current level connector */}
             <div style={{ 
               width: `${indentWidth}px`,
               height: '100%',
@@ -320,7 +266,6 @@ export function DesignBrowser({
             }}>
               {depth > 0 && (
                 <>
-                  {/* Vertical line (full height for non-last, half for last) */}
                   <div style={{
                     position: 'absolute',
                     left: `${lineLeft}px`,
@@ -329,7 +274,6 @@ export function DesignBrowser({
                     width: '1px',
                     borderLeft: '1px dashed #999',
                   }} />
-                  {/* Horizontal line to connect to node */}
                   <div style={{
                     position: 'absolute',
                     left: `${lineLeft}px`,
@@ -343,7 +287,6 @@ export function DesignBrowser({
             </div>
           </div>
 
-          {/* Expand/Collapse button */}
           <span
             className="tree-node-expand"
             onClick={(e) => {
@@ -366,7 +309,6 @@ export function DesignBrowser({
             {isLoading ? '⏳' : hasChildren ? (isExpanded ? '▼' : '▶') : ''}
           </span>
 
-          {/* Name */}
           <span 
             title={node.fullName}
             style={{
@@ -382,7 +324,6 @@ export function DesignBrowser({
           </span>
         </div>
 
-        {/* Render children if expanded */}
         {hasChildren && isExpanded && (
           <div>
             {isLoading ? (
@@ -406,54 +347,161 @@ export function DesignBrowser({
     );
   };
 
-  if (loading) {
-    return (
-      <div className="hierarchy-panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <div className="panel-header" style={{ padding: '8px 12px', borderBottom: '1px solid #e0e0e0', fontWeight: 'bold' }}>
-          Hierarchy
-        </div>
+  const renderHierarchyTab = () => {
+    if (loading) {
+      return (
         <div style={{ padding: '20px', textAlign: 'center', color: '#999', flex: 1 }}>
           Loading...
         </div>
-      </div>
-    );
-  }
+      );
+    }
 
-  if (error) {
-    return (
-      <div className="hierarchy-panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <div className="panel-header" style={{ padding: '8px 12px', borderBottom: '1px solid #e0e0e0', fontWeight: 'bold' }}>
-          Hierarchy
-        </div>
+    if (error) {
+      return (
         <div style={{ padding: '20px', textAlign: 'center', color: '#d32f2f', flex: 1, fontSize: '12px' }}>
           {error}
         </div>
-      </div>
-    );
-  }
+      );
+    }
 
-  if (rootNodes.length === 0) {
-    return (
-      <div className="hierarchy-panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <div className="panel-header" style={{ padding: '8px 12px', borderBottom: '1px solid #e0e0e0', fontWeight: 'bold' }}>
-          Hierarchy
-        </div>
+    if (rootNodes.length === 0) {
+      return (
         <div style={{ padding: '20px', textAlign: 'center', color: '#999', flex: 1, fontSize: '11px' }}>
           {kdbManager.isLoaded() 
             ? 'No design hierarchy available' 
             : 'Connect to server to load design'}
         </div>
-      </div>
-    );
-  }
+      );
+    }
 
-  return (
-    <div className="hierarchy-panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div className="panel-header" style={{ padding: '8px 12px', borderBottom: '1px solid #e0e0e0', fontWeight: 'bold' }}>
-        Hierarchy
-      </div>
+    return (
       <div className="tree-view" style={{ flex: 1, overflow: 'auto', padding: '4px' }}>
         {rootNodes.map(nodeId => renderTreeNodeWithChildren(nodeId))}
+      </div>
+    );
+  };
+
+  const renderFilesTab = () => {
+    if (filesLoading) {
+      return (
+        <div style={{ padding: '20px', textAlign: 'center', color: '#999', flex: 1 }}>
+          Loading files...
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {/* Filter input */}
+        <div style={{ padding: '8px', borderBottom: '1px solid #e0e0e0' }}>
+          <input
+            type="text"
+            placeholder="Filter files (* wildcard)"
+            value={fileFilter}
+            onChange={(e) => setFileFilter(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '4px 8px',
+              fontSize: '12px',
+              border: '1px solid #ccc',
+              borderRadius: '4px',
+              boxSizing: 'border-box',
+            }}
+          />
+          <div style={{ fontSize: '10px', color: '#999', marginTop: '4px' }}>
+            {filteredFiles.length} of {files.length} files
+          </div>
+        </div>
+
+        {/* File list */}
+        <div style={{ flex: 1, overflow: 'auto' }}>
+          {filteredFiles.map((file) => (
+            <div
+              key={file.id}
+              onDoubleClick={() => handleFileDoubleClick(file)}
+              style={{
+                padding: '6px 12px',
+                fontSize: '12px',
+                cursor: 'pointer',
+                borderBottom: '1px solid #f0f0f0',
+                display: 'flex',
+                alignItems: 'center',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = '#f5f5f5';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }}
+            >
+              <span style={{ marginRight: '6px', fontSize: '12px' }}>📄</span>
+              <span 
+                style={{
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                title={file.path}
+              >
+                {file.path.split('/').pop() || file.path}
+              </span>
+            </div>
+          ))}
+          {filteredFiles.length === 0 && (
+            <div style={{ padding: '20px', textAlign: 'center', color: '#999', fontSize: '11px' }}>
+              No files match the filter
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="design-browser-panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {/* Tab headers */}
+      <div style={{ 
+        display: 'flex', 
+        borderBottom: '1px solid #e0e0e0',
+        backgroundColor: '#f5f5f5',
+      }}>
+        <button
+          onClick={() => setActiveTab('hierarchy')}
+          style={{
+            flex: 1,
+            padding: '8px 12px',
+            border: 'none',
+            borderBottom: activeTab === 'hierarchy' ? '2px solid #1976d2' : '2px solid transparent',
+            backgroundColor: activeTab === 'hierarchy' ? '#fff' : 'transparent',
+            fontWeight: activeTab === 'hierarchy' ? 'bold' : 'normal',
+            fontSize: '12px',
+            cursor: 'pointer',
+            color: activeTab === 'hierarchy' ? '#1976d2' : '#666',
+          }}
+        >
+          Hierarchy
+        </button>
+        <button
+          onClick={() => setActiveTab('files')}
+          style={{
+            flex: 1,
+            padding: '8px 12px',
+            border: 'none',
+            borderBottom: activeTab === 'files' ? '2px solid #1976d2' : '2px solid transparent',
+            backgroundColor: activeTab === 'files' ? '#fff' : 'transparent',
+            fontWeight: activeTab === 'files' ? 'bold' : 'normal',
+            fontSize: '12px',
+            cursor: 'pointer',
+            color: activeTab === 'files' ? '#1976d2' : '#666',
+          }}
+        >
+          Files
+        </button>
+      </div>
+
+      {/* Tab content */}
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        {activeTab === 'hierarchy' ? renderHierarchyTab() : renderFilesTab()}
       </div>
     </div>
   );

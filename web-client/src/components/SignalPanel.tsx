@@ -7,9 +7,10 @@ import { FilterInput } from './FilterInput';
 interface SignalPanelProps {
   selectedModuleIndex: number | null;  // 1-based module index
   onSignalAddToWaveform?: (signal: Signal) => void;
+  onSignalDoubleClick?: (signal: Signal, moduleIndex: number) => void;
 }
 
-export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform }: SignalPanelProps) {
+export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSignalDoubleClick }: SignalPanelProps) {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -310,11 +311,15 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform }: Sign
                 }}
                 onClick={() => setSelectedSignalGlobalId(signal.globalId)}
                 onDoubleClick={() => {
-                  if (onSignalAddToWaveform) {
+                  // If onSignalDoubleClick is provided and source tab is active, jump to declaration
+                  // Otherwise add to waveform
+                  if (onSignalDoubleClick && selectedModuleIndex) {
+                    onSignalDoubleClick(signal, selectedModuleIndex);
+                  } else if (onSignalAddToWaveform) {
                     onSignalAddToWaveform(signal);
                   }
                 }}
-                title={onSignalAddToWaveform ? 'Double-click to add to waveform' : undefined}
+                title={onSignalDoubleClick ? 'Double-click to jump to declaration' : onSignalAddToWaveform ? 'Double-click to add to waveform' : undefined}
               >
                 {/* Signal name with bit range */}
                 <span style={{ 
