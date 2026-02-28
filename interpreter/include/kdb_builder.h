@@ -120,7 +120,7 @@ struct ModuleInfo {
 	// Note: fullName removed, reconstruct from hierarchy if needed
 	KdbModuleSourceLocation definition;
 	// New: Split signals into definition (shared) and instance (specific)
-	std::vector<SignalDefInfo> signalDefs;  // Signal definitions (shared)
+	std::vector<SignalDefInfo> signalDefs;  // Signal definitions (shared) - only for Definition
 	std::vector<SignalInstInfo> signalInsts;  // Signal instances (specific to this module instance)
 	// Deprecated: std::vector<SignalInfo> signals;
 	std::vector<ModuleInstanceInfo> instances;
@@ -129,6 +129,10 @@ struct ModuleInfo {
 	bool isInstance;
 	std::vector<uint32_t> childModuleIds;  // Direct child module IDs for hierarchy traversal
 	uint32_t defModuleId;  // Definition module ID for instances (0 if this is a definition)
+	
+	// Pointer to external signalDefs (for Instance modules, points to Definition's signalDefs)
+	// This is set by KdbBuilder::addModule after linking instances to definitions
+	const std::vector<SignalDefInfo>* externalSignalDefs = nullptr;
 
 	// Transition helper: Build SignalInfo vector from signalDefs and signalInsts
 	// Note: signalInsts may have more entries than signalDefs if multiple instances

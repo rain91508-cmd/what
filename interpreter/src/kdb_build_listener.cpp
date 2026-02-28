@@ -75,6 +75,8 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     // Set definition fileId from the file mapping
     moduleInfo.definition.fileId = fileId;
     
+    // Collect port signals first
+    std::vector<SignalInfo> portSignals;
     auto ports = object->Ports();
     if (ports) {
         for (auto* port : *ports) {
@@ -87,7 +89,7 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
             signalInfo.direction = convertPortDirection(port->VpiDirection());
             signalInfo.parentModuleId = 0;
             signalInfo.declaration = extractLocation(port);
-            
+
             bool isVector = false;
             // Try to get bit width from the port's typespec with module context
             if (auto* portBase = port->Cast<UHDM::BaseClass>()) {
@@ -95,13 +97,14 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
                 UHDM::BaseClass* moduleContext = const_cast<UHDM::module_inst*>(object);
                 extractBitWidthFromUhdmObject(portBase, signalInfo.msb, signalInfo.lsb, isVector, moduleContext, nullptr);
             }
-            
+
+            portSignals.push_back(signalInfo);
             moduleInfo.addSignal(signalInfo);
             currentModuleSignalMap_[signalInfo.fullName] = 0;
             driverAnalyzer_->getSignalMap()[signalInfo.fullName] = 0;
         }
     }
-    
+
     std::string parentFullName;
     size_t lastDot = fullName.rfind('.');
     if (lastDot != std::string::npos) {
@@ -117,16 +120,16 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
 
     bool moduleExists = builder_.hasModule(fullName);
     std::cerr << "DEBUG:   moduleExists=" << (moduleExists ? "true" : "false") << "\n";
-    
+
     if (moduleExists) {
         // Push false to indicate we didn't push to currentModuleStack_
         moduleStackMarkers_.push_back(false);
         return;
     }
-    
+
     // Push true to indicate we will push to currentModuleStack_
     moduleStackMarkers_.push_back(true);
-    
+
     uint64_t moduleId = builder_.addModule(moduleInfo, fullName);
     std::cerr << "DEBUG:   Added module with id=" << moduleId << ", isInstance=" << (moduleInfo.isInstance ? "true" : "false") << "\n";
     currentModuleStack_.push_back(moduleId);
