@@ -48,11 +48,7 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     moduleInfo.name = instName.empty() ? defName : instName;
     // Determine if this is an instance: instance has non-empty VpiName()
     moduleInfo.isInstance = !instName.empty();
-    moduleInfo.defModuleId = 0;  // Default: no definition module (for definitions)
-    // For instances, store the definition name for later lookup
-    if (moduleInfo.isInstance) {
-        moduleInfo.defName = defName;
-    }
+    moduleInfo.defModuleId = 0;  // Will be set in linkInstancesToDefinitions()
 
     // First, ensure the file is in the mapping before extracting location
     std::string filePath(object->VpiFile());
@@ -134,7 +130,7 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     // Push true to indicate we will push to currentModuleStack_
     moduleStackMarkers_.push_back(true);
 
-    uint64_t moduleId = builder_.addModule(moduleInfo, fullName);
+    uint32_t moduleId = builder_.addModule(moduleInfo, fullName);
     std::cerr << "DEBUG:   Added module with id=" << moduleId << ", isInstance=" << (moduleInfo.isInstance ? "true" : "false") << "\n";
     currentModuleStack_.push_back(moduleId);
     totalModules_++;
@@ -142,16 +138,18 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     
     // Store instance info for post-processing
     if (moduleInfo.isInstance && !defName.empty()) {
-        instanceDefNames_.push_back({defName, static_cast<uint32_t>(moduleId)});
+        instanceDefNames_.push_back({defName, moduleId});
     }
     
-    auto signals = moduleInfo.getSignals();
-    for (const auto& sig : signals) {
-        const SignalInfo* addedSignal = builder_.findSignalByName(sig.fullName);
-        if (addedSignal) {
-            currentModuleSignalMap_[sig.fullName] = addedSignal->id;
-            driverAnalyzer_->getSignalMap()[sig.fullName] = addedSignal->id;
-        }
+    // Register signals from moduleInfo to builder's signalFullNameToId_ map
+    // This ensures findSignalByName can find ports when checking for duplicate nets
+    uint32_t localIdx = 0;
+    for (const auto& inst : moduleInfo.signalInsts) {
+        uint64_t tempId = (static_cast<uint64_t>(moduleId) << 32) | localIdx;
+        builder_.registerSignalFullName(inst.fullName, tempId);
+        currentModuleSignalMap_[inst.fullName] = 0;  // Placeholder, not used
+        driverAnalyzer_->getSignalMap()[inst.fullName] = 0;  // Placeholder, not used
+        localIdx++;
     }
 
     auto nets = object->Nets();
@@ -159,23 +157,16 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
         for (auto* net : *nets) {
             if (!net) continue;
             std::string netName = std::string(net->VpiName());
+            std::string netFullName = fullName + "." + netName;
 
-            bool alreadyExists = false;
-            auto existingSignals = moduleInfo.getSignals();
-            for (const auto& existingSig : existingSignals) {
-                if (existingSig.name == netName) {
-                    alreadyExists = true;
-                    break;
-                }
-            }
-            
-            if (alreadyExists) {
+            // Check if signal already exists in builder (added via ports)
+            if (builder_.findSignalByName(netFullName)) {
                 continue;
             }
             
             SignalInfo signalInfo;
             signalInfo.name = netName;
-            signalInfo.fullName = fullName + "." + signalInfo.name;
+            signalInfo.fullName = netFullName;
             signalInfo.type = convertSignalType(net->VpiNetType());
             signalInfo.direction = PortDirection::UNKNOWN;
             signalInfo.parentModuleId = moduleId;
@@ -185,11 +176,12 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
             bool isVector = false;
             extractBitWidthFromUhdmObject(net, signalInfo.msb, signalInfo.lsb, isVector);
             
-            uint64_t signalId = builder_.addSignal(moduleId, signalInfo);
+            builder_.addSignal(moduleId, signalInfo);
             totalSignals_++;
             
-            currentModuleSignalMap_[signalInfo.fullName] = signalId;
-            driverAnalyzer_->getSignalMap()[signalInfo.fullName] = signalId;
+            // Note: Signal IDs are no longer used, store placeholder for compatibility
+            currentModuleSignalMap_[signalInfo.fullName] = 0;
+            driverAnalyzer_->getSignalMap()[signalInfo.fullName] = 0;
         }
     }
     
@@ -203,11 +195,12 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
             signalInfo.type = SignalType::PARAMETER;
             signalInfo.parentModuleId = moduleId;
             signalInfo.declaration = extractLocation(param);
-            uint64_t signalId = builder_.addSignal(moduleId, signalInfo);
+            builder_.addSignal(moduleId, signalInfo);
             totalSignals_++;
             
-            currentModuleSignalMap_[signalInfo.fullName] = signalId;
-            driverAnalyzer_->getSignalMap()[signalInfo.fullName] = signalId;
+            // Note: Signal IDs are no longer used, store placeholder for compatibility
+            currentModuleSignalMap_[signalInfo.fullName] = 0;
+            driverAnalyzer_->getSignalMap()[signalInfo.fullName] = 0;
         }
     }
     
@@ -402,6 +395,21 @@ void KdbBuildListener::linkInstancesToDefinitions() {
                       << " for instance id=" << instanceId << "\n";
         }
     }
+}
+
+void KdbBuildListener::finishBuild() {
+    std::cerr << "DEBUG: Finishing build, committing signal instances...\n";
+    
+    // 1. Apply any remaining driver relationships
+    driverAnalyzer_->applyDriverRelationships();
+    
+    // 2. Link instances to definitions (if not already done)
+    linkInstancesToDefinitions();
+    
+    // 3. Commit all signal instances to global array
+    builder_.commitSignalInsts();
+    
+    std::cerr << "DEBUG: Build finished, signal instances committed.\n";
 }
 
 }

@@ -65,8 +65,9 @@ struct KdbModuleSourceLocation {
 };
 
 // Signal definition - shared between Definition and Instance
+// Note: id removed, use array index as local index
 struct SignalDefInfo {
-    uint64_t id;  // Unique signal ID
+    // uint64_t id;  // REMOVED: Use array index as local index
     std::string name;  // Signal name (e.g., "mem_arvalid")
     SignalType type;
     KdbSourceLocation declaration;
@@ -74,13 +75,18 @@ struct SignalDefInfo {
 };
 
 // Signal instance - specific to each module instance
+// Note: id removed, use module's signalInstsStartId + localIndex as global id
 struct SignalInstInfo {
-    uint64_t id;  // References SignalDefInfo.id
+    // uint64_t id;  // REMOVED: Use global signal insts array index
+    uint32_t localIndex;  // Index within module's signalInsts (0, 1, 2, ...)
     std::string fullName;  // Full hierarchical name (e.g., "work@dut.mem_arvalid")
     uint32_t msb;
     uint32_t lsb;
     uint32_t parentModuleId;  // Module instance ID that owns this signal
-    std::vector<uint64_t> driverSignalIds;  // IDs of signals that drive this signal
+    // Phase 1: Store driver full names (before global IDs are assigned)
+    std::vector<std::string> driverSignalFullNames;  // Temporary storage for Phase 1
+    // Phase 2: Converted to global IDs (after commit)
+    std::vector<uint64_t> driverSignalGlobalIds;  // Global IDs in allSignalInsts array
     std::vector<KdbSourceLocation> driverLines;  // Source locations where drivers are discovered
 };
 
@@ -115,98 +121,83 @@ struct ModuleInstanceInfo {
 };
 
 struct ModuleInfo {
-	// Note: id removed, use array index + 1 as implicit ID
-	std::string name;  // Instance: VpiName(), Definition: VpiDefName()
-	// Note: fullName removed, reconstruct from hierarchy if needed
-	KdbModuleSourceLocation definition;
-	// New: Split signals into definition (shared) and instance (specific)
-	std::vector<SignalDefInfo> signalDefs;  // Signal definitions (shared) - only for Definition
-	std::vector<SignalInstInfo> signalInsts;  // Signal instances (specific to this module instance)
-	// Deprecated: std::vector<SignalInfo> signals;
-	std::vector<ModuleInstanceInfo> instances;
-	uint32_t parentModuleId;  // 0 for top-level modules
-	// Note: fileId removed, use definition.fileId instead
-	bool isInstance;
-	std::vector<uint32_t> childModuleIds;  // Direct child module IDs for hierarchy traversal
-	uint32_t defModuleId;  // Definition module ID for instances (0 if this is a definition)
-	std::string defName;   // Definition name for instances (e.g., "work@dut"), empty for definitions
-	const std::vector<SignalDefInfo>* externalSignalDefs = nullptr;
+    // Note: id removed, use array index + 1 as implicit ID
+    std::string name;  // Instance: VpiName(), Definition: VpiDefName()
+    // Note: fullName removed, reconstruct from hierarchy if needed
+    KdbModuleSourceLocation definition;
+    // Phase 1: Temporary storage for signal instances (before commit)
+    std::vector<SignalDefInfo> signalDefs;  // Signal definitions (shared) - only for Definition
+    std::vector<SignalInstInfo> signalInsts;  // Temporary storage (cleared after commit)
+    // Phase 2: Global array references (after commit)
+    uint32_t signalInstsStartId = 0;  // Start index in global allSignalInsts array
+    bool signalInstsCommitted = false;  // Whether signal insts have been committed to global array
+    
+    // Get signal insts count - derived from signalDefs size
+    uint32_t getSignalInstsCount() const {
+        if (isInstance && externalSignalDefs) {
+            // Instance: count equals Definition's signalDefs size
+            return static_cast<uint32_t>(externalSignalDefs->size());
+        }
+        // Definition: count equals own signalDefs size
+        return static_cast<uint32_t>(signalDefs.size());
+    }
+    // Deprecated: std::vector<SignalInfo> signals;
+    std::vector<ModuleInstanceInfo> instances;
+    uint32_t parentModuleId;  // 0 for top-level modules
+    // Note: fileId removed, use definition.fileId instead
+    bool isInstance;
+    std::vector<uint32_t> childModuleIds;  // Direct child module IDs for hierarchy traversal
+    uint32_t defModuleId;  // Definition module ID for instances (0 if this is a definition)
+    // Note: defName removed - use getDefName() to get from defModuleId
+    const std::vector<SignalDefInfo>* externalSignalDefs = nullptr;
 
-	// Get signalDefs - for Definition use own, for Instance use external (from Definition)
-	const std::vector<SignalDefInfo>& getSignalDefs() const {
-		if (isInstance && externalSignalDefs) {
-			return *externalSignalDefs;
-		}
-		return signalDefs;
-	}
+    // Get signalDefs - for Definition use own, for Instance use external (from Definition)
+    const std::vector<SignalDefInfo>& getSignalDefs() const {
+        if (isInstance && externalSignalDefs) {
+            return *externalSignalDefs;
+        }
+        return signalDefs;
+    }
 
-	// Transition helper: Build SignalInfo vector from signalDefs and signalInsts
-	// Automatically handles Definition vs Instance using getSignalDefs()
-	std::vector<SignalInfo> getSignals() const {
-		std::vector<SignalInfo> result;
-		result.reserve(signalInsts.size());
-		
-		const auto& defsToUse = getSignalDefs();
-		
-		for (const auto& inst : signalInsts) {
-			// Find corresponding definition by id
-			const SignalDefInfo* def = nullptr;
-			for (const auto& d : defsToUse) {
-				if (d.id == inst.id) {
-					def = &d;
-					break;
-				}
-			}
-			if (def) {
-				SignalInfo sig;
-				sig.id = inst.id;
-				sig.name = def->name;
-				sig.fullName = inst.fullName;
-				sig.type = def->type;
-				sig.direction = def->direction;
-				sig.msb = inst.msb;
-				sig.lsb = inst.lsb;
-				sig.declaration = def->declaration;
-				sig.parentModuleId = inst.parentModuleId;
-				sig.driverSignalIds = inst.driverSignalIds;
-				sig.driverLines = inst.driverLines;
-				result.push_back(std::move(sig));
-			}
-		}
-		return result;
-	}
+    // Check if signal insts have been committed to global array
+    bool isSignalInstsCommitted() const {
+        return signalInstsCommitted;
+    }
 
-	// Transition helper: Add signal by splitting into Def and Inst
-	void addSignal(const SignalInfo& sig) {
-		// Add to signalDefs if not exists (check by name for new signals with id=0)
-		bool defExists = false;
-		for (const auto& d : signalDefs) {
-			if (d.name == sig.name) {
-				defExists = true;
-				break;
-			}
-		}
-		if (!defExists) {
-			SignalDefInfo def;
-			def.id = sig.id;
-			def.name = sig.name;
-			def.type = sig.type;
-			def.declaration = sig.declaration;
-			def.direction = sig.direction;
-			signalDefs.push_back(std::move(def));
-		}
+    // Get signal instance by local index
+    // Phase 1: from signalInsts vector
+    // Phase 2: from global array (requires KdbBuilder pointer)
+    SignalInstInfo* getSignalInst(uint32_t localIndex);
+    const SignalInstInfo* getSignalInst(uint32_t localIndex) const;
 
-		// Add to signalInsts
-		SignalInstInfo inst;
-		inst.id = sig.id;
-		inst.fullName = sig.fullName;
-		inst.msb = sig.msb;
-		inst.lsb = sig.lsb;
-		inst.parentModuleId = sig.parentModuleId;
-		inst.driverSignalIds = sig.driverSignalIds;
-		inst.driverLines = sig.driverLines;
-		signalInsts.push_back(std::move(inst));
-	}
+    // Get global ID from local index
+    uint64_t getSignalGlobalId(uint32_t localIndex) const {
+        if (!signalInstsCommitted) {
+            throw std::runtime_error("Cannot get global ID before commit phase");
+        }
+        return static_cast<uint64_t>(signalInstsStartId) + localIndex;
+    }
+
+    // Get local index from SignalInst pointer (for adding new signals)
+    uint32_t getNextLocalIndex() const {
+        return static_cast<uint32_t>(signalInsts.size());
+    }
+
+    // Add signal instance (Phase 1 only)
+    void addSignalInst(SignalInstInfo&& inst) {
+        if (signalInstsCommitted) {
+            throw std::runtime_error("Cannot add signal after commit phase");
+        }
+        inst.localIndex = getNextLocalIndex();
+        signalInsts.push_back(std::move(inst));
+    }
+
+    // Transition helper: Build SignalInfo vector from signalDefs and signalInsts
+    // Automatically handles Definition vs Instance using getSignalDefs()
+    std::vector<SignalInfo> getSignals() const;
+
+    // Transition helper: Add signal by splitting into Def and Inst
+    void addSignal(const SignalInfo& sig);
 };
 
 class KdbBuilder {
@@ -228,7 +219,8 @@ public:
     uint32_t addModule(const ModuleInfo& module, const std::string& fullName);  // Changed return type, fullName for deduplication
     bool hasModule(const std::string& fullName) const;
     
-    uint64_t addSignal(uint32_t moduleId, const SignalInfo& signal);  // Changed parameter type
+    // Phase 1: Add signal (stores in module's temporary signalInsts)
+    uint64_t addSignal(uint32_t moduleId, const SignalInfo& signal);  // Returns local index as temporary ID
     
     uint32_t addInstance(const ModuleInstanceInfo& instance);  // Changed return type
     
@@ -237,15 +229,34 @@ public:
     
     void buildIndices();
     
+    // Phase 2: Commit all signal instances to global array
+    // This must be called after all modules are added and linked
+    void commitSignalInsts();
+    bool isSignalInstsCommitted() const { return signalInstsCommitted_; }
+    
+    // Get global signal instance by global ID
+    SignalInstInfo* getGlobalSignalInst(uint64_t globalId);
+    const SignalInstInfo* getGlobalSignalInst(uint64_t globalId) const;
+    
     const ModuleInfo* findModuleByName(const std::string& name) const;
     const ModuleInfo* findModuleById(uint32_t id) const;  // Changed parameter type
+    
+    // Get definition name for an instance module
+    std::string getDefName(const ModuleInfo* module) const {
+        if (!module || !module->isInstance || module->defModuleId == 0) {
+            return "";
+        }
+        const ModuleInfo* defModule = findModuleById(module->defModuleId);
+        return defModule ? defModule->name : "";
+    }
+    
     const SignalInfo* findSignalByName(const std::string& fullName) const;
-    const SignalInfo* findSignalById(uint64_t id) const;
+    const SignalInfo* findSignalById(uint64_t id) const;  // Now requires commit phase
     const SourceFileInfo* findFileByPath(const std::string& path) const;
     const SourceFileInfo* findFileById(uint32_t id) const;  // Changed parameter type
     
-    // Add driver to a signal by name (directly modifies signalInsts)
-    bool addDriverToSignal(const std::string& signalFullName, uint64_t driverSignalId);
+    // Add driver to a signal by name (Phase 1: stores fullName, Phase 2: resolved to global ID)
+    bool addDriverToSignal(const std::string& signalFullName, const std::string& driverSignalFullName);
     bool addDriverLineToSignal(const std::string& signalFullName, const KdbSourceLocation& location);
     
     // Helper methods to get ID from pointer (for future optimization)
@@ -278,6 +289,18 @@ public:
     size_t getFileCount() const { return files_.size(); }
     size_t getTotalSignalCount() const;
     
+    // Get global signal insts array (for ModuleInfo::getSignalInst)
+    std::vector<SignalInstInfo>& getAllSignalInsts() { return allSignalInsts_; }
+    const std::vector<SignalInstInfo>& getAllSignalInsts() const { return allSignalInsts_; }
+    
+    // Build SignalInfo from SignalInstInfo and SignalDefInfo
+    SignalInfo buildSignalInfo(const SignalInstInfo& inst, const SignalDefInfo& def) const;
+    
+    // Register signal fullName to tempId mapping (used by kdb_build_listener)
+    void registerSignalFullName(const std::string& fullName, uint64_t tempId) {
+        signalFullNameToId_[fullName] = tempId;
+    }
+    
 private:
     std::string projectName_;
     std::vector<uint32_t> topModuleIds_;  // Changed from uint64_t to uint32_t
@@ -292,16 +315,19 @@ private:
     std::vector<std::unique_ptr<ModuleInfo>> modules_;
     std::vector<std::unique_ptr<ModuleInstanceInfo>> instances_;
     
+    // Phase 2: Global signal instances array
+    std::vector<SignalInstInfo> allSignalInsts_;
+    bool signalInstsCommitted_ = false;
+    
     std::unordered_map<std::string, uint32_t> filePathToId_;  // Changed value type
     std::unordered_map<std::string, uint32_t> moduleNameToId_;  // Changed value type
-    std::unordered_map<std::string, uint64_t> signalFullNameToId_;  // Keep uint64_t for signal IDs
+    std::unordered_map<std::string, uint64_t> signalFullNameToId_;  // Now stores global ID after commit
     std::unordered_map<uint32_t, size_t> moduleIdToIndex_;  // Changed key type
-    std::unordered_map<uint64_t, size_t> signalIdToIndex_;  // Keep uint64_t for signal IDs
+    std::unordered_map<uint64_t, size_t> signalIdToIndex_;  // Maps global ID to index in allSignalInsts
     std::unordered_map<uint32_t, size_t> fileIdToIndex_;  // Changed key type
     
     uint32_t nextFileId_;  // Changed from uint64_t to uint32_t
     uint32_t nextModuleId_;  // Changed from uint64_t to uint32_t
-    uint64_t nextSignalId_;  // Keep uint64_t for signal IDs
     uint32_t nextInstanceId_;  // Changed from uint64_t to uint32_t
     
     bool compressionEnabled_ = true;
@@ -309,6 +335,9 @@ private:
     
     void toProtobuf(hwda::kdb::KnowledgeBase* kdb) const;
     void fromProtobuf(const hwda::kdb::KnowledgeBase& kdb);
+    
+    // Resolve driver references after commit
+    void resolveDriverReferences();
 };
 
 }

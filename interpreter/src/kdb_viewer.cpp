@@ -214,22 +214,20 @@ void printModuleWithSource(const KdbBuilder& builder, const std::string& moduleN
         }
     }
     std::cout << "\n  Ports (" << portCount << "):\n";
+    uint32_t localIdx = 0;
     for (const auto& def : module->signalDefs) {
         if (def.direction != PortDirection::UNKNOWN) {
             std::cout << "    " << std::setw(8) << std::left
                       << portDirectionToString(def.direction)
                       << " " << def.name;
-            // Find corresponding instance for bit width
-            for (const auto& inst : module->signalInsts) {
-                if (inst.id == def.id) {
-                    if (inst.msb != inst.lsb) {
-                        std::cout << " [" << inst.msb << ":" << inst.lsb << "]";
-                    }
-                    break;
-                }
+            // Find corresponding instance for bit width using localIndex
+            const SignalInstInfo* inst = module->getSignalInst(localIdx);
+            if (inst && inst->msb != inst->lsb) {
+                std::cout << " [" << inst->msb << ":" << inst->lsb << "]";
             }
             std::cout << "\n";
         }
+        localIdx++;
     }
 
     // Print all signals using getSignals()
@@ -272,22 +270,20 @@ void printModuleDetails(const KdbBuilder& builder, const std::string& moduleName
         }
     }
     std::cout << "\n  Ports (" << portCount << "):\n";
+    uint32_t localIdx2 = 0;
     for (const auto& def : module->signalDefs) {
         if (def.direction != PortDirection::UNKNOWN) {
             std::cout << "    " << std::setw(8) << std::left
                       << portDirectionToString(def.direction)
                       << " " << def.name;
-            // Find corresponding instance for bit width
-            for (const auto& inst : module->signalInsts) {
-                if (inst.id == def.id) {
-                    if (inst.msb != inst.lsb) {
-                        std::cout << " [" << inst.msb << ":" << inst.lsb << "]";
-                    }
-                    break;
-                }
+            // Find corresponding instance for bit width using localIndex
+            const SignalInstInfo* inst = module->getSignalInst(localIdx2);
+            if (inst && inst->msb != inst->lsb) {
+                std::cout << " [" << inst->msb << ":" << inst->lsb << "]";
             }
             std::cout << "\n";
         }
+        localIdx2++;
     }
 
     // Print all signals using getSignals()

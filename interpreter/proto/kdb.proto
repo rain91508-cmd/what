@@ -53,8 +53,9 @@ enum PortDirection {
 // See the direction field in Signal message below
 
 // Signal definition - shared between Definition and Instance
+// Note: id removed, use array index as local index
 message SignalDef {
-  uint64 id = 1;  // Unique signal ID
+  // uint64 id = 1;  // REMOVED: Use array index as local index
   string name = 2;  // Signal name (e.g., "mem_arvalid")
   SignalType type = 3;
   SourceLocation declaration = 4;
@@ -62,13 +63,14 @@ message SignalDef {
 }
 
 // Signal instance - specific to each module instance
+// Note: id removed, use module's signal_insts_start_id + array index as global id
 message SignalInst {
-  uint64 id = 1;  // References SignalDef.id
+  // uint64 id = 1;  // REMOVED: Use global signal insts array index
   string full_name = 2;  // Full hierarchical name (e.g., "work@dut.mem_arvalid")
   uint32 msb = 3;
   uint32 lsb = 4;
   uint32 parent_module_id = 5;  // Module instance ID that owns this signal
-  repeated uint64 driver_signal_ids = 6;  // IDs of signals that drive this signal
+  repeated uint64 driver_signal_global_ids = 6;  // Global IDs in all_signal_insts array
   repeated SourceLocation driver_lines = 7;  // Source locations where drivers are discovered
 }
 
@@ -83,10 +85,14 @@ message Module {
   ModuleSourceLocation definition = 3;
   // New: Split signals into definition (shared) and instance (specific)
   repeated SignalDef signal_defs = 4;  // Signal definitions (shared)
-  repeated SignalInst signal_insts = 5;  // Signal instances (specific to this module instance)
+  // Note: signal_insts moved to KnowledgeBase level for memory optimization
+  // repeated SignalInst signal_insts = 5;  // MOVED to KnowledgeBase.all_signal_insts
   bool is_instance = 6;
   repeated uint32 child_module_ids = 7;  // Direct child module IDs for hierarchy traversal
   uint32 def_module_id = 8;  // Definition module ID for instances (0 if this is a definition)
+  // Note: def_name removed - can be obtained from def_module_id's module name
+  uint32 signal_insts_start_id = 9;  // Start index in KnowledgeBase.all_signal_insts
+  // Note: signal_insts_count removed - can be derived from signal_defs.size() or def_module's signal_defs.size()
 }
 
 message DesignHierarchy {
@@ -99,4 +105,6 @@ message KnowledgeBase {
   repeated SourceFile files = 2;
   repeated Module modules = 3;
   repeated DesignHierarchy hierarchies = 4;
+  // New: Global signal instances array for memory optimization
+  repeated SignalInst all_signal_insts = 5;  // All signal instances from all modules
 }

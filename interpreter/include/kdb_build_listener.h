@@ -32,6 +32,9 @@ public:
     // Post-processing: link instances to their definition modules
     void linkInstancesToDefinitions();
     
+    // Finalize build: commit signal instances to global array
+    void finishBuild();
+    
     size_t getTotalModules() const { return totalModules_; }
     size_t getTotalSignals() const { return totalSignals_; }
     

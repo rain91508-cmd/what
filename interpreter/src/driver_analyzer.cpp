@@ -312,28 +312,13 @@ void DriverAnalyzer::applyDriverRelationships() {
     // First apply driver signal relationships
     for (auto& [drivenSignalName, driverInfos] : signalToDriverNames_) {
         for (auto& [driverSignalName, driverLocation] : driverInfos) {
-            // First try to find driver signal ID in current module's signal map
-            auto it = currentModuleSignalMap_.find(driverSignalName);
-            uint64_t driverSignalId = 0;
-            
-            if (it != currentModuleSignalMap_.end() && it->second != 0) {
-                driverSignalId = it->second;
+            // Use the new method to add driver by full name (will be resolved to global ID in Phase 2)
+            if (builder_.addDriverToSignal(drivenSignalName, driverSignalName)) {
+                std::cerr << "DEBUG: Added driver " << driverSignalName 
+                          << " to " << drivenSignalName << "\n";
             } else {
-                // If not found in current module, try to find globally via builder
-                const SignalInfo* driverSignal = builder_.findSignalByName(driverSignalName);
-                if (driverSignal) {
-                    driverSignalId = driverSignal->id;
-                }
-            }
-            
-            if (driverSignalId != 0) {
-                // Use the new method to directly add driver to signalInsts
-                if (builder_.addDriverToSignal(drivenSignalName, driverSignalId)) {
-                    std::cerr << "DEBUG: Added driver " << driverSignalName << " (id=" << driverSignalId 
-                              << ") to " << drivenSignalName << "\n";
-                }
-            } else {
-                std::cerr << "DEBUG: Driver signal not found: " << driverSignalName << "\n";
+                std::cerr << "DEBUG: Could not add driver " << driverSignalName 
+                          << " to " << drivenSignalName << "\n";
             }
         }
     }

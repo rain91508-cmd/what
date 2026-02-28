@@ -22,141 +22,24 @@
 namespace hwda {
 namespace interpreter {
 
+// Global KdbBuilder pointer for ModuleInfo::getSignalInst
+static KdbBuilder* g_currentBuilder = nullptr;
+
 KdbBuilder::KdbBuilder()
     : nextFileId_(1)
     , nextModuleId_(1)
-    , nextSignalId_(1)
     , nextInstanceId_(1) {
+    g_currentBuilder = this;
 }
 
-uint32_t KdbBuilder::addModule(const ModuleInfo& module, const std::string& fullName) {
-    auto it = moduleNameToId_.find(fullName);
-    if (it != moduleNameToId_.end()) {
-        return it->second;
+KdbBuilder::~KdbBuilder() {
+    if (g_currentBuilder == this) {
+        g_currentBuilder = nullptr;
     }
-
-    auto mod = std::make_unique<ModuleInfo>(module);
-    // Note: id is now implicit (array index + 1)
-
-    // For Instance modules, find Definition and sync signal IDs
-    const ModuleInfo* defModule = nullptr;
-    if (mod->isInstance && !mod->defName.empty()) {
-        // Build full definition name
-        std::string defFullName = mod->defName;
-        if (defFullName.find("work@") != 0) {
-            defFullName = "work@" + defFullName;
-        }
-        defModule = findModuleByName(defFullName);
-        if (defModule) {
-            mod->defModuleId = getModuleId(defModule);
-        }
-    }
-
-    // Process signals: assign IDs and build indices
-    // For Definition modules: assign new IDs
-    // For Instance modules: use Definition's signal IDs
-    if (!mod->isInstance) {
-        // Definition module: assign new IDs
-        for (size_t i = 0; i < mod->signalInsts.size() && i < mod->signalDefs.size(); ++i) {
-            auto& inst = mod->signalInsts[i];
-            auto& def = mod->signalDefs[i];
-            uint64_t newId = nextSignalId_++;
-            inst.id = newId;
-            def.id = newId;
-            signalFullNameToId_[inst.fullName] = newId;
-            signalIdToIndex_[newId] = newId;
-        }
-    } else if (defModule) {
-        // Instance module: use Definition's signal IDs
-        // Match signals by name
-        for (auto& inst : mod->signalInsts) {
-            // Extract signal name from fullName (e.g., "work@tb_top.u_dut.mem_arvalid" -> "mem_arvalid")
-            std::string sigName;
-            size_t lastDot = inst.fullName.rfind('.');
-            if (lastDot != std::string::npos) {
-                sigName = inst.fullName.substr(lastDot + 1);
-            } else {
-                sigName = inst.fullName;
-            }
-            
-            // Find matching signal in Definition
-            for (const auto& defSig : defModule->signalDefs) {
-                if (defSig.name == sigName) {
-                    inst.id = defSig.id;
-                    signalFullNameToId_[inst.fullName] = inst.id;
-                    signalIdToIndex_[inst.id] = inst.id;
-                    break;
-                }
-            }
-        }
-        // Set externalSignalDefs to point to Definition's signalDefs
-        // This allows Instance to share Definition's signal definitions
-        mod->externalSignalDefs = &defModule->signalDefs;
-    } else {
-        // Instance module but no Definition found: assign new IDs (fallback)
-        for (size_t i = 0; i < mod->signalInsts.size() && i < mod->signalDefs.size(); ++i) {
-            auto& inst = mod->signalInsts[i];
-            auto& def = mod->signalDefs[i];
-            uint64_t newId = nextSignalId_++;
-            inst.id = newId;
-            def.id = newId;
-            signalFullNameToId_[inst.fullName] = newId;
-            signalIdToIndex_[newId] = newId;
-        }
-    }
-
-    // Calculate ID from array index (ID = index + 1)
-    uint32_t id = static_cast<uint32_t>(modules_.size()) + 1;
-    uint32_t parentModuleId = mod->parentModuleId;  // Save before move
-
-    moduleNameToId_[fullName] = id;
-    moduleIdToIndex_[id] = modules_.size();
-    modules_.push_back(std::move(mod));
-
-    // Update parent's childModuleIds if this module has a parent
-    if (parentModuleId != 0) {
-        auto* parentMod = const_cast<ModuleInfo*>(findModuleById(parentModuleId));
-        if (parentMod) {
-            parentMod->childModuleIds.push_back(id);
-        }
-    }
-    
-    return id;
 }
-
-KdbBuilder::~KdbBuilder() = default;
 
 void KdbBuilder::setProjectName(const std::string& name) {
     projectName_ = name;
-}
-
-void KdbBuilder::setTopModule(uint32_t moduleId) {
-    topModuleIds_.clear();
-    topModuleIds_.push_back(moduleId);
-}
-
-void KdbBuilder::addHierarchy(uint32_t topModuleId) {
-    // Check if this topModuleId already exists
-    for (const auto& existing : hierarchies_) {
-        if (existing.topModuleId == topModuleId) {
-            return;
-        }
-    }
-    
-    HierarchyInfo hierarchy;
-    hierarchy.topModuleId = topModuleId;
-    
-    std::function<void(uint32_t)> collectModules = [&](uint32_t moduleId) {
-        hierarchy.moduleIds.push_back(moduleId);
-        auto children = getChildModules(moduleId);
-        for (const auto* child : children) {
-            // Use getModuleId to get ID from pointer
-            collectModules(getModuleId(child));
-        }
-    };
-    collectModules(topModuleId);
-    
-    hierarchies_.push_back(hierarchy);
 }
 
 uint32_t KdbBuilder::addSourceFile(const std::string& path, const std::string& content) {
@@ -178,7 +61,6 @@ bool KdbBuilder::setSourceFileContent(uint32_t fileId, const std::string& conten
     if (!file) return false;
     
     file->content = content;
-    
     return true;
 }
 
@@ -283,20 +165,90 @@ bool KdbBuilder::hasModule(const std::string& fullName) const {
     return moduleNameToId_.find(fullName) != moduleNameToId_.end();
 }
 
+uint32_t KdbBuilder::addModule(const ModuleInfo& module, const std::string& fullName) {
+    auto it = moduleNameToId_.find(fullName);
+    if (it != moduleNameToId_.end()) {
+        return it->second;
+    }
+
+    auto mod = std::make_unique<ModuleInfo>(module);
+    
+    // For Instance modules, find Definition
+    const ModuleInfo* defModule = nullptr;
+    if (mod->isInstance && mod->defModuleId != 0) {
+        defModule = findModuleById(mod->defModuleId);
+        if (defModule) {
+            mod->externalSignalDefs = &defModule->signalDefs;
+        }
+    }
+
+    // Calculate ID from array index (ID = index + 1)
+    uint32_t id = static_cast<uint32_t>(modules_.size()) + 1;
+    uint32_t parentModuleId = mod->parentModuleId;
+
+    moduleNameToId_[fullName] = id;
+    moduleIdToIndex_[id] = modules_.size();
+    modules_.push_back(std::move(mod));
+
+    // Update parent's childModuleIds if this module has a parent
+    if (parentModuleId != 0) {
+        auto* parentMod = const_cast<ModuleInfo*>(findModuleById(parentModuleId));
+        if (parentMod) {
+            parentMod->childModuleIds.push_back(id);
+        }
+    }
+    
+    return id;
+}
+
+// Phase 1: Add signal (stores in module's temporary signalInsts)
+// Returns local index, or existing index if signal already exists
 uint64_t KdbBuilder::addSignal(uint32_t moduleId, const SignalInfo& signal) {
+    if (signalInstsCommitted_) {
+        throw std::runtime_error("Cannot add signal after commit phase");
+    }
+    
     auto* mod = const_cast<ModuleInfo*>(findModuleById(moduleId));
     if (!mod) return 0;
 
-    SignalInfo sig = signal;
-    sig.id = nextSignalId_++;
-    sig.parentModuleId = moduleId;
+    // Check if signal already exists
+    auto it = signalFullNameToId_.find(signal.fullName);
+    if (it != signalFullNameToId_.end()) {
+        // Signal already exists, return existing local index
+        uint64_t tempId = it->second;
+        uint32_t existingModuleId = static_cast<uint32_t>(tempId >> 32);
+        if (existingModuleId == moduleId) {
+            return static_cast<uint32_t>(tempId & 0xFFFFFFFF);
+        }
+    }
 
-    uint64_t id = sig.id;
-    signalFullNameToId_[sig.fullName] = id;
-    signalIdToIndex_[id] = mod->signalInsts.size();
-    mod->addSignal(sig);
+    // Build SignalDef (for Definition modules)
+    if (!mod->isInstance) {
+        SignalDefInfo def;
+        def.name = signal.name;
+        def.type = signal.type;
+        def.declaration = signal.declaration;
+        def.direction = signal.direction;
+        mod->signalDefs.push_back(std::move(def));
+    }
 
-    return id;
+    // Build SignalInst
+    SignalInstInfo inst;
+    inst.localIndex = mod->getNextLocalIndex();
+    inst.fullName = signal.fullName;
+    inst.msb = signal.msb;
+    inst.lsb = signal.lsb;
+    inst.parentModuleId = moduleId;
+    inst.driverLines = signal.driverLines;
+    // Note: driverSignalFullNames will be filled later by addDriverToSignal
+    
+    mod->addSignalInst(std::move(inst));
+    
+    // Store mapping from fullName to (moduleId, localIndex)
+    uint64_t tempId = (static_cast<uint64_t>(moduleId) << 32) | inst.localIndex;
+    signalFullNameToId_[signal.fullName] = tempId;
+    
+    return inst.localIndex;
 }
 
 uint32_t KdbBuilder::addInstance(const ModuleInstanceInfo& instance) {
@@ -309,7 +261,123 @@ uint32_t KdbBuilder::addInstance(const ModuleInstanceInfo& instance) {
     return id;
 }
 
+void KdbBuilder::setTopModule(uint32_t moduleId) {
+    topModuleIds_.clear();
+    topModuleIds_.push_back(moduleId);
+}
+
+void KdbBuilder::addHierarchy(uint32_t topModuleId) {
+    for (const auto& existing : hierarchies_) {
+        if (existing.topModuleId == topModuleId) {
+            return;
+        }
+    }
+    
+    HierarchyInfo hierarchy;
+    hierarchy.topModuleId = topModuleId;
+    
+    std::function<void(uint32_t)> collectModules = [&](uint32_t moduleId) {
+        hierarchy.moduleIds.push_back(moduleId);
+        auto children = getChildModules(moduleId);
+        for (const auto* child : children) {
+            collectModules(getModuleId(child));
+        }
+    };
+    collectModules(topModuleId);
+    
+    hierarchies_.push_back(hierarchy);
+}
+
 void KdbBuilder::buildIndices() {
+}
+
+// Phase 2: Commit all signal instances to global array
+void KdbBuilder::commitSignalInsts() {
+    if (signalInstsCommitted_) return;
+    
+    // First pass: calculate total size and set start IDs
+    // Use actual signalInsts.size() for each module to ensure we only allocate for existing signals
+    uint32_t currentGlobalId = 0;
+    for (uint32_t moduleId = 1; moduleId <= modules_.size(); ++moduleId) {
+        ModuleInfo* mod = const_cast<ModuleInfo*>(findModuleById(moduleId));
+        if (!mod) continue;
+        
+        mod->signalInstsStartId = currentGlobalId;
+        // Use actual signalInsts size (not derived from signalDefs)
+        // This ensures we only allocate space for signals that were actually added
+        uint32_t count = static_cast<uint32_t>(mod->signalInsts.size());
+        currentGlobalId += count;
+    }
+    
+    // Allocate global array
+    allSignalInsts_.resize(currentGlobalId);
+    
+    // Second pass: copy data to global array
+    for (uint32_t moduleId = 1; moduleId <= modules_.size(); ++moduleId) {
+        ModuleInfo* mod = const_cast<ModuleInfo*>(findModuleById(moduleId));
+        if (!mod) continue;
+        
+        // Copy existing signal insts
+        for (size_t i = 0; i < mod->signalInsts.size(); ++i) {
+            uint32_t globalId = mod->signalInstsStartId + static_cast<uint32_t>(i);
+            allSignalInsts_[globalId] = std::move(mod->signalInsts[i]);
+        }
+        
+        // Clear temporary storage
+        mod->signalInsts.clear();
+        mod->signalInsts.shrink_to_fit();
+        mod->signalInstsCommitted = true;
+    }
+    
+    // Third pass: resolve driver references
+    resolveDriverReferences();
+    
+    // Update signalFullNameToId_ to use global IDs
+    // Use getSignalInstsCount() to iterate over all expected signals
+    for (uint32_t moduleId = 1; moduleId <= modules_.size(); ++moduleId) {
+        ModuleInfo* mod = const_cast<ModuleInfo*>(findModuleById(moduleId));
+        if (!mod) continue;
+        
+        uint32_t count = mod->getSignalInstsCount();
+        for (uint32_t localIdx = 0; localIdx < count; ++localIdx) {
+            uint32_t globalId = mod->signalInstsStartId + localIdx;
+            const SignalInstInfo* inst = getGlobalSignalInst(globalId);
+            if (inst) {
+                signalFullNameToId_[inst->fullName] = globalId;
+            }
+        }
+    }
+    
+    signalInstsCommitted_ = true;
+}
+
+void KdbBuilder::resolveDriverReferences() {
+    for (uint32_t globalId = 0; globalId < allSignalInsts_.size(); ++globalId) {
+        SignalInstInfo& inst = allSignalInsts_[globalId];
+        
+        // Resolve driver full names to global IDs
+        for (const auto& driverName : inst.driverSignalFullNames) {
+            auto it = signalFullNameToId_.find(driverName);
+            if (it != signalFullNameToId_.end()) {
+                // Before commit, the map contains temp IDs (moduleId << 32 | localIndex)
+                // After we've updated the map in commitSignalInsts, it contains global IDs
+                // But we're called before that update, so we need to handle temp IDs
+                uint64_t tempId = it->second;
+                uint32_t driverModuleId = static_cast<uint32_t>(tempId >> 32);
+                uint32_t driverLocalIdx = static_cast<uint32_t>(tempId & 0xFFFFFFFF);
+                
+                const ModuleInfo* driverMod = findModuleById(driverModuleId);
+                if (driverMod && driverMod->signalInstsCommitted) {
+                    uint64_t driverGlobalId = driverMod->signalInstsStartId + driverLocalIdx;
+                    inst.driverSignalGlobalIds.push_back(driverGlobalId);
+                }
+            }
+        }
+        
+        // Clear temporary storage
+        inst.driverSignalFullNames.clear();
+        inst.driverSignalFullNames.shrink_to_fit();
+    }
 }
 
 const ModuleInfo* KdbBuilder::findModuleByName(const std::string& name) const {
@@ -321,7 +389,6 @@ const ModuleInfo* KdbBuilder::findModuleByName(const std::string& name) const {
 }
 
 const ModuleInfo* KdbBuilder::findModuleById(uint32_t id) const {
-    // Use array index directly (ID = index + 1)
     if (id == 0 || id > modules_.size()) {
         return nullptr;
     }
@@ -329,51 +396,82 @@ const ModuleInfo* KdbBuilder::findModuleById(uint32_t id) const {
 }
 
 const SignalInfo* KdbBuilder::findSignalByName(const std::string& fullName) const {
-    auto it = signalFullNameToId_.find(fullName);
-    if (it != signalFullNameToId_.end()) {
-        return findSignalById(it->second);
+    if (!signalInstsCommitted_) {
+        // Phase 1: Use temp ID
+        auto it = signalFullNameToId_.find(fullName);
+        if (it != signalFullNameToId_.end()) {
+            uint64_t tempId = it->second;
+            uint32_t moduleId = static_cast<uint32_t>(tempId >> 32);
+            uint32_t localIdx = static_cast<uint32_t>(tempId & 0xFFFFFFFF);
+            
+            const ModuleInfo* mod = findModuleById(moduleId);
+            if (mod && !mod->signalInsts.empty() && localIdx < mod->signalInsts.size()) {
+                const SignalInstInfo& inst = mod->signalInsts[localIdx];
+                // For Phase 1, just return basic info from signalInst
+                static thread_local SignalInfo result;
+                result = SignalInfo();
+                result.fullName = inst.fullName;
+                result.msb = inst.msb;
+                result.lsb = inst.lsb;
+                result.parentModuleId = inst.parentModuleId;
+                // Try to get def info if available
+                const auto& defs = mod->getSignalDefs();
+                if (localIdx < defs.size()) {
+                    result.name = defs[localIdx].name;
+                    result.type = defs[localIdx].type;
+                    result.direction = defs[localIdx].direction;
+                    result.declaration = defs[localIdx].declaration;
+                }
+                return &result;
+            }
+        }
+    } else {
+        // Phase 2: Use global ID
+        auto it = signalFullNameToId_.find(fullName);
+        if (it != signalFullNameToId_.end()) {
+            return findSignalById(it->second);
+        }
     }
     return nullptr;
 }
 
 const SignalInfo* KdbBuilder::findSignalById(uint64_t id) const {
-    for (const auto& mod : modules_) {
-        auto signals = mod->getSignals();
-        for (const auto& sig : signals) {
-            if (sig.id == id) {
-                // Return a copy stored in a static thread_local variable
-                // Note: This is a temporary solution for transition
-                static thread_local SignalInfo result;
-                result = sig;
-                return &result;
-            }
-        }
+    if (!signalInstsCommitted_) {
+        throw std::runtime_error("Cannot find signal by global ID before commit phase");
     }
-    return nullptr;
+    
+    if (id >= allSignalInsts_.size()) return nullptr;
+    
+    const SignalInstInfo& inst = allSignalInsts_[id];
+    const ModuleInfo* mod = findModuleById(inst.parentModuleId);
+    if (!mod) return nullptr;
+    
+    // Calculate local index
+    uint32_t localIdx = static_cast<uint32_t>(id - mod->signalInstsStartId);
+    const auto& defs = mod->getSignalDefs();
+    if (localIdx >= defs.size()) return nullptr;
+    
+    static thread_local SignalInfo result;
+    result = buildSignalInfo(inst, defs[localIdx]);
+    return &result;
 }
 
-// Helper methods to get ID from pointer (for future optimization)
-uint32_t KdbBuilder::getModuleId(const ModuleInfo* module) const {
-    if (!module || modules_.empty()) return 0;
-    // Calculate ID from pointer offset (ID = index + 1)
-    // Note: modules_ stores unique_ptr<ModuleInfo>, so we need to compare raw pointers
-    for (size_t i = 0; i < modules_.size(); ++i) {
-        if (modules_[i].get() == module) {
-            return static_cast<uint32_t>(i) + 1;
-        }
-    }
-    return 0;  // Not found
-}
-
-uint32_t KdbBuilder::getSignalId(const ModuleInfo* module, const SignalInfo* signal) const {
-    if (!module || !signal) return 0;
-    // Find signal in signalInsts by comparing IDs
-    for (size_t i = 0; i < module->signalInsts.size(); ++i) {
-        if (module->signalInsts[i].id == signal->id) {
-            return static_cast<uint32_t>(i) + 1;
-        }
-    }
-    return 0;  // Not found
+SignalInfo KdbBuilder::buildSignalInfo(const SignalInstInfo& inst, const SignalDefInfo& def) const {
+    SignalInfo sig;
+    // Note: id is now global ID (startId + localIndex)
+    // We'll calculate it if needed, but for now leave as 0
+    sig.id = 0;  // TODO: Calculate if needed
+    sig.name = def.name;
+    sig.fullName = inst.fullName;
+    sig.type = def.type;
+    sig.direction = def.direction;
+    sig.msb = inst.msb;
+    sig.lsb = inst.lsb;
+    sig.declaration = def.declaration;
+    sig.parentModuleId = inst.parentModuleId;
+    sig.driverSignalIds = inst.driverSignalGlobalIds;
+    sig.driverLines = inst.driverLines;
+    return sig;
 }
 
 const SourceFileInfo* KdbBuilder::findFileByPath(const std::string& path) const {
@@ -392,6 +490,33 @@ const SourceFileInfo* KdbBuilder::findFileById(uint32_t id) const {
     return nullptr;
 }
 
+uint32_t KdbBuilder::getModuleId(const ModuleInfo* module) const {
+    if (!module || modules_.empty()) return 0;
+    for (size_t i = 0; i < modules_.size(); ++i) {
+        if (modules_[i].get() == module) {
+            return static_cast<uint32_t>(i) + 1;
+        }
+    }
+    return 0;
+}
+
+uint32_t KdbBuilder::getSignalId(const ModuleInfo* module, const SignalInfo* signal) const {
+    // TODO: Implement for new structure
+    (void)module;
+    (void)signal;
+    return 0;
+}
+
+SignalInstInfo* KdbBuilder::getGlobalSignalInst(uint64_t globalId) {
+    if (globalId >= allSignalInsts_.size()) return nullptr;
+    return &allSignalInsts_[globalId];
+}
+
+const SignalInstInfo* KdbBuilder::getGlobalSignalInst(uint64_t globalId) const {
+    if (globalId >= allSignalInsts_.size()) return nullptr;
+    return &allSignalInsts_[globalId];
+}
+
 std::vector<const ModuleInfo*> KdbBuilder::getAllModules() const {
     std::vector<const ModuleInfo*> result;
     result.reserve(modules_.size());
@@ -402,19 +527,9 @@ std::vector<const ModuleInfo*> KdbBuilder::getAllModules() const {
 }
 
 std::vector<const SignalInfo*> KdbBuilder::getAllSignals() const {
-    // Note: This function needs to be redesigned for the new SignalDef/SignalInst structure
-    // For now, return empty vector to allow compilation
     std::vector<const SignalInfo*> result;
-    // TODO: Implement proper signal collection from signalDefs and signalInsts
+    // TODO: Implement for new structure
     return result;
-}
-
-size_t KdbBuilder::getTotalSignalCount() const {
-    size_t count = 0;
-    for (const auto& mod : modules_) {
-        count += mod->signalInsts.size();  // Count instances, not definitions
-    }
-    return count;
 }
 
 std::vector<const SignalInfo*> KdbBuilder::getDrivers(uint64_t signalId) const {
@@ -432,10 +547,9 @@ std::vector<const SignalInfo*> KdbBuilder::getDrivers(uint64_t signalId) const {
 }
 
 std::vector<const SignalInfo*> KdbBuilder::getLoads(uint64_t signalId) const {
-    // Note: loadSignalIds removed - this function now returns empty result
-    // Loads can be computed by finding all signals that have this signal as driver
     std::vector<const SignalInfo*> result;
-    // TODO: Implement load calculation by scanning all signals' driverSignalIds
+    // TODO: Implement load calculation
+    (void)signalId;
     return result;
 }
 
@@ -449,6 +563,169 @@ std::vector<const ModuleInfo*> KdbBuilder::getChildModules(uint32_t parentModule
     return result;
 }
 
+size_t KdbBuilder::getTotalSignalCount() const {
+    if (signalInstsCommitted_) {
+        return allSignalInsts_.size();
+    }
+    size_t count = 0;
+    for (const auto& mod : modules_) {
+        count += mod->signalInsts.size();
+    }
+    return count;
+}
+
+// Phase 1: Store driver full name
+// Phase 2: Resolved to global ID during commit
+bool KdbBuilder::addDriverToSignal(const std::string& signalFullName, const std::string& driverSignalFullName) {
+    if (signalInstsCommitted_) {
+        // Phase 2: Directly add global ID
+        auto it = signalFullNameToId_.find(driverSignalFullName);
+        if (it == signalFullNameToId_.end()) return false;
+        
+        uint64_t driverGlobalId = it->second;
+        
+        // Find signal and add driver
+        auto sigIt = signalFullNameToId_.find(signalFullName);
+        if (sigIt == signalFullNameToId_.end()) return false;
+        
+        uint64_t signalGlobalId = sigIt->second;
+        SignalInstInfo* inst = getGlobalSignalInst(signalGlobalId);
+        if (!inst) return false;
+        
+        inst->driverSignalGlobalIds.push_back(driverGlobalId);
+        return true;
+    } else {
+        // Phase 1: Store full name for later resolution
+        for (auto& mod : modules_) {
+            for (auto& inst : mod->signalInsts) {
+                if (inst.fullName == signalFullName) {
+                    inst.driverSignalFullNames.push_back(driverSignalFullName);
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+bool KdbBuilder::addDriverLineToSignal(const std::string& signalFullName, const KdbSourceLocation& location) {
+    if (signalInstsCommitted_) {
+        // Phase 2: Use global array
+        auto it = signalFullNameToId_.find(signalFullName);
+        if (it == signalFullNameToId_.end()) return false;
+        
+        uint64_t signalGlobalId = it->second;
+        SignalInstInfo* inst = getGlobalSignalInst(signalGlobalId);
+        if (!inst) return false;
+        
+        inst->driverLines.push_back(location);
+        return true;
+    } else {
+        // Phase 1: Use temporary storage
+        for (auto& mod : modules_) {
+            for (auto& inst : mod->signalInsts) {
+                if (inst.fullName == signalFullName) {
+                    inst.driverLines.push_back(location);
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// ModuleInfo implementation
+SignalInstInfo* ModuleInfo::getSignalInst(uint32_t localIndex) {
+    if (!signalInstsCommitted) {
+        if (localIndex < signalInsts.size()) {
+            return &signalInsts[localIndex];
+        }
+    } else if (g_currentBuilder) {
+        uint32_t globalId = signalInstsStartId + localIndex;
+        return g_currentBuilder->getGlobalSignalInst(globalId);
+    }
+    return nullptr;
+}
+
+const SignalInstInfo* ModuleInfo::getSignalInst(uint32_t localIndex) const {
+    if (!signalInstsCommitted) {
+        if (localIndex < signalInsts.size()) {
+            return &signalInsts[localIndex];
+        }
+    } else if (g_currentBuilder) {
+        uint32_t globalId = signalInstsStartId + localIndex;
+        return g_currentBuilder->getGlobalSignalInst(globalId);
+    }
+    return nullptr;
+}
+
+std::vector<SignalInfo> ModuleInfo::getSignals() const {
+    std::vector<SignalInfo> result;
+    
+    const auto& defsToUse = getSignalDefs();
+    
+    // Use getSignalInstsCount() to get expected count
+    // But also check actual available signal instances
+    uint32_t expectedCount = getSignalInstsCount();
+    uint32_t availableCount = signalInstsCommitted ? expectedCount : static_cast<uint32_t>(signalInsts.size());
+    uint32_t count = std::min(expectedCount, availableCount);
+    count = std::min(count, static_cast<uint32_t>(defsToUse.size()));
+    result.reserve(count);
+    
+    for (uint32_t localIdx = 0; localIdx < count; ++localIdx) {
+        const SignalInstInfo* inst = getSignalInst(localIdx);
+        if (!inst) continue;
+        
+        const SignalDefInfo& def = defsToUse[localIdx];
+        SignalInfo sig;
+        sig.name = def.name;
+        sig.fullName = inst->fullName;
+        sig.type = def.type;
+        sig.direction = def.direction;
+        sig.msb = inst->msb;
+        sig.lsb = inst->lsb;
+        sig.declaration = def.declaration;
+        sig.parentModuleId = inst->parentModuleId;
+        sig.driverSignalIds = inst->driverSignalGlobalIds;
+        sig.driverLines = inst->driverLines;
+        result.push_back(std::move(sig));
+    }
+    return result;
+}
+
+void ModuleInfo::addSignal(const SignalInfo& sig) {
+    // Add to signalDefs if not exists (for Definition modules)
+    if (!isInstance) {
+        bool defExists = false;
+        for (const auto& d : signalDefs) {
+            if (d.name == sig.name) {
+                defExists = true;
+                break;
+            }
+        }
+        if (!defExists) {
+            SignalDefInfo def;
+            def.name = sig.name;
+            def.type = sig.type;
+            def.declaration = sig.declaration;
+            def.direction = sig.direction;
+            signalDefs.push_back(std::move(def));
+        }
+    }
+
+    // Add to signalInsts
+    SignalInstInfo inst;
+    inst.localIndex = getNextLocalIndex();
+    inst.fullName = sig.fullName;
+    inst.msb = sig.msb;
+    inst.lsb = sig.lsb;
+    inst.parentModuleId = sig.parentModuleId;
+    inst.driverSignalGlobalIds = sig.driverSignalIds;
+    inst.driverLines = sig.driverLines;
+    addSignalInst(std::move(inst));
+}
+
+// Serialization (simplified - needs full implementation)
 #ifdef USE_PROTOBUF
 
 static hwda::kdb::SignalType toProtoSignalType(SignalType type) {
@@ -517,13 +794,13 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
     
     for (const auto& mod : modules_) {
         auto* protoMod = kdb->add_modules();
-        // Note: id removed, use array index + 1 as implicit ID
         protoMod->set_name(mod->name);
-        // Note: full_name removed
         protoMod->set_parent_module_id(mod->parentModuleId);
-        // Note: file_id removed, use definition.file_id instead
         protoMod->set_is_instance(mod->isInstance);
         protoMod->set_def_module_id(mod->defModuleId);
+        // Note: def_name removed from proto - can be obtained from def_module_id's module name
+        protoMod->set_signal_insts_start_id(mod->signalInstsStartId);
+        // Note: signal_insts_count removed from proto - derived from signal_defs.size()
 
         if (mod->definition.fileId != 0) {
             auto* decl = protoMod->mutable_definition();
@@ -533,11 +810,8 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
         }
         
         // Serialize SignalDefs
-        // Note: Instance modules serialize their own signalDefs (may be empty if sharing)
-        // The sharing is restored during deserialization via externalSignalDefs
         for (const auto& def : mod->signalDefs) {
             auto* protoDef = protoMod->add_signal_defs();
-            protoDef->set_id(def.id);
             protoDef->set_name(def.name);
             protoDef->set_type(toProtoSignalType(def.type));
             protoDef->set_direction(toProtoPortDirection(def.direction));
@@ -549,29 +823,28 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
             }
         }
 
-        // Serialize SignalInsts
-        for (const auto& inst : mod->signalInsts) {
-            auto* protoInst = protoMod->add_signal_insts();
-            protoInst->set_id(inst.id);
-            protoInst->set_full_name(inst.fullName);
-            protoInst->set_msb(inst.msb);
-            protoInst->set_lsb(inst.lsb);
-            protoInst->set_parent_module_id(inst.parentModuleId);
-
-            for (const auto& driverId : inst.driverSignalIds) {
-                protoInst->add_driver_signal_ids(driverId);
-            }
-
-            for (const auto& driverLine : inst.driverLines) {
-                auto* protoDriverLine = protoInst->add_driver_lines();
-                protoDriverLine->set_file_id(driverLine.fileId);
-                protoDriverLine->set_line(driverLine.line);
-            }
-        }
-
         // Add child module IDs
         for (uint32_t childId : mod->childModuleIds) {
             protoMod->add_child_module_ids(childId);
+        }
+    }
+    
+    // Serialize global signal instances
+    for (const auto& inst : allSignalInsts_) {
+        auto* protoInst = kdb->add_all_signal_insts();
+        protoInst->set_full_name(inst.fullName);
+        protoInst->set_msb(inst.msb);
+        protoInst->set_lsb(inst.lsb);
+        protoInst->set_parent_module_id(inst.parentModuleId);
+
+        for (uint64_t driverId : inst.driverSignalGlobalIds) {
+            protoInst->add_driver_signal_global_ids(driverId);
+        }
+
+        for (const auto& driverLine : inst.driverLines) {
+            auto* protoDriverLine = protoInst->add_driver_lines();
+            protoDriverLine->set_file_id(driverLine.fileId);
+            protoDriverLine->set_line(driverLine.line);
         }
     }
     
@@ -588,6 +861,7 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
     files_.clear();
     modules_.clear();
     instances_.clear();
+    allSignalInsts_.clear();
     filePathToId_.clear();
     moduleNameToId_.clear();
     signalFullNameToId_.clear();
@@ -609,15 +883,17 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
         files_.push_back(std::move(file));
     }
     
+    // First pass: load modules
     for (const auto& protoMod : kdb.modules()) {
         auto mod = std::make_unique<ModuleInfo>();
-        // Note: id removed, use array index + 1 as implicit ID
         mod->name = protoMod.name();
-        // Note: full_name removed
         mod->parentModuleId = protoMod.parent_module_id();
-        // Note: file_id removed, use definition.file_id instead
         mod->isInstance = protoMod.is_instance();
         mod->defModuleId = protoMod.def_module_id();
+        // Note: def_name removed from proto - will be obtained from def_module_id's module name after linking
+        mod->signalInstsStartId = protoMod.signal_insts_start_id();
+        // Note: signal_insts_count removed from proto - will be derived from signal_defs.size() after linking
+        mod->signalInstsCommitted = true;  // Loaded from protobuf = already committed
 
         if (protoMod.has_definition()) {
             mod->definition.fileId = protoMod.definition().file_id();
@@ -625,10 +901,9 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
             mod->definition.endLine = protoMod.definition().end_line();
         }
 
-        // Load SignalDefs (new format)
+        // Load SignalDefs
         for (const auto& protoDef : protoMod.signal_defs()) {
             SignalDefInfo def;
-            def.id = protoDef.id();
             def.name = protoDef.name();
             def.type = fromProtoSignalType(protoDef.type());
             def.direction = fromProtoPortDirection(protoDef.direction());
@@ -639,40 +914,34 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
             mod->signalDefs.push_back(std::move(def));
         }
 
-        // Load SignalInsts (new format)
-        for (const auto& protoInst : protoMod.signal_insts()) {
-            SignalInstInfo inst;
-            inst.id = protoInst.id();
-            inst.fullName = protoInst.full_name();
-            inst.msb = protoInst.msb();
-            inst.lsb = protoInst.lsb();
-            inst.parentModuleId = protoInst.parent_module_id();
-            for (uint64_t driverId : protoInst.driver_signal_ids()) {
-                inst.driverSignalIds.push_back(driverId);
-            }
-            for (const auto& protoDriverLine : protoInst.driver_lines()) {
-                KdbSourceLocation driverLine;
-                driverLine.fileId = protoDriverLine.file_id();
-                driverLine.line = protoDriverLine.line();
-                inst.driverLines.push_back(driverLine);
-            }
-            mod->signalInsts.push_back(std::move(inst));
-            nextSignalId_ = std::max(nextSignalId_, inst.id + 1);
-            signalFullNameToId_[inst.fullName] = inst.id;
-            signalIdToIndex_[inst.id] = mod->signalInsts.size() - 1;
-        }
-
         // Load child module IDs
         for (uint32_t childId : protoMod.child_module_ids()) {
             mod->childModuleIds.push_back(childId);
         }
 
-        // Note: id is implicit (array index + 1)
         uint32_t id = static_cast<uint32_t>(modules_.size()) + 1;
-        // Note: moduleNameToId_ not rebuilt here since fullName is removed
-        // Rebuild indices if needed by traversing parent chain
         moduleIdToIndex_[id] = modules_.size();
+        moduleNameToId_[mod->name] = id;  // Build moduleNameToId_ mapping
         modules_.push_back(std::move(mod));
+    }
+    
+    // Load global signal instances
+    for (const auto& protoInst : kdb.all_signal_insts()) {
+        SignalInstInfo inst;
+        inst.fullName = protoInst.full_name();
+        inst.msb = protoInst.msb();
+        inst.lsb = protoInst.lsb();
+        inst.parentModuleId = protoInst.parent_module_id();
+        for (uint64_t driverId : protoInst.driver_signal_global_ids()) {
+            inst.driverSignalGlobalIds.push_back(driverId);
+        }
+        for (const auto& protoDriverLine : protoInst.driver_lines()) {
+            KdbSourceLocation driverLine;
+            driverLine.fileId = protoDriverLine.file_id();
+            driverLine.line = protoDriverLine.line();
+            inst.driverLines.push_back(driverLine);
+        }
+        allSignalInsts_.push_back(std::move(inst));
     }
     
     // Second pass: link Instance modules to Definition modules' signalDefs
@@ -680,10 +949,23 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
         if (mod->isInstance && mod->defModuleId != 0) {
             const ModuleInfo* defModule = findModuleById(mod->defModuleId);
             if (defModule) {
-                // Instance shares Definition's signalDefs
                 mod->externalSignalDefs = &defModule->signalDefs;
-                // Clear Instance's own signalDefs to save memory
                 mod->signalDefs.clear();
+            }
+        }
+    }
+    
+    // Build signalFullNameToId_ map
+    for (uint32_t moduleId = 1; moduleId <= modules_.size(); ++moduleId) {
+        const ModuleInfo* mod = findModuleById(moduleId);
+        if (!mod) continue;
+        
+        // Use getSignalInstsCount() which derives count from signal_defs.size()
+        uint32_t count = mod->getSignalInstsCount();
+        for (uint32_t localIdx = 0; localIdx < count; ++localIdx) {
+            uint32_t globalId = mod->signalInstsStartId + localIdx;
+            if (globalId < allSignalInsts_.size()) {
+                signalFullNameToId_[allSignalInsts_[globalId].fullName] = globalId;
             }
         }
     }
@@ -699,6 +981,8 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
         }
         hierarchies_.push_back(hierarchy);
     }
+    
+    signalInstsCommitted_ = true;
 }
 
 bool KdbBuilder::serializeToFile(const std::string& filepath) const {
@@ -706,38 +990,22 @@ bool KdbBuilder::serializeToFile(const std::string& filepath) const {
     hwda::kdb::KnowledgeBase kdb;
     toProtobuf(&kdb);
     
-    std::cerr << "Debug: toProtobuf done, modules: " << kdb.modules_size() << "\n";
-    
     std::string serialized;
     if (!kdb.SerializeToString(&serialized)) {
-        std::cerr << "Debug: SerializeToString failed\n";
         return false;
     }
     
-    std::cerr << "Debug: SerializeToString success, size: " << serialized.size() << "\n";
-    
 #ifdef USE_ZSTD
     if (compressionEnabled_) {
-        std::cerr << "Debug: Compression enabled\n";
         return serializeToFileCompressed(filepath, compressionLevel_);
     }
 #endif
     
     std::ofstream output(filepath, std::ios::binary);
-    if (!output) {
-        std::cerr << "Debug: Cannot open output file\n";
-        return false;
-    }
+    if (!output) return false;
     
     output.write(serialized.data(), serialized.size());
-    output.flush();
-    if (!output.good()) {
-        std::cerr << "Debug: Write failed\n";
-        return false;
-    }
-    
-    std::cerr << "Debug: Write success\n";
-    return true;
+    return output.good();
 #else
     (void)filepath;
     return false;
@@ -780,9 +1048,7 @@ bool KdbBuilder::serializeToFileCompressed(const std::string& filepath, int comp
     compressed.resize(result);
     
     std::ofstream output(filepath, std::ios::binary);
-    if (!output) {
-        return false;
-    }
+    if (!output) return false;
     
     uint32_t magic = 0x4B445743;
     uint32_t origSize = static_cast<uint32_t>(serialized.size());
@@ -806,101 +1072,23 @@ bool KdbBuilder::serializeToFileCompressed(const std::string& filepath, int comp
 bool KdbBuilder::deserializeFromFile(const std::string& filepath) {
 #ifdef USE_PROTOBUF
     std::ifstream input(filepath, std::ios::binary);
-    if (!input) {
-        std::cerr << "Debug: Cannot open file\n";
-        return false;
-    }
+    if (!input) return false;
     
-    input.seekg(0, std::ios::end);
-    size_t fileSize = input.tellg();
-    input.seekg(0, std::ios::beg);
-    
-    std::cerr << "Debug: File size in deserialize = " << fileSize << "\n";
-    
-    if (fileSize < sizeof(uint32_t)) {
-        std::cerr << "Debug: File too small\n";
-        return false;
-    }
-    
-    uint32_t magic;
+    // Check if file is compressed (check magic number)
+    uint32_t magic = 0;
     input.read(reinterpret_cast<char*>(&magic), sizeof(magic));
     input.seekg(0, std::ios::beg);
-    
-    std::cerr << "Debug: Magic in deserialize = 0x" << std::hex << magic << std::dec << "\n";
     
     if (magic == 0x4B445743) {
-#ifdef USE_ZSTD
-        std::cerr << "Debug: It's a compressed file\n";
+        // Compressed format
         return deserializeFromFileCompressed(filepath);
-#else
-        return false;
-#endif
     }
     
-    std::cerr << "Debug: Trying to parse as protobuf\n";
+    // Uncompressed format
+    std::string serialized((std::istreambuf_iterator<char>(input)),
+                           std::istreambuf_iterator<char>());
     
-    std::vector<char> buffer(fileSize);
-    input.read(buffer.data(), fileSize);
-    
-    hwda::kdb::KnowledgeBase kdb;
-    if (!kdb.ParseFromArray(buffer.data(), static_cast<int>(fileSize))) {
-        std::cerr << "Debug: ParseFromArray failed\n";
-        return false;
-    }
-    
-    std::cerr << "Debug: ParseFromArray success\n";
-    fromProtobuf(kdb);
-    return true;
-#else
-    (void)filepath;
-    return false;
-#endif
-}
-
-bool KdbBuilder::deserializeFromFileCompressed(const std::string& filepath) {
-#ifdef USE_PROTOBUF
-#ifdef USE_ZSTD
-    std::ifstream input(filepath, std::ios::binary);
-    if (!input) {
-        return false;
-    }
-    
-    uint32_t magic;
-    uint32_t origSize;
-    input.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-    input.read(reinterpret_cast<char*>(&origSize), sizeof(origSize));
-    
-    if (magic != 0x4B445743) {
-        return false;
-    }
-    
-    input.seekg(0, std::ios::end);
-    size_t fileSize = input.tellg();
-    size_t compressedSize = fileSize - sizeof(magic) - sizeof(origSize);
-    input.seekg(sizeof(magic) + sizeof(origSize), std::ios::beg);
-    
-    std::vector<char> compressed(compressedSize);
-    input.read(compressed.data(), compressedSize);
-    
-    std::vector<char> decompressed(origSize);
-    size_t result = ZSTD_decompress(decompressed.data(), origSize,
-                                    compressed.data(), compressedSize);
-    
-    if (ZSTD_isError(result)) {
-        return false;
-    }
-    
-    hwda::kdb::KnowledgeBase kdb;
-    if (!kdb.ParseFromArray(decompressed.data(), static_cast<int>(result))) {
-        return false;
-    }
-    
-    fromProtobuf(kdb);
-    return true;
-#else
-    (void)filepath;
-    return false;
-#endif
+    return deserializeFromString(serialized);
 #else
     (void)filepath;
     return false;
@@ -922,29 +1110,44 @@ bool KdbBuilder::deserializeFromString(const std::string& data) {
 #endif
 }
 
+bool KdbBuilder::deserializeFromFileCompressed(const std::string& filepath) {
+#ifdef USE_PROTOBUF
+#ifdef USE_ZSTD
+    std::ifstream input(filepath, std::ios::binary);
+    if (!input) return false;
+    
+    uint32_t magic;
+    uint32_t origSize;
+    input.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+    input.read(reinterpret_cast<char*>(&origSize), sizeof(origSize));
+    
+    if (magic != 0x4B445743) return false;
+    
+    std::vector<char> compressed((std::istreambuf_iterator<char>(input)),
+                                  std::istreambuf_iterator<char>());
+    
+    std::string serialized;
+    serialized.resize(origSize);
+    
+    size_t result = ZSTD_decompress(&serialized[0], origSize,
+                                    compressed.data(), compressed.size());
+    
+    if (ZSTD_isError(result)) {
+        return false;
+    }
+    
+    return deserializeFromString(serialized);
 #else
-
-bool KdbBuilder::serializeToFile(const std::string& filepath) const {
     (void)filepath;
     return false;
-}
-
-bool KdbBuilder::serializeToString(std::string* output) const {
-    (void)output;
-    return false;
-}
-
-bool KdbBuilder::deserializeFromFile(const std::string& filepath) {
-    (void)filepath;
-    return false;
-}
-
-bool KdbBuilder::deserializeFromString(const std::string& data) {
-    (void)data;
-    return false;
-}
-
 #endif
+#else
+    (void)filepath;
+    return false;
+#endif
+}
+
+#endif // USE_PROTOBUF
 
 }
 }
