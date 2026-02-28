@@ -52,20 +52,27 @@ enum PortDirection {
 // Port information is now integrated into Signal
 // See the direction field in Signal message below
 
-message Signal {
-  uint64 id = 1;  // Keep uint64 for signal IDs (can be many signals)
-  string name = 2;
-  string full_name = 3;
-  SignalType type = 4;
-  uint32 msb = 5;
-  uint32 lsb = 6;
-  uint32 parent_module_id = 7;  // Changed from uint64 to uint32
-  SourceLocation declaration = 8;
-  repeated uint64 driver_signal_ids = 9;
-  // Note: load_signal_ids removed - not needed
-  PortDirection direction = 10;  // Direction of the signal: INPUT, OUTPUT, INOUT, or UNKNOWN for internal signals
-  repeated SourceLocation driver_lines = 11;  // Source locations where drivers are discovered (using SourceLocation instead of DriverLocation)
+// Signal definition - shared between Definition and Instance
+message SignalDef {
+  uint64 id = 1;  // Unique signal ID
+  string name = 2;  // Signal name (e.g., "mem_arvalid")
+  SignalType type = 3;
+  SourceLocation declaration = 4;
+  PortDirection direction = 5;  // INPUT, OUTPUT, INOUT, or UNKNOWN for internal signals
 }
+
+// Signal instance - specific to each module instance
+message SignalInst {
+  uint64 id = 1;  // References SignalDef.id
+  string full_name = 2;  // Full hierarchical name (e.g., "work@dut.mem_arvalid")
+  uint32 msb = 3;
+  uint32 lsb = 4;
+  uint32 parent_module_id = 5;  // Module instance ID that owns this signal
+  repeated uint64 driver_signal_ids = 6;  // IDs of signals that drive this signal
+  repeated SourceLocation driver_lines = 7;  // Source locations where drivers are discovered
+}
+
+
 
 message Module {
   // Note: id removed, use array index + 1 as implicit ID
@@ -74,10 +81,12 @@ message Module {
   uint32 parent_module_id = 2;  // 0 for top-level modules
   // Note: file_id removed, use definition.file_id instead
   ModuleSourceLocation definition = 3;
-  repeated Signal signals = 4;  // Contains both ports and internal signals
-  bool is_instance = 5;
-  repeated uint32 child_module_ids = 6;  // Direct child module IDs for hierarchy traversal
-  uint32 def_module_id = 7;  // Definition module ID for instances (0 if this is a definition)
+  // New: Split signals into definition (shared) and instance (specific)
+  repeated SignalDef signal_defs = 4;  // Signal definitions (shared)
+  repeated SignalInst signal_insts = 5;  // Signal instances (specific to this module instance)
+  bool is_instance = 6;
+  repeated uint32 child_module_ids = 7;  // Direct child module IDs for hierarchy traversal
+  uint32 def_module_id = 8;  // Definition module ID for instances (0 if this is a definition)
 }
 
 message DesignHierarchy {

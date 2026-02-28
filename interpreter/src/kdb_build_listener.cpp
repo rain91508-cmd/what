@@ -95,7 +95,7 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
                 extractBitWidthFromUhdmObject(portBase, signalInfo.msb, signalInfo.lsb, isVector, moduleContext, nullptr);
             }
             
-            moduleInfo.signals.push_back(signalInfo);
+            moduleInfo.addSignal(signalInfo);
             currentModuleSignalMap_[signalInfo.fullName] = 0;
             driverAnalyzer_->getSignalMap()[signalInfo.fullName] = 0;
         }
@@ -137,22 +137,24 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
         instanceDefNames_.push_back({defName, static_cast<uint32_t>(moduleId)});
     }
     
-    for (const auto& sig : moduleInfo.signals) {
+    auto signals = moduleInfo.getSignals();
+    for (const auto& sig : signals) {
         const SignalInfo* addedSignal = builder_.findSignalByName(sig.fullName);
         if (addedSignal) {
             currentModuleSignalMap_[sig.fullName] = addedSignal->id;
             driverAnalyzer_->getSignalMap()[sig.fullName] = addedSignal->id;
         }
     }
-    
+
     auto nets = object->Nets();
     if (nets) {
         for (auto* net : *nets) {
             if (!net) continue;
             std::string netName = std::string(net->VpiName());
-            
+
             bool alreadyExists = false;
-            for (const auto& existingSig : moduleInfo.signals) {
+            auto existingSignals = moduleInfo.getSignals();
+            for (const auto& existingSig : existingSignals) {
                 if (existingSig.name == netName) {
                     alreadyExists = true;
                     break;

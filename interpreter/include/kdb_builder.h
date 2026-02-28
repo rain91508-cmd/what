@@ -63,19 +63,39 @@ struct KdbModuleSourceLocation {
     uint32_t endLine;
 };
 
+// Signal definition - shared between Definition and Instance
+struct SignalDefInfo {
+    uint64_t id;  // Unique signal ID
+    std::string name;  // Signal name (e.g., "mem_arvalid")
+    SignalType type;
+    KdbSourceLocation declaration;
+    PortDirection direction;  // INPUT, OUTPUT, INOUT, or UNKNOWN for internal signals
+};
+
+// Signal instance - specific to each module instance
+struct SignalInstInfo {
+    uint64_t id;  // References SignalDefInfo.id
+    std::string fullName;  // Full hierarchical name (e.g., "work@dut.mem_arvalid")
+    uint32_t msb;
+    uint32_t lsb;
+    uint32_t parentModuleId;  // Module instance ID that owns this signal
+    std::vector<uint64_t> driverSignalIds;  // IDs of signals that drive this signal
+    std::vector<KdbSourceLocation> driverLines;  // Source locations where drivers are discovered
+};
+
+// Deprecated: Keep for backward compatibility during transition
 struct SignalInfo {
-    uint64_t id;  // Keep uint64_t for signal IDs (can be many signals)
+    uint64_t id;
     std::string name;
     std::string fullName;
     SignalType type;
-    PortDirection direction;  // Direction of the signal: INPUT, OUTPUT, INOUT, or UNKNOWN for internal signals
+    PortDirection direction;
     uint32_t msb;
     uint32_t lsb;
     KdbSourceLocation declaration;
-    uint32_t parentModuleId;  // Changed from uint64_t to uint32_t
+    uint32_t parentModuleId;
     std::vector<uint64_t> driverSignalIds;
-    // Note: loadSignalIds removed - not needed
-    std::vector<KdbSourceLocation> driverLines;  // Source locations where drivers are discovered (using KdbSourceLocation instead of DriverLocation)
+    std::vector<KdbSourceLocation> driverLines;
 };
 
 struct ModuleInstanceInfo {
@@ -98,13 +118,80 @@ struct ModuleInfo {
 	std::string name;  // Instance: VpiName(), Definition: VpiDefName()
 	// Note: fullName removed, reconstruct from hierarchy if needed
 	KdbModuleSourceLocation definition;
-	std::vector<SignalInfo> signals;  // Contains both ports and internal signals
+	// New: Split signals into definition (shared) and instance (specific)
+	std::vector<SignalDefInfo> signalDefs;  // Signal definitions (shared)
+	std::vector<SignalInstInfo> signalInsts;  // Signal instances (specific to this module instance)
+	// Deprecated: std::vector<SignalInfo> signals;
 	std::vector<ModuleInstanceInfo> instances;
 	uint32_t parentModuleId;  // 0 for top-level modules
 	// Note: fileId removed, use definition.fileId instead
 	bool isInstance;
 	std::vector<uint32_t> childModuleIds;  // Direct child module IDs for hierarchy traversal
 	uint32_t defModuleId;  // Definition module ID for instances (0 if this is a definition)
+
+	// Transition helper: Build SignalInfo vector from signalDefs and signalInsts
+	std::vector<SignalInfo> getSignals() const {
+		std::vector<SignalInfo> result;
+		result.reserve(signalInsts.size());
+		for (const auto& inst : signalInsts) {
+			// Find corresponding definition
+			const SignalDefInfo* def = nullptr;
+			for (const auto& d : signalDefs) {
+				if (d.id == inst.id) {
+					def = &d;
+					break;
+				}
+			}
+			if (def) {
+				SignalInfo sig;
+				sig.id = inst.id;
+				sig.name = def->name;
+				sig.fullName = inst.fullName;
+				sig.type = def->type;
+				sig.direction = def->direction;
+				sig.msb = inst.msb;
+				sig.lsb = inst.lsb;
+				sig.declaration = def->declaration;
+				sig.parentModuleId = inst.parentModuleId;
+				sig.driverSignalIds = inst.driverSignalIds;
+				sig.driverLines = inst.driverLines;
+				result.push_back(std::move(sig));
+			}
+		}
+		return result;
+	}
+
+	// Transition helper: Add signal by splitting into Def and Inst
+	void addSignal(const SignalInfo& sig) {
+		// Add to signalDefs if not exists
+		bool defExists = false;
+		for (const auto& d : signalDefs) {
+			if (d.id == sig.id) {
+				defExists = true;
+				break;
+			}
+		}
+		if (!defExists) {
+			SignalDefInfo def;
+			def.id = sig.id;
+			def.name = sig.name;
+			def.type = sig.type;
+			def.declaration = sig.declaration;
+			def.direction = sig.direction;
+			signalDefs.push_back(std::move(def));
+		}
+
+		// Add to signalInsts
+		SignalInstInfo inst;
+		inst.id = sig.id;
+		inst.fullName = sig.fullName;
+		inst.msb = sig.msb;
+		inst.lsb = sig.lsb;
+		inst.parentModuleId = sig.parentModuleId;
+		inst.driverSignalIds = sig.driverSignalIds;
+		inst.driverLines = sig.driverLines;
+		signalInsts.push_back(std::move(inst));
+	}
 };
 
 class KdbBuilder {

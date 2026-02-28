@@ -91,14 +91,15 @@ void printModules(const KdbBuilder& builder, bool verbose) {
         
         if (verbose) {
             // Count port signals (those with direction != UNKNOWN)
-        int portCount = 0;
-        for (const auto& sig : module->signals) {
-            if (sig.direction != PortDirection::UNKNOWN) {
-                portCount++;
+            // Use signalDefs for port count
+            int portCount = 0;
+            for (const auto& def : module->signalDefs) {
+                if (def.direction != PortDirection::UNKNOWN) {
+                    portCount++;
+                }
             }
-        }
-        std::cout << "      Ports: " << portCount << "\n";
-            std::cout << "      Signals: " << module->signals.size() << "\n";
+            std::cout << "      Ports: " << portCount << "\n";
+            std::cout << "      Signals: " << module->signalInsts.size() << "\n";
             std::cout << "      File: " << module->definition.fileId << ", Start Line: " << module->definition.startLine << ", End Line: " << module->definition.endLine << "\n";
             if (module->isInstance && module->defModuleId != 0) {
                 std::cout << "      Definition Module ID: " << module->defModuleId << "\n";
@@ -205,28 +206,37 @@ void printModuleWithSource(const KdbBuilder& builder, const std::string& moduleN
     }
     
     // Print port signals (those with direction != UNKNOWN)
+    // Use signalDefs for port information
     int portCount = 0;
-    for (const auto& sig : module->signals) {
-        if (sig.direction != PortDirection::UNKNOWN) {
+    for (const auto& def : module->signalDefs) {
+        if (def.direction != PortDirection::UNKNOWN) {
             portCount++;
         }
     }
     std::cout << "\n  Ports (" << portCount << "):\n";
-    for (const auto& sig : module->signals) {
-        if (sig.direction != PortDirection::UNKNOWN) {
-            std::cout << "    " << std::setw(8) << std::left 
-                      << portDirectionToString(sig.direction)
-                      << " " << sig.name;
-            if (sig.msb != sig.lsb) {
-                std::cout << " [" << sig.msb << ":" << sig.lsb << "]";
+    for (const auto& def : module->signalDefs) {
+        if (def.direction != PortDirection::UNKNOWN) {
+            std::cout << "    " << std::setw(8) << std::left
+                      << portDirectionToString(def.direction)
+                      << " " << def.name;
+            // Find corresponding instance for bit width
+            for (const auto& inst : module->signalInsts) {
+                if (inst.id == def.id) {
+                    if (inst.msb != inst.lsb) {
+                        std::cout << " [" << inst.msb << ":" << inst.lsb << "]";
+                    }
+                    break;
+                }
             }
             std::cout << "\n";
         }
     }
-    
-    std::cout << "\n  Signals (" << module->signals.size() << "):\n";
-    for (const auto& signal : module->signals) {
-        std::cout << "    " << std::setw(10) << std::left 
+
+    // Print all signals using getSignals()
+    auto signals = module->getSignals();
+    std::cout << "\n  Signals (" << signals.size() << "):\n";
+    for (const auto& signal : signals) {
+        std::cout << "    " << std::setw(10) << std::left
                   << signalTypeToString(signal.type)
                   << " " << std::setw(8) << std::left
                   << portDirectionToString(signal.direction)
@@ -254,28 +264,37 @@ void printModuleDetails(const KdbBuilder& builder, const std::string& moduleName
     std::cout << ", End Line " << module->definition.endLine << "\n";
 
     // Print port signals (those with direction != UNKNOWN)
+    // Use signalDefs for port information
     int portCount = 0;
-    for (const auto& sig : module->signals) {
-        if (sig.direction != PortDirection::UNKNOWN) {
+    for (const auto& def : module->signalDefs) {
+        if (def.direction != PortDirection::UNKNOWN) {
             portCount++;
         }
     }
     std::cout << "\n  Ports (" << portCount << "):\n";
-    for (const auto& sig : module->signals) {
-        if (sig.direction != PortDirection::UNKNOWN) {
-            std::cout << "    " << std::setw(8) << std::left 
-                      << portDirectionToString(sig.direction)
-                      << " " << sig.name;
-            if (sig.msb != sig.lsb) {
-                std::cout << " [" << sig.msb << ":" << sig.lsb << "]";
+    for (const auto& def : module->signalDefs) {
+        if (def.direction != PortDirection::UNKNOWN) {
+            std::cout << "    " << std::setw(8) << std::left
+                      << portDirectionToString(def.direction)
+                      << " " << def.name;
+            // Find corresponding instance for bit width
+            for (const auto& inst : module->signalInsts) {
+                if (inst.id == def.id) {
+                    if (inst.msb != inst.lsb) {
+                        std::cout << " [" << inst.msb << ":" << inst.lsb << "]";
+                    }
+                    break;
+                }
             }
             std::cout << "\n";
         }
     }
-    
-    std::cout << "\n  Signals (" << module->signals.size() << "):\n";
-    for (const auto& signal : module->signals) {
-        std::cout << "    " << std::setw(10) << std::left 
+
+    // Print all signals using getSignals()
+    auto signals = module->getSignals();
+    std::cout << "\n  Signals (" << signals.size() << "):\n";
+    for (const auto& signal : signals) {
+        std::cout << "    " << std::setw(10) << std::left
                   << signalTypeToString(signal.type)
                   << " " << std::setw(8) << std::left
                   << portDirectionToString(signal.direction)
@@ -425,9 +444,11 @@ void printJson(const KdbBuilder& builder) {
         }
         std::cout << "],\n";
         
+        // Use getSignals() to get combined signal information
+        auto signals = module->getSignals();
         std::cout << "      \"signals\": [\n";
         bool firstModuleSignal = true;
-        for (const auto& signal : module->signals) {
+        for (const auto& signal : signals) {
             if (!firstModuleSignal) std::cout << ",\n";
             firstModuleSignal = false;
             std::cout << "        {\n";
@@ -442,7 +463,6 @@ void printJson(const KdbBuilder& builder) {
             std::cout << "          \"declaration\": {\n";
             std::cout << "            \"file_id\": " << signal.declaration.fileId << ",\n";
             std::cout << "            \"line\": " << signal.declaration.line << "\n";
-            // Note: column_start and column_end removed - not needed
             std::cout << "          },\n";
             std::cout << "          \"driver_signal_ids\": [";
             for (size_t i = 0; i < signal.driverSignalIds.size(); ++i) {
@@ -459,7 +479,6 @@ void printJson(const KdbBuilder& builder) {
                 std::cout << "            }";
             }
             std::cout << "\n          ]\n";
-            // Note: load_signal_ids removed - not needed
             std::cout << "        }";
         }
         std::cout << "\n      ],\n";
