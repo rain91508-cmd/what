@@ -311,6 +311,21 @@ class IndexedDBManager {
     console.log(`[IndexedDB] Cleared data for KDB: ${kdbId}`);
   }
 
+  /**
+   * Clear all data from all stores
+   */
+  async clearAll(): Promise<void> {
+    const db = this.getDB();
+    
+    // Clear all stores
+    await db.clear('knowledge-base');
+    await db.clear('modules');
+    await db.clear('source-files');
+    await db.clear('metadata');
+    
+    console.log('[IndexedDB] Cleared all data');
+  }
+
   // ============================================
   // Metadata Operations
   // ============================================

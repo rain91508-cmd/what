@@ -259,17 +259,31 @@ function App() {
     addMessage(`Selected waveform: ${waveName}`)
   }
 
-  const handleDisconnect = () => {
+  const handleDisconnect = async () => {
     setConnected(false)
     setKdbLoaded(false)
     setWaveforms([])
     setCurrentWaveform(null)
     setSelectedModule(null)
+    
+    // Clear managers (this clears IndexedDB data)
+    await kdbManager.clear()
     waveManager.clear()
-    kdbManager.clear()
+    
+    // Clear OPFS data
+    if (opfsManager.isSupported()) {
+      await opfsManager.clear()
+    }
+    
+    // Clear local storage
     localStorage.removeItem('serverConfig')
     localStorage.removeItem('currentKdbId')
-    addMessage('Disconnected from server')
+    
+    // Clear tabs
+    setTabs([])
+    setActiveTab('')
+    
+    addMessage('Disconnected from server, all local data cleared')
   }
 
 

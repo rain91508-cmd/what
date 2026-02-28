@@ -41,8 +41,8 @@ export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onO
       items: [
         { label: connected ? 'Disconnect' : 'Connect...', onClick: connected ? onDisconnect : onConnect },
         { separator: true, label: '' },
-        { label: 'Open KDB...', onClick: onOpenKdbList },
-        { label: 'Open Waveform...', onClick: onOpenWaveList },
+        { label: 'Open KDB...', onClick: onOpenKdbList, disabled: !connected },
+        { label: 'Open Waveform...', onClick: onOpenWaveList, disabled: !connected },
       ],
     },
     {

@@ -261,10 +261,13 @@ class KdbManager {
   }
 
   /**
-   * Clear current KDB
+   * Clear current KDB and all stored data
    */
-  clear(): void {
+  async clear(): Promise<void> {
     this.currentKdbId = null;
+    // Clear all IndexedDB data
+    await indexedDBManager.clearAll();
+    console.log('[KdbManager] Cleared all data');
   }
 
   // ==================== Private Helpers ====================
