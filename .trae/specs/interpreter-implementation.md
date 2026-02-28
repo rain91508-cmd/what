@@ -263,7 +263,14 @@ function getModuleSignals(moduleId, kdb) {
     const module = kdb.allModules[moduleId - 1];
     
     // Get signal definitions
-    const signalDefs = module.signal_defs;
+    // For instances, get from definition module; for definitions, use own signal_defs
+    let signalDefs;
+    if (module.is_instance && module.def_module_id !== 0) {
+        const defModule = kdb.allModules[module.def_module_id - 1];
+        signalDefs = defModule.signal_defs;
+    } else {
+        signalDefs = module.signal_defs;
+    }
     
     // Get signal instances from global array using start_id
     const startId = module.signal_insts_start_id;
