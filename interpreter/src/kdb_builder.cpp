@@ -435,11 +435,11 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
         protoMod->set_file_id(mod->fileId);
         protoMod->set_is_instance(mod->isInstance);
         
-        if (mod->declaration.fileId != 0) {
-            auto* decl = protoMod->mutable_declaration();
-            decl->set_file_id(mod->declaration.fileId);
-            decl->set_line(mod->declaration.line);
-            // Note: column_start and column_end removed - not needed
+        if (mod->definition.fileId != 0) {
+            auto* decl = protoMod->mutable_definition();
+            decl->set_file_id(mod->definition.fileId);
+            decl->set_start_line(mod->definition.startLine);
+            decl->set_end_line(mod->definition.endLine);
         }
         
         for (const auto& sig : mod->signals) {
@@ -523,10 +523,10 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
         mod->fileId = protoMod.file_id();
         mod->isInstance = protoMod.is_instance();
         
-        if (protoMod.has_declaration()) {
-            mod->declaration.fileId = protoMod.declaration().file_id();
-            mod->declaration.line = protoMod.declaration().line();
-            // Note: column_start and column_end removed - not needed
+        if (protoMod.has_definition()) {
+            mod->definition.fileId = protoMod.definition().file_id();
+            mod->definition.startLine = protoMod.definition().start_line();
+            mod->definition.endLine = protoMod.definition().end_line();
         }
         
         for (const auto& protoSig : protoMod.signals()) {

@@ -71,7 +71,7 @@ void printModules(const KdbBuilder& builder, bool verbose) {
         }
         std::cout << "      Ports: " << portCount << "\n";
             std::cout << "      Signals: " << module->signals.size() << "\n";
-            std::cout << "      File: " << module->fileId << ", Line: " << module->declaration.line << "\n";
+            std::cout << "      File: " << module->definition.fileId << ", Start Line: " << module->definition.startLine << ", End Line: " << module->definition.endLine << "\n";
         }
     }
 }
@@ -149,19 +149,19 @@ void printModuleWithSource(const KdbBuilder& builder, const std::string& moduleN
     std::cout << "  ID: " << module->id << "\n";
     std::cout << "  Full Name: " << module->fullName << "\n";
     std::cout << "  File ID: " << module->fileId << "\n";
-    std::cout << "  Location: Line " << module->declaration.line << "\n";
-    // Note: column info removed from KdbSourceLocation
+    std::cout << "  Definition: File " << module->definition.fileId << ", Start Line " << module->definition.startLine;
+    std::cout << ", End Line " << module->definition.endLine << "\n";
     
-    if (module->declaration.fileId != 0) {
-        const auto* file = builder.findFileById(module->declaration.fileId);
+    if (module->definition.fileId != 0) {
+        const auto* file = builder.findFileById(module->definition.fileId);
         if (file && !file->content.empty()) {
             std::cout << "\n  Source Code:\n";
-            uint32_t startLine = (module->declaration.line > 3) ? module->declaration.line - 3 : 1;
+            uint32_t startLine = (module->definition.startLine > 3) ? module->definition.startLine - 3 : 1;
             uint32_t endLine = std::min(startLine + 10, static_cast<uint32_t>(file->getLineCount()));
             
             for (uint32_t line = startLine; line <= endLine; ++line) {
                 std::cout << "    ";
-                if (line == module->declaration.line) {
+                if (line >= module->definition.startLine && line <= module->definition.endLine) {
                     std::cout << ">>> ";
                 } else {
                     std::cout << "    ";
@@ -217,8 +217,8 @@ void printModuleDetails(const KdbBuilder& builder, const std::string& moduleName
     std::cout << "  ID: " << module->id << "\n";
     std::cout << "  Full Name: " << module->fullName << "\n";
     std::cout << "  File ID: " << module->fileId << "\n";
-    std::cout << "  Location: Line " << module->declaration.line << "\n";
-    // Note: column info removed from KdbSourceLocation
+    std::cout << "  Definition: File " << module->definition.fileId << ", Start Line " << module->definition.startLine;
+    std::cout << ", End Line " << module->definition.endLine << "\n";
     
     // Print port signals (those with direction != UNKNOWN)
     int portCount = 0;
@@ -371,10 +371,10 @@ void printJson(const KdbBuilder& builder) {
         }
         std::cout << "      \"file_id\": " << module->fileId << ",\n";
         std::cout << "      \"is_instance\": " << (module->isInstance ? "true" : "false") << ",\n";
-        std::cout << "      \"declaration\": {\n";
-        std::cout << "        \"file_id\": " << module->declaration.fileId << ",\n";
-        std::cout << "        \"line\": " << module->declaration.line << "\n";
-        // Note: column_start and column_end removed - not needed
+        std::cout << "      \"definition\": {\n";
+        std::cout << "        \"file_id\": " << module->definition.fileId << ",\n";
+        std::cout << "        \"start_line\": " << module->definition.startLine << ",\n";
+        std::cout << "        \"end_line\": " << module->definition.endLine << "\n";
         std::cout << "      },\n";
         
         std::cout << "      \"child_module_ids\": [";

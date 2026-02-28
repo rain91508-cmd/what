@@ -34,6 +34,8 @@ public:
     
 private:
     KdbSourceLocation extractLocation(const UHDM::BaseClass* obj);
+    KdbModuleSourceLocation extractModuleLocation(const UHDM::module_inst* obj, bool isInstance);
+    uint32_t findEndmoduleLine(const std::string& content, uint32_t startLine);
     SignalType convertSignalType(int32_t uhdmNetType);
     PortDirection convertPortDirection(int direction);
     

@@ -46,8 +46,7 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     moduleInfo.fullName = fullName.empty() ? moduleInfo.name : fullName;
     moduleInfo.isInstance = !instName.empty();
     
-    moduleInfo.declaration = extractLocation(object);
-    
+    // First, ensure the file is in the mapping before extracting location
     std::string filePath(object->VpiFile());
     if (!filePath.empty()) {
         auto it = filePathToId_.find(filePath);
@@ -65,6 +64,9 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
             moduleInfo.fileId = it->second;
         }
     }
+    
+    // Now extract module location (fileId will be found in the mapping)
+    moduleInfo.definition = extractModuleLocation(object, moduleInfo.isInstance);
     
     auto ports = object->Ports();
     if (ports) {
@@ -232,6 +234,96 @@ KdbSourceLocation KdbBuildListener::extractLocation(const UHDM::BaseClass* obj) 
     loc.line = obj->VpiLineNo();
     
     return loc;
+}
+
+KdbModuleSourceLocation KdbBuildListener::extractModuleLocation(const UHDM::module_inst* obj, bool isInstance) {
+    KdbModuleSourceLocation loc;
+    loc.fileId = 0;
+    loc.startLine = 0;
+    loc.endLine = 0;
+    
+    if (!obj) return loc;
+    
+    // Get file location using VpiFile
+    std::string filePath(obj->VpiFile());
+    if (!filePath.empty()) {
+        auto it = filePathToId_.find(filePath);
+        if (it != filePathToId_.end()) {
+            loc.fileId = it->second;
+        }
+    }
+    loc.startLine = obj->VpiLineNo();
+    
+    // Scan for endmodule
+    if (loc.fileId != 0 && loc.startLine > 0) {
+        const auto* file = builder_.findFileById(loc.fileId);
+        if (file && !file->content.empty()) {
+            loc.endLine = findEndmoduleLine(file->content, loc.startLine);
+        } else {
+            loc.endLine = loc.startLine;
+        }
+    } else {
+        loc.endLine = loc.startLine;
+    }
+    
+    return loc;
+}
+
+uint32_t KdbBuildListener::findEndmoduleLine(const std::string& content, uint32_t startLine) {
+    std::istringstream stream(content);
+    std::string line;
+    uint32_t currentLine = 0;
+    uint32_t lastNonEmptyLine = startLine;
+    int braceDepth = 0;
+    bool foundModule = false;
+    
+    while (std::getline(stream, line)) {
+        currentLine++;
+        
+        // Skip lines before start line
+        if (currentLine < startLine) continue;
+        
+        // Mark that we've reached the module line
+        if (currentLine == startLine) {
+            foundModule = true;
+        }
+        
+        // Only process after finding the module keyword line
+        if (!foundModule) continue;
+        
+        // Track brace depth to handle nested structures
+        for (char c : line) {
+            if (c == '(' || c == '[' || c == '{') braceDepth++;
+            else if (c == ')' || c == ']' || c == '}') braceDepth--;
+        }
+        
+        // Check for endmodule keyword (only at brace depth 0 to avoid matching in strings/comments)
+        if (braceDepth == 0) {
+            // Remove comments for checking
+            std::string checkLine = line;
+            size_t commentPos = checkLine.find("//");
+            if (commentPos != std::string::npos) {
+                checkLine = checkLine.substr(0, commentPos);
+            }
+            
+            // Check for endmodule - must be at the start of line (after whitespace)
+            size_t pos = checkLine.find("endmodule");
+            if (pos != std::string::npos) {
+                // Verify it's not part of another word by checking preceding character
+                if (pos == 0 || std::isspace(checkLine[pos - 1])) {
+                    return currentLine;
+                }
+            }
+        }
+        
+        // Track last non-empty line as fallback
+        if (!line.empty() && line.find_first_not_of(" \t\r\n") != std::string::npos) {
+            lastNonEmptyLine = currentLine;
+        }
+    }
+    
+    // If endmodule not found, return the last non-empty line of the file
+    return lastNonEmptyLine;
 }
 
 SignalType KdbBuildListener::convertSignalType(int32_t uhdmNetType) {

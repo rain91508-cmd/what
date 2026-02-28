@@ -22,6 +22,12 @@ message SourceLocation {
   // Note: column_start and column_end removed - not needed
 }
 
+message ModuleSourceLocation {
+  uint32 file_id = 1;
+  uint32 start_line = 2;
+  uint32 end_line = 3;
+}
+
 enum SignalType {
   SIGNAL_TYPE_UNKNOWN = 0;
   SIGNAL_TYPE_WIRE = 1;
@@ -67,7 +73,7 @@ message Module {
   string full_name = 3;
   uint32 parent_module_id = 4;  // Changed from uint64 to uint32
   uint32 file_id = 5;  // Changed from uint64 to uint32
-  SourceLocation declaration = 6;
+  ModuleSourceLocation definition = 6;
   repeated Signal signals = 7;  // Contains both ports and internal signals
   bool is_instance = 8;
   repeated uint32 child_module_ids = 9;  // Direct child module IDs for hierarchy traversal

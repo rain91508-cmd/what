@@ -57,7 +57,11 @@ struct KdbSourceLocation {
     // Note: columnStart and columnEnd removed - not needed
 };
 
-
+struct KdbModuleSourceLocation {
+    uint32_t fileId;
+    uint32_t startLine;
+    uint32_t endLine;
+};
 
 struct SignalInfo {
     uint64_t id;  // Keep uint64_t for signal IDs (can be many signals)
@@ -93,7 +97,7 @@ struct ModuleInfo {
 	uint32_t id;  // Changed from uint64_t to uint32_t
 	std::string name;
 	std::string fullName;
-	KdbSourceLocation declaration;
+	KdbModuleSourceLocation definition;
 	std::vector<SignalInfo> signals;  // Contains both ports and internal signals
 	std::vector<ModuleInstanceInfo> instances;
 	uint32_t parentModuleId;  // Changed from uint64_t to uint32_t
