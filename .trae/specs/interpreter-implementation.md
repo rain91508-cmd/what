@@ -161,18 +161,36 @@ The following fields have been removed to reduce memory usage:
 | `signal_insts_count` | Module | Derived from `signal_defs.size()` |
 | `full_name` | Module | Built dynamically from parent chain |
 | `def_name` | Module | Obtained from `def_module_id`'s module name |
+| `full_name` (serialized) | SignalInst | Dynamically reconstructed from module hierarchy |
 
 **Memory Savings:**
 - SignalDef: 8 bytes per signal (removed `id`)
 - SignalInst: 4 bytes per signal (replaced `id` with `localIndex`)
 - Module: 4 bytes per module (removed `signal_insts_count`)
 - Module: ~20 bytes per instance (removed `def_name` string)
+- KDB File: ~30-50 bytes per signal (removed `full_name` from serialization)
 
 **Getting Definition Name:**
 ```cpp
 // Use KdbBuilder::getDefName() to get definition name for an instance
 std::string defName = builder.getDefName(module);
 ```
+
+**Dynamic Full Name Calculation:**
+```cpp
+// Calculate module's full hierarchical name
+std::string moduleFullName = builder.calculateModuleFullName(module);
+// Result: "work@top.u_adder"
+
+// Calculate signal's full hierarchical name
+std::string signalFullName = builder.calculateSignalFullName(module, "sum");
+// Result: "work@top.u_adder.sum"
+```
+
+**Serialization Strategy:**
+- `fullName` is kept in memory (SignalInstInfo) for fast access
+- `fullName` is NOT serialized to reduce file size
+- During deserialization, `fullName` is reconstructed from module hierarchy + signal name
 
 ## 4. Two-Phase Build Process
 

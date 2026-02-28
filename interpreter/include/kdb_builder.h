@@ -250,6 +250,13 @@ public:
         return defModule ? defModule->name : "";
     }
     
+    // Calculate module's full hierarchical name (e.g., "work@top.u_adder")
+    std::string calculateModuleFullName(const ModuleInfo* module) const;
+    
+    // Calculate signal's full hierarchical name (e.g., "work@top.u_adder.sum")
+    std::string calculateSignalFullName(uint32_t moduleId, const std::string& signalName) const;
+    std::string calculateSignalFullName(const ModuleInfo* module, const std::string& signalName) const;
+    
     const SignalInfo* findSignalByName(const std::string& fullName) const;
     const SignalInfo* findSignalById(uint64_t id) const;  // Now requires commit phase
     const SourceFileInfo* findFileByPath(const std::string& path) const;

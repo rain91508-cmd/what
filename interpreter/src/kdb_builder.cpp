@@ -395,6 +395,41 @@ const ModuleInfo* KdbBuilder::findModuleById(uint32_t id) const {
     return modules_[id - 1].get();
 }
 
+std::string KdbBuilder::calculateModuleFullName(const ModuleInfo* module) const {
+    if (!module) return "";
+    
+    // Build full name from parent chain
+    std::vector<std::string> names;
+    const ModuleInfo* current = module;
+    while (current) {
+        names.push_back(current->name);
+        if (current->parentModuleId == 0) break;
+        current = findModuleById(current->parentModuleId);
+    }
+    
+    // Reverse to get root-to-leaf order
+    std::reverse(names.begin(), names.end());
+    
+    // Join with "."
+    std::string fullName;
+    for (size_t i = 0; i < names.size(); ++i) {
+        if (i > 0) fullName += ".";
+        fullName += names[i];
+    }
+    return fullName;
+}
+
+std::string KdbBuilder::calculateSignalFullName(uint32_t moduleId, const std::string& signalName) const {
+    const ModuleInfo* module = findModuleById(moduleId);
+    return calculateSignalFullName(module, signalName);
+}
+
+std::string KdbBuilder::calculateSignalFullName(const ModuleInfo* module, const std::string& signalName) const {
+    std::string moduleFullName = calculateModuleFullName(module);
+    if (moduleFullName.empty()) return signalName;
+    return moduleFullName + "." + signalName;
+}
+
 const SignalInfo* KdbBuilder::findSignalByName(const std::string& fullName) const {
     if (!signalInstsCommitted_) {
         // Phase 1: Use temp ID
@@ -830,9 +865,10 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
     }
     
     // Serialize global signal instances
+    // Note: fullName is not serialized - will be reconstructed during deserialization
     for (const auto& inst : allSignalInsts_) {
         auto* protoInst = kdb->add_all_signal_insts();
-        protoInst->set_full_name(inst.fullName);
+        // protoInst->set_full_name(inst.fullName);  // REMOVED: fullName reconstructed dynamically
         protoInst->set_msb(inst.msb);
         protoInst->set_lsb(inst.lsb);
         protoInst->set_parent_module_id(inst.parentModuleId);
@@ -926,9 +962,10 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
     }
     
     // Load global signal instances
+    // Note: fullName is not loaded from proto - will be reconstructed after all modules are loaded
     for (const auto& protoInst : kdb.all_signal_insts()) {
         SignalInstInfo inst;
-        inst.fullName = protoInst.full_name();
+        // inst.fullName = protoInst.full_name();  // REMOVED: fullName reconstructed dynamically
         inst.msb = protoInst.msb();
         inst.lsb = protoInst.lsb();
         inst.parentModuleId = protoInst.parent_module_id();
@@ -951,6 +988,21 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
             if (defModule) {
                 mod->externalSignalDefs = &defModule->signalDefs;
                 mod->signalDefs.clear();
+            }
+        }
+    }
+    
+    // Third pass: reconstruct fullName for all signal instances
+    for (uint32_t moduleId = 1; moduleId <= modules_.size(); ++moduleId) {
+        const ModuleInfo* mod = findModuleById(moduleId);
+        if (!mod) continue;
+        
+        uint32_t count = mod->getSignalInstsCount();
+        const auto& defs = mod->getSignalDefs();
+        for (uint32_t localIdx = 0; localIdx < count && localIdx < defs.size(); ++localIdx) {
+            uint32_t globalId = mod->signalInstsStartId + localIdx;
+            if (globalId < allSignalInsts_.size()) {
+                allSignalInsts_[globalId].fullName = calculateSignalFullName(mod, defs[localIdx].name);
             }
         }
     }

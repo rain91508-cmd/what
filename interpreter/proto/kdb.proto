@@ -64,9 +64,10 @@ message SignalDef {
 
 // Signal instance - specific to each module instance
 // Note: id removed, use module's signal_insts_start_id + array index as global id
+// Note: full_name removed - dynamically reconstructed from module hierarchy + signal_def.name
 message SignalInst {
   // uint64 id = 1;  // REMOVED: Use global signal insts array index
-  string full_name = 2;  // Full hierarchical name (e.g., "work@dut.mem_arvalid")
+  // string full_name = 2;  // REMOVED: Dynamically reconstructed
   uint32 msb = 3;
   uint32 lsb = 4;
   uint32 parent_module_id = 5;  // Module instance ID that owns this signal
