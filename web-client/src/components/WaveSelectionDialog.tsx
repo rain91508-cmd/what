@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { waveManager } from '../modules/wSignal';
 
-// Waveform info from server API
 interface ServerWaveformInfo {
   name: string;
   file_size: number;
@@ -18,6 +17,7 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
   const [selectedWave, setSelectedWave] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
 
   useEffect(() => {
     loadWaveList();
@@ -29,7 +29,6 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
       console.log('[WaveSelectionDialog] Loading waveform list...');
       const waveList = await waveManager.fetchWaveformList();
       console.log('[WaveSelectionDialog] Got wave list:', waveList);
-      // 只显示有效的波形文件 - 使用类型断言避免类型冲突
       const validWaves = (waveList as unknown as ServerWaveformInfo[]).filter((wave) => wave.is_valid);
       console.log('[WaveSelectionDialog] Valid waves:', validWaves);
       setWaves(validWaves);
@@ -52,6 +51,22 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
+
+  const wildcardMatch = (pattern: string, text: string): boolean => {
+    if (!pattern.includes('*') && !pattern.includes('?')) {
+      return text.toLowerCase().includes(pattern.toLowerCase());
+    }
+    const regex = new RegExp(
+      '^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$',
+      'i'
+    );
+    return regex.test(text);
+  };
+
+  const filteredWaves = waves.filter(wave => {
+    if (!filter.trim()) return true;
+    return wildcardMatch(filter, wave.name);
+  });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -126,30 +141,52 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
             <div style={{ marginBottom: '10px', color: '#666', fontSize: '12px' }}>
               Select a waveform file to view:
             </div>
+            <div style={{ marginBottom: '10px' }}>
+              <input
+                type="text"
+                placeholder="Filter (* wildcard)..."
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  border: '1px solid #c0c0c0',
+                  borderRadius: '3px',
+                  fontSize: '12px',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
             <div className="wave-list" style={{ maxHeight: '200px', overflowY: 'auto' }}>
-              {waves.map((wave) => (
-                <div
-                  key={wave.name}
-                  className={`wave-item ${selectedWave === wave.name ? 'selected' : ''}`}
-                  onClick={() => setSelectedWave(wave.name)}
-                  style={{
-                    padding: '10px',
-                    border: '1px solid #e0e0e0',
-                    borderRadius: '4px',
-                    marginBottom: '8px',
-                    cursor: 'pointer',
-                    backgroundColor: selectedWave === wave.name ? '#e3f2fd' : '#fff',
-                    borderColor: selectedWave === wave.name ? '#2196f3' : '#e0e0e0',
-                  }}
-                >
-                  <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
-                    {wave.name}
-                  </div>
-                  <div style={{ fontSize: '11px', color: '#666' }}>
-                    Size: {formatBytes(wave.file_size)}
-                  </div>
+              {filteredWaves.length === 0 ? (
+                <div style={{ padding: '10px', color: '#999', textAlign: 'center' }}>
+                  No matching waveform files
                 </div>
-              ))}
+              ) : (
+                filteredWaves.map((wave) => (
+                  <div
+                    key={wave.name}
+                    className={`wave-item ${selectedWave === wave.name ? 'selected' : ''}`}
+                    onClick={() => setSelectedWave(wave.name)}
+                    style={{
+                      padding: '10px',
+                      border: '1px solid #e0e0e0',
+                      borderRadius: '4px',
+                      marginBottom: '8px',
+                      cursor: 'pointer',
+                      backgroundColor: selectedWave === wave.name ? '#e3f2fd' : '#fff',
+                      borderColor: selectedWave === wave.name ? '#2196f3' : '#e0e0e0',
+                    }}
+                  >
+                    <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
+                      {wave.name}
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#666' }}>
+                      Size: {formatBytes(wave.file_size)}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
           <div className="dialog-footer">

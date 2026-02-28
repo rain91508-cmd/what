@@ -17,6 +17,7 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
   const [selectedKdb, setSelectedKdb] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
 
   useEffect(() => {
     loadKdbList();
@@ -27,7 +28,6 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
       setLoading(true);
       const response = await apiService.getKdbList();
       if (response.status === 'success' && response.data && response.data.kdbs) {
-        // 只显示有效的 KDB
         const validKdbs = response.data.kdbs.filter((kdb: KdbInfo) => kdb.is_valid);
         setKdbs(validKdbs);
         if (validKdbs.length > 0) {
@@ -50,6 +50,22 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
+
+  const wildcardMatch = (pattern: string, text: string): boolean => {
+    if (!pattern.includes('*') && !pattern.includes('?')) {
+      return text.toLowerCase().includes(pattern.toLowerCase());
+    }
+    const regex = new RegExp(
+      '^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$',
+      'i'
+    );
+    return regex.test(text);
+  };
+
+  const filteredKdbs = kdbs.filter(kdb => {
+    if (!filter.trim()) return true;
+    return wildcardMatch(filter, kdb.name);
+  });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -124,30 +140,52 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
             <div style={{ marginBottom: '10px', color: '#666', fontSize: '12px' }}>
               Select a knowledge base to download and load:
             </div>
+            <div style={{ marginBottom: '10px' }}>
+              <input
+                type="text"
+                placeholder="Filter (* wildcard)..."
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  border: '1px solid #c0c0c0',
+                  borderRadius: '3px',
+                  fontSize: '12px',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
             <div className="kdb-list" style={{ maxHeight: '200px', overflowY: 'auto' }}>
-              {kdbs.map((kdb) => (
-                <div
-                  key={kdb.name}
-                  className={`kdb-item ${selectedKdb === kdb.name ? 'selected' : ''}`}
-                  onClick={() => setSelectedKdb(kdb.name)}
-                  style={{
-                    padding: '10px',
-                    border: '1px solid #e0e0e0',
-                    borderRadius: '4px',
-                    marginBottom: '8px',
-                    cursor: 'pointer',
-                    backgroundColor: selectedKdb === kdb.name ? '#e3f2fd' : '#fff',
-                    borderColor: selectedKdb === kdb.name ? '#2196f3' : '#e0e0e0',
-                  }}
-                >
-                  <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
-                    {kdb.name}
-                  </div>
-                  <div style={{ fontSize: '11px', color: '#666' }}>
-                    Size: {formatBytes(kdb.file_size)}
-                  </div>
+              {filteredKdbs.length === 0 ? (
+                <div style={{ padding: '10px', color: '#999', textAlign: 'center' }}>
+                  No matching KDB files
                 </div>
-              ))}
+              ) : (
+                filteredKdbs.map((kdb) => (
+                  <div
+                    key={kdb.name}
+                    className={`kdb-item ${selectedKdb === kdb.name ? 'selected' : ''}`}
+                    onClick={() => setSelectedKdb(kdb.name)}
+                    style={{
+                      padding: '10px',
+                      border: '1px solid #e0e0e0',
+                      borderRadius: '4px',
+                      marginBottom: '8px',
+                      cursor: 'pointer',
+                      backgroundColor: selectedKdb === kdb.name ? '#e3f2fd' : '#fff',
+                      borderColor: selectedKdb === kdb.name ? '#2196f3' : '#e0e0e0',
+                    }}
+                  >
+                    <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
+                      {kdb.name}
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#666' }}>
+                      Size: {formatBytes(kdb.file_size)}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
           <div className="dialog-footer">

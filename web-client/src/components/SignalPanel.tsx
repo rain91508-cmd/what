@@ -193,6 +193,16 @@ export function SignalPanel({ selectedModule }: SignalPanelProps) {
     }
   };
 
+  // Get display label: show direction for ports (input/output/inout), type for internal signals
+  const getSignalDisplayLabel = (signal: Signal): string => {
+    const dirNum = Number(signal.direction);
+    if (dirNum === 1) return 'input';
+    if (dirNum === 2) return 'output';
+    if (dirNum === 3) return 'inout';
+    // For internal signals, show signal type
+    return getSignalTypeLabel(signal.signalType);
+  };
+
   const getDirectionIcon = (direction: PortDirection): string => {
     const dirNum = Number(direction);
     switch (dirNum) {
@@ -404,26 +414,14 @@ export function SignalPanel({ selectedModule }: SignalPanelProps) {
                             {getDirectionIcon(signal.direction)}
                           </span>
 
-                          {/* Signal name */}
+                          {/* Signal name with bit range */}
                           <span style={{ 
                             flex: 1,
                             color: '#333',
                             fontFamily: 'monospace',
                           }}>
-                            {signal.name}
+                            {signal.name}{formatSignalWidth(signal)}
                           </span>
-
-                          {/* Width */}
-                          {formatSignalWidth(signal) && (
-                            <span style={{ 
-                              marginRight: '8px',
-                              color: '#666',
-                              fontFamily: 'monospace',
-                              fontSize: '11px',
-                            }}>
-                              {formatSignalWidth(signal)}
-                            </span>
-                          )}
 
                           {/* Type badge */}
                           <span style={{
@@ -433,7 +431,7 @@ export function SignalPanel({ selectedModule }: SignalPanelProps) {
                             borderRadius: '3px',
                             fontSize: '10px',
                           }}>
-                            {getSignalTypeLabel(signal.signalType)}
+                            {getSignalDisplayLabel(signal)}
                           </span>
                         </div>
                       ))}
