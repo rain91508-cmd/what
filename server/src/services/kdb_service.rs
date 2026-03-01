@@ -144,39 +144,35 @@ impl KdbService {
     }
 
     /// 获取知识库元信息
+    /// 注意：不使用缓存，每次都从文件系统读取最新数据
+    /// 这样可以确保文件更新后获取到最新信息
     pub async fn get_kdb_info(&self, kdb_name: &str) -> Result<KdbInfo> {
-        // 先尝试从缓存获取
-        let cache_key = ServerState::make_kdb_metadata_key(kdb_name);
-        if let Some(cached) = self.state.kdb_metadata_cache.get(&cache_key).await {
-            debug!("知识库元数据缓存命中：{}", kdb_name);
-            self.state.stats.record_cache_hit().await;
-            return Ok(serde_json::from_value(cached.clone())?);
-        }
-
-        self.state.stats.record_cache_miss().await;
-
-        // 从文件系统读取
+        // 从文件系统读取（不使用缓存，确保数据新鲜）
         let kdb_path = self.get_kdb_path(kdb_name)?;
         let metadata = fs::metadata(&kdb_path).await?;
 
-        // TODO: 实际实现中需要解析 KDB 文件头获取真实信息
-        // 这里使用占位实现
+        // 获取文件修改时间
+        let modified_time = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        // 计算校验和
+        let checksum = compute_file_hash(&kdb_path).await?;
+
         let info = KdbInfo {
             design_name: kdb_name.to_string(),
             version: "1.0.0".to_string(),
             signal_count: 0, // TODO: 从文件解析
             module_count: 0, // TODO: 从文件解析
             file_size: metadata.len(),
-            checksum: compute_file_hash(&kdb_path).await?,
+            checksum: checksum.clone(),
         };
 
-        // 缓存元数据
-        self.state
-            .kdb_metadata_cache
-            .insert(cache_key, serde_json::to_value(&info)?)
-            .await;
-
-        info!("获取知识库元信息：{} ({} bytes)", kdb_name, metadata.len());
+        info!("获取知识库元信息：{} ({} bytes, modified={}, checksum={})", 
+            kdb_name, metadata.len(), modified_time, &checksum[..8.min(checksum.len())]);
         Ok(info)
     }
 
