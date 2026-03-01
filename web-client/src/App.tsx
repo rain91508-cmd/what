@@ -813,6 +813,10 @@ function App() {
         timeConfig={activeTabData?.timeConfig}
         onTimeConfigChange={(config) => handleTimeConfigChange(activeTab, config)}
         maxWaveformTimePs={1000000}
+        onConnect={() => setShowConnectionDialog(true)}
+        onOpenKdb={() => setShowKdbSelectionDialog(true)}
+        onOpenWaveform={() => setShowWaveSelectionDialog(true)}
+        connected={connected}
       />
 
       {/* Main Content */}

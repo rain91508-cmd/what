@@ -19,6 +19,11 @@ interface ToolBarProps {
   onTimeConfigChange?: (config: TimeConfig) => void;
   // Maximum waveform time in ps (for validation)
   maxWaveformTimePs?: number;
+  // Connection and file actions
+  onConnect?: () => void;
+  onOpenKdb?: () => void;
+  onOpenWaveform?: () => void;
+  connected?: boolean;
 }
 
 export function ToolBar({ 
@@ -35,6 +40,10 @@ export function ToolBar({
   timeConfig,
   onTimeConfigChange,
   maxWaveformTimePs = 1000000, // Default 1,000,000 ps = 1000 ns
+  onConnect,
+  onOpenKdb,
+  onOpenWaveform,
+  connected = false,
 }: ToolBarProps) {
   // Local state for input value (only committed on Enter)
   const [inputValue, setInputValue] = useState<string>('');
@@ -142,6 +151,31 @@ export function ToolBar({
 
   return (
     <div className="tool-bar">
+      {/* Connection and file actions */}
+      <button 
+        className="tool-bar-button" 
+        title={connected ? "Connected" : "Connect to Server"}
+        onClick={onConnect}
+        style={{ color: connected ? '#4caf50' : '#666' }}
+      >
+        {connected ? '🟢' : '🔌'}
+      </button>
+      <button 
+        className="tool-bar-button" 
+        title="Open KDB"
+        onClick={onOpenKdb}
+      >
+        📂
+      </button>
+      <button 
+        className="tool-bar-button" 
+        title="Open Waveform"
+        onClick={onOpenWaveform}
+      >
+        📊
+      </button>
+      
+      <div className="tool-bar-separator"></div>
       <button className="tool-bar-button" title="Zoom In" onClick={onZoomIn}>
         🔍+
       </button>

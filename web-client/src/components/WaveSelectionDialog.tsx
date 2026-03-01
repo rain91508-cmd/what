@@ -75,10 +75,14 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
     }
   };
 
+  const handleDoubleClick = (waveName: string) => {
+    onSelect(waveName);
+  };
+
   if (loading) {
     return (
-      <div className="dialog-overlay">
-        <div className="dialog">
+      <div className="dialog-overlay" onClick={onCancel}>
+        <div className="dialog" onClick={e => e.stopPropagation()}>
           <div className="dialog-header">
             <span className="dialog-title">Select Waveform</span>
           </div>
@@ -92,8 +96,8 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
 
   if (error) {
     return (
-      <div className="dialog-overlay">
-        <div className="dialog">
+      <div className="dialog-overlay" onClick={onCancel}>
+        <div className="dialog" onClick={e => e.stopPropagation()}>
           <div className="dialog-header">
             <span className="dialog-title">Select Waveform</span>
             <button className="dialog-close" onClick={onCancel}>×</button>
@@ -112,8 +116,8 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
 
   if (waves.length === 0) {
     return (
-      <div className="dialog-overlay">
-        <div className="dialog">
+      <div className="dialog-overlay" onClick={onCancel}>
+        <div className="dialog" onClick={e => e.stopPropagation()}>
           <div className="dialog-header">
             <span className="dialog-title">Select Waveform</span>
             <button className="dialog-close" onClick={onCancel}>×</button>
@@ -168,6 +172,7 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
                     key={wave.name}
                     className={`wave-item ${selectedWave === wave.name ? 'selected' : ''}`}
                     onClick={() => setSelectedWave(wave.name)}
+                    onDoubleClick={() => handleDoubleClick(wave.name)}
                     style={{
                       padding: '10px',
                       border: '1px solid #e0e0e0',

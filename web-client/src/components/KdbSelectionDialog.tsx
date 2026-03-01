@@ -67,17 +67,26 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
     return wildcardMatch(filter, kdb.name);
   });
 
+  const handleSelect = (kdbName: string) => {
+    onSelect(kdbName);
+    onCancel();
+  };
+
+  const handleDoubleClick = (kdbName: string) => {
+    onSelect(kdbName);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedKdb) {
-      onSelect(selectedKdb);
+      handleSelect(selectedKdb);
     }
   };
 
   if (loading) {
     return (
-      <div className="dialog-overlay">
-        <div className="dialog">
+      <div className="dialog-overlay" onClick={onCancel}>
+        <div className="dialog" onClick={e => e.stopPropagation()}>
           <div className="dialog-header">
             <span className="dialog-title">Select Knowledge Base</span>
           </div>
@@ -91,8 +100,8 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
 
   if (error) {
     return (
-      <div className="dialog-overlay">
-        <div className="dialog">
+      <div className="dialog-overlay" onClick={onCancel}>
+        <div className="dialog" onClick={e => e.stopPropagation()}>
           <div className="dialog-header">
             <span className="dialog-title">Select Knowledge Base</span>
             <button className="dialog-close" onClick={onCancel}>×</button>
@@ -111,8 +120,8 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
 
   if (kdbs.length === 0) {
     return (
-      <div className="dialog-overlay">
-        <div className="dialog">
+      <div className="dialog-overlay" onClick={onCancel}>
+        <div className="dialog" onClick={e => e.stopPropagation()}>
           <div className="dialog-header">
             <span className="dialog-title">Select Knowledge Base</span>
             <button className="dialog-close" onClick={onCancel}>×</button>
@@ -167,6 +176,7 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
                     key={kdb.name}
                     className={`kdb-item ${selectedKdb === kdb.name ? 'selected' : ''}`}
                     onClick={() => setSelectedKdb(kdb.name)}
+                    onDoubleClick={() => handleDoubleClick(kdb.name)}
                     style={{
                       padding: '10px',
                       border: '1px solid #e0e0e0',
