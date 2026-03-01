@@ -1,5 +1,5 @@
 // ============================================
-// Hardware Design Analyzer - Core Types
+// Web-based HDL Analysis Toolkit - Core Types
 // ============================================
 
 // Re-export KDB types from kdb.ts

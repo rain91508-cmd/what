@@ -1,6 +1,6 @@
-# HWDA Web Client
+# WHAT Web Client
 
-Hardware Design Analyzer Web Client - A high-performance web-based waveform and code viewer.
+Web-based HDL Analysis Toolkit (WHAT) - A high-performance web-based waveform and code viewer.
 
 ## Architecture Overview
 

@@ -1,7 +1,7 @@
 {
   "name": "hwda-web-client",
   "version": "0.1.0",
-  "description": "Hardware Design Analyzer Web Client",
+  "description": "Web-based HDL Analysis Toolkit (WHAT) Web Client",
   "type": "module",
   "scripts": {
     "dev": "vite",

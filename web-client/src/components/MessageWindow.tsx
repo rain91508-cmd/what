@@ -153,10 +153,10 @@ export function MessageWindow({ messages, onBookmarkClick }: MessageWindowProps)
       </div>
 
       {/* Content */}
-      <div ref={scrollRef} style={{ flex: 1, overflow: 'auto' }}>
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {activeTab === 'messages' ? (
           // Messages Tab
-          <div className="message-window">
+          <div ref={scrollRef} className="message-window" style={{ flex: 1, overflow: 'auto' }}>
             {messages.length === 0 ? (
               <div style={{ color: '#999', padding: '8px' }}>No messages</div>
             ) : (

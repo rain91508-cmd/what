@@ -1,5 +1,5 @@
 // ============================================
-// WASM Layer - Hardware Design Analyzer
+// WASM Layer - Web-based HDL Analysis Toolkit
 // ============================================
 // 
 // Architecture: JS (UI/Scheduling) <-> WASM (Data Processing)

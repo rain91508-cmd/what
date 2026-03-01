@@ -1,5 +1,5 @@
 // ============================================
-// HWDA Web Client - Main Application
+// WHAT Web Client - Main Application
 // ============================================
 //
 // Layout (参考DVE风格):
@@ -167,7 +167,14 @@ function App() {
   }, [])
 
   const addMessage = useCallback((msg: string) => {
-    setMessages(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`])
+    setMessages(prev => {
+      const newMessages = [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]
+      // Keep only the last 100 messages
+      if (newMessages.length > 100) {
+        return newMessages.slice(-100)
+      }
+      return newMessages
+    })
   }, [])
 
   // ============================================
@@ -1228,7 +1235,7 @@ function App() {
     return (
       <div className="loading-screen">
         <div className="loading-spinner"></div>
-        <p>Initializing HWDA...</p>
+        <p>Initializing WHAT...</p>
       </div>
     )
   }
