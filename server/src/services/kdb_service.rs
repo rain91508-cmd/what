@@ -1,5 +1,6 @@
 use crate::error::{Result, ServerError};
 use crate::state::{ServerState, TimeRange};
+use crate::services::compute_file_hash;
 use std::path::PathBuf;
 use tokio::fs;
 use tracing::{debug, info, warn};
@@ -29,6 +30,10 @@ pub struct KdbFileInfo {
     pub file_size: u64,
     /// 是否为有效的 KDB 文件
     pub is_valid: bool,
+    /// 文件修改时间 (Unix timestamp)
+    pub modified_time: u64,
+    /// SHA256 校验和 (用于缓存验证)
+    pub checksum: String,
 }
 
 /// 知识库元数据信息
@@ -56,7 +61,7 @@ impl KdbService {
     }
 
     /// 获取所有可用的知识库列表
-    /// 只返回有效的 KDB 文件
+    /// 返回所有 KDB 文件（包括无效的），包含完整的元数据用于缓存验证
     pub async fn list_kdbs(&self) -> Result<Vec<KdbFileInfo>> {
         let mut kdbs = Vec::new();
 
@@ -69,10 +74,21 @@ impl KdbService {
                     match self.validate_kdb_file(&path).await {
                         Ok(true) => {
                             let metadata = fs::metadata(&path).await?;
+                            // 获取文件修改时间
+                            let modified_time = metadata
+                                .modified()
+                                .ok()
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0);
+                            // 计算校验和
+                            let checksum = compute_file_hash(&path).await.unwrap_or_default();
                             kdbs.push(KdbFileInfo {
                                 name: name.to_string(),
                                 file_size: metadata.len(),
                                 is_valid: true,
+                                modified_time,
+                                checksum,
                             });
                         }
                         Ok(false) => {
@@ -81,6 +97,8 @@ impl KdbService {
                                 name: name.to_string(),
                                 file_size: 0,
                                 is_valid: false,
+                                modified_time: 0,
+                                checksum: String::new(),
                             });
                         }
                         Err(e) => {
@@ -234,12 +252,7 @@ impl KdbService {
     }
 }
 
-/// 计算文件 SHA256 哈希值
-async fn compute_file_hash(path: &PathBuf) -> Result<String> {
-    // TODO: 实现文件哈希计算
-    // 这里使用简化实现
-    Ok(format!("sha256:{}", uuid::Uuid::new_v4().simple()))
-}
+// compute_file_hash 已移到 mod.rs 作为公共服务
 
 #[cfg(test)]
 mod tests {

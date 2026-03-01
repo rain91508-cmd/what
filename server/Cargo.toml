@@ -33,6 +33,10 @@ fstapi = { path = "../third_party/fst-tools/fstapi" }
 zstd = "0.13"
 lz4 = "1.24"
 
+# Cryptography (for file checksums)
+sha2 = "0.10"
+digest = "0.10"
+
 # Regex
 regex = "1.10"
 

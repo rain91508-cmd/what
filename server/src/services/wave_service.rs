@@ -1,5 +1,6 @@
 use crate::error::{Result, ServerError};
 use crate::services::wave_data::{LodConfig, LodLevel, SignalWaveData, Transition, ChunkSerializer, CompressionAlgorithm};
+use crate::services::compute_file_hash;
 use crate::state::ServerState;
 use std::path::PathBuf;
 use tokio::fs;
@@ -20,6 +21,10 @@ pub struct WaveFileInfo {
     pub file_size: u64,
     /// 是否为有效的 FST 文件
     pub is_valid: bool,
+    /// 文件修改时间 (Unix timestamp)
+    pub modified_time: u64,
+    /// SHA256 校验和 (用于缓存验证)
+    pub checksum: String,
 }
 
 /// 波形文件元数据信息
@@ -129,12 +134,30 @@ impl WaveService {
                         // 验证 FST 文件有效性
                         let is_valid = self.validate_fst_file(&path).await?;
 
-                        info!("  发现 FST 文件: {} ({} bytes, valid={})", name, file_size, is_valid);
+                        // 获取文件修改时间
+                        let modified_time = metadata
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+
+                        // 计算校验和（只对有效文件）
+                        let checksum = if is_valid {
+                            compute_file_hash(&path).await.unwrap_or_default()
+                        } else {
+                            String::new()
+                        };
+
+                        info!("  发现 FST 文件: {} ({} bytes, valid={}, modified={}, checksum={})", 
+                            name, file_size, is_valid, modified_time, &checksum[..8.min(checksum.len())]);
 
                         waves.push(WaveFileInfo {
                             name,
                             file_size,
                             is_valid,
+                            modified_time,
+                            checksum,
                         });
                     }
                 }
