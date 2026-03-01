@@ -980,6 +980,33 @@ GET /api/kdb/info
     "file_size": 10485760,
     "checksum": "sha256:abc123..."
   }
+
+GET /api/kdb/list
+  描述: 获取所有可用知识库文件列表（包含缓存验证元数据）
+  响应:
+  {
+    "status": "success",
+    "data": {
+      "kdbs": [
+        {
+          "name": "riscv2",
+          "file_size": 4758,
+          "is_valid": true,
+          "modified_time": 1772362874,
+          "checksum": "8d04a6b5d54c8f814a6117c6080192853020561e6bd38e286976519b0016b0c0"
+        }
+      ],
+      "summary": {
+        "total": 1,
+        "valid": 1,
+        "invalid": 0
+      }
+    }
+  }
+  说明:
+    - modified_time: Unix时间戳，用于检测文件是否更新
+    - checksum: SHA256校验和，用于验证文件完整性
+    - 客户端可通过比较modified_time或checksum判断是否需要重新下载
 ```
 
 **Requirement: SV-005 波形数据API（HTTP Range + 压缩）**
@@ -1015,16 +1042,32 @@ GET /api/wave/:waveform_name/signals/:signal_name/data?lod=<level>&start=<time>&
     Range: bytes=0-1023
 
 GET /api/wave/list
-  描述: 获取所有可用波形文件列表
+  描述: 获取所有可用波形文件列表（包含缓存验证元数据）
   响应:
-  [
-    {
-      "name": "tb_top",
-      "file": "tb_top.fst",
-      "time_range": {"start": 0, "end": 1000000000, "unit": "ps"},
-      "signal_count": 5000
+  {
+    "status": "success",
+    "data": {
+      "waves": [
+        {
+          "name": "riscv2",
+          "file_size": 1243,
+          "is_valid": true,
+          "modified_time": 1772362874,
+          "checksum": "8d04a6b5d54c8f814a6117c6080192853020561e6bd38e286976519b0016b0c0"
+        }
+      ],
+      "summary": {
+        "total": 1,
+        "valid": 1,
+        "invalid": 0
+      }
     }
-  ]
+  }
+  说明:
+    - modified_time: Unix时间戳，用于检测文件是否更新
+    - checksum: SHA256校验和，用于验证文件完整性
+    - 客户端可通过比较modified_time或checksum判断是否需要重新下载
+    - 避免在文件未变化时重复下载大文件
 
 GET /api/wave/:waveform_name/info/:signal_name
   描述: 获取指定波形中指定信号的元信息
