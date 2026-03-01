@@ -1,8 +1,14 @@
 // ============================================
-// KDB Types - Matching KDB Proto Structure
+// KDB Types - Matching New KDB Proto Structure
 // ============================================
 // These types match the protobuf definitions in interpreter/proto/kdb.proto
 // Field names are converted to camelCase for JavaScript conventions
+//
+// Key changes:
+// - Module.id removed (use array index + 1)
+// - Module.fullName removed (calculate dynamically)
+// - Signal split into SignalDef and SignalInst
+// - SignalInst stored in global array allSignalInsts
 
 /**
  * KDB Header
@@ -14,24 +20,12 @@ export interface KDBHeader {
 }
 
 /**
- * Source Link - for source code navigation
- */
-export interface SourceLink {
-  line: number;
-  columnStart: number;  // proto: column_start
-  columnEnd: number;    // proto: column_end
-  targetId: number;     // proto: target_id
-}
-
-/**
  * Source File
  */
 export interface SourceFile {
   id: number;
   path: string;
   content: string;
-  signalLinks: SourceLink[];  // proto: signal_links
-  submodLinks: SourceLink[];  // proto: submod_links
 }
 
 /**
@@ -43,8 +37,16 @@ export interface SourceLocation {
 }
 
 /**
+ * Module Source Location (with start/end line)
+ */
+export interface ModuleSourceLocation {
+  fileId: number;   // proto: file_id
+  startLine: number; // proto: start_line
+  endLine: number;   // proto: end_line
+}
+
+/**
  * Signal Type Enum
- * Matches proto SignalType
  */
 export enum SignalType {
   UNKNOWN = 0,
@@ -60,7 +62,6 @@ export enum SignalType {
 
 /**
  * Port Direction Enum
- * Matches proto PortDirection
  */
 export enum PortDirection {
   UNKNOWN = 0,
@@ -70,35 +71,45 @@ export enum PortDirection {
 }
 
 /**
- * Signal
+ * Signal Definition (stored in Definition modules)
+ * Contains static information shared among all instances
  */
-export interface Signal {
-  id: number;
+export interface SignalDef {
   name: string;
-  fullName: string;           // proto: full_name
-  signalType: SignalType;     // proto: type (renamed to avoid JS keyword)
+  type: SignalType;
+  declaration?: SourceLocation;
+  direction: PortDirection;
+}
+
+/**
+ * Signal Instance (stored in global allSignalInsts array)
+ * Contains instance-specific information
+ */
+export interface SignalInst {
   msb: number;
   lsb: number;
-  parentModuleId: number;     // proto: parent_module_id
-  declaration?: SourceLocation;
-  driverSignalIds: number[];  // proto: driver_signal_ids
-  direction: PortDirection;
-  driverLines: SourceLocation[];  // proto: driver_lines
+  parentModuleId: number;  // proto: parent_module_id
+  driverSignalGlobalIds: number[];  // proto: driver_signal_global_ids
+  driverLines: SourceLocation[];    // proto: driver_lines
 }
 
 /**
  * Module - can be a module definition or an instance
+ * Note: id is implicit (array index + 1)
+ * Note: fullName is calculated dynamically from parent chain
  */
 export interface Module {
-  id: number;
+  // Note: id is implicit - use array index + 1
   name: string;
-  fullName: string;           // proto: full_name
-  parentModuleId: number;     // proto: parent_module_id
-  fileId: number;             // proto: file_id
-  declaration?: SourceLocation;
-  signals: Signal[];
+  // Note: fullName removed - calculate dynamically
+  parentModuleId: number;     // proto: parent_module_id, 0 for top-level
+  definition: ModuleSourceLocation;  // Replaces fileId + declaration
+  signalDefs: SignalDef[];    // proto: signal_defs (only for definitions)
   isInstance: boolean;        // proto: is_instance
   childModuleIds: number[];   // proto: child_module_ids
+  defModuleId: number;        // proto: def_module_id, 0 if this is a definition
+  signalInstsStartId: number; // proto: signal_insts_start_id, index in allSignalInsts
+  // Note: signal count = signalDefs.length (for def) or defModule's signalDefs.length (for instance)
 }
 
 /**
@@ -110,33 +121,57 @@ export interface DesignHierarchy {
 }
 
 /**
- * Knowledge Base - minimal in-memory representation
- * For full storage, see IndexedDB schema
+ * Knowledge Base - Complete design representation
  */
 export interface KnowledgeBase {
-  id: string;
   header: KDBHeader;
-  topModuleIds: number[];     // Extracted from hierarchies for quick access
+  files: SourceFile[];
+  modules: Module[];          // All modules, index 0 = ID 1
   hierarchies: DesignHierarchy[];
+  allSignalInsts: SignalInst[];  // proto: all_signal_insts, global signal instances
 }
 
 // ============================================
-// UI Types - for component props and state
+// Helper Types for UI (computed on demand)
 // ============================================
 
 /**
- * Tree Node for DesignBrowser
+ * Signal with full information (computed from SignalDef + SignalInst)
+ * This is what UI components work with
  */
-export interface ModuleTreeNode {
-  module: Module;
-  children: ModuleTreeNode[];
-  expanded: boolean;
+export interface Signal {
+  // Global ID in allSignalInsts array
+  globalId: number;
+  // Local index within module (0-based)
+  localIndex: number;
+  // Signal name (from SignalDef)
+  name: string;
+  // Full hierarchical name (computed on demand)
+  fullName: string;
+  // Signal type (from SignalDef)
+  signalType: SignalType;
+  // Port direction (from SignalDef)
+  direction: PortDirection;
+  // Bit width (from SignalInst)
+  msb: number;
+  lsb: number;
+  // Declaration location (from SignalDef)
+  declaration?: SourceLocation;
+  // Driver signal global IDs (from SignalInst)
+  driverSignalGlobalIds: number[];
+  // Driver source locations (from SignalInst)
+  driverLines: SourceLocation[];
+  // Parent module ID (from SignalInst)
+  parentModuleId: number;
 }
 
 /**
- * Selected module with its signals
+ * Module with computed full name
+ * This is what UI components work with
  */
-export interface SelectedModule {
-  module: Module;
-  signals: Signal[];
+export interface ModuleWithFullName extends Module {
+  // Module ID (1-based, computed from array index)
+  id: number;
+  // Full hierarchical name (computed on demand)
+  fullName: string;
 }

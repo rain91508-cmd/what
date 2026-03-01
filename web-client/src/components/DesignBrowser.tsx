@@ -17,6 +17,14 @@ interface TreeNodeState extends TreeNode {
 
 type TabType = 'hierarchy' | 'files';
 
+// Pagination state for each node
+interface PaginationState {
+  currentPage: number;
+  pageSize: number;
+}
+
+const DEFAULT_PAGE_SIZE = 20;
+
 export function DesignBrowser({ 
   onModuleSelect, 
   onModuleDoubleClick, 
@@ -30,6 +38,11 @@ export function DesignBrowser({
   const [rootNodes, setRootNodes] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Pagination state: nodeId -> PaginationState
+  const [paginationMap, setPaginationMap] = useState<Map<number, PaginationState>>(new Map());
+  // Editing page size: nodeId -> temp value
+  const [editingPageSize, setEditingPageSize] = useState<Map<number, string>>(new Map());
   
   // Files tab state
   const [files, setFiles] = useState<SourceFile[]>([]);
@@ -208,6 +221,51 @@ export function DesignBrowser({
     return childIds;
   };
 
+  // Get paginated child IDs for a node
+  const getPaginatedChildIds = (parentId: number): { visibleIds: number[]; total: number; currentPage: number; pageSize: number; totalPages: number } => {
+    const allChildIds = getChildIds(parentId);
+    const pagination = paginationMap.get(parentId) || { currentPage: 1, pageSize: DEFAULT_PAGE_SIZE };
+    const total = allChildIds.length;
+    const totalPages = Math.ceil(total / pagination.pageSize);
+    
+    // Ensure current page is valid
+    const validPage = Math.min(Math.max(1, pagination.currentPage), Math.max(1, totalPages));
+    
+    const startIndex = (validPage - 1) * pagination.pageSize;
+    const endIndex = Math.min(startIndex + pagination.pageSize, total);
+    const visibleIds = allChildIds.slice(startIndex, endIndex);
+    
+    return { visibleIds, total, currentPage: validPage, pageSize: pagination.pageSize, totalPages };
+  };
+
+  // Update pagination for a node
+  const setPagination = (nodeId: number, updates: Partial<PaginationState>) => {
+    setPaginationMap(prev => {
+      const newMap = new Map(prev);
+      const current = newMap.get(nodeId) || { currentPage: 1, pageSize: DEFAULT_PAGE_SIZE };
+      newMap.set(nodeId, { ...current, ...updates });
+      return newMap;
+    });
+  };
+
+  // Navigate to previous page
+  const goToPreviousPage = (nodeId: number) => {
+    const pagination = paginationMap.get(nodeId) || { currentPage: 1, pageSize: DEFAULT_PAGE_SIZE };
+    if (pagination.currentPage > 1) {
+      setPagination(nodeId, { currentPage: pagination.currentPage - 1 });
+    }
+  };
+
+  // Navigate to next page
+  const goToNextPage = (nodeId: number) => {
+    const allChildIds = getChildIds(nodeId);
+    const pagination = paginationMap.get(nodeId) || { currentPage: 1, pageSize: DEFAULT_PAGE_SIZE };
+    const totalPages = Math.ceil(allChildIds.length / pagination.pageSize);
+    if (pagination.currentPage < totalPages) {
+      setPagination(nodeId, { currentPage: pagination.currentPage + 1 });
+    }
+  };
+
   const renderTreeNodeWithChildren = (nodeId: number, depth: number = 0, isLast: boolean = true, parentChain: boolean[] = []) => {
     const node = treeNodes.get(nodeId);
     if (!node) return null;
@@ -216,7 +274,6 @@ export function DesignBrowser({
     const isSelected = selectedModuleIndex === nodeId;
     const hasChildren = node.hasChildren;
     const isLoading = node.loading;
-    const childIds = getChildIds(nodeId);
 
     const indentWidth = 16;
     const lineHeight = 24;
@@ -331,15 +388,135 @@ export function DesignBrowser({
                 Loading...
               </div>
             ) : (
-              childIds.map((childId, index) => {
-                const childIsLast = index === childIds.length - 1;
-                return renderTreeNodeWithChildren(
-                  childId, 
-                  depth + 1, 
-                  childIsLast,
-                  [...parentChain, isLast]
+              (() => {
+                const { visibleIds, total, currentPage, pageSize, totalPages } = getPaginatedChildIds(nodeId);
+                const needsPagination = total > DEFAULT_PAGE_SIZE;
+                const startIdx = (currentPage - 1) * pageSize + 1;
+                const endIdx = Math.min(startIdx + visibleIds.length - 1, total);
+                
+                return (
+                  <>
+                    {/* Pagination controls */}
+                    {needsPagination && (
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        padding: '4px 8px',
+                        paddingLeft: `${(depth + 1) * indentWidth + 8}px`,
+                        fontSize: '11px',
+                        color: '#666',
+                        backgroundColor: '#f5f5f5',
+                        borderBottom: '1px solid #e0e0e0',
+                      }}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            goToPreviousPage(nodeId);
+                          }}
+                          disabled={currentPage <= 1}
+                          style={{
+                            padding: '2px 6px',
+                            marginRight: '4px',
+                            border: '1px solid #ccc',
+                            borderRadius: '2px',
+                            background: '#fff',
+                            cursor: currentPage <= 1 ? 'not-allowed' : 'pointer',
+                            opacity: currentPage <= 1 ? 0.5 : 1,
+                            fontSize: '10px',
+                          }}
+                        >
+                          ◀
+                        </button>
+                        
+                        <span style={{ margin: '0 8px' }}>
+                          {editingPageSize.has(nodeId) ? (
+                            <input
+                              type="text"
+                              value={editingPageSize.get(nodeId)}
+                              onChange={(e) => {
+                                setEditingPageSize(prev => new Map(prev).set(nodeId, e.target.value));
+                              }}
+                              onBlur={() => {
+                                const value = parseInt(editingPageSize.get(nodeId) || '', 10);
+                                if (!isNaN(value) && value > 0) {
+                                  setPagination(nodeId, { pageSize: value, currentPage: 1 });
+                                }
+                                setEditingPageSize(prev => {
+                                  const newMap = new Map(prev);
+                                  newMap.delete(nodeId);
+                                  return newMap;
+                                });
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.currentTarget.blur();
+                                }
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              autoFocus
+                              style={{
+                                width: '60px',
+                                padding: '1px 4px',
+                                fontSize: '11px',
+                                border: '1px solid #1976d2',
+                                borderRadius: '2px',
+                                textAlign: 'center',
+                              }}
+                            />
+                          ) : (
+                            <span
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditingPageSize(prev => new Map(prev).set(nodeId, String(pageSize)));
+                              }}
+                              onDoubleClick={(e) => e.stopPropagation()}
+                              style={{
+                                cursor: 'pointer',
+                                textDecoration: 'underline',
+                                color: '#1976d2',
+                              }}
+                              title="Double-click to edit page size"
+                            >
+                              {startIdx}-{endIdx} / {total}
+                            </span>
+                          )}
+                        </span>
+                        
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            goToNextPage(nodeId);
+                          }}
+                          disabled={currentPage >= totalPages}
+                          style={{
+                            padding: '2px 6px',
+                            marginLeft: '4px',
+                            border: '1px solid #ccc',
+                            borderRadius: '2px',
+                            background: '#fff',
+                            cursor: currentPage >= totalPages ? 'not-allowed' : 'pointer',
+                            opacity: currentPage >= totalPages ? 0.5 : 1,
+                            fontSize: '10px',
+                          }}
+                        >
+                          ▶
+                        </button>
+                      </div>
+                    )}
+                    
+                    {/* Child nodes - lazy loaded, only visible ones */}
+                    {visibleIds.map((childId, index) => {
+                      const childIsLast = index === visibleIds.length - 1 && endIdx === total;
+                      return renderTreeNodeWithChildren(
+                        childId, 
+                        depth + 1, 
+                        childIsLast,
+                        [...parentChain, isLast]
+                      );
+                    })}
+                  </>
                 );
-              })
+              })()
             )}
           </div>
         )}
@@ -459,24 +636,30 @@ export function DesignBrowser({
 
   return (
     <div className="design-browser-panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* Tab headers */}
+      {/* Tab headers - DVE style matching main tabs */}
       <div style={{ 
         display: 'flex', 
-        borderBottom: '1px solid #e0e0e0',
-        backgroundColor: '#f5f5f5',
+        background: 'linear-gradient(to bottom, #e8e8e8, #d0d0d0)',
+        borderBottom: '1px solid #a0a0a0',
+        padding: '2px 4px 0 4px',
+        gap: '2px',
       }}>
         <button
           onClick={() => setActiveTab('hierarchy')}
           style={{
             flex: 1,
-            padding: '8px 12px',
-            border: 'none',
-            borderBottom: activeTab === 'hierarchy' ? '2px solid #1976d2' : '2px solid transparent',
-            backgroundColor: activeTab === 'hierarchy' ? '#fff' : 'transparent',
-            fontWeight: activeTab === 'hierarchy' ? 'bold' : 'normal',
-            fontSize: '12px',
+            padding: '4px 12px',
+            background: activeTab === 'hierarchy' 
+              ? '#fff' 
+              : 'linear-gradient(to bottom, #f0f0f0, #e0e0e0)',
+            border: '1px solid #a0a0a0',
+            borderBottom: activeTab === 'hierarchy' ? '1px solid #fff' : '1px solid #a0a0a0',
+            borderRadius: '3px 3px 0 0',
+            fontWeight: activeTab === 'hierarchy' ? 'bold' : '500',
+            fontSize: '11px',
             cursor: 'pointer',
-            color: activeTab === 'hierarchy' ? '#1976d2' : '#666',
+            color: activeTab === 'hierarchy' ? '#333' : '#666',
+            marginBottom: activeTab === 'hierarchy' ? '-1px' : '0',
           }}
         >
           Hierarchy
@@ -485,14 +668,18 @@ export function DesignBrowser({
           onClick={() => setActiveTab('files')}
           style={{
             flex: 1,
-            padding: '8px 12px',
-            border: 'none',
-            borderBottom: activeTab === 'files' ? '2px solid #1976d2' : '2px solid transparent',
-            backgroundColor: activeTab === 'files' ? '#fff' : 'transparent',
-            fontWeight: activeTab === 'files' ? 'bold' : 'normal',
-            fontSize: '12px',
+            padding: '4px 12px',
+            background: activeTab === 'files' 
+              ? '#fff' 
+              : 'linear-gradient(to bottom, #f0f0f0, #e0e0e0)',
+            border: '1px solid #a0a0a0',
+            borderBottom: activeTab === 'files' ? '1px solid #fff' : '1px solid #a0a0a0',
+            borderRadius: '3px 3px 0 0',
+            fontWeight: activeTab === 'files' ? 'bold' : '500',
+            fontSize: '11px',
             cursor: 'pointer',
-            color: activeTab === 'files' ? '#1976d2' : '#666',
+            color: activeTab === 'files' ? '#333' : '#666',
+            marginBottom: activeTab === 'files' ? '-1px' : '0',
           }}
         >
           Files
