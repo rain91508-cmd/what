@@ -486,6 +486,46 @@ class KdbManager {
   }
 
   /**
+   * Get file ID for a module
+   */
+  async getModuleFileId(moduleId: number): Promise<number | null> {
+    const module = this.getModuleById(moduleId);
+    if (!module) return null;
+    
+    // Module's definition contains the fileId
+    if (module.definition && module.definition.fileId) {
+      return module.definition.fileId;
+    }
+    
+    // Fallback: try to match by module name
+    const sourceFiles = await this.getAllSourceFiles();
+    const file = sourceFiles.find(f => {
+      const fileName = f.path.split('/').pop()?.replace(/\.v$/, '') || '';
+      return fileName === module.name || f.path.includes(module.name);
+    });
+    
+    return file?.id || null;
+  }
+
+  /**
+   * Get file info by ID
+   */
+  async getFileInfo(fileId: number): Promise<{ id: number; name: string; fullName: string; path: string } | null> {
+    const file = await this.getSourceFile(fileId);
+    if (!file) return null;
+    
+    // Extract file name from path
+    const fileName = file.path.split('/').pop() || '';
+    
+    return {
+      id: file.id,
+      name: fileName,
+      fullName: file.path,
+      path: file.path,
+    };
+  }
+
+  /**
    * Get KDB header info
    */
   async getHeader(): Promise<{ version: string; projectName: string; createdAt: string } | null> {

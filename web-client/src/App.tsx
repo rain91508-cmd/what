@@ -48,6 +48,9 @@ import { FileChangeDialog } from './components/FileChangeDialog'
 import { MockDataDialog } from './components/MockDataDialog'
 import { Splitter } from './components/ResizablePanel'
 
+// Bookmark
+import { bookmarkManager, type Bookmark } from './types/bookmark'
+
 // Types
 import type { Signal } from './types/kdb'
 import type { WaveformInfo, ColumnWidths, TimeConfig, Tab, NavigationHistoryEntry } from './components/TabPanel'
@@ -122,7 +125,10 @@ function App() {
   
   // Global counter for waveform signal unique_id (starts from 1, increments forever)
   const nextWaveformSignalIdRef = useRef(1)
-  
+
+  // Ref for Monaco editor to get current cursor position
+  const monacoEditorRef = useRef<any>(null)
+
   // Get current active tab data
   const activeTabData = tabs.find(t => t.id === activeTab)
   
@@ -342,6 +348,117 @@ function App() {
     const history = activeTabData.navigationHistory || [];
     return pointer < history.length;
   }, [activeTab, tabs]);
+
+  // ============================================
+  // Bookmark Management
+  // ============================================
+  
+  // Add bookmark at current source position
+  const handleAddBookmark = useCallback(async () => {
+    // Check if there's an active source tab
+    const activeSourceTab = tabs.find(t => t.type === 'source' && t.id === activeTab);
+    
+    if (!activeSourceTab) {
+      addMessage('No active source tab to bookmark');
+      return;
+    }
+    
+    const moduleIndex = activeSourceTab.moduleIndex;
+    if (!moduleIndex) {
+      addMessage('Cannot bookmark: no module loaded');
+      return;
+    }
+    
+    // Get current line from Monaco editor
+    let lineNumber = 1;
+    if (monacoEditorRef.current) {
+      const position = monacoEditorRef.current.getPosition();
+      if (position) {
+        lineNumber = position.lineNumber;
+      }
+    } else if (activeSourceTab.signalDeclarationLine) {
+      lineNumber = activeSourceTab.signalDeclarationLine;
+    }
+    
+    // Get file info
+    const fileId = await kdbManager.getModuleFileId(moduleIndex);
+    if (!fileId) {
+      addMessage('Cannot bookmark: file not found');
+      return;
+    }
+    
+    const fileInfo = await kdbManager.getFileInfo(fileId);
+    if (!fileInfo) {
+      addMessage('Cannot bookmark: file info not found');
+      return;
+    }
+    
+    // Get line content (we need to fetch the source content)
+    const sourceFile = await kdbManager.getSourceFile(fileId);
+    if (!sourceFile) {
+      addMessage('Cannot bookmark: source file not found');
+      return;
+    }
+    const lines = sourceFile.content.split('\n');
+    const lineContent = lines[lineNumber - 1]?.trim() || '';
+    
+    // Create bookmark (name will be auto-generated as "Mark N")
+    const bookmark = bookmarkManager.addBookmark({
+      moduleIndex: moduleIndex,  // Store module index for navigation
+      fileId: fileId,
+      fileName: fileInfo.name,
+      fileFullName: fileInfo.fullName,
+      lineNumber: lineNumber,
+      lineContent: lineContent,
+    });
+    
+    addMessage(`Added bookmark: ${bookmark.name}`);
+  }, [activeTab, tabs, addMessage]);
+  
+  // Handle bookmark click - jump to source
+  const handleBookmarkClick = useCallback((bookmark: Bookmark) => {
+    // Use stored moduleIndex from bookmark
+    const moduleIndex = bookmark.moduleIndex;
+    
+    // Check if there's an active source tab
+    const activeSourceTab = tabs.find(t => t.type === 'source' && t.id === activeTab);
+    
+    if (activeSourceTab) {
+      // Update existing source tab
+      setTabs(prev => prev.map(tab => 
+        tab.id === activeSourceTab.id 
+          ? { 
+              ...tab, 
+              moduleIndex: moduleIndex,
+              signalDeclarationLine: bookmark.lineNumber,
+              startFromLine1: true
+            } 
+          : tab
+      ));
+      setActiveTab(activeSourceTab.id);
+      
+      // Add navigation entry
+      addNavigationEntry(bookmark.fileId, bookmark.lineNumber);
+      addMessage(`Jump to bookmark: ${bookmark.name}`);
+    } else {
+      // No active source tab, create one
+      const newId = `source-${tabCounter.current++}`;
+      const newTab: Tab = {
+        id: newId,
+        label: 'Source',
+        type: 'source',
+        moduleIndex: moduleIndex,
+        signalDeclarationLine: bookmark.lineNumber,
+        startFromLine1: true,
+      };
+      setTabs(prev => [...prev, newTab]);
+      setActiveTab(newId);
+      
+      // Add navigation entry after tab is created
+      setTimeout(() => addNavigationEntry(bookmark.fileId, bookmark.lineNumber), 0);
+      addMessage(`Open source at bookmark: ${bookmark.name}`);
+    }
+  }, [activeTab, tabs, addNavigationEntry, addMessage]);
 
   // ============================================
   // File Change Detection
@@ -1104,7 +1221,7 @@ function App() {
   }
 
   const handleMessageResize = (delta: number) => {
-    setMessageHeight(Math.max(60, Math.min(250, messageStartHeightRef.current - delta)))
+    setMessageHeight(Math.max(60, messageStartHeightRef.current - delta))
   }
 
   if (!initialized) {
@@ -1153,6 +1270,7 @@ function App() {
         onRefreshCheck={handleManualRefreshCheck}
         onToggleAutoCheck={handleToggleAutoCheck}
         autoCheckEnabled={autoCheckEnabled}
+        onAddBookmark={handleAddBookmark}
       />
 
       {/* Main Content */}
@@ -1207,6 +1325,7 @@ function App() {
                 moduleIndex={activeTabData.moduleIndex || null}
                 startFromLine1={activeTabData.startFromLine1}
                 signalDeclarationLine={activeTabData.signalDeclarationLine}
+                editorRef={monacoEditorRef}
               />
             ) : activeTabData ? (
               <WaveformWindow
@@ -1235,7 +1354,7 @@ function App() {
         className="bottom-panel"
         style={{ height: messageHeight, minHeight: 60 }}
       >
-        <MessageWindow messages={messages} />
+        <MessageWindow messages={messages} onBookmarkClick={handleBookmarkClick} />
       </div>
 
       {/* Connection Dialog */}

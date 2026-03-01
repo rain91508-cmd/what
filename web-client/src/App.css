@@ -555,7 +555,6 @@ body {
 .bottom-panel {
   height: 100px;
   min-height: 60px;
-  max-height: 250px;
   background: #fff;
   border-top: 1px solid #b0b0b0;
   overflow: hidden;

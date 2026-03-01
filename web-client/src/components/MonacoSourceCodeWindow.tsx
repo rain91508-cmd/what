@@ -23,17 +23,19 @@ interface MonacoSourceCodeWindowProps {
   moduleIndex: number | null;
   startFromLine1?: boolean;
   signalDeclarationLine?: number;
+  editorRef?: React.MutableRefObject<editor.IStandaloneCodeEditor | null>;
 }
 
 const modelCache = new Map<string, editor.ITextModel>();
 
-export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDeclarationLine }: MonacoSourceCodeWindowProps) {
+export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDeclarationLine, editorRef: externalEditorRef }: MonacoSourceCodeWindowProps) {
   const [content, setContent] = useState<string>('');
   const [filePath, setFilePath] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [highlightLine, setHighlightLine] = useState<number | null>(null);
   const [moduleName, setModuleName] = useState<string>('');
-  const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+  const internalEditorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+  const editorRef = externalEditorRef || internalEditorRef;
   const pendingHighlightRef = useRef<number | null>(null);
   const decorationsRef = useRef<string[]>([]);
   const monacoInstance = useMonaco();

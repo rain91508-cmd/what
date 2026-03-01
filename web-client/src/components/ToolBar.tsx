@@ -28,6 +28,8 @@ interface ToolBarProps {
   onRefreshCheck?: () => void;
   onToggleAutoCheck?: () => void;
   autoCheckEnabled?: boolean;
+  // Bookmark
+  onAddBookmark?: () => void;
 }
 
 export function ToolBar({ 
@@ -51,6 +53,7 @@ export function ToolBar({
   onRefreshCheck,
   onToggleAutoCheck,
   autoCheckEnabled = false,
+  onAddBookmark,
 }: ToolBarProps) {
   // Local state for input value (only committed on Enter)
   const [inputValue, setInputValue] = useState<string>('');
@@ -249,6 +252,9 @@ export function ToolBar({
       </button>
       <button className="tool-bar-button" title="Add Waveform Tab" onClick={onAddWaveformTab}>
         <span style={{ fontSize: '12px', fontFamily: 'monospace' }}>⌇+</span>
+      </button>
+      <button className="tool-bar-button" title="Add Bookmark" onClick={onAddBookmark}>
+        🔖
       </button>
       
       {/* File change detection buttons */}
