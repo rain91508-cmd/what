@@ -14,6 +14,41 @@ export interface WaveformInfo {
   signalCount: number;
 }
 
+// Server file info with cache validation metadata
+export interface ServerKdbFileInfo {
+  name: string;
+  file_size: number;
+  is_valid: boolean;
+  modified_time: number;
+  checksum: string;
+}
+
+export interface ServerWaveFileInfo {
+  name: string;
+  file_size: number;
+  is_valid: boolean;
+  modified_time: number;
+  checksum: string;
+}
+
+export interface KdbListResponse {
+  kdbs: ServerKdbFileInfo[];
+  summary: {
+    total: number;
+    valid: number;
+    invalid: number;
+  };
+}
+
+export interface WaveListResponse {
+  waves: ServerWaveFileInfo[];
+  summary: {
+    total: number;
+    valid: number;
+    invalid: number;
+  };
+}
+
 export interface TimeRange {
   start: number;
   end: number;

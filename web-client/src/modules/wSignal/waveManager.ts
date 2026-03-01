@@ -38,9 +38,13 @@ class WaveManager {
         console.log('[WaveManager] Loaded', waves.length, 'waveforms');
         return waves;
       }
+      // Clear cache on error to prevent showing stale data
+      this.waveforms.clear();
       return [];
     } catch (error) {
       console.error('[WaveManager] Failed to fetch waveform list:', error);
+      // Clear cache on error to prevent showing stale data
+      this.waveforms.clear();
       return [];
     }
   }

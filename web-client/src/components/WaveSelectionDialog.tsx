@@ -26,19 +26,30 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
   const loadWaveList = async () => {
     try {
       setLoading(true);
+      setError(null);
+      setWaves([]); // Clear previous list
+      setSelectedWave('');
+      
       console.log('[WaveSelectionDialog] Loading waveform list...');
       const waveList = await waveManager.fetchWaveformList();
       console.log('[WaveSelectionDialog] Got wave list:', waveList);
+      
+      if (!waveList || waveList.length === 0) {
+        setError('No waveforms available - server may be disconnected');
+        setWaves([]);
+        return;
+      }
+      
       const validWaves = (waveList as unknown as ServerWaveformInfo[]).filter((wave) => wave.is_valid);
       console.log('[WaveSelectionDialog] Valid waves:', validWaves);
       setWaves(validWaves);
       if (validWaves.length > 0) {
         setSelectedWave(validWaves[0].name);
       }
-      setError(null);
     } catch (err) {
       console.error('[WaveSelectionDialog] Error loading waveform list:', err);
       setError(`Error loading waveform list: ${err instanceof Error ? err.message : String(err)}`);
+      setWaves([]);
     } finally {
       setLoading(false);
     }

@@ -24,6 +24,10 @@ interface ToolBarProps {
   onOpenKdb?: () => void;
   onOpenWaveform?: () => void;
   connected?: boolean;
+  // File change detection
+  onRefreshCheck?: () => void;
+  onToggleAutoCheck?: () => void;
+  autoCheckEnabled?: boolean;
 }
 
 export function ToolBar({ 
@@ -44,6 +48,9 @@ export function ToolBar({
   onOpenKdb,
   onOpenWaveform,
   connected = false,
+  onRefreshCheck,
+  onToggleAutoCheck,
+  autoCheckEnabled = false,
 }: ToolBarProps) {
   // Local state for input value (only committed on Enter)
   const [inputValue, setInputValue] = useState<string>('');
@@ -243,6 +250,28 @@ export function ToolBar({
       <button className="tool-bar-button" title="Add Waveform Tab" onClick={onAddWaveformTab}>
         <span style={{ fontSize: '12px', fontFamily: 'monospace' }}>⌇+</span>
       </button>
+      
+      {/* File change detection buttons */}
+      <div className="tool-bar-separator"></div>
+      <button 
+        className="tool-bar-button" 
+        title="Refresh Check - Check if KDB/Waveform has changed"
+        onClick={onRefreshCheck}
+      >
+        🔄
+      </button>
+      <button 
+        className="tool-bar-button" 
+        title={autoCheckEnabled ? "Auto Check: ON" : "Auto Check: OFF"}
+        onClick={onToggleAutoCheck}
+        style={{ 
+          color: autoCheckEnabled ? '#4caf50' : '#666',
+          fontWeight: autoCheckEnabled ? 'bold' : 'normal'
+        }}
+      >
+        {autoCheckEnabled ? '⏱️' : '⏸️'}
+      </button>
+      
       <div className="tool-bar-separator"></div>
       <button 
         className="tool-bar-button" 

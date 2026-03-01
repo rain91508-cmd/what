@@ -26,6 +26,10 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
   const loadKdbList = async () => {
     try {
       setLoading(true);
+      setError(null);
+      setKdbs([]); // Clear previous list
+      setSelectedKdb('');
+      
       const response = await apiService.getKdbList();
       if (response.status === 'success' && response.data && response.data.kdbs) {
         const validKdbs = response.data.kdbs.filter((kdb: KdbInfo) => kdb.is_valid);
@@ -34,10 +38,12 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
           setSelectedKdb(validKdbs[0].name);
         }
       } else {
-        setError('Failed to load KDB list');
+        setError('Failed to load KDB list - server may be disconnected');
+        setKdbs([]);
       }
     } catch (err) {
-      setError('Error loading KDB list');
+      setError('Error loading KDB list - server may be disconnected');
+      setKdbs([]);
     } finally {
       setLoading(false);
     }

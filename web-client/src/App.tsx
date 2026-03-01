@@ -44,6 +44,7 @@ import { MessageWindow } from './components/MessageWindow'
 import { ConnectionDialog } from './components/ConnectionDialog'
 import { KdbSelectionDialog } from './components/KdbSelectionDialog'
 import { WaveSelectionDialog } from './components/WaveSelectionDialog'
+import { FileChangeDialog } from './components/FileChangeDialog'
 import { Splitter } from './components/ResizablePanel'
 
 // Types
@@ -69,6 +70,21 @@ function App() {
   const [, setWaveforms] = useState<WaveformInfo[]>([])
   const [, setCurrentWaveform] = useState<string | null>(null)
   
+  // File change detection state
+  const [currentKdbName, setCurrentKdbName] = useState<string | null>(null)
+  const [currentKdbChecksum, setCurrentKdbChecksum] = useState<string | null>(null)
+  const [currentWaveName, setCurrentWaveName] = useState<string | null>(null)
+  const [currentWaveChecksum, setCurrentWaveChecksum] = useState<string | null>(null)
+  const [autoCheckEnabled, setAutoCheckEnabled] = useState(false)
+  const autoCheckIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  
+  // Health check interval ref
+  const healthCheckIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  
+  // File change dialog state
+  const [showFileChangeDialog, setShowFileChangeDialog] = useState(false)
+  const [pendingFileChanges, setPendingFileChanges] = useState<{ kdbChanged: boolean; waveChanged: boolean }>({ kdbChanged: false, waveChanged: false })
+  
   // Global selected module index for hierarchy/signal panel (1-based)
   const [selectedModuleIndex, setSelectedModuleIndex] = useState<number | null>(null)
   
@@ -93,20 +109,10 @@ function App() {
   });
 
   // Dynamic tabs state - each tab has its own data
-  const [tabs, setTabs] = useState<Tab[]>([
-    { id: 'source-1', label: 'Source', type: 'source', moduleIndex: null },
-    { 
-      id: 'waveform-1', 
-      label: 'Waveform', 
-      type: 'waveform', 
-      signals: [],
-      groups: createDefaultGroups(),
-      selectedGroup: 'group_1',
-      timeConfig: { ...DEFAULT_TIME_CONFIG },
-    },
-  ])
-  const [activeTab, setActiveTab] = useState('source-1')
-  const tabCounter = useRef(2)
+  // Initialize with empty tabs - no default source or waveform tabs
+  const [tabs, setTabs] = useState<Tab[]>([])
+  const [activeTab, setActiveTab] = useState<string>('')
+  const tabCounter = useRef(1)
   
   // Global counter for waveform signal unique_id (starts from 1, increments forever)
   const nextWaveformSignalIdRef = useRef(1)
@@ -129,33 +135,15 @@ function App() {
           await opfsManager.initialize()
         }
 
-        // Try to restore connection and KDB from local storage
-        const savedConfig = localStorage.getItem('serverConfig')
-        if (savedConfig) {
-          const config = JSON.parse(savedConfig)
-          apiService.configure(config)
-          const isConnected = await apiService.testConnection()
-          setConnected(isConnected)
-          
-          if (isConnected) {
-            addMessage('Restored connection to server')
-            
-            // Try to load local KDB if available
-            const savedKdbId = localStorage.getItem('currentKdbId')
-            if (savedKdbId) {
-              // Just set the ID, data will be loaded on-demand
-              kdbManager.clear()
-              // We don't have the actual KDB ID stored, so we just mark as loaded
-              // The user will need to reconnect to load the KDB
-            }
-            
-            // Load waveform list
-            await loadWaveformList()
-          }
-        }
-
+        // Initialize storage layers but don't auto-connect to server
+        // Server starts in disconnected state - user must manually connect
+        setConnected(false)
+        addMessage('Application initialized - please connect to server')
+        
+        // Don't restore previous connection automatically
+        // User can manually connect via Connect button
+        
         setInitialized(true)
-        addMessage('Application initialized successfully')
       } catch (error) {
         console.error('Initialization error:', error)
         addMessage(`Initialization error: ${error}`)
@@ -169,6 +157,67 @@ function App() {
   const addMessage = useCallback((msg: string) => {
     setMessages(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`])
   }, [])
+
+  // ============================================
+  // Health Check Management
+  // ============================================
+  
+  // Start periodic health check
+  const startHealthCheck = useCallback(() => {
+    if (healthCheckIntervalRef.current) {
+      clearInterval(healthCheckIntervalRef.current);
+    }
+    
+    healthCheckIntervalRef.current = setInterval(async () => {
+      const isHealthy = await apiService.testConnection();
+      
+      if (!isHealthy && connected) {
+        // Server disconnected
+        setConnected(false);
+        addMessage('⚠️ Server disconnected');
+        // Clear API service configuration so requests fail
+        apiService.clearConfig();
+        // Clear KDB and waveform lists - content remains in IndexedDB/OPFS
+        // but is no longer accessible in the UI until reconnect
+        setKdbLoaded(false);
+        setWaveforms([]);
+        setCurrentWaveform(null);
+        setCurrentKdbName(null);
+        setCurrentKdbChecksum(null);
+        setCurrentWaveName(null);
+        setCurrentWaveChecksum(null);
+        // Clear kdbManager state so DesignBrowser shows empty
+        kdbManager.clear();
+        // Note: Actual data remains in IndexedDB/OPFS for offline viewing
+        // but UI lists are cleared
+      } else if (isHealthy && !connected) {
+        // Server reconnected
+        setConnected(true);
+        addMessage('✓ Server reconnected');
+      }
+    }, 5000); // Check every 5 seconds
+  }, [connected, addMessage]);
+  
+  // Stop health check
+  const stopHealthCheck = useCallback(() => {
+    if (healthCheckIntervalRef.current) {
+      clearInterval(healthCheckIntervalRef.current);
+      healthCheckIntervalRef.current = null;
+    }
+  }, []);
+  
+  // Start/stop health check based on connection state
+  useEffect(() => {
+    if (connected) {
+      startHealthCheck();
+    } else {
+      stopHealthCheck();
+    }
+    
+    return () => {
+      stopHealthCheck();
+    };
+  }, [connected, startHealthCheck, stopHealthCheck]);
 
   // ============================================
   // Source Navigation History Management
@@ -288,6 +337,134 @@ function App() {
     return pointer < history.length;
   }, [activeTab, tabs]);
 
+  // ============================================
+  // File Change Detection
+  // ============================================
+
+  // Manual refresh check - check if current KDB or waveform has changed
+  const handleRefreshCheck = useCallback(async () => {
+    addMessage('Checking for file changes...');
+    
+    let hasChanges = false;
+    
+    // Check KDB
+    if (currentKdbName && currentKdbChecksum) {
+      const kdbResult = await apiService.checkKdbChanged(currentKdbName, currentKdbChecksum);
+      if (kdbResult.changed) {
+        addMessage(`⚠️ KDB "${currentKdbName}" has changed on server!`);
+        hasChanges = true;
+      } else {
+        addMessage(`✓ KDB "${currentKdbName}" is up to date`);
+      }
+    } else if (currentKdbName) {
+      addMessage(`ℹ️ KDB "${currentKdbName}" loaded (no checksum stored)`);
+    }
+    
+    // Check Waveform
+    if (currentWaveName && currentWaveChecksum) {
+      const waveResult = await apiService.checkWaveformChanged(currentWaveName, currentWaveChecksum);
+      if (waveResult.changed) {
+        addMessage(`⚠️ Waveform "${currentWaveName}" has changed on server!`);
+        hasChanges = true;
+      } else {
+        addMessage(`✓ Waveform "${currentWaveName}" is up to date`);
+      }
+    } else if (currentWaveName) {
+      addMessage(`ℹ️ Waveform "${currentWaveName}" loaded (no checksum stored)`);
+    }
+    
+    if (!currentKdbName && !currentWaveName) {
+      addMessage('ℹ️ No KDB or waveform currently loaded');
+    } else if (!hasChanges && (currentKdbName || currentWaveName)) {
+      addMessage('✓ All files are up to date');
+    }
+    
+    return hasChanges;
+  }, [currentKdbName, currentKdbChecksum, currentWaveName, currentWaveChecksum, addMessage]);
+
+  // Toggle auto check
+  const handleToggleAutoCheck = useCallback(() => {
+    setAutoCheckEnabled(prev => {
+      const newValue = !prev;
+      if (newValue) {
+        addMessage('Auto check enabled (checking every 5 seconds)');
+      } else {
+        addMessage('Auto check disabled');
+      }
+      return newValue;
+    });
+  }, [addMessage]);
+
+  // Auto check effect
+  useEffect(() => {
+    if (autoCheckEnabled) {
+      // Start auto check interval (5 seconds)
+      autoCheckIntervalRef.current = setInterval(async () => {
+        const hasChanges = await handleRefreshCheck();
+        if (hasChanges) {
+          // Show confirmation dialog instead of just message
+          setPendingFileChanges({
+            kdbChanged: currentKdbName ? true : false,
+            waveChanged: currentWaveName ? true : false,
+          });
+          setShowFileChangeDialog(true);
+        }
+      }, 5000); // 5 seconds
+      
+      return () => {
+        if (autoCheckIntervalRef.current) {
+          clearInterval(autoCheckIntervalRef.current);
+          autoCheckIntervalRef.current = null;
+        }
+      };
+    } else {
+      // Clear interval when disabled
+      if (autoCheckIntervalRef.current) {
+        clearInterval(autoCheckIntervalRef.current);
+        autoCheckIntervalRef.current = null;
+      }
+    }
+  }, [autoCheckEnabled, handleRefreshCheck, addMessage, currentKdbName, currentWaveName]);
+
+  // Handle reload KDB
+  const handleReloadKdb = useCallback(async () => {
+    setShowFileChangeDialog(false);
+    if (currentKdbName) {
+      addMessage(`Reloading KDB: ${currentKdbName}...`);
+      // Clear current KDB data
+      await kdbManager.clear();
+      setKdbLoaded(false);
+      setCurrentKdbChecksum(null);
+      // Reload KDB
+      await handleKdbSelect(currentKdbName);
+    }
+  }, [currentKdbName, addMessage]);
+
+  // Handle reload waveform
+  const handleReloadWave = useCallback(async () => {
+    setShowFileChangeDialog(false);
+    if (currentWaveName) {
+      addMessage(`Reloading waveform: ${currentWaveName}...`);
+      // Clear current waveform data
+      waveManager.clear();
+      setCurrentWaveform(null);
+      setCurrentWaveChecksum(null);
+      // Reload waveform
+      await handleWaveSelect(currentWaveName);
+    }
+  }, [currentWaveName, addMessage]);
+
+  // Handle reload both
+  const handleReloadBoth = useCallback(async () => {
+    setShowFileChangeDialog(false);
+    if (currentKdbName) {
+      await handleReloadKdb();
+    }
+    if (currentWaveName) {
+      await handleReloadWave();
+    }
+  }, [currentKdbName, currentWaveName, handleReloadKdb, handleReloadWave]);
+
   // Load waveform list from server
   const loadWaveformList = async () => {
     const waves = await waveManager.fetchWaveformList()
@@ -330,6 +507,16 @@ function App() {
       addMessage(`KDB File: ${info.design_name}, Size: ${formatBytes(info.file_size)}`)
     }
     
+    // Get checksum from list API
+    const listResponse = await apiService.getKdbList()
+    let kdbChecksum: string | null = null
+    if (listResponse.status === 'success' && listResponse.data?.kdbs) {
+      const serverKdb = listResponse.data.kdbs.find(k => k.name === kdbName)
+      if (serverKdb) {
+        kdbChecksum = serverKdb.checksum
+      }
+    }
+    
     addMessage(`Starting KDB download...`)
     
     // Download KDB with progress
@@ -345,6 +532,8 @@ function App() {
     
     if (success) {
       setKdbLoaded(true)
+      setCurrentKdbName(kdbName)
+      setCurrentKdbChecksum(kdbChecksum)
       localStorage.setItem('currentKdbId', kdbName)
       
       // Get parsed KDB details (real data after WASM parsing)
@@ -370,38 +559,87 @@ function App() {
   }
 
   // Handle waveform selection
-  const handleWaveSelect = (waveName: string) => {
+  const handleWaveSelect = async (waveName: string) => {
     setShowWaveSelectionDialog(false)
     waveManager.setCurrentWaveform(waveName)
     setCurrentWaveform(waveName)
     addMessage(`Selected waveform: ${waveName}`)
+    
+    // Get checksum from list API
+    const listResponse = await apiService.getWaveformList()
+    let waveChecksum: string | null = null
+    if (listResponse.status === 'success' && listResponse.data?.waves) {
+      const serverWave = listResponse.data.waves.find(w => w.name === waveName)
+      if (serverWave) {
+        waveChecksum = serverWave.checksum
+      }
+    }
+    
+    setCurrentWaveName(waveName)
+    setCurrentWaveChecksum(waveChecksum)
   }
 
   const handleDisconnect = async () => {
     setConnected(false)
+    // Clear API service configuration so requests fail
+    apiService.clearConfig()
+    localStorage.removeItem('serverConfig')
+    
+    addMessage('Disconnected from server')
+  }
+
+  // Handle close KDB - clear KDB data and close source tabs
+  const handleCloseKdb = async () => {
+    addMessage('Closing KDB...')
+    
+    // Clear KDB data from storage
+    await kdbManager.clear()
+    
+    // Clear KDB-related state
     setKdbLoaded(false)
-    setWaveforms([])
-    setCurrentWaveform(null)
+    setCurrentKdbName(null)
+    setCurrentKdbChecksum(null)
     setSelectedModuleIndex(null)
     
-    // Clear managers (this clears IndexedDB data)
-    await kdbManager.clear()
+    // Close all source tabs
+    setTabs(prev => {
+      const remainingTabs = prev.filter(tab => tab.type !== 'source')
+      // Update active tab if the active one was closed
+      if (remainingTabs.length > 0 && !remainingTabs.find(t => t.id === activeTab)) {
+        setActiveTab(remainingTabs[0].id)
+      } else if (remainingTabs.length === 0) {
+        setActiveTab('')
+      }
+      return remainingTabs
+    })
+    
+    addMessage('KDB closed')
+  }
+
+  // Handle close Waveform - clear wave data and close waveform tabs
+  const handleCloseWave = async () => {
+    addMessage('Closing Waveform...')
+    
+    // Clear waveform data
     waveManager.clear()
+    setCurrentWaveform(null)
+    setCurrentWaveName(null)
+    setCurrentWaveChecksum(null)
+    setWaveforms([])
     
-    // Clear OPFS data
-    if (opfsManager.isSupported()) {
-      await opfsManager.clear()
-    }
+    // Close all waveform tabs
+    setTabs(prev => {
+      const remainingTabs = prev.filter(tab => tab.type !== 'waveform')
+      // Update active tab if the active one was closed
+      if (remainingTabs.length > 0 && !remainingTabs.find(t => t.id === activeTab)) {
+        setActiveTab(remainingTabs[0].id)
+      } else if (remainingTabs.length === 0) {
+        setActiveTab('')
+      }
+      return remainingTabs
+    })
     
-    // Clear local storage
-    localStorage.removeItem('serverConfig')
-    localStorage.removeItem('currentKdbId')
-    
-    // Clear tabs
-    setTabs([])
-    setActiveTab('')
-    
-    addMessage('Disconnected from server, all local data cleared')
+    addMessage('Waveform closed')
   }
 
 
@@ -796,6 +1034,10 @@ function App() {
         onDisconnect={handleDisconnect}
         onOpenKdbList={() => setShowKdbSelectionDialog(true)}
         onOpenWaveList={() => setShowWaveSelectionDialog(true)}
+        onCloseKdb={handleCloseKdb}
+        onCloseWave={handleCloseWave}
+        hasKdbLoaded={kdbLoaded}
+        hasWaveLoaded={!!currentWaveName}
       />
 
       {/* Tool Bar */}
@@ -817,6 +1059,9 @@ function App() {
         onOpenKdb={() => setShowKdbSelectionDialog(true)}
         onOpenWaveform={() => setShowWaveSelectionDialog(true)}
         connected={connected}
+        onRefreshCheck={handleRefreshCheck}
+        onToggleAutoCheck={handleToggleAutoCheck}
+        autoCheckEnabled={autoCheckEnabled}
       />
 
       {/* Main Content */}
@@ -896,7 +1141,7 @@ function App() {
       {/* Bottom Panel - Messages */}
       <div 
         className="bottom-panel"
-        style={{ height: messageHeight, minHeight: 60, maxHeight: 250 }}
+        style={{ height: messageHeight, minHeight: 60 }}
       >
         <MessageWindow messages={messages} />
       </div>
@@ -922,6 +1167,20 @@ function App() {
         <WaveSelectionDialog
           onSelect={handleWaveSelect}
           onCancel={() => setShowWaveSelectionDialog(false)}
+        />
+      )}
+      
+      {/* File Change Confirmation Dialog */}
+      {showFileChangeDialog && (
+        <FileChangeDialog
+          kdbChanged={pendingFileChanges.kdbChanged}
+          waveChanged={pendingFileChanges.waveChanged}
+          kdbName={currentKdbName}
+          waveName={currentWaveName}
+          onReloadKdb={handleReloadKdb}
+          onReloadWave={handleReloadWave}
+          onReloadBoth={handleReloadBoth}
+          onCancel={() => setShowFileChangeDialog(false)}
         />
       )}
     </div>

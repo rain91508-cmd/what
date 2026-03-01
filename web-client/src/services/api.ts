@@ -12,24 +12,12 @@ import type {
   ApiResponse,
   ApiError,
   ServerConfig,
-  WaveformInfo,
   WaveformSignal,
+  KdbListResponse,
+  WaveListResponse,
+  ServerKdbFileInfo,
+  ServerWaveFileInfo,
 } from '../types';
-
-interface KdbFileInfo {
-  name: string;
-  file_size: number;
-  is_valid: boolean;
-}
-
-interface KdbListResponse {
-  kdbs: KdbFileInfo[];
-  summary: {
-    total: number;
-    valid: number;
-    invalid: number;
-  };
-}
 
 interface KdbInfoResponse {
   kdb_info: {
@@ -51,8 +39,17 @@ class ApiService {
     this.baseUrl = `${protocol}://${config.host}:${config.port}`;
   }
 
+  clearConfig(): void {
+    this.baseUrl = '';
+    this.connected = false;
+  }
+
   isConnected(): boolean {
     return this.connected;
+  }
+
+  hasConfig(): boolean {
+    return this.baseUrl !== '';
   }
 
   // Generic API request
@@ -60,6 +57,15 @@ class ApiService {
     endpoint: string,
     options?: RequestInit
   ): Promise<ApiResponse<T>> {
+    // Check if configured
+    if (!this.baseUrl) {
+      const error: ApiError = {
+        code: 'NOT_CONFIGURED',
+        message: 'Server not configured. Please connect first.',
+      };
+      return { status: 'error', data: null, error };
+    }
+    
     try {
       const response = await fetch(`${this.baseUrl}${endpoint}`, {
         ...options,
@@ -175,8 +181,52 @@ class ApiService {
   }
 
   // Waveform APIs
-  async getWaveformList(): Promise<ApiResponse<WaveformInfo[]>> {
+  async getWaveformList(): Promise<ApiResponse<WaveListResponse>> {
     return this.request('/api/wave/list');
+  }
+
+  // Check if KDB has changed by comparing checksum
+  async checkKdbChanged(kdbName: string, localChecksum?: string): Promise<{ changed: boolean; serverInfo?: ServerKdbFileInfo }> {
+    const response = await this.request<KdbListResponse>('/api/kdb');
+    if (response.status !== 'success' || !response.data) {
+      return { changed: false };
+    }
+
+    const serverKdb = response.data.kdbs.find(k => k.name === kdbName);
+    if (!serverKdb) {
+      return { changed: false };
+    }
+
+    // If no local checksum, consider it as changed (needs download)
+    if (!localChecksum) {
+      return { changed: true, serverInfo: serverKdb };
+    }
+
+    // Compare checksums
+    const changed = serverKdb.checksum !== localChecksum;
+    return { changed, serverInfo: serverKdb };
+  }
+
+  // Check if Waveform has changed by comparing checksum
+  async checkWaveformChanged(waveName: string, localChecksum?: string): Promise<{ changed: boolean; serverInfo?: ServerWaveFileInfo }> {
+    const response = await this.request<WaveListResponse>('/api/wave/list');
+    if (response.status !== 'success' || !response.data) {
+      return { changed: false };
+    }
+
+    const serverWave = response.data.waves.find(w => w.name === waveName);
+    if (!serverWave) {
+      return { changed: false };
+    }
+
+    // If no local checksum, consider it as changed (needs download)
+    if (!localChecksum) {
+      return { changed: true, serverInfo: serverWave };
+    }
+
+    // Compare checksums
+    const changed = serverWave.checksum !== localChecksum;
+    return { changed, serverInfo: serverWave };
   }
 
   async getWaveformSignals(

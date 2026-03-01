@@ -6,6 +6,10 @@ interface MenuBarProps {
   onDisconnect: () => void;
   onOpenKdbList: () => void;
   onOpenWaveList: () => void;
+  onCloseKdb: () => void;
+  onCloseWave: () => void;
+  hasKdbLoaded: boolean;
+  hasWaveLoaded: boolean;
 }
 
 interface MenuItem {
@@ -20,7 +24,7 @@ interface Menu {
   items: MenuItem[];
 }
 
-export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onOpenWaveList }: MenuBarProps) {
+export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onOpenWaveList, onCloseKdb, onCloseWave, hasKdbLoaded, hasWaveLoaded }: MenuBarProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const menuBarRef = useRef<HTMLDivElement>(null);
 
@@ -43,6 +47,9 @@ export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onO
         { separator: true, label: '' },
         { label: 'Open KDB...', onClick: onOpenKdbList, disabled: !connected },
         { label: 'Open Waveform...', onClick: onOpenWaveList, disabled: !connected },
+        { separator: true, label: '' },
+        { label: 'Close KDB', onClick: onCloseKdb, disabled: !hasKdbLoaded },
+        { label: 'Close Waveform', onClick: onCloseWave, disabled: !hasWaveLoaded },
       ],
     },
     {
