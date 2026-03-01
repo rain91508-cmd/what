@@ -45,6 +45,7 @@ import { ConnectionDialog } from './components/ConnectionDialog'
 import { KdbSelectionDialog } from './components/KdbSelectionDialog'
 import { WaveSelectionDialog } from './components/WaveSelectionDialog'
 import { FileChangeDialog } from './components/FileChangeDialog'
+import { MockDataDialog } from './components/MockDataDialog'
 import { Splitter } from './components/ResizablePanel'
 
 // Types
@@ -84,6 +85,11 @@ function App() {
   // File change dialog state
   const [showFileChangeDialog, setShowFileChangeDialog] = useState(false)
   const [pendingFileChanges, setPendingFileChanges] = useState<{ kdbChanged: boolean; waveChanged: boolean }>({ kdbChanged: false, waveChanged: false })
+  
+  // Mock data state for waveform when no real wave file is loaded
+  const [useMockData, setUseMockData] = useState(false)
+  const [showMockDataDialog, setShowMockDataDialog] = useState(false)
+  const [pendingMockSignal, setPendingMockSignal] = useState<Signal | null>(null)
   
   // Global selected module index for hierarchy/signal panel (1-based)
   const [selectedModuleIndex, setSelectedModuleIndex] = useState<number | null>(null)
@@ -345,14 +351,15 @@ function App() {
   const handleRefreshCheck = useCallback(async () => {
     addMessage('Checking for file changes...');
     
-    let hasChanges = false;
+    let kdbChanged = false;
+    let waveChanged = false;
     
     // Check KDB
     if (currentKdbName && currentKdbChecksum) {
       const kdbResult = await apiService.checkKdbChanged(currentKdbName, currentKdbChecksum);
       if (kdbResult.changed) {
         addMessage(`⚠️ KDB "${currentKdbName}" has changed on server!`);
-        hasChanges = true;
+        kdbChanged = true;
       } else {
         addMessage(`✓ KDB "${currentKdbName}" is up to date`);
       }
@@ -365,7 +372,7 @@ function App() {
       const waveResult = await apiService.checkWaveformChanged(currentWaveName, currentWaveChecksum);
       if (waveResult.changed) {
         addMessage(`⚠️ Waveform "${currentWaveName}" has changed on server!`);
-        hasChanges = true;
+        waveChanged = true;
       } else {
         addMessage(`✓ Waveform "${currentWaveName}" is up to date`);
       }
@@ -373,13 +380,16 @@ function App() {
       addMessage(`ℹ️ Waveform "${currentWaveName}" loaded (no checksum stored)`);
     }
     
+    const hasChanges = kdbChanged || waveChanged;
+    
     if (!currentKdbName && !currentWaveName) {
       addMessage('ℹ️ No KDB or waveform currently loaded');
     } else if (!hasChanges && (currentKdbName || currentWaveName)) {
       addMessage('✓ All files are up to date');
     }
     
-    return hasChanges;
+    // Return detailed change info
+    return { hasChanges, kdbChanged, waveChanged };
   }, [currentKdbName, currentKdbChecksum, currentWaveName, currentWaveChecksum, addMessage]);
 
   // Toggle auto check
@@ -400,12 +410,12 @@ function App() {
     if (autoCheckEnabled) {
       // Start auto check interval (5 seconds)
       autoCheckIntervalRef.current = setInterval(async () => {
-        const hasChanges = await handleRefreshCheck();
-        if (hasChanges) {
-          // Show confirmation dialog instead of just message
+        const result = await handleRefreshCheck();
+        if (result.hasChanges) {
+          // Show confirmation dialog
           setPendingFileChanges({
-            kdbChanged: currentKdbName ? true : false,
-            waveChanged: currentWaveName ? true : false,
+            kdbChanged: result.kdbChanged,
+            waveChanged: result.waveChanged,
           });
           setShowFileChangeDialog(true);
         }
@@ -426,6 +436,18 @@ function App() {
     }
   }, [autoCheckEnabled, handleRefreshCheck, addMessage, currentKdbName, currentWaveName]);
 
+  // Manual refresh check wrapper - shows dialog if changes detected
+  const handleManualRefreshCheck = useCallback(async () => {
+    const result = await handleRefreshCheck();
+    if (result.hasChanges) {
+      setPendingFileChanges({
+        kdbChanged: result.kdbChanged,
+        waveChanged: result.waveChanged,
+      });
+      setShowFileChangeDialog(true);
+    }
+  }, [handleRefreshCheck]);
+
   // Handle reload KDB
   const handleReloadKdb = useCallback(async () => {
     setShowFileChangeDialog(false);
@@ -435,8 +457,8 @@ function App() {
       await kdbManager.clear();
       setKdbLoaded(false);
       setCurrentKdbChecksum(null);
-      // Reload KDB
-      await handleKdbSelect(currentKdbName);
+      // Reload KDB (don't show wave dialog since this is a reload)
+      await handleKdbSelect(currentKdbName, false);
     }
   }, [currentKdbName, addMessage]);
 
@@ -496,9 +518,40 @@ function App() {
   }
 
   // Handle KDB selection
-  const handleKdbSelect = async (kdbName: string) => {
+  const handleKdbSelect = async (kdbName: string, showWaveDialog: boolean = true) => {
     setShowKdbSelectionDialog(false)
-    addMessage(`Selected KDB: ${kdbName}`)
+    
+    // If a KDB is already loaded, clear it first
+    if (kdbLoaded || currentKdbName) {
+      addMessage(`Closing previous KDB: ${currentKdbName || 'unknown'}...`);
+      await kdbManager.clear();
+      setKdbLoaded(false);
+      setCurrentKdbName(null);
+      setCurrentKdbChecksum(null);
+      setSelectedModuleIndex(null);
+      
+      // Close all source and waveform tabs
+      setTabs(prev => {
+        const remainingTabs = prev.filter(tab => tab.type !== 'source' && tab.type !== 'waveform');
+        if (remainingTabs.length > 0 && !remainingTabs.find(t => t.id === activeTab)) {
+          setActiveTab(remainingTabs[0].id);
+        } else if (remainingTabs.length === 0) {
+          setActiveTab('');
+        }
+        return remainingTabs;
+      });
+      
+      // Clear waveform state too
+      waveManager.clear();
+      setCurrentWaveform(null);
+      setCurrentWaveName(null);
+      setCurrentWaveChecksum(null);
+      setWaveforms([]);
+      
+      addMessage('Previous KDB closed');
+    }
+    
+    addMessage(`Loading KDB: ${kdbName}`)
     
     // Get KDB info first (basic info from server)
     const kdbInfo = await apiService.getKdbInfo(kdbName)
@@ -550,8 +603,10 @@ function App() {
       // Force refresh of components
       setSelectedModuleIndex(null)
       
-      // Show waveform selection dialog
-      setShowWaveSelectionDialog(true)
+      // Show waveform selection dialog only for initial load (not reload)
+      if (showWaveDialog) {
+        setShowWaveSelectionDialog(true)
+      }
     } else {
       addMessage('✗ Failed to load KDB')
       addMessage('  Please check browser console for detailed error information')
@@ -577,6 +632,12 @@ function App() {
     
     setCurrentWaveName(waveName)
     setCurrentWaveChecksum(waveChecksum)
+    
+    // Reset mock data flag when loading real waveform
+    if (useMockData) {
+      setUseMockData(false)
+      addMessage('Switched from mock data to real waveform data')
+    }
   }
 
   const handleDisconnect = async () => {
@@ -814,6 +875,18 @@ function App() {
   }
 
   const handleSignalAddToWaveform = (signal: Signal) => {
+    // If no waveform loaded and not already using mock data, ask user
+    if (!currentWaveName && !useMockData) {
+      setPendingMockSignal(signal)
+      setShowMockDataDialog(true)
+      return
+    }
+    
+    // Add signal to waveform
+    addSignalToWaveform(signal)
+  }
+  
+  const addSignalToWaveform = (signal: Signal) => {
     // Generate unique_id for this signal instance
     const unique_id = nextWaveformSignalIdRef.current++
     
@@ -837,6 +910,24 @@ function App() {
     }))
     
     addMessage(`Added signal to waveform: ${signal.name} (ID: ${unique_id})`)
+  }
+  
+  const handleMockDataConfirm = () => {
+    setShowMockDataDialog(false)
+    setUseMockData(true)
+    addMessage('Using mock data for waveform display')
+    
+    // Add the pending signal
+    if (pendingMockSignal) {
+      addSignalToWaveform(pendingMockSignal)
+      setPendingMockSignal(null)
+    }
+  }
+  
+  const handleMockDataCancel = () => {
+    setShowMockDataDialog(false)
+    setPendingMockSignal(null)
+    addMessage('Please load a waveform file to view signal data')
   }
 
   const handleSignalRemove = (signal: Signal & { unique_id: number }) => {
@@ -1059,7 +1150,7 @@ function App() {
         onOpenKdb={() => setShowKdbSelectionDialog(true)}
         onOpenWaveform={() => setShowWaveSelectionDialog(true)}
         connected={connected}
-        onRefreshCheck={handleRefreshCheck}
+        onRefreshCheck={handleManualRefreshCheck}
         onToggleAutoCheck={handleToggleAutoCheck}
         autoCheckEnabled={autoCheckEnabled}
       />
@@ -1093,6 +1184,7 @@ function App() {
             selectedModuleIndex={selectedModuleIndex}
             onSignalAddToWaveform={handleSignalAddToWaveform}
             onSignalDoubleClick={handleSignalDoubleClick}
+            activeTabType={tabs.find(t => t.id === activeTab)?.type}
           />
         </div>
 
@@ -1181,6 +1273,14 @@ function App() {
           onReloadWave={handleReloadWave}
           onReloadBoth={handleReloadBoth}
           onCancel={() => setShowFileChangeDialog(false)}
+        />
+      )}
+      
+      {/* Mock Data Confirmation Dialog */}
+      {showMockDataDialog && (
+        <MockDataDialog
+          onConfirm={handleMockDataConfirm}
+          onCancel={handleMockDataCancel}
         />
       )}
     </div>

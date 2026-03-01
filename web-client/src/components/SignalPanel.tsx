@@ -8,9 +8,12 @@ interface SignalPanelProps {
   selectedModuleIndex: number | null;  // 1-based module index
   onSignalAddToWaveform?: (signal: Signal) => void;
   onSignalDoubleClick?: (signal: Signal, moduleIndex: number) => void;
+  activeTabType?: 'source' | 'waveform' | null;  // Current active tab type
 }
 
-export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSignalDoubleClick }: SignalPanelProps) {
+const DEFAULT_PAGE_SIZE = 50;
+
+export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSignalDoubleClick, activeTabType }: SignalPanelProps) {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -19,24 +22,125 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
   const [selectedSignalGlobalId, setSelectedSignalGlobalId] = useState<number | null>(null);
   const ioDropdownRef = useRef<HTMLDivElement>(null);
 
+  // Pagination state - stores the actual signal index range in the module
+  const [currentRangeStart, setCurrentRangeStart] = useState(0); // 0-based index in module
+  const [currentRangeEnd, setCurrentRangeEnd] = useState(-1);    // 0-based index in module
+  const [pageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [showJumpDialog, setShowJumpDialog] = useState(false);
+  const [jumpPosition, setJumpPosition] = useState('');
+  const jumpDialogRef = useRef<HTMLDivElement>(null);
+
+  // Module info
+  const [totalSignalCount, setTotalSignalCount] = useState(0);
+  const [hasMoreForward, setHasMoreForward] = useState(false);
+  const [hasMoreBackward, setHasMoreBackward] = useState(false);
+
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (ioDropdownRef.current && !ioDropdownRef.current.contains(event.target as Node)) {
         setShowIoDropdown(false);
       }
+      if (jumpDialogRef.current && !jumpDialogRef.current.contains(event.target as Node)) {
+        setShowJumpDialog(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Load signals when selected module changes
+  // Reset when module changes
   useEffect(() => {
-    loadSignals();
+    setCurrentRangeStart(0);
+    setCurrentRangeEnd(-1);
+    setSignals([]);
+    setHasMoreForward(false);
+    setHasMoreBackward(false);
+    if (selectedModuleIndex) {
+      const count = kdbManager.getModuleSignalCount(selectedModuleIndex);
+      setTotalSignalCount(count);
+    } else {
+      setTotalSignalCount(0);
+    }
   }, [selectedModuleIndex]);
 
-  const loadSignals = async () => {
-    console.log('[SignalPanel] loadSignals called, selectedModuleIndex:', selectedModuleIndex);
+  // Load signals when module or pageSize changes - from current position
+  useEffect(() => {
+    loadSignalsForward(currentRangeStart);
+  }, [selectedModuleIndex, pageSize]);
+
+  // Load signals when filter changes - always start from beginning
+  useEffect(() => {
+    setCurrentRangeStart(0);
+    setCurrentRangeEnd(-1);
+    loadSignalsForward(0);
+  }, [searchTerm, ioFilters]);
+
+  const createFilterFn = (): ((signal: Signal) => boolean) => {
+    return (signal: Signal): boolean => {
+      // IO filter
+      if (!ioFilters.has('all')) {
+        const dirNum = Number(signal.direction);
+        const dirName = dirNum === 1 ? 'input' : dirNum === 2 ? 'output' : dirNum === 3 ? 'inout' : 'internal';
+        if (!ioFilters.has(dirName)) {
+          return false;
+        }
+      }
+      
+      // Search term filter
+      if (searchTerm) {
+        const term = searchTerm.trim();
+        if (term) {
+          if (term.includes('*') || term.includes('?')) {
+            // Wildcard pattern - convert to regex with anchor-based matching
+            // * at start: matches any prefix (ends with pattern after *)
+            // * at end: matches any suffix (starts with pattern before *)
+            // * in middle: matches any sequence in that position
+            // ? matches any single character
+            let pattern = term
+              .replace(/[.+^${}()|[\]\\]/g, '\\$&');  // Escape regex special chars first
+            
+            // Check if pattern starts with * (match suffix)
+            const startsWithWildcard = pattern.startsWith('*');
+            // Check if pattern ends with * (match prefix)
+            const endsWithWildcard = pattern.endsWith('*');
+            
+            // Replace wildcards
+            pattern = pattern
+              .replace(/\*/g, '.*')                    // * -> .*
+              .replace(/\?/g, '.');                    // ? -> .
+            
+            // Build regex with proper anchors
+            let regexPattern = pattern;
+            if (!startsWithWildcard) {
+              // If doesn't start with *, anchor to start
+              regexPattern = '^' + regexPattern;
+            }
+            if (!endsWithWildcard) {
+              // If doesn't end with *, anchor to end
+              regexPattern = regexPattern + '$';
+            }
+            
+            const regex = new RegExp(regexPattern, 'i');
+            if (!regex.test(signal.name) && !regex.test(signal.fullName)) {
+              return false;
+            }
+          } else {
+            // Simple contains
+            const lowerTerm = term.toLowerCase();
+            if (!signal.name.toLowerCase().includes(lowerTerm) && 
+                !signal.fullName.toLowerCase().includes(lowerTerm)) {
+              return false;
+            }
+          }
+        }
+      }
+      
+      return true;
+    };
+  };
+
+  const loadSignalsForward = async (startIndex: number) => {
     if (!selectedModuleIndex) {
       setSignals([]);
       return;
@@ -44,10 +148,46 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
 
     try {
       setLoading(true);
-      console.log('[SignalPanel] Fetching signals for module index:', selectedModuleIndex);
-      const moduleSignals = await kdbManager.getModuleSignals(selectedModuleIndex);
-      console.log('[SignalPanel] Got signals:', moduleSignals);
-      setSignals(moduleSignals);
+      const filterFn = createFilterFn();
+      
+      // Get total count fresh to avoid stale state issues
+      const moduleSignalCount = kdbManager.getModuleSignalCount(selectedModuleIndex);
+      
+      const result = await kdbManager.findFilteredSignalsPaged(
+        selectedModuleIndex,
+        startIndex,
+        pageSize,
+        filterFn,
+        'forward'
+      );
+      
+      setSignals(result.signals);
+      
+      // Calculate display range based on the search window, not just matched signals
+      // This gives users context about where they are in the module
+      if (result.signals.length > 0) {
+        // Start from the first matched signal
+        const displayStartIdx = result.actualStartIndex;
+        // End is either the last matched signal or the search window end
+        // If we're at the end of module, show up to module end
+        const displayEndIdx = result.hasMore 
+          ? Math.max(result.actualEndIndex, startIndex + Math.min(pageSize, moduleSignalCount) - 1)  // More signals available, extend to search window
+          : Math.max(result.actualEndIndex, startIndex + Math.min(pageSize, moduleSignalCount) - 1, moduleSignalCount - 1); // At end, extend to module end
+        
+        setCurrentRangeStart(displayStartIdx);
+        setCurrentRangeEnd(Math.min(displayEndIdx, moduleSignalCount - 1));
+      } else {
+        // No signals found, keep current range or reset
+        setCurrentRangeStart(startIndex);
+        setCurrentRangeEnd(Math.min(startIndex + pageSize - 1, moduleSignalCount - 1));
+      }
+      
+      // Update total count state as well
+      setTotalSignalCount(moduleSignalCount);
+      setHasMoreForward(result.hasMore);
+      setHasMoreBackward(result.actualStartIndex > 0);
+      
+      console.log(`[SignalPanel] Loaded ${result.signals.length} signals, range: ${result.actualStartIndex}-${result.actualEndIndex}, total: ${moduleSignalCount}`);
     } catch (err) {
       console.error('[SignalPanel] Failed to load signals:', err);
       setSignals([]);
@@ -56,27 +196,81 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
     }
   };
 
-  // Convert wildcard pattern to regex
-  const wildcardToRegex = (pattern: string): RegExp => {
-    const escaped = pattern
-      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-      .replace(/\*/g, '.*')
-      .replace(/\?/g, '.');
-    return new RegExp(`^${escaped}$`, 'i');
+  const loadSignalsBackward = async (startIndex: number) => {
+    if (!selectedModuleIndex) {
+      setSignals([]);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const filterFn = createFilterFn();
+      
+      const result = await kdbManager.findFilteredSignalsPaged(
+        selectedModuleIndex,
+        startIndex,
+        pageSize,
+        filterFn,
+        'backward'
+      );
+      
+      setSignals(result.signals);
+      setCurrentRangeStart(result.actualStartIndex);
+      setCurrentRangeEnd(result.actualEndIndex >= 0 ? result.actualEndIndex : startIndex);
+      setHasMoreForward(result.actualEndIndex < totalSignalCount - 1);
+      setHasMoreBackward(result.hasMore);
+      
+      console.log(`[SignalPanel] Loaded ${result.signals.length} signals (backward), range: ${result.actualStartIndex}-${result.actualEndIndex}`);
+    } catch (err) {
+      console.error('[SignalPanel] Failed to load signals:', err);
+      setSignals([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const goToPrevPage = () => {
+    if (currentRangeStart > 0) {
+      // Search backward from one index before current range start
+      loadSignalsBackward(Math.max(0, currentRangeStart - 1));
+    }
+  };
+
+  const goToNextPage = () => {
+    if (currentRangeEnd >= 0 && currentRangeEnd < totalSignalCount - 1) {
+      // Search forward from one index after current range end
+      loadSignalsForward(currentRangeEnd + 1);
+    }
+  };
+
+  const handleRangeDoubleClick = () => {
+    // Show jump dialog with current start position
+    setJumpPosition((currentRangeStart >= 0 ? currentRangeStart + 1 : 1).toString());
+    setShowJumpDialog(true);
+  };
+
+  const applyJumpPosition = () => {
+    const position = parseInt(jumpPosition, 10);
+    
+    if (isNaN(position) || position < 1 || position > totalSignalCount) {
+      return;
+    }
+    
+    // Convert to 0-based index and load
+    const startIndex = position - 1;
+    loadSignalsForward(startIndex);
+    setShowJumpDialog(false);
   };
 
   // Toggle IO filter
   const toggleIoFilter = (filter: string) => {
     const newFilters = new Set(ioFilters);
     if (filter === 'all') {
-      // If clicking 'all', clear other selections and select 'all'
       setIoFilters(new Set(['all']));
     } else {
-      // Remove 'all' if selecting a specific filter
       newFilters.delete('all');
       if (newFilters.has(filter)) {
         newFilters.delete(filter);
-        // If no filters selected, default to 'all'
         if (newFilters.size === 0) {
           setIoFilters(new Set(['all']));
         } else {
@@ -89,45 +283,7 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
     }
   };
 
-  // Filter signals by search term and IO type
-  const filterSignals = (signalList: Signal[]): Signal[] => {
-    return signalList.filter(s => {
-      // Name filter with wildcard support
-      if (searchTerm) {
-        const term = searchTerm.trim();
-        if (term) {
-          // Check if pattern contains wildcards
-          if (term.includes('*') || term.includes('?')) {
-            const regex = wildcardToRegex(term);
-            if (!regex.test(s.name) && !regex.test(s.fullName)) {
-              return false;
-            }
-          } else {
-            // Simple substring match
-            const lowerTerm = term.toLowerCase();
-            if (!s.name.toLowerCase().includes(lowerTerm) && 
-                !s.fullName.toLowerCase().includes(lowerTerm)) {
-              return false;
-            }
-          }
-        }
-      }
-      
-      // IO filter (multi-select)
-      if (!ioFilters.has('all')) {
-        const dirNum = Number(s.direction);
-        const dirName = dirNum === 1 ? 'input' : dirNum === 2 ? 'output' : dirNum === 3 ? 'inout' : 'internal';
-        if (!ioFilters.has(dirName)) {
-          return false;
-        }
-      }
-      
-      return true;
-    });
-  };
-
   const getSignalTypeLabel = (type: SignalType): string => {
-    // Use numeric comparison to handle both enum and raw number values
     const typeNum = Number(type);
     switch (typeNum) {
       case 1: return 'wire';
@@ -142,13 +298,11 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
     }
   };
 
-  // Get display label: show direction for ports (input/output/inout), type for internal signals
   const getSignalDisplayLabel = (signal: Signal): string => {
     const dirNum = Number(signal.direction);
     if (dirNum === 1) return 'input';
     if (dirNum === 2) return 'output';
     if (dirNum === 3) return 'inout';
-    // For internal signals, show signal type
     return getSignalTypeLabel(signal.signalType);
   };
 
@@ -158,6 +312,14 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
     }
     return `[${signal.msb}:${signal.lsb}]`;
   };
+
+  // Display range (1-based for user, using actual signal indices)
+  // When no signals found (rangeEnd < 0), show 0-0
+  const displayStart = (currentRangeStart >= 0 && currentRangeEnd >= 0) ? currentRangeStart + 1 : 0;
+  const displayEnd = (currentRangeStart >= 0 && currentRangeEnd >= 0) ? currentRangeEnd + 1 : 0;
+  
+  // Show pagination only when total signals > 50
+  const isPagedMode = totalSignalCount > 50;
 
   return (
     <div className="signal-panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -173,7 +335,7 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
         <span>Signals</span>
         {selectedModuleIndex && (
           <span style={{ fontSize: '11px', color: '#666', fontWeight: 'normal' }}>
-            {signals.length} signals
+            {totalSignalCount} signals
           </span>
         )}
       </div>
@@ -263,7 +425,147 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
         </div>
       </div>
 
-
+      {/* Pagination bar (only show in paged mode) */}
+      {isPagedMode && selectedModuleIndex && (
+        <div style={{
+          padding: '4px 8px',
+          borderBottom: '1px solid #e0e0e0',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '8px',
+          fontSize: '11px',
+          backgroundColor: '#f5f5f5',
+          flexShrink: 0,
+        }}>
+          <button
+            onClick={goToPrevPage}
+            disabled={!hasMoreBackward}
+            style={{
+              padding: '2px 6px',
+              border: '1px solid #ddd',
+              borderRadius: '3px',
+              backgroundColor: !hasMoreBackward ? '#f0f0f0' : 'white',
+              cursor: !hasMoreBackward ? 'not-allowed' : 'pointer',
+              fontSize: '11px',
+            }}
+            title="Previous page"
+          >
+            ◀
+          </button>
+          
+          <div 
+            ref={jumpDialogRef}
+            style={{ position: 'relative' }}
+          >
+            <span
+              onDoubleClick={handleRangeDoubleClick}
+              style={{ 
+                cursor: 'pointer',
+                padding: '2px 6px',
+                borderRadius: '3px',
+                backgroundColor: '#fff',
+              }}
+              title="Double-click to jump to position"
+            >
+              {displayStart} - {displayEnd} / {totalSignalCount}
+            </span>
+            
+            {showJumpDialog && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '100%',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  marginTop: '4px',
+                  backgroundColor: 'white',
+                  border: '1px solid #ddd',
+                  borderRadius: '4px',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                  zIndex: 1000,
+                  padding: '8px',
+                  minWidth: '150px',
+                }}
+              >
+                <div style={{ marginBottom: '8px', fontWeight: 'bold', fontSize: '11px' }}>
+                  Jump to Position
+                </div>
+                
+                <div style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <input
+                    type="number"
+                    value={jumpPosition}
+                    onChange={(e) => setJumpPosition(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        applyJumpPosition();
+                      }
+                    }}
+                    min={1}
+                    max={totalSignalCount}
+                    autoFocus
+                    style={{
+                      width: '60px',
+                      padding: '4px 6px',
+                      fontSize: '12px',
+                      border: '1px solid #ddd',
+                      borderRadius: '3px',
+                    }}
+                  />
+                  <span style={{ fontSize: '11px', color: '#666' }}>/ {totalSignalCount}</span>
+                </div>
+                
+                <div style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end' }}>
+                  <button
+                    onClick={() => setShowJumpDialog(false)}
+                    style={{
+                      padding: '4px 8px',
+                      border: '1px solid #ddd',
+                      borderRadius: '3px',
+                      backgroundColor: 'white',
+                      cursor: 'pointer',
+                      fontSize: '11px',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={applyJumpPosition}
+                    style={{
+                      padding: '4px 8px',
+                      border: '1px solid #1976d2',
+                      borderRadius: '3px',
+                      backgroundColor: '#1976d2',
+                      color: 'white',
+                      cursor: 'pointer',
+                      fontSize: '11px',
+                    }}
+                  >
+                    Jump
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+          
+          <button
+            onClick={goToNextPage}
+            disabled={!hasMoreForward}
+            style={{
+              padding: '2px 6px',
+              border: '1px solid #ddd',
+              borderRadius: '3px',
+              backgroundColor: !hasMoreForward ? '#f0f0f0' : 'white',
+              cursor: !hasMoreForward ? 'not-allowed' : 'pointer',
+              fontSize: '11px',
+            }}
+            title="Next page"
+          >
+            ▶
+          </button>
+        </div>
+      )}
 
       {/* Signal list */}
       <div style={{ flex: 1, overflow: 'auto' }}>
@@ -292,11 +594,11 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
             color: '#999',
             fontSize: '12px',
           }}>
-            No signals in this module
+            {searchTerm || !ioFilters.has('all') ? 'No signals match the filter' : 'No signals in this module'}
           </div>
         ) : (
           <div>
-            {filterSignals(signals).map((signal, index) => (
+            {signals.map((signal, index) => (
               <div
                 key={`${signal.globalId}-${index}`}
                 style={{
@@ -311,17 +613,16 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
                 }}
                 onClick={() => setSelectedSignalGlobalId(signal.globalId)}
                 onDoubleClick={() => {
-                  // If onSignalDoubleClick is provided and source tab is active, jump to declaration
-                  // Otherwise add to waveform
-                  if (onSignalDoubleClick && selectedModuleIndex) {
+                  // If source tab is active or no tab, jump to declaration (will open source tab)
+                  if ((activeTabType === 'source' || !activeTabType) && onSignalDoubleClick && selectedModuleIndex) {
                     onSignalDoubleClick(signal, selectedModuleIndex);
-                  } else if (onSignalAddToWaveform) {
+                  } else if (activeTabType === 'waveform' && onSignalAddToWaveform) {
+                    // Only add to waveform when waveform tab is explicitly active
                     onSignalAddToWaveform(signal);
                   }
                 }}
-                title={onSignalDoubleClick ? 'Double-click to jump to declaration' : onSignalAddToWaveform ? 'Double-click to add to waveform' : undefined}
+                title={activeTabType === 'waveform' ? 'Double-click to add to waveform' : 'Double-click to jump to declaration'}
               >
-                {/* Signal name with bit range */}
                 <span style={{ 
                   flex: 1,
                   color: '#333',
@@ -331,7 +632,6 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
                   {signal.name}{formatSignalWidth(signal)}
                 </span>
 
-                {/* Type badge */}
                 <span style={{
                   padding: '1px 6px',
                   backgroundColor: '#e3f2fd',

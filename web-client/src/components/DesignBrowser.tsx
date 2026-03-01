@@ -17,9 +17,9 @@ interface TreeNodeState extends TreeNode {
 
 type TabType = 'hierarchy' | 'files';
 
-// Pagination state for each node
+// Pagination state for each node - stores start position (1-based) instead of page
 interface PaginationState {
-  currentPage: number;
+  startPosition: number;  // 1-based starting position
   pageSize: number;
 }
 
@@ -222,47 +222,52 @@ export function DesignBrowser({
   };
 
   // Get paginated child IDs for a node
-  const getPaginatedChildIds = (parentId: number): { visibleIds: number[]; total: number; currentPage: number; pageSize: number; totalPages: number } => {
+  const getPaginatedChildIds = (parentId: number): { visibleIds: number[]; total: number; startPosition: number; pageSize: number; hasMore: boolean } => {
     const allChildIds = getChildIds(parentId);
-    const pagination = paginationMap.get(parentId) || { currentPage: 1, pageSize: DEFAULT_PAGE_SIZE };
+    const pagination = paginationMap.get(parentId) || { startPosition: 1, pageSize: DEFAULT_PAGE_SIZE };
     const total = allChildIds.length;
-    const totalPages = Math.ceil(total / pagination.pageSize);
     
-    // Ensure current page is valid
-    const validPage = Math.min(Math.max(1, pagination.currentPage), Math.max(1, totalPages));
+    // Ensure start position is valid (1-based)
+    const validStartPosition = Math.min(Math.max(1, pagination.startPosition), Math.max(1, total));
+    const startIndex = validStartPosition - 1; // Convert to 0-based
     
-    const startIndex = (validPage - 1) * pagination.pageSize;
+    // Calculate end index based on pageSize
     const endIndex = Math.min(startIndex + pagination.pageSize, total);
     const visibleIds = allChildIds.slice(startIndex, endIndex);
     
-    return { visibleIds, total, currentPage: validPage, pageSize: pagination.pageSize, totalPages };
+    // Check if there are more items after this page
+    const hasMore = endIndex < total;
+    
+    return { visibleIds, total, startPosition: validStartPosition, pageSize: pagination.pageSize, hasMore };
   };
 
   // Update pagination for a node
   const setPagination = (nodeId: number, updates: Partial<PaginationState>) => {
     setPaginationMap(prev => {
       const newMap = new Map(prev);
-      const current = newMap.get(nodeId) || { currentPage: 1, pageSize: DEFAULT_PAGE_SIZE };
+      const current = newMap.get(nodeId) || { startPosition: 1, pageSize: DEFAULT_PAGE_SIZE };
       newMap.set(nodeId, { ...current, ...updates });
       return newMap;
     });
   };
 
-  // Navigate to previous page
+  // Navigate to previous page (move back by pageSize)
   const goToPreviousPage = (nodeId: number) => {
-    const pagination = paginationMap.get(nodeId) || { currentPage: 1, pageSize: DEFAULT_PAGE_SIZE };
-    if (pagination.currentPage > 1) {
-      setPagination(nodeId, { currentPage: pagination.currentPage - 1 });
+    const pagination = paginationMap.get(nodeId) || { startPosition: 1, pageSize: DEFAULT_PAGE_SIZE };
+    if (pagination.startPosition > 1) {
+      const newStart = Math.max(1, pagination.startPosition - pagination.pageSize);
+      setPagination(nodeId, { startPosition: newStart });
     }
   };
 
-  // Navigate to next page
+  // Navigate to next page (move forward by pageSize)
   const goToNextPage = (nodeId: number) => {
     const allChildIds = getChildIds(nodeId);
-    const pagination = paginationMap.get(nodeId) || { currentPage: 1, pageSize: DEFAULT_PAGE_SIZE };
-    const totalPages = Math.ceil(allChildIds.length / pagination.pageSize);
-    if (pagination.currentPage < totalPages) {
-      setPagination(nodeId, { currentPage: pagination.currentPage + 1 });
+    const pagination = paginationMap.get(nodeId) || { startPosition: 1, pageSize: DEFAULT_PAGE_SIZE };
+    const maxStart = Math.max(1, allChildIds.length - pagination.pageSize + 1);
+    if (pagination.startPosition < maxStart) {
+      const newStart = Math.min(maxStart, pagination.startPosition + pagination.pageSize);
+      setPagination(nodeId, { startPosition: newStart });
     }
   };
 
@@ -389,10 +394,11 @@ export function DesignBrowser({
               </div>
             ) : (
               (() => {
-                const { visibleIds, total, currentPage, pageSize, totalPages } = getPaginatedChildIds(nodeId);
+                const { visibleIds, total, startPosition, hasMore } = getPaginatedChildIds(nodeId);
                 const needsPagination = total > DEFAULT_PAGE_SIZE;
-                const startIdx = (currentPage - 1) * pageSize + 1;
-                const endIdx = Math.min(startIdx + visibleIds.length - 1, total);
+                // Calculate display range based on startPosition
+                const startIdx = startPosition;
+                const endIdx = Math.min(startPosition + visibleIds.length - 1, total);
                 
                 return (
                   <>
@@ -413,15 +419,15 @@ export function DesignBrowser({
                             e.stopPropagation();
                             goToPreviousPage(nodeId);
                           }}
-                          disabled={currentPage <= 1}
+                          disabled={startPosition <= 1}
                           style={{
                             padding: '2px 6px',
                             marginRight: '4px',
                             border: '1px solid #ccc',
                             borderRadius: '2px',
                             background: '#fff',
-                            cursor: currentPage <= 1 ? 'not-allowed' : 'pointer',
-                            opacity: currentPage <= 1 ? 0.5 : 1,
+                            cursor: startPosition <= 1 ? 'not-allowed' : 'pointer',
+                            opacity: startPosition <= 1 ? 0.5 : 1,
                             fontSize: '10px',
                           }}
                         >
@@ -431,15 +437,16 @@ export function DesignBrowser({
                         <span style={{ margin: '0 8px' }}>
                           {editingPageSize.has(nodeId) ? (
                             <input
-                              type="text"
+                              type="number"
                               value={editingPageSize.get(nodeId)}
                               onChange={(e) => {
                                 setEditingPageSize(prev => new Map(prev).set(nodeId, e.target.value));
                               }}
                               onBlur={() => {
                                 const value = parseInt(editingPageSize.get(nodeId) || '', 10);
-                                if (!isNaN(value) && value > 0) {
-                                  setPagination(nodeId, { pageSize: value, currentPage: 1 });
+                                if (!isNaN(value) && value >= 1 && value <= total) {
+                                  // Jump directly to the specified start position
+                                  setPagination(nodeId, { startPosition: value });
                                 }
                                 setEditingPageSize(prev => {
                                   const newMap = new Map(prev);
@@ -454,8 +461,10 @@ export function DesignBrowser({
                               }}
                               onClick={(e) => e.stopPropagation()}
                               autoFocus
+                              min={1}
+                              max={total}
                               style={{
-                                width: '60px',
+                                width: '50px',
                                 padding: '1px 4px',
                                 fontSize: '11px',
                                 border: '1px solid #1976d2',
@@ -465,17 +474,17 @@ export function DesignBrowser({
                             />
                           ) : (
                             <span
-                              onClick={(e) => {
+                              onDoubleClick={(e) => {
                                 e.stopPropagation();
-                                setEditingPageSize(prev => new Map(prev).set(nodeId, String(pageSize)));
+                                // Show input with current start position
+                                setEditingPageSize(prev => new Map(prev).set(nodeId, String(startIdx)));
                               }}
-                              onDoubleClick={(e) => e.stopPropagation()}
                               style={{
                                 cursor: 'pointer',
                                 textDecoration: 'underline',
                                 color: '#1976d2',
                               }}
-                              title="Double-click to edit page size"
+                              title="Double-click to jump to position"
                             >
                               {startIdx}-{endIdx} / {total}
                             </span>
@@ -487,15 +496,15 @@ export function DesignBrowser({
                             e.stopPropagation();
                             goToNextPage(nodeId);
                           }}
-                          disabled={currentPage >= totalPages}
+                          disabled={!hasMore}
                           style={{
                             padding: '2px 6px',
                             marginLeft: '4px',
                             border: '1px solid #ccc',
                             borderRadius: '2px',
                             background: '#fff',
-                            cursor: currentPage >= totalPages ? 'not-allowed' : 'pointer',
-                            opacity: currentPage >= totalPages ? 0.5 : 1,
+                            cursor: !hasMore ? 'not-allowed' : 'pointer',
+                            opacity: !hasMore ? 0.5 : 1,
                             fontSize: '10px',
                           }}
                         >
@@ -506,7 +515,9 @@ export function DesignBrowser({
                     
                     {/* Child nodes - lazy loaded, only visible ones */}
                     {visibleIds.map((childId, index) => {
-                      const childIsLast = index === visibleIds.length - 1 && endIdx === total;
+                      // The last visible item in current page should use L-shape (isLast=true)
+                      // regardless of whether there are more items in total
+                      const childIsLast = index === visibleIds.length - 1;
                       return renderTreeNodeWithChildren(
                         childId, 
                         depth + 1, 

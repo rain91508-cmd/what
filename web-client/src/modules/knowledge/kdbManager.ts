@@ -334,6 +334,126 @@ class KdbManager {
   }
 
   /**
+   * Get signal count for a module
+   */
+  getModuleSignalCount(moduleId: number): number {
+    const signalDefs = this.getSignalDefs(moduleId);
+    return signalDefs.length;
+  }
+
+  /**
+   * Get signals for a module with pagination (lazy loading)
+   * @param moduleId Module ID (1-based)
+   * @param offset Start index (0-based)
+   * @param limit Maximum number of signals to return
+   * @returns Array of signals for the requested page
+   */
+  async getModuleSignalsPaged(moduleId: number, offset: number, limit: number): Promise<Signal[]> {
+    console.log(`[KdbManager] getModuleSignalsPaged called for moduleId: ${moduleId}, offset: ${offset}, limit: ${limit}`);
+    const module = this.getModuleById(moduleId);
+    if (!module) return [];
+    
+    const signalDefs = this.getSignalDefs(moduleId);
+    const signals: Signal[] = [];
+    
+    const endIndex = Math.min(offset + limit, signalDefs.length);
+    
+    for (let i = offset; i < endIndex; i++) {
+      const globalId = module.signalInstsStartId + i;
+      const signal = this.buildSignal(globalId);
+      if (signal) {
+        signals.push(signal);
+      }
+    }
+    
+    console.log(`[KdbManager] Built ${signals.length} signals for module ${moduleId} (offset: ${offset}, limit: ${limit})`);
+    return signals;
+  }
+
+  /**
+   * Find next filtered signals starting from a given index
+   * @param moduleId Module ID (1-based)
+   * @param startIndex Starting index (0-based, inclusive)
+   * @param limit Maximum number of signals to return
+   * @param filterFn Filter function that returns true if signal matches
+   * @param direction 'forward' or 'backward'
+   * @returns Object with signals array and actual start/end indices
+   */
+  async findFilteredSignalsPaged(
+    moduleId: number,
+    startIndex: number,
+    limit: number,
+    filterFn: (signal: Signal) => boolean,
+    direction: 'forward' | 'backward' = 'forward'
+  ): Promise<{ signals: Signal[]; actualStartIndex: number; actualEndIndex: number; hasMore: boolean }> {
+    console.log(`[KdbManager] findFilteredSignalsPaged: moduleId=${moduleId}, startIndex=${startIndex}, limit=${limit}, direction=${direction}`);
+    
+    const module = this.getModuleById(moduleId);
+    if (!module) {
+      return { signals: [], actualStartIndex: -1, actualEndIndex: -1, hasMore: false };
+    }
+    
+    const signalDefs = this.getSignalDefs(moduleId);
+    const signals: Signal[] = [];
+    
+    if (direction === 'forward') {
+      // Search forward from startIndex
+      let currentIndex = startIndex;
+      let firstMatchIndex = -1;
+      let lastMatchIndex = -1;
+      
+      while (currentIndex < signalDefs.length && signals.length < limit) {
+        const globalId = module.signalInstsStartId + currentIndex;
+        const signal = this.buildSignal(globalId);
+        
+        if (signal && filterFn(signal)) {
+          if (firstMatchIndex === -1) {
+            firstMatchIndex = currentIndex;
+          }
+          lastMatchIndex = currentIndex;
+          signals.push(signal);
+        }
+        
+        currentIndex++;
+      }
+      
+      return {
+        signals,
+        actualStartIndex: firstMatchIndex,
+        actualEndIndex: lastMatchIndex,
+        hasMore: currentIndex < signalDefs.length
+      };
+    } else {
+      // Search backward from startIndex
+      let currentIndex = startIndex;
+      let firstMatchIndex = -1;
+      let lastMatchIndex = -1;
+      
+      while (currentIndex >= 0 && signals.length < limit) {
+        const globalId = module.signalInstsStartId + currentIndex;
+        const signal = this.buildSignal(globalId);
+        
+        if (signal && filterFn(signal)) {
+          if (firstMatchIndex === -1) {
+            firstMatchIndex = currentIndex;
+          }
+          lastMatchIndex = currentIndex;
+          signals.unshift(signal); // Add to beginning since we're going backward
+        }
+        
+        currentIndex--;
+      }
+      
+      return {
+        signals,
+        actualStartIndex: lastMatchIndex, // In backward search, last is actually the first in result
+        actualEndIndex: firstMatchIndex,
+        hasMore: currentIndex >= 0
+      };
+    }
+  }
+
+  /**
    * Get source file content by ID
    */
   async getSourceFile(id: number): Promise<SourceFile | null> {
