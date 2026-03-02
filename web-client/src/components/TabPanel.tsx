@@ -88,6 +88,8 @@ export interface Tab {
   moduleIndex?: number | null;  // For source tabs - 1-based module index
   startFromLine1?: boolean;     // For source tabs - open from line 1 instead of module start line
   signalDeclarationLine?: number; // For source tabs - jump to signal declaration line
+  moduleStartLine?: number;     // For source tabs - module definition start line
+  moduleEndLine?: number;       // For source tabs - module definition end line
   // Source navigation history
   navigationHistory?: NavigationHistoryEntry[];
   navigationPointer?: number;   // Points to next insertion position

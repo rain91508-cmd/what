@@ -23,12 +23,14 @@ interface MonacoSourceCodeWindowProps {
   moduleIndex: number | null;
   startFromLine1?: boolean;
   signalDeclarationLine?: number;
+  moduleStartLine?: number;  // Module start line for graying out
+  moduleEndLine?: number;    // Module end line for graying out
   editorRef?: React.MutableRefObject<editor.IStandaloneCodeEditor | null>;
 }
 
 const modelCache = new Map<string, editor.ITextModel>();
 
-export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDeclarationLine, editorRef: externalEditorRef }: MonacoSourceCodeWindowProps) {
+export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDeclarationLine, moduleStartLine, moduleEndLine, editorRef: externalEditorRef }: MonacoSourceCodeWindowProps) {
   const [content, setContent] = useState<string>('');
   const [filePath, setFilePath] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -38,6 +40,7 @@ export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDecl
   const editorRef = externalEditorRef || internalEditorRef;
   const pendingHighlightRef = useRef<number | null>(null);
   const decorationsRef = useRef<string[]>([]);
+  const grayOutDecorationsRef = useRef<string[]>([]);
   const monacoInstance = useMonaco();
 
   // Apply highlight to a specific line
@@ -71,6 +74,60 @@ export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDecl
     ]);
   }, []);
 
+  // Apply gray out decoration for lines outside module range
+  const applyGrayOutDecoration = useCallback((editor: editor.IStandaloneCodeEditor, startLine: number, endLine: number, totalLines: number) => {
+    if (!startLine || !endLine || totalLines <= 0) return;
+    
+    console.log('[MonacoSourceCodeWindow] Applying gray out decoration:', startLine, '-', endLine, 'of', totalLines);
+    
+    // Clear previous gray out decorations
+    if (grayOutDecorationsRef.current.length > 0) {
+      editor.deltaDecorations(grayOutDecorationsRef.current, []);
+      grayOutDecorationsRef.current = [];
+    }
+    
+    const decorations: monaco.editor.IModelDeltaDecoration[] = [];
+    
+    // Gray out lines before module start
+    if (startLine > 1) {
+      for (let i = 1; i < startLine; i++) {
+        decorations.push({
+          range: new monaco.Range(i, 1, i, 1),
+          options: {
+            isWholeLine: true,
+            inlineClassName: 'grayed-out-line',
+            overviewRuler: {
+              color: 'rgba(200, 200, 200, 0.3)',
+              position: monaco.editor.OverviewRulerLane.Full
+            }
+          }
+        });
+      }
+    }
+    
+    // Gray out lines after module end
+    if (endLine < totalLines) {
+      for (let i = endLine + 1; i <= totalLines; i++) {
+        decorations.push({
+          range: new monaco.Range(i, 1, i, 1),
+          options: {
+            isWholeLine: true,
+            inlineClassName: 'grayed-out-line',
+            overviewRuler: {
+              color: 'rgba(200, 200, 200, 0.3)',
+              position: monaco.editor.OverviewRulerLane.Full
+            }
+          }
+        });
+      }
+    }
+    
+    if (decorations.length > 0) {
+      grayOutDecorationsRef.current = editor.deltaDecorations([], decorations);
+      console.log('[MonacoSourceCodeWindow] Applied', decorations.length, 'gray out decorations');
+    }
+  }, []);
+
   // Handle editor mount
   const handleEditorDidMount = useCallback((editor: editor.IStandaloneCodeEditor) => {
     editorRef.current = editor;
@@ -84,8 +141,14 @@ export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDecl
       } else if (highlightLine) {
         applyHighlight(editor, highlightLine);
       }
+      
+      // Apply gray out decoration if module range is set
+      if (moduleStartLine && moduleEndLine && content) {
+        const totalLines = content.split('\n').length;
+        applyGrayOutDecoration(editor, moduleStartLine, moduleEndLine, totalLines);
+      }
     }, 100);
-  }, [highlightLine, applyHighlight]);
+  }, [highlightLine, applyHighlight, moduleStartLine, moduleEndLine, content, applyGrayOutDecoration]);
 
   // Load source file when module or highlight settings change
   useEffect(() => {
@@ -378,6 +441,79 @@ export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDecl
           width: 4px !important;
           margin-left: 2px;
           border-radius: 2px;
+        }
+        .monaco-editor .grayed-out-line {
+          opacity: 0.5 !important;
+          filter: grayscale(0.6) !important;
+        }
+        .monaco-editor .grayed-out-line * {
+          color: #888 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk1 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk2 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk3 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk4 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk5 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk6 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk7 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk8 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk9 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk10 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk11 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk12 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk13 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk14 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk15 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk16 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk17 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk18 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk19 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk20 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .mtk21 {
+          color: #999 !important;
+        }
+        .monaco-editor .grayed-out-line .line-numbers {
+          color: #bbb !important;
         }
       `}</style>
     </div>

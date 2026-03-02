@@ -400,6 +400,11 @@ function App() {
       return;
     }
     
+    // Get module info for module start/end line
+    const module = kdbManager.getModuleById(moduleIndex);
+    const moduleStartLine = module?.definition?.startLine;
+    const moduleEndLine = module?.definition?.endLine;
+    
     // Get line content (we need to fetch the source content)
     const sourceFile = await kdbManager.getSourceFile(fileId);
     if (!sourceFile) {
@@ -412,6 +417,8 @@ function App() {
     // Create bookmark (name will be auto-generated as "Mark N")
     const bookmark = bookmarkManager.addBookmark({
       moduleIndex: moduleIndex,  // Store module index for navigation
+      moduleStartLine: moduleStartLine,  // Store for gray out
+      moduleEndLine: moduleEndLine,      // Store for gray out
       fileId: fileId,
       fileName: fileInfo.name,
       fileFullName: fileInfo.fullName,
@@ -426,6 +433,8 @@ function App() {
   const handleBookmarkClick = useCallback((bookmark: Bookmark) => {
     // Use stored moduleIndex from bookmark
     const moduleIndex = bookmark.moduleIndex;
+    const moduleStartLine = bookmark.moduleStartLine;
+    const moduleEndLine = bookmark.moduleEndLine;
     
     // Check if there's an active source tab
     const activeSourceTab = tabs.find(t => t.type === 'source' && t.id === activeTab);
@@ -438,7 +447,9 @@ function App() {
               ...tab, 
               moduleIndex: moduleIndex,
               signalDeclarationLine: bookmark.lineNumber,
-              startFromLine1: true
+              startFromLine1: true,
+              moduleStartLine: moduleStartLine,
+              moduleEndLine: moduleEndLine,
             } 
           : tab
       ));
@@ -457,6 +468,8 @@ function App() {
         moduleIndex: moduleIndex,
         signalDeclarationLine: bookmark.lineNumber,
         startFromLine1: true,
+        moduleStartLine: moduleStartLine,
+        moduleEndLine: moduleEndLine,
       };
       setTabs(prev => [...prev, newTab]);
       setActiveTab(newId);
@@ -852,10 +865,43 @@ function App() {
     // Update global selected module index
     setSelectedModuleIndex(moduleIndex)
     
-    // Get module info for navigation history
+    // Get module info
     const module = kdbManager.getModuleById(moduleIndex);
     const fileId = module?.definition?.fileId;
     const line = module?.definition?.startLine || 1;
+    
+    // Determine the display range for gray out
+    // If this is an instance, find the parent module definition
+    // If this is a module definition, use its own range
+    let displayStartLine: number | undefined;
+    let displayEndLine: number | undefined;
+    
+    if (module?.isInstance) {
+      // This is an instance, find the parent module definition
+      const parentModuleId = module.parentModuleId;
+      if (parentModuleId > 0) {
+        const parentModule = kdbManager.getModuleById(parentModuleId);
+        if (parentModule && !parentModule.isInstance) {
+          // Parent is a module definition, use its range
+          displayStartLine = parentModule.definition?.startLine;
+          displayEndLine = parentModule.definition?.endLine;
+        } else if (parentModule && parentModule.isInstance) {
+          // Parent is also an instance, find the def_module_id
+          const defModuleId = parentModule.defModuleId;
+          if (defModuleId > 0) {
+            const defModule = kdbManager.getModuleById(defModuleId);
+            displayStartLine = defModule?.definition?.startLine;
+            displayEndLine = defModule?.definition?.endLine;
+          }
+        }
+      }
+    } else {
+      // This is a module definition, use its own range
+      displayStartLine = module?.definition?.startLine;
+      displayEndLine = module?.definition?.endLine;
+    }
+    
+    console.log('[App] Display range:', displayStartLine, '-', displayEndLine, 'isInstance:', module?.isInstance);
     
     // Find or create a source tab for this module and switch to it
     const existingSourceTab = tabs.find(t => t.type === 'source')
@@ -866,7 +912,7 @@ function App() {
       // Clear startFromLine1 and signalDeclarationLine to use module's startLine
       setTabs(prev => prev.map(tab => 
         tab.id === existingSourceTab.id 
-          ? { ...tab, moduleIndex, startFromLine1: undefined, signalDeclarationLine: undefined } 
+          ? { ...tab, moduleIndex, startFromLine1: undefined, signalDeclarationLine: undefined, moduleStartLine: displayStartLine, moduleEndLine: displayEndLine } 
           : tab
       ))
       setActiveTab(existingSourceTab.id)
@@ -884,6 +930,8 @@ function App() {
         label: 'Source',
         type: 'source',
         moduleIndex,
+        moduleStartLine: displayStartLine,
+        moduleEndLine: displayEndLine,
       }
       console.log('[App] Creating new source tab:', newTab);
       setTabs(prev => [...prev, newTab])
@@ -919,10 +967,10 @@ function App() {
       
       if (existingSourceTab) {
         // Update existing source tab with the new module index
-        // Clear signalDeclarationLine to ensure startFromLine1 takes effect
+        // Clear signalDeclarationLine and module range to show entire file
         setTabs(prev => prev.map(tab => 
           tab.id === existingSourceTab.id 
-            ? { ...tab, moduleIndex: moduleIdx, startFromLine1: true, signalDeclarationLine: undefined } 
+            ? { ...tab, moduleIndex: moduleIdx, startFromLine1: true, signalDeclarationLine: undefined, moduleStartLine: undefined, moduleEndLine: undefined } 
             : tab
         ))
         setActiveTab(existingSourceTab.id)
@@ -938,6 +986,7 @@ function App() {
           type: 'source',
           moduleIndex: moduleIdx,
           startFromLine1: true,
+          // Don't set moduleStartLine and moduleEndLine to show entire file
         }
         setTabs(prev => [...prev, newTab])
         setActiveTab(newId)
@@ -950,7 +999,7 @@ function App() {
   }
 
   const handleSignalDoubleClick = (signal: Signal, moduleIndex: number) => {
-    console.log('[App] handleSignalDoubleClick called, signal:', signal.name, 'declaration:', signal.declaration, 'moduleIndex:', moduleIndex)
+    console.log('[App] handleSignalDoubleClick called, signal:', signal.name, 'declaration:', signal.declaration, 'moduleIndex:', moduleIndex, 'parentModuleId:', signal.parentModuleId)
     
     if (!signal.declaration) {
       addMessage(`No declaration info for ${signal.name}`)
@@ -959,6 +1008,37 @@ function App() {
     
     const line = signal.declaration.line;
     const fileId = signal.declaration.fileId;
+    
+    // Determine display range based on signal's parent module
+    // Use the same logic as hierarchy double click
+    let displayStartLine: number | undefined;
+    let displayEndLine: number | undefined;
+    let displayModuleIndex = moduleIndex;
+    
+    // Get the parent module of this signal
+    const parentModuleId = signal.parentModuleId;
+    if (parentModuleId > 0) {
+      const parentModule = kdbManager.getModuleById(parentModuleId);
+      displayModuleIndex = parentModuleId;
+      
+      if (parentModule) {
+        if (!parentModule.isInstance) {
+          // Parent is a module definition, use its range
+          displayStartLine = parentModule.definition?.startLine;
+          displayEndLine = parentModule.definition?.endLine;
+        } else {
+          // Parent is an instance, find the def_module_id
+          const defModuleId = parentModule.defModuleId;
+          if (defModuleId > 0) {
+            const defModule = kdbManager.getModuleById(defModuleId);
+            displayStartLine = defModule?.definition?.startLine;
+            displayEndLine = defModule?.definition?.endLine;
+          }
+        }
+      }
+    }
+    
+    console.log('[App] Signal display range:', displayStartLine, '-', displayEndLine, 'for parentModuleId:', parentModuleId);
     
     // Check if there's an active source tab
     const activeSourceTab = tabs.find(t => t.type === 'source' && t.id === activeTab)
@@ -969,8 +1049,10 @@ function App() {
         tab.id === activeSourceTab.id 
           ? { 
               ...tab, 
-              moduleIndex: moduleIndex,
-              signalDeclarationLine: line 
+              moduleIndex: displayModuleIndex,
+              signalDeclarationLine: line,
+              moduleStartLine: displayStartLine,
+              moduleEndLine: displayEndLine,
             } 
           : tab
       ))
@@ -986,8 +1068,10 @@ function App() {
         id: newId,
         label: 'Source',
         type: 'source',
-        moduleIndex: moduleIndex,
+        moduleIndex: displayModuleIndex,
         signalDeclarationLine: line,
+        moduleStartLine: displayStartLine,
+        moduleEndLine: displayEndLine,
       }
       setTabs(prev => [...prev, newTab])
       setActiveTab(newId)
@@ -1332,6 +1416,8 @@ function App() {
                 moduleIndex={activeTabData.moduleIndex || null}
                 startFromLine1={activeTabData.startFromLine1}
                 signalDeclarationLine={activeTabData.signalDeclarationLine}
+                moduleStartLine={activeTabData.moduleStartLine}
+                moduleEndLine={activeTabData.moduleEndLine}
                 editorRef={monacoEditorRef}
               />
             ) : activeTabData ? (
