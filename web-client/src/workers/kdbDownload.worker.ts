@@ -123,8 +123,10 @@ interface KDBWorkerSchema extends DBSchema {
       msb: number;
       lsb: number;
       parentModuleId: number;
-      driverSignalGlobalIds: number[];
-      driverLines: unknown[];
+      driverLocations: {
+        driverSignalGlobalId: number;
+        line: number;
+      }[];
       kdbId: string;
     };
     indexes: { 'by-kdb': string };

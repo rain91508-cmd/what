@@ -107,15 +107,24 @@ export interface SignalDef {
 }
 
 /**
+ * Driver Location - combines signal ID and source location
+ * Matches proto: DriverLocation
+ */
+export interface DriverLocation {
+  driverSignalGlobalId: number;  // proto: driver_signal_global_id
+  line: number;                  // Source line number
+}
+
+/**
  * Signal Instance (stored in global allSignalInsts array)
  * Contains instance-specific information
+ * Updated to match proto: SignalInst with driver_locations
  */
 export interface SignalInst {
   msb: number;
   lsb: number;
-  parentModuleId: number;  // proto: parent_module_id
-  driverSignalGlobalIds: number[];  // proto: driver_signal_global_ids
-  driverLines: SourceLocation[];    // proto: driver_lines
+  parentModuleId: number;        // proto: parent_module_id
+  driverLocations: DriverLocation[];  // proto: driver_locations - replaces driverSignalGlobalIds + driverLines
 }
 
 /**
@@ -163,6 +172,7 @@ export interface KnowledgeBase {
 /**
  * Signal with full information (computed from SignalDef + SignalInst)
  * This is what UI components work with
+ * Updated to use DriverLocation for driver information
  */
 export interface Signal {
   // Global ID in allSignalInsts array
@@ -182,10 +192,8 @@ export interface Signal {
   lsb: number;
   // Declaration location (from SignalDef)
   declaration?: SourceLocation;
-  // Driver signal global IDs (from SignalInst)
-  driverSignalGlobalIds: number[];
-  // Driver source locations (from SignalInst)
-  driverLines: SourceLocation[];
+  // Driver locations - combines signal ID and source line (from SignalInst)
+  driverLocations: DriverLocation[];
   // Parent module ID (from SignalInst)
   parentModuleId: number;
 }

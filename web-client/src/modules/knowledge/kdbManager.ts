@@ -255,10 +255,25 @@ class KdbManager {
       msb: inst.msb,
       lsb: inst.lsb,
       declaration: def.declaration,
-      driverSignalGlobalIds: inst.driverSignalGlobalIds,
-      driverLines: inst.driverLines,
+      driverLocations: inst.driverLocations || [],  // Updated to use new DriverLocation structure
       parentModuleId: inst.parentModuleId,
     };
+  }
+
+  /**
+   * Get driver information by signal global ID
+   * Returns array of DriverLocation containing driver signal global ID and source line
+   * @param signalGlobalId - Global ID of the signal in allSignalInsts array
+   * @returns Array of DriverLocation or empty array if signal not found or has no drivers
+   */
+  getDriverBySignalId(signalGlobalId: number): import('../../types/kdb').DriverLocation[] {
+    const inst = this.getSignalInstByGlobalId(signalGlobalId);
+    if (!inst) {
+      console.warn(`[KdbManager] Signal instance not found for globalId: ${signalGlobalId}`);
+      return [];
+    }
+    
+    return inst.driverLocations || [];
   }
 
   // ==================== On-Demand Loading API ====================

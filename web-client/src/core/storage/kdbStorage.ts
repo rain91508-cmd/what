@@ -104,13 +104,32 @@ async function store_signal_inst(globalIndex: number, data: any, kdbId: string):
     return data[key];
   };
   
+  // Handle both old format (driverSignalGlobalIds + driverLines) and new format (driverLocations)
+  const driverLocations = getValue('driverLocations');
+  let driverLocationsArray = [];
+  
+  if (driverLocations && Array.isArray(driverLocations)) {
+    // New format: driverLocations is already an array of {driverSignalGlobalId, line}
+    driverLocationsArray = driverLocations.map((loc: any) => ({
+      driverSignalGlobalId: loc.driverSignalGlobalId || loc.driver_signal_global_id || 0,
+      line: loc.line || 0,
+    }));
+  } else {
+    // Old format or fallback: combine driverSignalGlobalIds and driverLines
+    const driverSignalGlobalIds = getValue('driverSignalGlobalIds') || [];
+    const driverLines = getValue('driverLines') || [];
+    driverLocationsArray = driverSignalGlobalIds.map((id: number, idx: number) => ({
+      driverSignalGlobalId: id,
+      line: driverLines[idx]?.line || 0,
+    }));
+  }
+  
   await db.put('signal-insts', {
     index: globalIndex,
     msb: getValue('msb') || 0,
     lsb: getValue('lsb') || 0,
     parentModuleId: getValue('parentModuleId') || 0,
-    driverSignalGlobalIds: getValue('driverSignalGlobalIds') || [],
-    driverLines: (getValue('driverLines') || []).map(convertToPlainObject),
+    driverLocations: driverLocationsArray,
     kdbId,
   });
 }

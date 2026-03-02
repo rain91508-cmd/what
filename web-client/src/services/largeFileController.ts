@@ -17,7 +17,6 @@
 const LARGE_FILE_THRESHOLD = 2 * 1024 * 1024; // 2MB threshold for large file mode
 const WINDOW_SIZE = 2000; // Number of lines in window
 const BUFFER_LINES = 1000; // Extra lines to load before/after visible area
-const SCROLL_THRESHOLD = 300; // Lines to scroll before triggering reload
 
 // ============================================
 // Types

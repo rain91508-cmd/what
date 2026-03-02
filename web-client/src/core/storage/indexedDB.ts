@@ -69,9 +69,8 @@ interface HWDBSchema extends DBSchema {
       msb: number;
       lsb: number;
       parentModuleId: number;
-      driverSignalGlobalIds: number[];
-      driverLines: {
-        fileId: number;
+      driverLocations: {
+        driverSignalGlobalId: number;
         line: number;
       }[];
       kdbId: string;
@@ -285,8 +284,7 @@ class IndexedDBManager {
       msb: inst.msb,
       lsb: inst.lsb,
       parentModuleId: inst.parentModuleId,
-      driverSignalGlobalIds: inst.driverSignalGlobalIds,
-      driverLines: inst.driverLines,
+      driverLocations: inst.driverLocations,
       kdbId,
     });
   }
