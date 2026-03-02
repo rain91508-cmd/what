@@ -294,8 +294,13 @@ public:
     const SourceFileContent* findFileContentById(uint32_t id) const;  // Get file content by ID
     
     // Add driver to a signal by name (Phase 1: stores fullName, Phase 2: resolved to global ID)
+    // DEPRECATED: Use addDriverLocation instead to add both ID and line together
     bool addDriverToSignal(const std::string& signalFullName, const std::string& driverSignalFullName);
     bool addDriverLineToSignal(const std::string& signalFullName, const KdbSourceLocation& location);
+    
+    // Add driver location with both driver ID and line number at once
+    // This is the preferred method to ensure driver ID and line are paired correctly
+    bool addDriverLocation(const std::string& signalFullName, const std::string& driverSignalFullName, uint32_t line);
     
     // Helper methods to get ID from pointer (for future optimization)
     uint32_t getModuleId(const ModuleInfo* module) const;

@@ -48,7 +48,7 @@ public:
     
 private:
     void extractRhsSignals(const UHDM::expr* expr, const std::string& lhsSignalName, 
-                          const UHDM::BaseClass* assignObj);
+                          const UHDM::BaseClass* assignObj, uint32_t line);
     void processAssignment(const UHDM::assignment* assign);
     void processProcessStmt(const UHDM::process_stmt* process);
     void processStmt(const UHDM::BaseClass* stmt);

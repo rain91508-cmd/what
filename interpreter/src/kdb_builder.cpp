@@ -873,6 +873,49 @@ bool KdbBuilder::addDriverLineToSignal(const std::string& signalFullName, const 
     return false;
 }
 
+bool KdbBuilder::addDriverLocation(const std::string& signalFullName, const std::string& driverSignalFullName, uint32_t line) {
+    // This function adds both driver ID and line number at once, ensuring they are paired correctly
+    if (signalInstsCommitted_) {
+        // Phase 2: Directly add global ID with line
+        auto it = signalFullNameToId_.find(driverSignalFullName);
+        if (it == signalFullNameToId_.end()) return false;
+        
+        uint64_t driverGlobalId = it->second;
+        
+        // Find signal and add driver location
+        auto sigIt = signalFullNameToId_.find(signalFullName);
+        if (sigIt == signalFullNameToId_.end()) return false;
+        
+        uint64_t signalGlobalId = sigIt->second;
+        SignalInstInfo* inst = getGlobalSignalInst(signalGlobalId);
+        if (!inst) return false;
+        
+        // Add complete driver location with both ID and line
+        DriverLocation driverLoc;
+        driverLoc.driverSignalGlobalId = driverGlobalId;
+        driverLoc.line = line;
+        inst->driverLocations.push_back(driverLoc);
+        return true;
+    } else {
+        // Phase 1: Store full name and line for later resolution
+        for (auto& mod : modules_) {
+            for (auto& inst : mod->signalInsts) {
+                if (inst.fullName == signalFullName) {
+                    // Store driver full name for later resolution
+                    inst.driverSignalFullNames.push_back(driverSignalFullName);
+                    // Add driver location with line (driver ID will be resolved later)
+                    DriverLocation driverLoc;
+                    driverLoc.driverSignalGlobalId = 0;  // Will be resolved later
+                    driverLoc.line = line;
+                    inst.driverLocations.push_back(driverLoc);
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 // ModuleInfo implementation
 SignalInstInfo* ModuleInfo::getSignalInst(uint32_t localIndex) {
     if (!signalInstsCommitted) {

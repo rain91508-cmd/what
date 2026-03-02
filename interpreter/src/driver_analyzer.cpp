@@ -31,10 +31,13 @@ void DriverAnalyzer::analyzeContinuousAssignments(const UHDM::module_inst* modul
         
         if (lhsName.empty()) continue;
         
-        // Always record driver line for continuous assignment
+        // Extract line number
+        uint32_t line = contAssign->VpiLineNo();
+        
+        // Always record driver line for continuous assignment (for signals without RHS)
         signalDriverLines_[lhsName].push_back(extractLocation(contAssign));
         
-        extractRhsSignals(rhs, lhsName, contAssign);
+        extractRhsSignals(rhs, lhsName, contAssign, line);
     }
 }
 
@@ -268,16 +271,17 @@ void DriverAnalyzer::processAssignment(const UHDM::assignment* assign) {
         return;
     }
     
-    std::cerr << "DEBUG: Processing assignment to " << lhsName << " at line " << assign->VpiLineNo() << "\n";
+    uint32_t line = assign->VpiLineNo();
+    std::cerr << "DEBUG: Processing assignment to " << lhsName << " at line " << line << "\n";
     
-    // Always record driver line for this assignment
+    // Always record driver line for this assignment (for signals without RHS)
     signalDriverLines_[lhsName].push_back(extractLocation(assign));
     
     // If RHS exists, extract signals from it
     if (rhs) {
         // Cast rhs to expr for extractRhsSignals
         if (auto* rhsExpr = rhs->Cast<UHDM::expr>()) {
-            extractRhsSignals(rhsExpr, lhsName, assign);
+            extractRhsSignals(rhsExpr, lhsName, assign, line);
         }
     } else {
         std::cerr << "DEBUG: Assignment has no RHS (constant assignment)\n";
@@ -285,14 +289,16 @@ void DriverAnalyzer::processAssignment(const UHDM::assignment* assign) {
 }
 
 void DriverAnalyzer::extractRhsSignals(const UHDM::expr* expr, const std::string& lhsSignalName, 
-                                        const UHDM::BaseClass* assignObj) {
+                                        const UHDM::BaseClass* assignObj, uint32_t line) {
     if (!expr) return;
     
     if (auto* refObj = expr->Cast<UHDM::ref_obj>()) {
         std::string rhsName = std::string(refObj->VpiFullName());
         if (!rhsName.empty()) {
-            std::cerr << "DEBUG: Found RHS signal: " << rhsName << " for LHS: " << lhsSignalName << "\n";
-            signalToDriverNames_[lhsSignalName].push_back({rhsName, extractLocation(assignObj)});
+            std::cerr << "DEBUG: Found RHS signal: " << rhsName << " for LHS: " << lhsSignalName 
+                      << " at line " << line << "\n";
+            // Use new function to add both driver ID and line at once
+            builder_.addDriverLocation(lhsSignalName, rhsName, line);
         }
     }
     
@@ -301,7 +307,7 @@ void DriverAnalyzer::extractRhsSignals(const UHDM::expr* expr, const std::string
         if (operands) {
             for (auto* operand : *operands) {
                 if (auto* operandExpr = operand->Cast<UHDM::expr>()) {
-                    extractRhsSignals(operandExpr, lhsSignalName, assignObj);
+                    extractRhsSignals(operandExpr, lhsSignalName, assignObj, line);
                 }
             }
         }
