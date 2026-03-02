@@ -3,6 +3,7 @@ import Editor, { useMonaco, loader } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
 import { kdbManager } from '../modules/knowledge/kdbManager';
 import type { editor } from 'monaco-editor';
+import { LargeFileController, type FileMetadata } from '../services/largeFileController';
 
 // Configure monaco loader to use local files instead of CDN
 loader.config({
@@ -41,12 +42,16 @@ export function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId
   const [highlightLine, setHighlightLine] = useState<number | null>(null);
   const [moduleName, setModuleName] = useState<string>('');
   const [totalLines, setTotalLines] = useState<number>(0);
+  const [, setIsLargeFile] = useState(false);
+  const [windowStartLine, setWindowStartLine] = useState(1);
   const internalEditorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const editorRef = externalEditorRef || internalEditorRef;
   const pendingHighlightRef = useRef<number | null>(null);
   const decorationsRef = useRef<string[]>([]);
   const grayOutDecorationsRef = useRef<string[]>([]);
   const monacoInstance = useMonaco();
+  const largeFileControllerRef = useRef<LargeFileController | null>(null);
+  const isLargeFileModeRef = useRef(false);
 
   // Widths for header sections (module info and file path)
   const [moduleInfoWidth, setModuleInfoWidth] = useState(300);
@@ -244,6 +249,24 @@ export function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId
     const disposable1 = editor.onMouseDown(handleMouseDown);
     const disposable2 = editor.onDidChangeCursorSelection(handleSelectionChange);
 
+    // Handle scroll for large file mode
+    const disposable3 = editor.onDidScrollChange(async () => {
+      if (!isLargeFileModeRef.current || !largeFileControllerRef.current) return;
+
+      const visibleRanges = editor.getVisibleRanges();
+      if (!visibleRanges || visibleRanges.length === 0) return;
+
+      const visibleRange = visibleRanges[0];
+      const visibleStart = visibleRange.startLineNumber;
+      const visibleEnd = visibleRange.endLineNumber;
+
+      // Adjust for window offset in large file mode
+      const adjustedStart = visibleStart + windowStartLine - 1;
+      const adjustedEnd = visibleEnd + windowStartLine - 1;
+
+      await largeFileControllerRef.current.ensureWindow(adjustedStart, adjustedEnd);
+    });
+
     // Check if there's a pending highlight to apply
     setTimeout(() => {
       if (pendingHighlightRef.current) {
@@ -263,12 +286,21 @@ export function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId
     return () => {
       disposable1.dispose();
       disposable2.dispose();
+      disposable3.dispose();
     };
-  }, [highlightLine, applyHighlight, moduleStartLine, moduleEndLine, content, applyGrayOutDecoration, onWordClick]);
+  }, [highlightLine, applyHighlight, moduleStartLine, moduleEndLine, content, applyGrayOutDecoration, onWordClick, windowStartLine]);
 
   // Load source file when module or highlight settings change
   useEffect(() => {
     loadSourceFile();
+
+    // Cleanup large file controller when component unmounts or file changes
+    return () => {
+      if (largeFileControllerRef.current) {
+        largeFileControllerRef.current.dispose();
+        largeFileControllerRef.current = null;
+      }
+    };
   }, [moduleIndex, displayModuleIndex, startFromLine1, signalDeclarationLine]);
 
   // Re-apply gray out decoration when module range changes
@@ -444,37 +476,112 @@ export function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId
       setModuleName(targetModuleName);
       console.log('[MonacoSourceCodeWindow] Loading source file for fileId:', targetFileId, 'moduleName:', targetModuleName);
       
-      // Get file info and content separately
+      // Get file info first
       const fileInfo = await kdbManager.getSourceFileInfo(targetFileId);
-      const fileContent = await kdbManager.getSourceFileContent(targetFileId);
-      console.log('[MonacoSourceCodeWindow] Source file info:', fileInfo, 'content length:', fileContent?.length || 0);
+      if (!fileInfo) {
+        throw new Error('File info not found');
+      }
       
-      if (fileContent !== null) {
-        console.log('[MonacoSourceCodeWindow] Source file content length:', fileContent.length);
-        setContent(fileContent);
-        setFilePath(fileInfo?.path || '');
-        // Use stored totalLines from file info
-        setTotalLines(fileInfo?.totalLines || 0);
+      setFilePath(fileInfo.path);
+      setTotalLines(fileInfo.totalLines);
+      
+      // Check if this is a large file
+      // For now, we use totalLines as a proxy for file size
+      // In production, you should store actual file size in metadata
+      const estimatedSize = fileInfo.totalLines * 50; // Rough estimate: 50 bytes per line
+      const metadata: FileMetadata = {
+        id: targetFileId,
+        path: fileInfo.path,
+        name: fileInfo.name,
+        fullName: fileInfo.fullName,
+        totalLines: fileInfo.totalLines,
+        size: estimatedSize,
+        kdbId: fileInfo.kdbId,
+      };
+      
+      const isLarge = LargeFileController.isLargeFile(metadata);
+      setIsLargeFile(isLarge);
+      isLargeFileModeRef.current = isLarge;
+      
+      if (isLarge) {
+        // Large file mode: use windowed loading
+        console.log('[MonacoSourceCodeWindow] Large file detected, using windowed loading');
         
-        // Priority: signalDeclarationLine > startFromLine1 > module.startLine
-        if (signalDeclarationLine) {
-          console.log('[MonacoSourceCodeWindow] Jumping to signal declaration line:', signalDeclarationLine);
-          setHighlightLine(signalDeclarationLine);
-        } else if (startFromLine1) {
-          console.log('[MonacoSourceCodeWindow] Opening from line 1 (file mode)');
-          setHighlightLine(1);
-        } else if (targetModuleStartLine) {
-          console.log('[MonacoSourceCodeWindow] Highlight line:', targetModuleStartLine);
-          setHighlightLine(targetModuleStartLine);
-        } else {
-          setHighlightLine(null);
+        // Clean up previous controller
+        if (largeFileControllerRef.current) {
+          largeFileControllerRef.current.dispose();
         }
+        
+        // Create new controller
+        const controller = new LargeFileController({
+          onContentChange: (content, startLine) => {
+            setContent(content);
+            setWindowStartLine(startLine);
+          },
+          onLoadingChange: (loading) => {
+            setLoading(loading);
+          },
+          onError: (error) => {
+            console.error('[MonacoSourceCodeWindow] Large file error:', error);
+            setContent(`// Error loading large file: ${error}`);
+          },
+        });
+        
+        largeFileControllerRef.current = controller;
+        
+        // Initialize controller
+        const success = await controller.init(metadata);
+        if (!success) {
+          throw new Error('Failed to initialize large file controller');
+        }
+        
+        // Determine initial visible range
+        let targetLine = 1;
+        if (signalDeclarationLine) {
+          targetLine = signalDeclarationLine;
+        } else if (targetModuleStartLine) {
+          targetLine = targetModuleStartLine;
+        }
+        
+        // Load initial window around target line
+        const visibleStart = Math.max(1, targetLine - 50);
+        const visibleEnd = Math.min(fileInfo.totalLines, targetLine + 50);
+        await controller.ensureWindow(visibleStart, visibleEnd);
+        
+        // Set highlight
+        if (signalDeclarationLine) {
+          setHighlightLine(signalDeclarationLine);
+        } else if (targetModuleStartLine) {
+          setHighlightLine(targetModuleStartLine);
+        }
+        
       } else {
-        console.log('[MonacoSourceCodeWindow] Source file not found for fileId:', targetFileId);
-        setContent(`// Source file not found\n// File ID: ${targetFileId}`);
-        setFilePath('');
-        setTotalLines(0);
-        setHighlightLine(null);
+        // Small file mode: load entire content
+        console.log('[MonacoSourceCodeWindow] Small file, loading entire content');
+        
+        const fileContent = await kdbManager.getSourceFileContent(targetFileId);
+        console.log('[MonacoSourceCodeWindow] Source file content length:', fileContent?.length || 0);
+        
+        if (fileContent !== null) {
+          setContent(fileContent);
+          setWindowStartLine(1);
+          
+          // Priority: signalDeclarationLine > startFromLine1 > module.startLine
+          if (signalDeclarationLine) {
+            console.log('[MonacoSourceCodeWindow] Jumping to signal declaration line:', signalDeclarationLine);
+            setHighlightLine(signalDeclarationLine);
+          } else if (startFromLine1) {
+            console.log('[MonacoSourceCodeWindow] Opening from line 1 (file mode)');
+            setHighlightLine(1);
+          } else if (targetModuleStartLine) {
+            console.log('[MonacoSourceCodeWindow] Highlight line:', targetModuleStartLine);
+            setHighlightLine(targetModuleStartLine);
+          } else {
+            setHighlightLine(null);
+          }
+        } else {
+          throw new Error('File content not found');
+        }
       }
     } catch (err) {
       console.error('[MonacoSourceCodeWindow] Error loading source file:', err);
