@@ -52,6 +52,10 @@ class ApiService {
     return this.baseUrl !== '';
   }
 
+  getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
   // Generic API request
   private async request<T>(
     endpoint: string,
@@ -138,47 +142,8 @@ class ApiService {
     return this.request(`/api/kdb/${kdbName}`);
   }
 
-  async downloadKdb(
-    kdbName: string,
-    onProgress?: (downloaded: number, total: number) => void
-  ): Promise<ArrayBuffer | null> {
-    // First, get file info
-    const info = await this.getKdbInfo(kdbName);
-    if (info.status !== 'success' || !info.data) {
-      console.error('[ApiService] Failed to get KDB info:', info);
-      return null;
-    }
-
-    const totalSize = info.data.kdb_info.file_size;
-    const chunkSize = 64 * 1024; // 64KB chunks
-    const chunks: ArrayBuffer[] = [];
-    let downloaded = 0;
-
-    // Download in chunks
-    for (let offset = 0; offset < totalSize; offset += chunkSize) {
-      const end = Math.min(offset + chunkSize - 1, totalSize - 1);
-      const result = await this.binaryRequest(`/api/kdb/${kdbName}/file`, { start: offset, end });
-
-      if (!result) {
-        console.error('[ApiService] Failed to download chunk at offset:', offset);
-        return null;
-      }
-
-      chunks.push(result.data);
-      downloaded += result.data.byteLength;
-      onProgress?.(downloaded, totalSize);
-    }
-
-    // Combine chunks
-    const combined = new Uint8Array(downloaded);
-    let position = 0;
-    for (const chunk of chunks) {
-      combined.set(new Uint8Array(chunk), position);
-      position += chunk.byteLength;
-    }
-
-    return combined.buffer;
-  }
+  // Note: downloadKdb removed - use kdbDownloadManager with Web Worker instead
+  // for streaming download + zstd decompression + batch storage
 
   // Waveform APIs
   async getWaveformList(): Promise<ApiResponse<WaveListResponse>> {

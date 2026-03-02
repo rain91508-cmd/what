@@ -12,7 +12,7 @@
 import { apiService } from '../../services/api';
 import { indexedDBManager } from '../../core/storage/indexedDB';
 import { get_source_file_content } from '../../core/storage/kdbStorage';
-import { parseKdbWithWasm } from './kdbWasmParser';
+import { kdbDownloadManager, type KDBDownloadProgress } from '../../services/kdbDownloadManager';
 import { wasmManager } from '../../wasm';
 import type { 
   Module, 
@@ -67,7 +67,8 @@ class KdbManager {
   }
 
   /**
-   * Download and load KDB from server
+   * Download and load KDB from server using Web Worker
+   * Implements streaming download + zstd decompression + batch storage
    */
   async downloadAndLoadKdb(
     kdbName: string,
@@ -81,26 +82,29 @@ class KdbManager {
     this.downloading = true;
 
     try {
-      const kdbData = await apiService.downloadKdb(kdbName, onProgress);
-      if (!kdbData) {
-        throw new Error('Failed to download KDB');
+      console.log('[KdbManager] Starting KDB download with Worker...');
+
+      // Use new Worker-based download manager
+      const result = await kdbDownloadManager.downloadKDB(
+        kdbName,
+        kdbName, // Use kdbName as kdbId
+        (progress: KDBDownloadProgress) => {
+          console.log(`[KdbManager] ${progress.phase}: ${progress.loaded}/${progress.total}`);
+          onProgress?.(progress.loaded, progress.total);
+        }
+      );
+
+      if (!result.success) {
+        throw new Error(result.error || 'Download failed');
       }
 
-      console.log('[KdbManager] Download complete, starting WASM parsing...');
+      console.log('[KdbManager] Download complete:', result.designName);
 
-      const success = await this.parseKdb(kdbData, kdbName, (msg) => {
-        console.log('[KdbManager]', msg);
-      });
-
-      if (success) {
-        this.currentKdbId = kdbName;
-        // Load modules and signal instances into memory
-        await this.loadKdbData();
-        console.log('[KdbManager] KDB loaded successfully:', kdbName);
-        return true;
-      }
-      
-      return false;
+      this.currentKdbId = kdbName;
+      // Load modules and signal instances into memory
+      await this.loadKdbData();
+      console.log('[KdbManager] KDB loaded successfully:', kdbName);
+      return true;
     } catch (error) {
       console.error('[KdbManager] Failed to download/load KDB:', error);
       return false;
@@ -122,35 +126,6 @@ class KdbManager {
     this.allSignalInsts = await indexedDBManager.getAllSignalInsts(this.currentKdbId);
     
     console.log(`[KdbManager] Loaded ${this.modules.length} modules and ${this.allSignalInsts.length} signal instances`);
-  }
-
-  /**
-   * Parse KDB binary data and store to IndexedDB via WASM
-   */
-  private async parseKdb(data: ArrayBuffer, kdbId: string, onMessage?: (msg: string) => void): Promise<boolean> {
-    const view = new DataView(data);
-    const magic = view.getUint32(0, true);
-
-    if (magic === 0x4B445743) { // "CWDK"
-      console.log('[KdbManager] Detected CWDK format, using WASM parser');
-      onMessage?.('Detected CWDK format (zstd compressed)');
-      
-      const success = await parseKdbWithWasm(kdbId, data, onMessage);
-      if (success) {
-        console.log('[KdbManager] WASM parsing successful, data stored to IndexedDB');
-        onMessage?.('WASM parsing successful');
-        return true;
-      }
-      
-      console.warn('[KdbManager] WASM parsing failed');
-      onMessage?.('WASM parsing failed');
-      return false;
-    }
-
-    const magicStr = String.fromCharCode(...new Uint8Array(data, 0, 4));
-    console.warn('[KdbManager] Invalid KDB magic number:', magicStr || magic.toString(16));
-    onMessage?.(`Invalid KDB magic number: ${magicStr || magic.toString(16)}`);
-    return false;
   }
 
   // ==================== Dynamic Calculation Helpers ====================
