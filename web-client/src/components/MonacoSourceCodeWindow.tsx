@@ -77,51 +77,47 @@ export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDecl
   // Apply gray out decoration for lines outside module range
   const applyGrayOutDecoration = useCallback((editor: editor.IStandaloneCodeEditor, startLine: number, endLine: number, totalLines: number) => {
     if (!startLine || !endLine || totalLines <= 0) return;
-    
+
     console.log('[MonacoSourceCodeWindow] Applying gray out decoration:', startLine, '-', endLine, 'of', totalLines);
-    
+
     // Clear previous gray out decorations
     if (grayOutDecorationsRef.current.length > 0) {
       editor.deltaDecorations(grayOutDecorationsRef.current, []);
       grayOutDecorationsRef.current = [];
     }
-    
+
     const decorations: monaco.editor.IModelDeltaDecoration[] = [];
-    
-    // Gray out lines before module start
+
+    // Gray out lines before module start - use className for whole line background
     if (startLine > 1) {
-      for (let i = 1; i < startLine; i++) {
-        decorations.push({
-          range: new monaco.Range(i, 1, i, 1),
-          options: {
-            isWholeLine: true,
-            inlineClassName: 'grayed-out-line',
-            overviewRuler: {
-              color: 'rgba(200, 200, 200, 0.3)',
-              position: monaco.editor.OverviewRulerLane.Full
-            }
+      decorations.push({
+        range: new monaco.Range(1, 1, startLine - 1, 1),
+        options: {
+          isWholeLine: true,
+          className: 'grayed-out-line',
+          overviewRuler: {
+            color: 'rgba(200, 200, 200, 0.3)',
+            position: monaco.editor.OverviewRulerLane.Full
           }
-        });
-      }
+        }
+      });
     }
-    
-    // Gray out lines after module end
+
+    // Gray out lines after module end - use className for whole line background
     if (endLine < totalLines) {
-      for (let i = endLine + 1; i <= totalLines; i++) {
-        decorations.push({
-          range: new monaco.Range(i, 1, i, 1),
-          options: {
-            isWholeLine: true,
-            inlineClassName: 'grayed-out-line',
-            overviewRuler: {
-              color: 'rgba(200, 200, 200, 0.3)',
-              position: monaco.editor.OverviewRulerLane.Full
-            }
+      decorations.push({
+        range: new monaco.Range(endLine + 1, 1, totalLines, 1),
+        options: {
+          isWholeLine: true,
+          className: 'grayed-out-line',
+          overviewRuler: {
+            color: 'rgba(200, 200, 200, 0.3)',
+            position: monaco.editor.OverviewRulerLane.Full
           }
-        });
-      }
+        }
+      });
     }
-    
+
     if (decorations.length > 0) {
       grayOutDecorationsRef.current = editor.deltaDecorations([], decorations);
       console.log('[MonacoSourceCodeWindow] Applied', decorations.length, 'gray out decorations');
@@ -443,77 +439,7 @@ export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDecl
           border-radius: 2px;
         }
         .monaco-editor .grayed-out-line {
-          opacity: 0.5 !important;
-          filter: grayscale(0.6) !important;
-        }
-        .monaco-editor .grayed-out-line * {
-          color: #888 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk1 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk2 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk3 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk4 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk5 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk6 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk7 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk8 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk9 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk10 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk11 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk12 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk13 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk14 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk15 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk16 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk17 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk18 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk19 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk20 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .mtk21 {
-          color: #999 !important;
-        }
-        .monaco-editor .grayed-out-line .line-numbers {
-          color: #bbb !important;
+          background-color: rgba(200, 200, 200, 0.25) !important;
         }
       `}</style>
     </div>

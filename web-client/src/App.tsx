@@ -401,9 +401,35 @@ function App() {
     }
     
     // Get module info for module start/end line
+    // Use the same logic as hierarchy double click to determine display range
     const module = kdbManager.getModuleById(moduleIndex);
-    const moduleStartLine = module?.definition?.startLine;
-    const moduleEndLine = module?.definition?.endLine;
+    let displayStartLine: number | undefined;
+    let displayEndLine: number | undefined;
+    
+    if (module?.isInstance) {
+      // This is an instance, find the parent module definition
+      const parentModuleId = module.parentModuleId;
+      if (parentModuleId > 0) {
+        const parentModule = kdbManager.getModuleById(parentModuleId);
+        if (parentModule && !parentModule.isInstance) {
+          // Parent is a module definition, use its range
+          displayStartLine = parentModule.definition?.startLine;
+          displayEndLine = parentModule.definition?.endLine;
+        } else if (parentModule && parentModule.isInstance) {
+          // Parent is also an instance, find the def_module_id
+          const defModuleId = parentModule.defModuleId;
+          if (defModuleId > 0) {
+            const defModule = kdbManager.getModuleById(defModuleId);
+            displayStartLine = defModule?.definition?.startLine;
+            displayEndLine = defModule?.definition?.endLine;
+          }
+        }
+      }
+    } else {
+      // This is a module definition, use its own range
+      displayStartLine = module?.definition?.startLine;
+      displayEndLine = module?.definition?.endLine;
+    }
     
     // Get line content (we need to fetch the source content)
     const sourceFile = await kdbManager.getSourceFile(fileId);
@@ -417,8 +443,8 @@ function App() {
     // Create bookmark (name will be auto-generated as "Mark N")
     const bookmark = bookmarkManager.addBookmark({
       moduleIndex: moduleIndex,  // Store module index for navigation
-      moduleStartLine: moduleStartLine,  // Store for gray out
-      moduleEndLine: moduleEndLine,      // Store for gray out
+      moduleStartLine: displayStartLine,  // Store for gray out (normal display range start)
+      moduleEndLine: displayEndLine,      // Store for gray out (normal display range end)
       fileId: fileId,
       fileName: fileInfo.name,
       fileFullName: fileInfo.fullName,
