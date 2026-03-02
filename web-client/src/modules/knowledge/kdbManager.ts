@@ -11,6 +11,7 @@
 
 import { apiService } from '../../services/api';
 import { indexedDBManager } from '../../core/storage/indexedDB';
+import { get_source_file_content } from '../../core/storage/kdbStorage';
 import { parseKdbWithWasm } from './kdbWasmParser';
 import { wasmManager } from '../../wasm';
 import type { 
@@ -493,10 +494,11 @@ class KdbManager {
   }
 
   /**
-   * Get source file content by ID (large data)
+   * Get source file content by ID (large data from OPFS)
    */
   async getSourceFileContent(id: number): Promise<string | null> {
-    return indexedDBManager.getSourceFileContent(id);
+    if (!this.currentKdbId) return null;
+    return get_source_file_content(id, this.currentKdbId);
   }
 
   /**

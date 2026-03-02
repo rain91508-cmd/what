@@ -8,7 +8,7 @@
 // - SignalInst stored in global allSignalInsts array
 //
 
-import { openDB, DBSchema, IDBPDatabase } from 'idb';
+import { openDB, deleteDB, DBSchema, IDBPDatabase } from 'idb';
 import type { 
   Module, 
   SignalInst,
@@ -90,14 +90,7 @@ interface HWDBSchema extends DBSchema {
     };
     indexes: { 'by-kdb': string };
   };
-  'source-file-content': {
-    key: number;  // file id (1-based)
-    value: {
-      id: number;
-      content: string;
-      kdbId: string;
-    };
-  };
+  // Note: source-file-content store removed - content now stored in OPFS
   'metadata': {
     key: string;
     value: {
@@ -118,13 +111,23 @@ class IndexedDBManager {
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
+    // Check if we need to force reset (e.g., when schema changes significantly)
+    const needsReset = await this.checkIfNeedsReset();
+    if (needsReset) {
+      console.log('[IndexedDB] Force resetting database due to schema change...');
+      await this.forceReset();
+    }
+
     this.db = await openDB<HWDBSchema>(DB_NAME, DB_VERSION, {
       upgrade(db, oldVersion, _newVersion) {
+        console.log(`[IndexedDB] Upgrading from version ${oldVersion} to ${_newVersion}`);
+        
         // Delete old stores if upgrading from v3 or below
         if (oldVersion < 4) {
           const storeNames = Array.from(db.objectStoreNames);
           storeNames.forEach(name => {
             try {
+              console.log(`[IndexedDB] Deleting old store: ${name}`);
               db.deleteObjectStore(name);
             } catch (e) {
               // Ignore errors for non-existent stores
@@ -150,16 +153,13 @@ class IndexedDBManager {
           signalStore.createIndex('by-kdb', 'kdbId');
         }
 
-        // Source file info store - stores metadata only
+        // Source file info store - stores metadata only (content is in OPFS)
         if (!db.objectStoreNames.contains('source-file-info')) {
           const sourceInfoStore = db.createObjectStore('source-file-info', { keyPath: 'id' });
           sourceInfoStore.createIndex('by-kdb', 'kdbId');
         }
 
-        // Source file content store - stores large content separately
-        if (!db.objectStoreNames.contains('source-file-content')) {
-          db.createObjectStore('source-file-content', { keyPath: 'id' });
-        }
+        // Note: source-file-content store removed - content now stored in OPFS
 
         // Metadata store
         if (!db.objectStoreNames.contains('metadata')) {
@@ -330,21 +330,6 @@ class IndexedDBManager {
   }
 
   // ============================================
-  // Source File Content Operations (large data)
-  // ============================================
-  
-  async storeSourceFileContent(id: number, content: string, kdbId: string): Promise<void> {
-    const db = this.getDB();
-    await db.put('source-file-content', { id, content, kdbId });
-  }
-
-  async getSourceFileContent(id: number): Promise<string | null> {
-    const db = this.getDB();
-    const result = await db.get('source-file-content', id);
-    return result?.content || null;
-  }
-
-  // ============================================
   // Cleanup Operations
   // ============================================
   
@@ -390,10 +375,7 @@ class IndexedDBManager {
       await db.delete('source-file-info', id);
     }
 
-    // Clear source file content
-    for (const id of fileIds) {
-      await db.delete('source-file-content', id);
-    }
+    // Note: source-file-content store removed - content is in OPFS, cleared separately
 
     console.log(`[IndexedDB] Cleared data for KDB: ${kdbId}`);
   }
@@ -408,10 +390,61 @@ class IndexedDBManager {
     await db.clear('modules');
     await db.clear('signal-insts');
     await db.clear('source-file-info');
-    await db.clear('source-file-content');
+    // Note: source-file-content store removed - content is in OPFS
     await db.clear('metadata');
     
     console.log('[IndexedDB] Cleared all data');
+  }
+
+  /**
+   * Check if database needs to be reset due to schema changes
+   * Uses a metadata flag to track schema version
+   */
+  private async checkIfNeedsReset(): Promise<boolean> {
+    try {
+      // Try to open the database without upgrading to check current state
+      const existingDb = await openDB(DB_NAME, DB_VERSION);
+      
+      // Check if we have the old 'source-files' store (indicates old schema)
+      const hasOldStore = existingDb.objectStoreNames.contains('source-files');
+      // Check if we have the deprecated 'source-file-content' store (content now in OPFS)
+      const hasDeprecatedContentStore = existingDb.objectStoreNames.contains('source-file-content');
+      const hasNewInfoStore = existingDb.objectStoreNames.contains('source-file-info');
+      
+      existingDb.close();
+      
+      if (hasOldStore || hasDeprecatedContentStore || !hasNewInfoStore) {
+        console.log('[IndexedDB] Detected old schema, needs reset:', { hasOldStore, hasDeprecatedContentStore, hasNewInfoStore });
+        return true;
+      }
+      
+      return false;
+    } catch (e) {
+      // Database doesn't exist or other error, no need to reset
+      return false;
+    }
+  }
+
+  /**
+   * Force reset the database by deleting and recreating it
+   */
+  private async forceReset(): Promise<void> {
+    try {
+      // Close current connection if any
+      if (this.db) {
+        this.db.close();
+        this.db = null;
+      }
+      
+      // Delete the entire database
+      await deleteDB(DB_NAME);
+      console.log('[IndexedDB] Database deleted for reset');
+      
+      // Reset initialization flag
+      this.initialized = false;
+    } catch (e) {
+      console.error('[IndexedDB] Error during force reset:', e);
+    }
   }
 
   // ============================================

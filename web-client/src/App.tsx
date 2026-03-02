@@ -1032,11 +1032,13 @@ function App() {
     
     if (activeSourceTab) {
       // Update the active source tab to jump to signal declaration
+      // Use signal's parent module as display module
       setTabs(prev => prev.map(tab => 
         tab.id === activeSourceTab.id 
           ? { 
               ...tab, 
               moduleIndex: displayModuleIndex,
+              displayModuleIndex: displayModuleIndex,  // Set display module to signal's parent
               signalDeclarationLine: line,
               moduleStartLine: displayStartLine,
               moduleEndLine: displayEndLine,
@@ -1056,6 +1058,7 @@ function App() {
         label: 'Source',
         type: 'source',
         moduleIndex: displayModuleIndex,
+        displayModuleIndex: displayModuleIndex,  // Set display module to signal's parent
         signalDeclarationLine: line,
         moduleStartLine: displayStartLine,
         moduleEndLine: displayEndLine,
