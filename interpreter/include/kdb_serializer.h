@@ -25,7 +25,8 @@ private:
     void writeModules(std::vector<uint8_t>& buffer, const std::vector<ModuleInfo>& modules);
     void writeSignals(std::vector<uint8_t>& buffer, const std::vector<SignalInfo>& signals);
     void writeConnections(std::vector<uint8_t>& buffer, const std::vector<ModuleInstanceInfo::PortConnection>& connections);
-    void writeSourceFiles(std::vector<uint8_t>& buffer, const std::vector<SourceFileInfo>& files);
+    void writeSourceFiles(std::vector<uint8_t>& buffer, const std::vector<SourceFileInfo>& files,
+                          const std::vector<SourceFileContent>& contents);
     
     void writeString(std::vector<uint8_t>& buffer, const std::string& str);
     void writeUint32(std::vector<uint8_t>& buffer, uint32_t value);

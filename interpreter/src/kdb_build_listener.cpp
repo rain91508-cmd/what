@@ -272,9 +272,11 @@ KdbModuleSourceLocation KdbBuildListener::extractModuleLocation(const UHDM::modu
     
     // Scan for endmodule
     if (loc.fileId != 0 && loc.startLine > 0) {
-        const auto* file = builder_.findFileById(loc.fileId);
-        if (file && !file->content.empty()) {
-            loc.endLine = findEndmoduleLine(file->content, loc.startLine);
+        const auto* fileInfo = builder_.findFileById(loc.fileId);
+        const auto* fileContent = builder_.findFileContentById(loc.fileId);
+        if (fileInfo && fileContent && !fileContent->data.empty()) {
+            std::string contentStr(fileContent->data.begin(), fileContent->data.end());
+            loc.endLine = findEndmoduleLine(contentStr, loc.startLine);
         } else {
             loc.endLine = loc.startLine;
         }

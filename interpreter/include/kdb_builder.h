@@ -41,16 +41,29 @@ enum class PortDirection {
     INOUT = 3
 };
 
-struct SourceFileInfo {
-    uint32_t id;  // Changed from uint64_t to uint32_t
-    std::string path;
-    std::string content;
-    uint32_t totalLines = 0;  // Total number of lines in the file
+// Source file content - stored separately for lazy loading
+struct SourceFileContent {
+    std::vector<uint8_t> data;  // UTF-8 encoded content as byte array
     
-    std::string getLine(uint32_t lineNum) const;
-    std::string getRange(uint32_t startLine, uint32_t startCol, 
+    std::string toString() const {
+        return std::string(data.begin(), data.end());
+    }
+};
+
+// Source file metadata - for quick access without loading content
+struct SourceFileInfo {
+    // Note: id removed, use array index + 1 as implicit ID
+    std::string path;
+    uint32_t totalLines = 0;  // Total number of lines in the file
+    // Line index for fast seeking: lineIndexOffset[n] = byte offset of line (256*n + 1)
+    std::vector<uint32_t> lineIndexOffset;
+    
+    // Get byte offset for a specific line (1-based)
+    uint32_t getLineOffset(uint32_t lineNum) const;
+    // Get line content from byte array
+    std::string getLine(const SourceFileContent& content, uint32_t lineNum) const;
+    std::string getRange(const SourceFileContent& content, uint32_t startLine, uint32_t startCol, 
                          uint32_t endLine, uint32_t endCol) const;
-    uint64_t getLineCount() const;
 };
 
 struct KdbSourceLocation {
@@ -262,6 +275,7 @@ public:
     const SignalInfo* findSignalById(uint64_t id) const;  // Now requires commit phase
     const SourceFileInfo* findFileByPath(const std::string& path) const;
     const SourceFileInfo* findFileById(uint32_t id) const;  // Changed parameter type
+    const SourceFileContent* findFileContentById(uint32_t id) const;  // Get file content by ID
     
     // Add driver to a signal by name (Phase 1: stores fullName, Phase 2: resolved to global ID)
     bool addDriverToSignal(const std::string& signalFullName, const std::string& driverSignalFullName);
@@ -295,7 +309,7 @@ public:
     int getCompressionLevel() const { return compressionLevel_; }
     
     size_t getModuleCount() const { return modules_.size(); }
-    size_t getFileCount() const { return files_.size(); }
+    size_t getFileCount() const { return fileInfos_.size(); }
     size_t getTotalSignalCount() const;
     
     // Get global signal insts array (for ModuleInfo::getSignalInst)
@@ -320,7 +334,9 @@ private:
     };
     std::vector<HierarchyInfo> hierarchies_;
     
-    std::vector<std::unique_ptr<SourceFileInfo>> files_;
+    // Source files split into info (metadata) and content (byte arrays)
+    std::vector<std::unique_ptr<SourceFileInfo>> fileInfos_;
+    std::vector<std::unique_ptr<SourceFileContent>> fileContents_;
     std::vector<std::unique_ptr<ModuleInfo>> modules_;
     std::vector<std::unique_ptr<ModuleInstanceInfo>> instances_;
     
@@ -335,9 +351,9 @@ private:
     std::unordered_map<uint64_t, size_t> signalIdToIndex_;  // Maps global ID to index in allSignalInsts
     std::unordered_map<uint32_t, size_t> fileIdToIndex_;  // Changed key type
     
-    uint32_t nextFileId_;  // Changed from uint64_t to uint32_t
-    uint32_t nextModuleId_;  // Changed from uint64_t to uint32_t
-    uint32_t nextInstanceId_;  // Changed from uint64_t to uint32_t
+    // Note: nextFileId_ removed - file ID is array index + 1
+    uint32_t nextModuleId_ = 1;  // Changed from uint64_t to uint32_t
+    uint32_t nextInstanceId_ = 1;  // Changed from uint64_t to uint32_t
     
     bool compressionEnabled_ = true;
     int compressionLevel_ = 9;

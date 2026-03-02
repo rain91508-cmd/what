@@ -10,11 +10,20 @@ message KDBHeader {
   string created_at = 3;
 }
 
-message SourceFile {
-  uint32 id = 1;  // Changed from uint64 to uint32
-  string path = 2;
-  string content = 3;
-  uint32 total_lines = 4;  // Total number of lines in the source file
+// Source file content - stored as byte array (UTF-8 encoded)
+// Note: id removed, use array index + 1 as implicit ID
+message SourceFileContent {
+  bytes content = 1;  // UTF-8 encoded file content
+}
+
+// Source file metadata - for quick access without loading content
+// Note: id removed, use array index + 1 as implicit ID
+message SourceFileInfo {
+  string path = 1;
+  uint32 total_lines = 2;  // Total number of lines in the source file
+  // Line index for fast seeking: line_index_offset[n] = byte offset of line (256*n + 1)
+  // For example: line_index_offset[0] = offset of line 1, line_index_offset[1] = offset of line 257
+  repeated uint32 line_index_offset = 3;
 }
 
 message SourceLocation {
@@ -104,9 +113,11 @@ message DesignHierarchy {
 
 message KnowledgeBase {
   KDBHeader header = 1;
-  repeated SourceFile files = 2;
-  repeated Module modules = 3;
-  repeated DesignHierarchy hierarchies = 4;
-  // New: Global signal instances array for memory optimization
-  repeated SignalInst all_signal_insts = 5;  // All signal instances from all modules
+  // Note: SourceFile split into SourceFileInfo and SourceFileContent
+  repeated SourceFileInfo file_infos = 2;      // File metadata (path, total_lines, line_index_offset)
+  repeated SourceFileContent file_contents = 3; // File content (UTF-8 byte arrays)
+  repeated Module modules = 4;
+  repeated DesignHierarchy hierarchies = 5;
+  // Global signal instances array for memory optimization
+  repeated SignalInst all_signal_insts = 6;  // All signal instances from all modules
 }

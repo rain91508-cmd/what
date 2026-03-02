@@ -1,5 +1,4 @@
 #include "kdb_builder.h"
-#include "kdb_serializer.h"
 #include "surelog_parser.h"
 #include <iostream>
 #include <fstream>

@@ -97,13 +97,24 @@ void KdbSerializer::writeConnections(std::vector<uint8_t>& buffer, const std::ve
     }
 }
 
-void KdbSerializer::writeSourceFiles(std::vector<uint8_t>& buffer, const std::vector<SourceFileInfo>& files) {
+void KdbSerializer::writeSourceFiles(std::vector<uint8_t>& buffer, const std::vector<SourceFileInfo>& files,
+                                     const std::vector<SourceFileContent>& contents) {
     writeUint32(buffer, static_cast<uint32_t>(files.size()));
     
-    for (const auto& file : files) {
-        writeUint64(buffer, file.id);
+    for (size_t i = 0; i < files.size(); ++i) {
+        const auto& file = files[i];
+        const auto& content = contents[i];
+        // Note: id removed - use array index + 1 as implicit ID
         writeString(buffer, file.path);
-        writeString(buffer, file.content);
+        writeUint32(buffer, file.totalLines);
+        // Write line index offsets
+        writeUint32(buffer, static_cast<uint32_t>(file.lineIndexOffset.size()));
+        for (uint32_t offset : file.lineIndexOffset) {
+            writeUint32(buffer, offset);
+        }
+        // Write content as byte array
+        writeUint32(buffer, static_cast<uint32_t>(content.data.size()));
+        buffer.insert(buffer.end(), content.data.begin(), content.data.end());
     }
 }
 
@@ -131,8 +142,23 @@ std::vector<uint8_t> KdbSerializer::serializeToBuffer(const KdbBuilder& builder)
     std::vector<ModuleInstanceInfo::PortConnection> connections;
     writeConnections(buffer, connections);
     
-    std::vector<SourceFileInfo> sourceFiles;
-    writeSourceFiles(buffer, sourceFiles);
+    // Get all source files
+    auto files = builder.getAllFiles();
+    std::vector<SourceFileInfo> sourceFileInfos;
+    std::vector<SourceFileContent> sourceFileContents;
+    for (size_t i = 0; i < files.size(); ++i) {
+        if (files[i]) {
+            sourceFileInfos.push_back(*files[i]);
+            // Get content by ID (array index + 1)
+            const auto* content = builder.findFileContentById(static_cast<uint32_t>(i + 1));
+            if (content) {
+                sourceFileContents.push_back(*content);
+            } else {
+                sourceFileContents.push_back(SourceFileContent());
+            }
+        }
+    }
+    writeSourceFiles(buffer, sourceFileInfos, sourceFileContents);
     
     // Return uncompressed buffer for now
     return buffer;

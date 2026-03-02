@@ -139,34 +139,51 @@ void printFiles(const KdbBuilder& builder) {
     std::cout << "\n=== Source Files (" << builder.getFileCount() << ") ===\n";
     
     for (uint64_t id = 1; id <= builder.getFileCount(); ++id) {
-        const auto* file = builder.findFileById(id);
-        if (file) {
-            std::cout << "  [" << id << "] " << file->path 
-                      << " (" << file->getLineCount() << " lines)\n";
+        const auto* fileInfo = builder.findFileById(id);
+        if (fileInfo) {
+            std::cout << "  [" << id << "] " << fileInfo->path 
+                      << " (" << fileInfo->totalLines << " lines)\n";
         }
     }
 }
 
 void printSourceFileContent(const KdbBuilder& builder, const std::string& filePath) {
-    const auto* file = builder.findFileByPath(filePath);
-    if (!file) {
+    const SourceFileInfo* fileInfo = builder.findFileByPath(filePath);
+    const SourceFileContent* fileContent = nullptr;
+    uint32_t fileId = 0;
+    
+    if (!fileInfo) {
         try {
             uint64_t id = std::stoull(filePath);
-            file = builder.findFileById(id);
+            fileInfo = builder.findFileById(id);
+            if (fileInfo) fileId = static_cast<uint32_t>(id);
         } catch (...) {}
+    } else {
+        // Find ID by path
+        for (uint32_t id = 1; id <= builder.getFileCount(); ++id) {
+            const auto* info = builder.findFileById(id);
+            if (info && info->path == filePath) {
+                fileId = id;
+                break;
+            }
+        }
     }
     
-    if (!file) {
+    if (fileId != 0) {
+        fileContent = builder.findFileContentById(fileId);
+    }
+    
+    if (!fileInfo || !fileContent) {
         std::cout << "File not found: " << filePath << "\n";
         return;
     }
     
-    std::cout << "\n=== Source File: " << file->path << " ===\n";
-    std::cout << "Lines: " << file->getLineCount() << "\n\n";
+    std::cout << "\n=== Source File: " << fileInfo->path << " ===\n";
+    std::cout << "Lines: " << fileInfo->totalLines << "\n\n";
     
-    for (uint32_t line = 1; line <= file->getLineCount(); ++line) {
+    for (uint32_t line = 1; line <= fileInfo->totalLines; ++line) {
         std::cout << std::setw(5) << std::right << line << " | " 
-                  << file->getLine(line) << "\n";
+                  << fileInfo->getLine(*fileContent, line) << "\n";
     }
 }
 
@@ -186,11 +203,12 @@ void printModuleWithSource(const KdbBuilder& builder, const std::string& moduleN
     std::cout << ", End Line " << module->definition.endLine << "\n";
     
     if (module->definition.fileId != 0) {
-        const auto* file = builder.findFileById(module->definition.fileId);
-        if (file && !file->content.empty()) {
+        const auto* fileInfo = builder.findFileById(module->definition.fileId);
+        const auto* fileContent = builder.findFileContentById(module->definition.fileId);
+        if (fileInfo && fileContent && !fileContent->data.empty()) {
             std::cout << "\n  Source Code:\n";
             uint32_t startLine = (module->definition.startLine > 3) ? module->definition.startLine - 3 : 1;
-            uint32_t endLine = std::min(startLine + 10, static_cast<uint32_t>(file->getLineCount()));
+            uint32_t endLine = std::min(startLine + 10, fileInfo->totalLines);
             
             for (uint32_t line = startLine; line <= endLine; ++line) {
                 std::cout << "    ";
@@ -200,7 +218,7 @@ void printModuleWithSource(const KdbBuilder& builder, const std::string& moduleN
                     std::cout << "    ";
                 }
                 std::cout << std::setw(5) << std::right << line << " | " 
-                          << file->getLine(line) << "\n";
+                          << fileInfo->getLine(*fileContent, line) << "\n";
             }
         }
     }
@@ -406,11 +424,12 @@ void printJson(const KdbBuilder& builder) {
     // Output files array
     std::cout << "  \"files\": [\n";
     bool firstFile = true;
+    uint32_t fileId = 1;
     for (const auto* file : builder.getAllFiles()) {
         if (!firstFile) std::cout << ",\n";
         firstFile = false;
         std::cout << "    {\n";
-        std::cout << "      \"id\": " << file->id << ",\n";
+        std::cout << "      \"id\": " << fileId++ << ",\n";
         std::cout << "      \"path\": \"" << file->path << "\",\n";
         std::cout << "      \"total_lines\": " << file->totalLines << "\n";
         std::cout << "    }";

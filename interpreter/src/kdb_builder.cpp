@@ -26,8 +26,7 @@ namespace interpreter {
 static KdbBuilder* g_currentBuilder = nullptr;
 
 KdbBuilder::KdbBuilder()
-    : nextFileId_(1)
-    , nextModuleId_(1)
+    : nextModuleId_(1)
     , nextInstanceId_(1) {
     g_currentBuilder = this;
 }
@@ -43,122 +42,190 @@ void KdbBuilder::setProjectName(const std::string& name) {
 }
 
 uint32_t KdbBuilder::addSourceFile(const std::string& path, const std::string& content) {
-    auto file = std::make_unique<SourceFileInfo>();
-    file->id = nextFileId_++;
-    file->path = path;
-    file->content = content;
+    // Calculate ID from array index (ID = index + 1)
+    uint32_t id = static_cast<uint32_t>(fileInfos_.size()) + 1;
     
-    uint32_t id = file->id;
+    // Create file info
+    auto fileInfo = std::make_unique<SourceFileInfo>();
+    fileInfo->path = path;
+    
+    // Create file content
+    auto fileContent = std::make_unique<SourceFileContent>();
+    fileContent->data.assign(content.begin(), content.end());
+    
+    // Calculate total lines and line index offsets
+    fileInfo->totalLines = 0;
+    fileInfo->lineIndexOffset.push_back(0);  // Line 1 starts at offset 0
+    
+    for (size_t i = 0; i < content.size(); ++i) {
+        if (content[i] == '\n') {
+            fileInfo->totalLines++;
+            // Every 256 lines, record the offset for the next line
+            if ((fileInfo->totalLines % 256) == 0) {
+                fileInfo->lineIndexOffset.push_back(static_cast<uint32_t>(i + 1));
+            }
+        }
+    }
+    // If file is not empty and doesn't end with newline, add 1
+    if (!content.empty() && content.back() != '\n') {
+        fileInfo->totalLines++;
+    }
+    
     filePathToId_[path] = id;
-    fileIdToIndex_[id] = files_.size();
-    files_.push_back(std::move(file));
+    fileIdToIndex_[id] = fileInfos_.size();
+    fileInfos_.push_back(std::move(fileInfo));
+    fileContents_.push_back(std::move(fileContent));
     
     return id;
 }
 
 bool KdbBuilder::setSourceFileContent(uint32_t fileId, const std::string& content) {
-    auto* file = const_cast<SourceFileInfo*>(findFileById(fileId));
-    if (!file) return false;
+    if (fileId == 0 || fileId > fileContents_.size()) return false;
     
-    file->content = content;
+    auto* fileContent = fileContents_[fileId - 1].get();
+    auto* fileInfo = fileInfos_[fileId - 1].get();
+    
+    fileContent->data.assign(content.begin(), content.end());
+    
+    // Recalculate line info
+    fileInfo->totalLines = 0;
+    fileInfo->lineIndexOffset.clear();
+    fileInfo->lineIndexOffset.push_back(0);
+    
+    for (size_t i = 0; i < content.size(); ++i) {
+        if (content[i] == '\n') {
+            fileInfo->totalLines++;
+            if ((fileInfo->totalLines % 256) == 0) {
+                fileInfo->lineIndexOffset.push_back(static_cast<uint32_t>(i + 1));
+            }
+        }
+    }
+    if (!content.empty() && content.back() != '\n') {
+        fileInfo->totalLines++;
+    }
+    
     return true;
 }
 
 std::string KdbBuilder::getSourceLine(uint32_t fileId, uint32_t line) const {
-    const auto* file = findFileById(fileId);
-    if (!file || line == 0 || line > file->getLineCount()) return "";
+    if (fileId == 0 || fileId > fileInfos_.size()) return "";
     
-    return file->getLine(line);
+    const auto* fileInfo = fileInfos_[fileId - 1].get();
+    const auto* fileContent = fileContents_[fileId - 1].get();
+    
+    if (line == 0 || line > fileInfo->totalLines) return "";
+    
+    return fileInfo->getLine(*fileContent, line);
 }
 
 std::string KdbBuilder::getSourceRange(uint32_t fileId, uint32_t startLine, uint32_t startCol,
                                         uint32_t endLine, uint32_t endCol) const {
-    const auto* file = findFileById(fileId);
-    if (!file) return "";
+    if (fileId == 0 || fileId > fileInfos_.size()) return "";
     
-    return file->getRange(startLine, startCol, endLine, endCol);
+    const auto* fileInfo = fileInfos_[fileId - 1].get();
+    const auto* fileContent = fileContents_[fileId - 1].get();
+    
+    return fileInfo->getRange(*fileContent, startLine, startCol, endLine, endCol);
 }
 
 std::string KdbBuilder::getSourceFileContent(uint32_t fileId) const {
-    const auto* file = findFileById(fileId);
-    return file ? file->content : "";
+    if (fileId == 0 || fileId > fileContents_.size()) return "";
+    
+    const auto* fileContent = fileContents_[fileId - 1].get();
+    return fileContent->toString();
 }
 
-std::string SourceFileInfo::getLine(uint32_t lineNum) const {
-    if (content.empty() || lineNum == 0) return "";
+// Get byte offset for a specific line (1-based) using line index
+uint32_t SourceFileInfo::getLineOffset(uint32_t lineNum) const {
+    if (lineNum == 0 || lineNum > totalLines) return 0;
     
-    size_t currentLine = 1;
-    size_t lineStart = 0;
+    // Use line index for fast lookup (every 256 lines)
+    uint32_t indexSlot = (lineNum - 1) / 256;
+    uint32_t offset = 0;
     
-    for (size_t i = 0; i < content.size(); ++i) {
-        if (currentLine == lineNum) {
-            lineStart = i;
-            break;
-        }
-        if (content[i] == '\n') {
+    if (indexSlot < lineIndexOffset.size()) {
+        offset = lineIndexOffset[indexSlot];
+    }
+    
+    return offset;
+}
+
+std::string SourceFileInfo::getLine(const SourceFileContent& content, uint32_t lineNum) const {
+    if (lineNum == 0 || lineNum > totalLines || content.data.empty()) return "";
+    
+    // Use line index for fast seeking
+    uint32_t startOffset = getLineOffset(lineNum);
+    
+    // Find the exact line start
+    uint32_t currentLine = ((lineNum - 1) / 256) * 256 + 1;
+    size_t lineStart = startOffset;
+    
+    const auto& data = content.data;
+    for (size_t i = startOffset; i < data.size() && currentLine < lineNum; ++i) {
+        if (data[i] == '\n') {
             currentLine++;
+            if (currentLine == lineNum) {
+                lineStart = i + 1;
+                break;
+            }
         }
     }
     
     if (currentLine != lineNum) return "";
     
+    // Find line end
     size_t lineEnd = lineStart;
-    while (lineEnd < content.size() && content[lineEnd] != '\n' && content[lineEnd] != '\r') {
+    while (lineEnd < data.size() && data[lineEnd] != '\n' && data[lineEnd] != '\r') {
         lineEnd++;
     }
     
-    return content.substr(lineStart, lineEnd - lineStart);
+    return std::string(data.begin() + lineStart, data.begin() + lineEnd);
 }
 
-std::string SourceFileInfo::getRange(uint32_t startLine, uint32_t startCol, 
+std::string SourceFileInfo::getRange(const SourceFileContent& content, uint32_t startLine, uint32_t startCol,
                                       uint32_t endLine, uint32_t endCol) const {
-    if (content.empty() || startLine == 0 || endLine == 0) return "";
+    if (startLine == 0 || endLine == 0 || startLine > totalLines || endLine > totalLines) return "";
     if (startLine > endLine) return "";
     
-    size_t currentLine = 1;
-    size_t startPos = 0;
+    const auto& data = content.data;
     
-    for (size_t i = 0; i < content.size(); ++i) {
+    // Find start position
+    uint32_t startOffset = getLineOffset(startLine);
+    uint32_t currentLine = ((startLine - 1) / 256) * 256 + 1;
+    size_t startPos = startOffset;
+    
+    for (size_t i = startOffset; i < data.size() && currentLine <= startLine; ++i) {
         if (currentLine == startLine) {
             startPos = i + (startCol > 0 ? startCol - 1 : 0);
             break;
         }
-        if (content[i] == '\n') {
+        if (data[i] == '\n') {
             currentLine++;
         }
     }
     
-    currentLine = 1;
-    size_t endPos = content.size();
+    // Find end position
+    uint32_t endOffset = getLineOffset(endLine);
+    currentLine = ((endLine - 1) / 256) * 256 + 1;
+    size_t endPos = data.size();
     
-    for (size_t i = 0; i < content.size(); ++i) {
+    for (size_t i = endOffset; i < data.size() && currentLine <= endLine; ++i) {
         if (currentLine == endLine) {
             if (endCol > 0) {
                 endPos = i + endCol;
             } else {
-                while (i < content.size() && content[i] != '\n') i++;
+                while (i < data.size() && data[i] != '\n') i++;
                 endPos = i;
             }
             break;
         }
-        if (content[i] == '\n') {
+        if (data[i] == '\n') {
             currentLine++;
         }
     }
     
-    if (startPos >= endPos || startPos >= content.size()) return "";
-    return content.substr(startPos, endPos - startPos);
-}
-
-uint64_t SourceFileInfo::getLineCount() const {
-    if (content.empty()) return 0;
-    uint64_t count = 1;
-    for (size_t i = 0; i < content.size(); ++i) {
-        if (content[i] == '\n') {
-            count++;
-        }
-    }
-    return count;
+    if (startPos >= endPos || startPos >= data.size()) return "";
+    return std::string(data.begin() + startPos, data.begin() + endPos);
 }
 
 bool KdbBuilder::hasModule(const std::string& fullName) const {
@@ -524,11 +591,17 @@ const SourceFileInfo* KdbBuilder::findFileByPath(const std::string& path) const 
 }
 
 const SourceFileInfo* KdbBuilder::findFileById(uint32_t id) const {
-    auto it = fileIdToIndex_.find(id);
-    if (it != fileIdToIndex_.end() && it->second < files_.size()) {
-        return files_[it->second].get();
+    if (id == 0 || id > fileInfos_.size()) {
+        return nullptr;
     }
-    return nullptr;
+    return fileInfos_[id - 1].get();
+}
+
+const SourceFileContent* KdbBuilder::findFileContentById(uint32_t id) const {
+    if (id == 0 || id > fileContents_.size()) {
+        return nullptr;
+    }
+    return fileContents_[id - 1].get();
 }
 
 uint32_t KdbBuilder::getModuleId(const ModuleInfo* module) const {
@@ -575,8 +648,8 @@ std::vector<const SignalInfo*> KdbBuilder::getAllSignals() const {
 
 std::vector<const SourceFileInfo*> KdbBuilder::getAllFiles() const {
     std::vector<const SourceFileInfo*> result;
-    result.reserve(files_.size());
-    for (const auto& file : files_) {
+    result.reserve(fileInfos_.size());
+    for (const auto& file : fileInfos_) {
         result.push_back(file.get());
     }
     return result;
@@ -835,22 +908,22 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
     ss << std::put_time(std::localtime(&time), "%Y-%m-%d %H:%M:%S");
     header->set_created_at(ss.str());
     
-    for (const auto& file : files_) {
-        auto* protoFile = kdb->add_files();
-        protoFile->set_id(file->id);
-        protoFile->set_path(file->path);
-        protoFile->set_content(file->content);
-        // Calculate total lines by counting newline characters
-        // This matches 'wc -l' behavior: count of newline characters
-        uint32_t totalLines = 0;
-        for (char c : file->content) {
-            if (c == '\n') totalLines++;
+    // Serialize file infos and contents separately
+    for (size_t i = 0; i < fileInfos_.size(); ++i) {
+        const auto& info = fileInfos_[i];
+        const auto& content = fileContents_[i];
+        
+        // Serialize file info
+        auto* protoInfo = kdb->add_file_infos();
+        protoInfo->set_path(info->path);
+        protoInfo->set_total_lines(info->totalLines);
+        for (uint32_t offset : info->lineIndexOffset) {
+            protoInfo->add_line_index_offset(offset);
         }
-        // If file is not empty and doesn't end with newline, add 1
-        if (!file->content.empty() && file->content.back() != '\n') {
-            totalLines++;
-        }
-        protoFile->set_total_lines(totalLines);
+        
+        // Serialize file content
+        auto* protoContent = kdb->add_file_contents();
+        protoContent->set_content(content->data.data(), content->data.size());
     }
     
     for (const auto& mod : modules_) {
@@ -926,7 +999,8 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
 }
 
 void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
-    files_.clear();
+    fileInfos_.clear();
+    fileContents_.clear();
     modules_.clear();
     instances_.clear();
     allSignalInsts_.clear();
@@ -939,17 +1013,32 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
     
     projectName_ = kdb.header().project_name();
     
-    for (const auto& protoFile : kdb.files()) {
-        auto file = std::make_unique<SourceFileInfo>();
-        file->id = protoFile.id();
-        file->path = protoFile.path();
-        file->content = protoFile.content();
-        file->totalLines = protoFile.total_lines();
+    // Deserialize file infos and contents separately
+    // Note: file_infos and file_contents should have the same size and order
+    size_t fileCount = std::min(kdb.file_infos_size(), kdb.file_contents_size());
+    for (size_t i = 0; i < fileCount; ++i) {
+        const auto& protoInfo = kdb.file_infos(i);
+        const auto& protoContent = kdb.file_contents(i);
         
-        nextFileId_ = std::max(nextFileId_, file->id + 1);
-        filePathToId_[file->path] = file->id;
-        fileIdToIndex_[file->id] = files_.size();
-        files_.push_back(std::move(file));
+        // Deserialize file info
+        auto info = std::make_unique<SourceFileInfo>();
+        info->path = protoInfo.path();
+        info->totalLines = protoInfo.total_lines();
+        for (uint32_t offset : protoInfo.line_index_offset()) {
+            info->lineIndexOffset.push_back(offset);
+        }
+        
+        // Deserialize file content
+        auto content = std::make_unique<SourceFileContent>();
+        const std::string& contentStr = protoContent.content();
+        content->data.assign(contentStr.begin(), contentStr.end());
+        
+        // Calculate ID from array index (ID = index + 1)
+        uint32_t id = static_cast<uint32_t>(fileInfos_.size()) + 1;
+        filePathToId_[info->path] = id;
+        fileIdToIndex_[id] = fileInfos_.size();
+        fileInfos_.push_back(std::move(info));
+        fileContents_.push_back(std::move(content));
     }
     
     // First pass: load modules
