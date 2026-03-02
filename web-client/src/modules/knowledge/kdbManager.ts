@@ -597,20 +597,7 @@ class KdbManager {
   async findInstanceByName(moduleId: number, instanceName: string): Promise<number | null> {
     console.log(`[KdbManager] findInstanceByName: moduleId=${moduleId}, instanceName=${instanceName}`);
 
-    // Try WASM first if available and KDB is stored in WASM memory
-    if (wasmManager.isInitialized() && this.currentKdbId) {
-      try {
-        const result = await wasmManager.findInstanceByName(this.currentKdbId, moduleId, instanceName);
-        if (result !== null) {
-          console.log(`[KdbManager] Found instance via WASM: ${instanceName} at moduleId=${result}`);
-          return result;
-        }
-      } catch (error) {
-        console.warn('[KdbManager] WASM findInstanceByName failed, falling back to JS:', error);
-      }
-    }
-
-    // Fallback to JS implementation
+    // Use JS implementation directly
     return this.findInstanceByNameJS(moduleId, instanceName);
   }
 
@@ -647,7 +634,6 @@ class KdbManager {
 
   /**
    * Find signal by name within a module (for source code click)
-   * First tries WASM, then falls back to JS implementation
    * @param moduleId Module ID (1-based) to search in
    * @param signalName Signal name to find
    * @returns Global signal ID if found, or null if not found
@@ -655,20 +641,7 @@ class KdbManager {
   async findSignalByName(moduleId: number, signalName: string): Promise<number | null> {
     console.log(`[KdbManager] findSignalByName: moduleId=${moduleId}, signalName=${signalName}`);
 
-    // Try WASM first if available and KDB is stored in WASM memory
-    if (wasmManager.isInitialized() && this.currentKdbId) {
-      try {
-        const result = await wasmManager.findSignalByName(this.currentKdbId, moduleId, signalName);
-        if (result !== null) {
-          console.log(`[KdbManager] Found signal via WASM: ${signalName} at globalId=${result}`);
-          return result;
-        }
-      } catch (error) {
-        console.warn('[KdbManager] WASM findSignalByName failed, falling back to JS:', error);
-      }
-    }
-
-    // Fallback to JS implementation
+    // Use JS implementation directly
     return this.findSignalByNameJS(moduleId, signalName);
   }
 
