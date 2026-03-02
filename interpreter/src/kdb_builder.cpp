@@ -789,10 +789,18 @@ bool KdbBuilder::addDriverToSignal(const std::string& signalFullName, const std:
         SignalInstInfo* inst = getGlobalSignalInst(signalGlobalId);
         if (!inst) return false;
         
-        // Add driver location
+        // Check if driver already exists to avoid duplicates
+        for (auto& driverLoc : inst->driverLocations) {
+            if (driverLoc.driverSignalGlobalId == driverGlobalId) {
+                // Driver already exists, don't add again
+                return true;
+            }
+        }
+        
+        // Add driver location (line will be set by addDriverLineToSignal)
         DriverLocation driverLoc;
         driverLoc.driverSignalGlobalId = driverGlobalId;
-        driverLoc.line = 0;  // Line will be added by addDriverLineToSignal
+        driverLoc.line = 0;  // Line will be set by addDriverLineToSignal
         inst->driverLocations.push_back(driverLoc);
         return true;
     } else {
@@ -800,6 +808,12 @@ bool KdbBuilder::addDriverToSignal(const std::string& signalFullName, const std:
         for (auto& mod : modules_) {
             for (auto& inst : mod->signalInsts) {
                 if (inst.fullName == signalFullName) {
+                    // Check if driver already exists
+                    for (const auto& name : inst.driverSignalFullNames) {
+                        if (name == driverSignalFullName) {
+                            return true;  // Already exists
+                        }
+                    }
                     inst.driverSignalFullNames.push_back(driverSignalFullName);
                     return true;
                 }
@@ -819,9 +833,18 @@ bool KdbBuilder::addDriverLineToSignal(const std::string& signalFullName, const 
         SignalInstInfo* inst = getGlobalSignalInst(signalGlobalId);
         if (!inst) return false;
         
-        // Add or update driver location with line number
+        // Find an existing driver location with line=0 and update it
+        // or add a new one if all have lines set
+        for (auto& driverLoc : inst->driverLocations) {
+            if (driverLoc.line == 0) {
+                driverLoc.line = location.line;
+                return true;
+            }
+        }
+        
+        // All existing drivers have lines, add a new one with unknown driver ID
         DriverLocation driverLoc;
-        driverLoc.driverSignalGlobalId = 0;  // Unknown at this point
+        driverLoc.driverSignalGlobalId = 0;  // Unknown driver
         driverLoc.line = location.line;
         inst->driverLocations.push_back(driverLoc);
         return true;
@@ -830,6 +853,14 @@ bool KdbBuilder::addDriverLineToSignal(const std::string& signalFullName, const 
         for (auto& mod : modules_) {
             for (auto& inst : mod->signalInsts) {
                 if (inst.fullName == signalFullName) {
+                    // Find an existing driver location with line=0 and update it
+                    for (auto& driverLoc : inst.driverLocations) {
+                        if (driverLoc.line == 0) {
+                            driverLoc.line = location.line;
+                            return true;
+                        }
+                    }
+                    // Add new driver location
                     DriverLocation driverLoc;
                     driverLoc.driverSignalGlobalId = 0;  // Will be resolved later
                     driverLoc.line = location.line;
