@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { kdbManager, type TreeNode } from '../modules/knowledge/kdbManager';
-import type { SourceFile } from '../types/kdb';
+import type { SourceFileInfo } from '../types/kdb';
 
 interface DesignBrowserProps {
   onModuleSelect: (moduleIndex: number) => void;
@@ -45,7 +45,7 @@ export function DesignBrowser({
   const [editingPageSize, setEditingPageSize] = useState<Map<number, string>>(new Map());
   
   // Files tab state
-  const [files, setFiles] = useState<SourceFile[]>([]);
+  const [files, setFiles] = useState<SourceFileInfo[]>([]);
   const [fileFilter, setFileFilter] = useState('');
   const [filesLoading, setFilesLoading] = useState(false);
 
@@ -111,7 +111,7 @@ export function DesignBrowser({
         return;
       }
 
-      const allFiles = await kdbManager.getAllSourceFiles();
+      const allFiles = await kdbManager.getAllSourceFileInfo();
       setFiles(allFiles);
       setFilesLoading(false);
     } catch (err) {
@@ -192,7 +192,7 @@ export function DesignBrowser({
     onModuleDoubleClick(nodeId);
   };
 
-  const handleFileDoubleClick = (file: SourceFile) => {
+  const handleFileDoubleClick = (file: SourceFileInfo) => {
     // Open file directly from first line (not from module's start line)
     if (onFileDoubleClick) {
       onFileDoubleClick(file.id);

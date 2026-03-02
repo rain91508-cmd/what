@@ -116,21 +116,40 @@ async function store_signal_inst(globalIndex: number, data: any, kdbId: string):
 }
 
 /**
- * Store source file
- * WASM calls: store_source_file(id, path, content, totalLines, kdbId)
+ * Store source file info (metadata only)
+ * WASM calls: store_source_file_info(id, path, name, fullName, totalLines, kdbId)
  */
-async function store_source_file(id: number, path: string, content: string, totalLines: number, kdbId: string): Promise<void> {
+async function store_source_file_info(id: number, path: string, name: string, fullName: string, totalLines: number, kdbId: string): Promise<void> {
   await indexedDBManager.initialize();
   const db = (indexedDBManager as any).db;
   if (!db) throw new Error('IndexedDB not initialized');
   
-  console.log('[KdbStorage] Storing source file:', id, 'path:', path, 'totalLines:', totalLines, 'content length:', content?.length || 0);
+  console.log('[KdbStorage] Storing source file info:', id, 'path:', path, 'totalLines:', totalLines);
   
-  await db.put('source-files', {
+  await db.put('source-file-info', {
     id,
     path,
-    content,
+    name,
+    fullName,
     totalLines,
+    kdbId,
+  });
+}
+
+/**
+ * Store source file content (large data)
+ * WASM calls: store_source_file_content(id, content, kdbId)
+ */
+async function store_source_file_content(id: number, content: string, kdbId: string): Promise<void> {
+  await indexedDBManager.initialize();
+  const db = (indexedDBManager as any).db;
+  if (!db) throw new Error('IndexedDB not initialized');
+  
+  console.log('[KdbStorage] Storing source file content:', id, 'content length:', content?.length || 0);
+  
+  await db.put('source-file-content', {
+    id,
+    content,
     kdbId,
   });
 }
@@ -148,7 +167,7 @@ async function clear_kdb_data(kdbId: string): Promise<void> {
   await db.delete('knowledge-base', kdbId);
 
   // Get all keys to delete from each store
-  const stores = ['modules', 'signal-insts', 'source-files'];
+  const stores = ['modules', 'signal-insts', 'source-file-info', 'source-file-content'];
   
   for (const storeName of stores) {
     try {
@@ -187,7 +206,8 @@ if (typeof window !== 'undefined') {
   (window as any).store_knowledge_base = store_knowledge_base;
   (window as any).store_module = store_module;
   (window as any).store_signal_inst = store_signal_inst;
-  (window as any).store_source_file = store_source_file;
+  (window as any).store_source_file_info = store_source_file_info;
+  (window as any).store_source_file_content = store_source_file_content;
   (window as any).clear_kdb_data = clear_kdb_data;
   console.log('[KdbStorage] Functions exposed to global scope');
 }
@@ -197,6 +217,7 @@ export {
   store_knowledge_base,
   store_module,
   store_signal_inst,
-  store_source_file,
+  store_source_file_info,
+  store_source_file_content,
   clear_kdb_data,
 };

@@ -66,6 +66,7 @@ export function isWasmAvailable(): boolean {
 export {
   store_knowledge_base,
   store_module,
-  store_source_file,
+  store_source_file_info,
+  store_source_file_content,
   clear_kdb_data,
 } from '../../core/storage/kdbStorage';

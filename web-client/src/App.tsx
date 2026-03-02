@@ -311,9 +311,9 @@ function App() {
     // If displayModuleId is 0 or invalid, but fileId is provided,
     // get the file's total lines to show entire file
     if (!displayRange && effectiveFileId) {
-      const sourceFile = await kdbManager.getSourceFile(effectiveFileId);
-      if (sourceFile) {
-        const totalLines = sourceFile.content.split('\n').length;
+      // Use kdbManager to get total lines directly
+      const totalLines = await kdbManager.getSourceFileTotalLines(effectiveFileId);
+      if (totalLines > 0) {
         displayRange = {
           fileId: effectiveFileId,
           startLine: 1,
@@ -475,12 +475,20 @@ function App() {
       return;
     }
     
-    // Get current line from Monaco editor
+    // Get current line and content from Monaco editor
     let lineNumber = 1;
+    let lineContent = '';
+    
     if (monacoEditorRef.current) {
-      const position = monacoEditorRef.current.getPosition();
+      const editor = monacoEditorRef.current;
+      const position = editor.getPosition();
       if (position) {
         lineNumber = position.lineNumber;
+        // Use Monaco Editor API to get line content directly
+        const model = editor.getModel();
+        if (model) {
+          lineContent = model.getLineContent(lineNumber).trim();
+        }
       }
     } else if (activeSourceTab.signalDeclarationLine) {
       lineNumber = activeSourceTab.signalDeclarationLine;
@@ -503,25 +511,6 @@ function App() {
       addMessage('Cannot bookmark: no module or file loaded');
       return;
     }
-    
-    // Get line content (we need to fetch the source content)
-    let sourceFile = null;
-    if (displayModuleIndex && displayModuleIndex > 0) {
-      const moduleFileId = await kdbManager.getModuleFileId(displayModuleIndex);
-      if (moduleFileId) {
-        sourceFile = await kdbManager.getSourceFile(moduleFileId);
-      }
-    } else if (fileId) {
-      // File mode: use fileId directly
-      sourceFile = await kdbManager.getSourceFile(fileId);
-    }
-    
-    if (!sourceFile) {
-      addMessage('Cannot bookmark: source file not found');
-      return;
-    }
-    const lines = sourceFile.content.split('\n');
-    const lineContent = lines[lineNumber - 1]?.trim() || '';
     
     // Create bookmark (name will be auto-generated as "Mark N")
     // Store displayModuleIndex as the module context for this bookmark

@@ -12,7 +12,7 @@ import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import type { 
   Module, 
   SignalInst,
-  SourceFile,
+  SourceFileInfo,
   DesignHierarchy 
 } from '../../types/kdb';
 
@@ -78,16 +78,25 @@ interface HWDBSchema extends DBSchema {
     };
     indexes: { 'by-kdb': string };
   };
-  'source-files': {
+  'source-file-info': {
     key: number;  // file id (1-based)
     value: {
       id: number;
       path: string;
-      content: string;
+      name: string;
+      fullName: string;
+      totalLines: number;
       kdbId: string;
-      timestamp: number;
     };
     indexes: { 'by-kdb': string };
+  };
+  'source-file-content': {
+    key: number;  // file id (1-based)
+    value: {
+      id: number;
+      content: string;
+      kdbId: string;
+    };
   };
   'metadata': {
     key: string;
@@ -100,7 +109,7 @@ interface HWDBSchema extends DBSchema {
 }
 
 const DB_NAME = 'hwda-database';
-const DB_VERSION = 3;  // Increment version for new schema
+const DB_VERSION = 4;  // Increment version for split source file storage
 
 class IndexedDBManager {
   private db: IDBPDatabase<HWDBSchema> | null = null;
@@ -111,8 +120,8 @@ class IndexedDBManager {
 
     this.db = await openDB<HWDBSchema>(DB_NAME, DB_VERSION, {
       upgrade(db, oldVersion, _newVersion) {
-        // Delete old stores if upgrading
-        if (oldVersion < 3) {
+        // Delete old stores if upgrading from v3 or below
+        if (oldVersion < 4) {
           const storeNames = Array.from(db.objectStoreNames);
           storeNames.forEach(name => {
             try {
@@ -124,28 +133,43 @@ class IndexedDBManager {
         }
 
         // Knowledge Base store - stores header and hierarchies
-        const kdbStore = db.createObjectStore('knowledge-base', { keyPath: 'id' });
-        kdbStore.createIndex('by-timestamp', 'timestamp');
+        if (!db.objectStoreNames.contains('knowledge-base')) {
+          const kdbStore = db.createObjectStore('knowledge-base', { keyPath: 'id' });
+          kdbStore.createIndex('by-timestamp', 'timestamp');
+        }
 
         // Modules store - key is 1-based ID
-        const moduleStore = db.createObjectStore('modules', { keyPath: 'id' });
-        moduleStore.createIndex('by-kdb', 'kdbId');
+        if (!db.objectStoreNames.contains('modules')) {
+          const moduleStore = db.createObjectStore('modules', { keyPath: 'id' });
+          moduleStore.createIndex('by-kdb', 'kdbId');
+        }
 
         // Signal instances store - key is global index (0-based)
-        const signalStore = db.createObjectStore('signal-insts', { keyPath: 'index' });
-        signalStore.createIndex('by-kdb', 'kdbId');
+        if (!db.objectStoreNames.contains('signal-insts')) {
+          const signalStore = db.createObjectStore('signal-insts', { keyPath: 'index' });
+          signalStore.createIndex('by-kdb', 'kdbId');
+        }
 
-        // Source files store - key is 1-based ID
-        const sourceStore = db.createObjectStore('source-files', { keyPath: 'id' });
-        sourceStore.createIndex('by-kdb', 'kdbId');
+        // Source file info store - stores metadata only
+        if (!db.objectStoreNames.contains('source-file-info')) {
+          const sourceInfoStore = db.createObjectStore('source-file-info', { keyPath: 'id' });
+          sourceInfoStore.createIndex('by-kdb', 'kdbId');
+        }
+
+        // Source file content store - stores large content separately
+        if (!db.objectStoreNames.contains('source-file-content')) {
+          db.createObjectStore('source-file-content', { keyPath: 'id' });
+        }
 
         // Metadata store
-        db.createObjectStore('metadata', { keyPath: 'key' });
+        if (!db.objectStoreNames.contains('metadata')) {
+          db.createObjectStore('metadata', { keyPath: 'key' });
+        }
       },
     });
 
     this.initialized = true;
-    console.log('[IndexedDB] Initialized successfully (v3)');
+    console.log('[IndexedDB] Initialized successfully (v4 - split source file storage)');
   }
 
   isInitialized(): boolean {
@@ -287,33 +311,37 @@ class IndexedDBManager {
   }
 
   // ============================================
-  // Source File Operations
+  // Source File Info Operations (metadata only)
   // ============================================
   
-  async storeSourceFile(file: SourceFile, kdbId: string): Promise<void> {
+  async storeSourceFileInfo(info: SourceFileInfo): Promise<void> {
     const db = this.getDB();
-    await db.put('source-files', {
-      ...file,
-      kdbId,
-      timestamp: Date.now(),
-    });
+    await db.put('source-file-info', info);
   }
 
-  async getSourceFile(id: number): Promise<SourceFile | null> {
+  async getSourceFileInfo(id: number): Promise<SourceFileInfo | null> {
     const db = this.getDB();
-    const result = await db.get('source-files', id);
-    if (!result) return null;
-    const { kdbId, timestamp, ...file } = result;
-    return file as SourceFile;
+    return (await db.get('source-file-info', id)) || null;
   }
 
-  async getSourceFilesByKdb(kdbId: string): Promise<SourceFile[]> {
+  async getSourceFileInfoByKdb(kdbId: string): Promise<SourceFileInfo[]> {
     const db = this.getDB();
-    const results = await db.getAllFromIndex('source-files', 'by-kdb', kdbId);
-    return results.map(r => {
-      const { kdbId, timestamp, ...file } = r;
-      return file as SourceFile;
-    });
+    return await db.getAllFromIndex('source-file-info', 'by-kdb', kdbId);
+  }
+
+  // ============================================
+  // Source File Content Operations (large data)
+  // ============================================
+  
+  async storeSourceFileContent(id: number, content: string, kdbId: string): Promise<void> {
+    const db = this.getDB();
+    await db.put('source-file-content', { id, content, kdbId });
+  }
+
+  async getSourceFileContent(id: number): Promise<string | null> {
+    const db = this.getDB();
+    const result = await db.get('source-file-content', id);
+    return result?.content || null;
   }
 
   // ============================================
@@ -350,16 +378,21 @@ class IndexedDBManager {
       await db.delete('signal-insts', idx);
     }
 
-    // Clear source files
-    const fileIndex = db.transaction('source-files').store.index('by-kdb');
-    let fileCursor = await fileIndex.openCursor(kdbId);
+    // Clear source file info
+    const fileInfoIndex = db.transaction('source-file-info').store.index('by-kdb');
+    let fileInfoCursor = await fileInfoIndex.openCursor(kdbId);
     const fileIds: number[] = [];
-    while (fileCursor) {
-      fileIds.push(fileCursor.value.id);
-      fileCursor = await fileCursor.continue();
+    while (fileInfoCursor) {
+      fileIds.push(fileInfoCursor.value.id);
+      fileInfoCursor = await fileInfoCursor.continue();
     }
     for (const id of fileIds) {
-      await db.delete('source-files', id);
+      await db.delete('source-file-info', id);
+    }
+
+    // Clear source file content
+    for (const id of fileIds) {
+      await db.delete('source-file-content', id);
     }
 
     console.log(`[IndexedDB] Cleared data for KDB: ${kdbId}`);
@@ -374,7 +407,8 @@ class IndexedDBManager {
     await db.clear('knowledge-base');
     await db.clear('modules');
     await db.clear('signal-insts');
-    await db.clear('source-files');
+    await db.clear('source-file-info');
+    await db.clear('source-file-content');
     await db.clear('metadata');
     
     console.log('[IndexedDB] Cleared all data');

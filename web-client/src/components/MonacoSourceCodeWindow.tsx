@@ -40,6 +40,7 @@ export function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId
   const [loading, setLoading] = useState(false);
   const [highlightLine, setHighlightLine] = useState<number | null>(null);
   const [moduleName, setModuleName] = useState<string>('');
+  const [totalLines, setTotalLines] = useState<number>(0);
   const internalEditorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const editorRef = externalEditorRef || internalEditorRef;
   const pendingHighlightRef = useRef<number | null>(null);
@@ -253,8 +254,7 @@ export function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId
       }
 
       // Apply gray out decoration if module range is set
-      if (moduleStartLine && moduleEndLine && content) {
-        const totalLines = content.split('\n').length;
+      if (moduleStartLine && moduleEndLine && totalLines > 0) {
         applyGrayOutDecoration(editor, moduleStartLine, moduleEndLine, totalLines);
       }
     }, 100);
@@ -274,10 +274,9 @@ export function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId
   // Re-apply gray out decoration when module range changes
   useEffect(() => {
     const editor = editorRef.current;
-    if (!editor || !content) return;
+    if (!editor || totalLines <= 0) return;
 
     if (moduleStartLine && moduleEndLine) {
-      const totalLines = content.split('\n').length;
       applyGrayOutDecoration(editor, moduleStartLine, moduleEndLine, totalLines);
     } else {
       // Clear gray out decorations if no range specified
@@ -286,7 +285,7 @@ export function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId
         grayOutDecorationsRef.current = [];
       }
     }
-  }, [moduleStartLine, moduleEndLine, content, applyGrayOutDecoration]);
+  }, [moduleStartLine, moduleEndLine, totalLines, applyGrayOutDecoration]);
 
   // Register Verilog language
   useEffect(() => {
@@ -445,13 +444,17 @@ export function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId
       setModuleName(targetModuleName);
       console.log('[MonacoSourceCodeWindow] Loading source file for fileId:', targetFileId, 'moduleName:', targetModuleName);
       
-      const sourceFile = await kdbManager.getSourceFile(targetFileId);
-      console.log('[MonacoSourceCodeWindow] Source file result:', sourceFile);
+      // Get file info and content separately
+      const fileInfo = await kdbManager.getSourceFileInfo(targetFileId);
+      const fileContent = await kdbManager.getSourceFileContent(targetFileId);
+      console.log('[MonacoSourceCodeWindow] Source file info:', fileInfo, 'content length:', fileContent?.length || 0);
       
-      if (sourceFile) {
-        console.log('[MonacoSourceCodeWindow] Source file content length:', sourceFile.content?.length || 0);
-        setContent(sourceFile.content || '');
-        setFilePath(sourceFile.path || '');
+      if (fileContent !== null) {
+        console.log('[MonacoSourceCodeWindow] Source file content length:', fileContent.length);
+        setContent(fileContent);
+        setFilePath(fileInfo?.path || '');
+        // Use stored totalLines from file info
+        setTotalLines(fileInfo?.totalLines || 0);
         
         // Priority: signalDeclarationLine > startFromLine1 > module.startLine
         if (signalDeclarationLine) {
@@ -470,12 +473,14 @@ export function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId
         console.log('[MonacoSourceCodeWindow] Source file not found for fileId:', targetFileId);
         setContent(`// Source file not found\n// File ID: ${targetFileId}`);
         setFilePath('');
+        setTotalLines(0);
         setHighlightLine(null);
       }
     } catch (err) {
       console.error('[MonacoSourceCodeWindow] Error loading source file:', err);
       setContent(`// Error loading source file: ${err}`);
       setFilePath('');
+      setTotalLines(0);
       setHighlightLine(null);
     } finally {
       setLoading(false);

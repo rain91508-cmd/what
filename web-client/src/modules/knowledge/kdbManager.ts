@@ -18,7 +18,7 @@ import type {
   Signal, 
   SignalDef, 
   SignalInst,
-  SourceFile, 
+  SourceFileInfo, 
   DesignHierarchy
 } from '../../types/kdb';
 
@@ -486,28 +486,34 @@ class KdbManager {
   }
 
   /**
-   * Get source file content by ID
+   * Get source file info by ID (metadata only)
    */
-  async getSourceFile(id: number): Promise<SourceFile | null> {
-    return indexedDBManager.getSourceFile(id);
+  async getSourceFileInfo(id: number): Promise<SourceFileInfo | null> {
+    return indexedDBManager.getSourceFileInfo(id);
   }
 
   /**
-   * Get source file by path
+   * Get source file content by ID (large data)
    */
-  async getSourceFileByPath(path: string): Promise<SourceFile | null> {
-    if (!this.currentKdbId) return null;
-    
-    const files = await indexedDBManager.getSourceFilesByKdb(this.currentKdbId);
-    return files.find(f => f.path === path) || null;
+  async getSourceFileContent(id: number): Promise<string | null> {
+    return indexedDBManager.getSourceFileContent(id);
   }
 
   /**
-   * Get all source files in current KDB
+   * Get source file total lines by ID
+   * Uses stored totalLines from file info
    */
-  async getAllSourceFiles(): Promise<SourceFile[]> {
+  async getSourceFileTotalLines(id: number): Promise<number> {
+    const fileInfo = await indexedDBManager.getSourceFileInfo(id);
+    return fileInfo?.totalLines || 0;
+  }
+
+  /**
+   * Get all source file info in current KDB
+   */
+  async getAllSourceFileInfo(): Promise<SourceFileInfo[]> {
     if (!this.currentKdbId) return [];
-    return indexedDBManager.getSourceFilesByKdb(this.currentKdbId);
+    return indexedDBManager.getSourceFileInfoByKdb(this.currentKdbId);
   }
 
   /**
@@ -530,30 +536,27 @@ class KdbManager {
     }
     
     // Fallback: try to match by module name
-    const sourceFiles = await this.getAllSourceFiles();
-    const file = sourceFiles.find(f => {
+    const sourceFileInfos = await this.getAllSourceFileInfo();
+    const fileInfo = sourceFileInfos.find((f: SourceFileInfo) => {
       const fileName = f.path.split('/').pop()?.replace(/\.v$/, '') || '';
       return fileName === module.name || f.path.includes(module.name);
     });
     
-    return file?.id || null;
+    return fileInfo?.id || null;
   }
 
   /**
    * Get file info by ID
    */
   async getFileInfo(fileId: number): Promise<{ id: number; name: string; fullName: string; path: string } | null> {
-    const file = await this.getSourceFile(fileId);
-    if (!file) return null;
-    
-    // Extract file name from path
-    const fileName = file.path.split('/').pop() || '';
+    const fileInfo = await this.getSourceFileInfo(fileId);
+    if (!fileInfo) return null;
     
     return {
-      id: file.id,
-      name: fileName,
-      fullName: file.path,
-      path: file.path,
+      id: fileInfo.id,
+      name: fileInfo.name,
+      fullName: fileInfo.fullName,
+      path: fileInfo.path,
     };
   }
 

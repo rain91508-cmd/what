@@ -20,13 +20,37 @@ export interface KDBHeader {
 }
 
 /**
- * Source File
+ * Source File Info (metadata only, small data)
+ * Stored separately from content for efficient access
+ */
+export interface SourceFileInfo {
+  id: number;
+  path: string;
+  name: string;
+  fullName: string;
+  totalLines: number;  // proto: total_lines - Total number of lines in the source file
+  kdbId: string;       // Associated KDB ID
+}
+
+/**
+ * Source File Content (large data, loaded on demand)
+ * Stored separately from info for efficient memory usage
+ */
+export interface SourceFileContent {
+  id: number;
+  content: string;
+  kdbId: string;       // Associated KDB ID
+}
+
+/**
+ * Source File (combined, for backward compatibility)
+ * @deprecated Use SourceFileInfo and SourceFileContent separately
  */
 export interface SourceFile {
   id: number;
   path: string;
   content: string;
-  totalLines: number;  // proto: total_lines - Total number of lines in the source file
+  totalLines: number;
 }
 
 /**

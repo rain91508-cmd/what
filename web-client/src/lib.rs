@@ -30,7 +30,10 @@ extern "C" {
     fn store_signal_inst(global_index: u32, data: &JsValue, kdb_id: &str) -> js_sys::Promise;
     
     #[wasm_bindgen(js_namespace = window)]
-    fn store_source_file(id: u32, path: &str, content: &str, total_lines: u32, kdb_id: &str) -> js_sys::Promise;
+    fn store_source_file_info(id: u32, path: &str, name: &str, full_name: &str, total_lines: u32, kdb_id: &str) -> js_sys::Promise;
+    
+    #[wasm_bindgen(js_namespace = window)]
+    fn store_source_file_content(id: u32, content: &str, kdb_id: &str) -> js_sys::Promise;
     
     #[wasm_bindgen(js_namespace = window)]
     fn clear_kdb_data(kdb_id: &str) -> js_sys::Promise;
@@ -293,12 +296,29 @@ async fn store_kdb_to_indexeddb(kdb_data: &KnowledgeBase, kdb_id: &str) -> Resul
     }
     console_log!("[WASM] Stored {} signal instances", kdb_data.all_signal_insts.len());
     
-    // 4. Store source files (key is numeric id)
+    // 4. Store source files - separate info and content
     console_log!("[WASM] Storing {} source files...", kdb_data.files.len());
     for file in &kdb_data.files {
-        let file_promise = store_source_file(file.id, &file.path, &file.content, file.total_lines, kdb_id);
-        if let Err(e) = wasm_bindgen_futures::JsFuture::from(file_promise).await {
-            console_log!("[WASM] Failed to store file {}: {:?}", file.id, e);
+        // Extract file name from path
+        let name = file.path.split('/').last().unwrap_or(&file.path);
+        
+        // Store file info (metadata)
+        let info_promise = store_source_file_info(
+            file.id, 
+            &file.path, 
+            name, 
+            &file.path,  // full_name same as path for now
+            file.total_lines, 
+            kdb_id
+        );
+        if let Err(e) = wasm_bindgen_futures::JsFuture::from(info_promise).await {
+            console_log!("[WASM] Failed to store file info {}: {:?}", file.id, e);
+        }
+        
+        // Store file content (large data)
+        let content_promise = store_source_file_content(file.id, &file.content, kdb_id);
+        if let Err(e) = wasm_bindgen_futures::JsFuture::from(content_promise).await {
+            console_log!("[WASM] Failed to store file content {}: {:?}", file.id, e);
         }
     }
     console_log!("[WASM] Stored {} source files", kdb_data.files.len());
