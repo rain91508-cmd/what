@@ -143,6 +143,18 @@ void printFiles(const KdbBuilder& builder) {
         if (fileInfo) {
             std::cout << "  [" << id << "] " << fileInfo->path 
                       << " (" << fileInfo->totalLines << " lines)\n";
+            // Show line index offset info
+            if (!fileInfo->lineIndexOffset.empty()) {
+                std::cout << "      Line index offsets (every 256 lines):\n";
+                for (size_t i = 0; i < fileInfo->lineIndexOffset.size() && i < 5; ++i) {
+                    std::cout << "        Line " << (i * 256 + 1) 
+                              << " -> byte offset " << fileInfo->lineIndexOffset[i] << "\n";
+                }
+                if (fileInfo->lineIndexOffset.size() > 5) {
+                    std::cout << "        ... (" << fileInfo->lineIndexOffset.size() 
+                              << " total index points)\n";
+                }
+            }
         }
     }
 }
@@ -431,7 +443,14 @@ void printJson(const KdbBuilder& builder) {
         std::cout << "    {\n";
         std::cout << "      \"id\": " << fileId++ << ",\n";
         std::cout << "      \"path\": \"" << file->path << "\",\n";
-        std::cout << "      \"total_lines\": " << file->totalLines << "\n";
+        std::cout << "      \"total_lines\": " << file->totalLines << ",\n";
+        // Output line_index_offset
+        std::cout << "      \"line_index_offset\": [";
+        for (size_t i = 0; i < file->lineIndexOffset.size(); ++i) {
+            if (i > 0) std::cout << ", ";
+            std::cout << file->lineIndexOffset[i];
+        }
+        std::cout << "]\n";
         std::cout << "    }";
     }
     std::cout << "\n  ],\n";
