@@ -21,6 +21,7 @@ void printUsage(const char* progName) {
               << "  -L, --load <name>     Show signal load trace\n"
               << "  -c, --source          Show source code for module/signal\n"
               << "  -C, --content <file>  Show content of a source file\n"
+              << "  -R, --range <spec>    Show line range using index offset (format: fileId:startLine:endLine)\n"
               << "  -j, --json            Output in JSON format\n"
               << "  -v, --verbose         Verbose output\n"
               << "  --help                Show this help\n";
@@ -196,6 +197,52 @@ void printSourceFileContent(const KdbBuilder& builder, const std::string& filePa
     for (uint32_t line = 1; line <= fileInfo->totalLines; ++line) {
         std::cout << std::setw(5) << std::right << line << " | " 
                   << fileInfo->getLine(*fileContent, line) << "\n";
+    }
+}
+
+void printSourceLineRange(const KdbBuilder& builder, const std::string& filePath, 
+                          uint32_t startLine, uint32_t endLine) {
+    const SourceFileInfo* fileInfo = builder.findFileByPath(filePath);
+    uint32_t fileId = 0;
+    
+    if (!fileInfo) {
+        try {
+            uint64_t id = std::stoull(filePath);
+            fileInfo = builder.findFileById(id);
+            if (fileInfo) fileId = static_cast<uint32_t>(id);
+        } catch (...) {}
+    } else {
+        for (uint32_t id = 1; id <= builder.getFileCount(); ++id) {
+            const auto* info = builder.findFileById(id);
+            if (info && info->path == filePath) {
+                fileId = id;
+                break;
+            }
+        }
+    }
+    
+    if (fileId == 0 || !fileInfo) {
+        std::cout << "File not found: " << filePath << "\n";
+        return;
+    }
+    
+    std::cout << "\n=== Source File: " << fileInfo->path << " (lines " << startLine << "-" << endLine << ") ===\n";
+    std::cout << "Using index offset for fast seeking...\n\n";
+    
+    // Show which index offset is being used
+    uint32_t indexSlot = (startLine - 1) / 256;
+    if (indexSlot < fileInfo->lineIndexOffset.size()) {
+        std::cout << "Debug: Using index offset[" << indexSlot << "] = " 
+                  << fileInfo->lineIndexOffset[indexSlot] 
+                  << " (line " << (indexSlot * 256 + 1) << ")\n\n";
+    }
+    
+    auto lines = builder.getSourceLineRange(fileId, startLine, endLine);
+    
+    uint32_t lineNum = startLine;
+    for (const auto& line : lines) {
+        std::cout << std::setw(5) << std::right << lineNum << " | " << line << "\n";
+        lineNum++;
     }
 }
 
@@ -577,6 +624,7 @@ int main(int argc, char* argv[]) {
         {"load", required_argument, nullptr, 'L'},
         {"source", no_argument, nullptr, 'c'},
         {"content", required_argument, nullptr, 'C'},
+        {"range", required_argument, nullptr, 'R'},
         {"json", no_argument, nullptr, 'j'},
         {"verbose", no_argument, nullptr, 'v'},
         {"help", no_argument, nullptr, 'H'},
@@ -584,7 +632,8 @@ int main(int argc, char* argv[]) {
     };
     
     int opt;
-    while ((opt = getopt_long(argc, argv, "msfhM:S:D:L:cC:jv", longOptions, nullptr)) != -1) {
+    std::string rangeSpec;
+    while ((opt = getopt_long(argc, argv, "msfhM:S:D:L:cC:R:jv", longOptions, nullptr)) != -1) {
         switch (opt) {
             case 'm':
                 showModules = true;
@@ -615,6 +664,9 @@ int main(int argc, char* argv[]) {
                 break;
             case 'C':
                 contentFile = optarg;
+                break;
+            case 'R':
+                rangeSpec = optarg;
                 break;
             case 'j':
                 showJson = true;
@@ -685,6 +737,31 @@ int main(int argc, char* argv[]) {
     
     if (!contentFile.empty()) {
         printSourceFileContent(builder, contentFile);
+        return 0;
+    }
+    
+    // Handle range option: format "fileId:startLine:endLine" or "fileId:startLine"
+    if (!rangeSpec.empty()) {
+        // Parse range spec: fileId:startLine:endLine or fileId:startLine
+        size_t firstColon = rangeSpec.find(':');
+        if (firstColon != std::string::npos) {
+            std::string fileIdStr = rangeSpec.substr(0, firstColon);
+            size_t secondColon = rangeSpec.find(':', firstColon + 1);
+            
+            try {
+                uint32_t fileId = std::stoul(fileIdStr);
+                uint32_t startLine = std::stoul(rangeSpec.substr(firstColon + 1, 
+                    secondColon != std::string::npos ? secondColon - firstColon - 1 : std::string::npos));
+                uint32_t endLine = (secondColon != std::string::npos) ? 
+                    std::stoul(rangeSpec.substr(secondColon + 1)) : startLine;
+                
+                printSourceLineRange(builder, std::to_string(fileId), startLine, endLine);
+            } catch (...) {
+                std::cout << "Invalid range format. Use: fileId:startLine:endLine or fileId:startLine\n";
+            }
+        } else {
+            std::cout << "Invalid range format. Use: fileId:startLine:endLine or fileId:startLine\n";
+        }
         return 0;
     }
     

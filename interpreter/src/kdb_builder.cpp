@@ -135,6 +135,15 @@ std::string KdbBuilder::getSourceFileContent(uint32_t fileId) const {
     return fileContent->toString();
 }
 
+std::vector<std::string> KdbBuilder::getSourceLineRange(uint32_t fileId, uint32_t startLine, uint32_t endLine) const {
+    if (fileId == 0 || fileId > fileInfos_.size()) return {};
+    
+    const auto* fileInfo = fileInfos_[fileId - 1].get();
+    const auto* fileContent = fileContents_[fileId - 1].get();
+    
+    return fileInfo->getLineRange(*fileContent, startLine, endLine);
+}
+
 // Get byte offset for a specific line (1-based) using line index
 uint32_t SourceFileInfo::getLineOffset(uint32_t lineNum) const {
     if (lineNum == 0 || lineNum > totalLines) return 0;
@@ -226,6 +235,49 @@ std::string SourceFileInfo::getRange(const SourceFileContent& content, uint32_t 
     
     if (startPos >= endPos || startPos >= data.size()) return "";
     return std::string(data.begin() + startPos, data.begin() + endPos);
+}
+
+std::vector<std::string> SourceFileInfo::getLineRange(const SourceFileContent& content, 
+                                                      uint32_t startLine, uint32_t endLine) const {
+    std::vector<std::string> result;
+    if (startLine == 0 || endLine == 0 || startLine > totalLines || endLine > totalLines) {
+        return result;
+    }
+    if (startLine > endLine) {
+        std::swap(startLine, endLine);
+    }
+    
+    const auto& data = content.data;
+    
+    // Use index offset for fast seeking to start line
+    uint32_t startOffset = getLineOffset(startLine);
+    uint32_t currentLine = ((startLine - 1) / 256) * 256 + 1;
+    size_t pos = startOffset;
+    
+    // Find exact start position
+    while (pos < data.size() && currentLine < startLine) {
+        if (data[pos] == '\n') {
+            currentLine++;
+        }
+        pos++;
+    }
+    
+    // Extract lines
+    while (currentLine <= endLine && pos < data.size()) {
+        size_t lineStart = pos;
+        // Find end of current line
+        while (pos < data.size() && data[pos] != '\n' && data[pos] != '\r') {
+            pos++;
+        }
+        // Extract line content
+        result.push_back(std::string(data.begin() + lineStart, data.begin() + pos));
+        currentLine++;
+        // Skip newline
+        if (pos < data.size() && data[pos] == '\n') pos++;
+        if (pos < data.size() && data[pos] == '\r') pos++;
+    }
+    
+    return result;
 }
 
 bool KdbBuilder::hasModule(const std::string& fullName) const {

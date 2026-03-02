@@ -64,6 +64,11 @@ struct SourceFileInfo {
     std::string getLine(const SourceFileContent& content, uint32_t lineNum) const;
     std::string getRange(const SourceFileContent& content, uint32_t startLine, uint32_t startCol, 
                          uint32_t endLine, uint32_t endCol) const;
+    
+    // Efficient line range reading using index offset
+    // Returns lines from startLine to endLine (inclusive) using index for fast seeking
+    std::vector<std::string> getLineRange(const SourceFileContent& content, 
+                                          uint32_t startLine, uint32_t endLine) const;
 };
 
 struct KdbSourceLocation {
@@ -229,6 +234,10 @@ public:
     std::string getSourceRange(uint32_t fileId, uint32_t startLine, uint32_t startCol,
                                uint32_t endLine, uint32_t endCol) const;  // Changed parameter type
     std::string getSourceFileContent(uint32_t fileId) const;  // Changed parameter type
+    
+    // Efficient line range reading using index offset
+    // Returns lines from startLine to endLine (inclusive)
+    std::vector<std::string> getSourceLineRange(uint32_t fileId, uint32_t startLine, uint32_t endLine) const;
     
     uint32_t addModule(const ModuleInfo& module, const std::string& fullName);  // Changed return type, fullName for deduplication
     bool hasModule(const std::string& fullName) const;
