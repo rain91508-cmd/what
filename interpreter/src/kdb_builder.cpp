@@ -573,6 +573,15 @@ std::vector<const SignalInfo*> KdbBuilder::getAllSignals() const {
     return result;
 }
 
+std::vector<const SourceFileInfo*> KdbBuilder::getAllFiles() const {
+    std::vector<const SourceFileInfo*> result;
+    result.reserve(files_.size());
+    for (const auto& file : files_) {
+        result.push_back(file.get());
+    }
+    return result;
+}
+
 std::vector<const SignalInfo*> KdbBuilder::getDrivers(uint64_t signalId) const {
     std::vector<const SignalInfo*> result;
     const SignalInfo* signal = findSignalById(signalId);
@@ -831,6 +840,17 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
         protoFile->set_id(file->id);
         protoFile->set_path(file->path);
         protoFile->set_content(file->content);
+        // Calculate total lines by counting newline characters
+        // This matches 'wc -l' behavior: count of newline characters
+        uint32_t totalLines = 0;
+        for (char c : file->content) {
+            if (c == '\n') totalLines++;
+        }
+        // If file is not empty and doesn't end with newline, add 1
+        if (!file->content.empty() && file->content.back() != '\n') {
+            totalLines++;
+        }
+        protoFile->set_total_lines(totalLines);
     }
     
     for (const auto& mod : modules_) {
@@ -924,6 +944,7 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
         file->id = protoFile.id();
         file->path = protoFile.path();
         file->content = protoFile.content();
+        file->totalLines = protoFile.total_lines();
         
         nextFileId_ = std::max(nextFileId_, file->id + 1);
         filePathToId_[file->path] = file->id;

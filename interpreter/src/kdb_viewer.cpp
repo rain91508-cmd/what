@@ -403,6 +403,20 @@ void printJson(const KdbBuilder& builder) {
     std::cout << "    \"files\": " << builder.getFileCount() << "\n";
     std::cout << "  },\n";
     
+    // Output files array
+    std::cout << "  \"files\": [\n";
+    bool firstFile = true;
+    for (const auto* file : builder.getAllFiles()) {
+        if (!firstFile) std::cout << ",\n";
+        firstFile = false;
+        std::cout << "    {\n";
+        std::cout << "      \"id\": " << file->id << ",\n";
+        std::cout << "      \"path\": \"" << file->path << "\",\n";
+        std::cout << "      \"total_lines\": " << file->totalLines << "\n";
+        std::cout << "    }";
+    }
+    std::cout << "\n  ],\n";
+    
     std::cout << "  \"modules\": [\n";
     bool first = true;
     for (const auto* module : modules) {

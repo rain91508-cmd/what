@@ -45,6 +45,7 @@ struct SourceFileInfo {
     uint32_t id;  // Changed from uint64_t to uint32_t
     std::string path;
     std::string content;
+    uint32_t totalLines = 0;  // Total number of lines in the file
     
     std::string getLine(uint32_t lineNum) const;
     std::string getRange(uint32_t startLine, uint32_t startCol, 
@@ -272,6 +273,7 @@ public:
     
     std::vector<const ModuleInfo*> getAllModules() const;
     std::vector<const SignalInfo*> getAllSignals() const;
+    std::vector<const SourceFileInfo*> getAllFiles() const;
     
     std::vector<const SignalInfo*> getDrivers(uint64_t signalId) const;
     std::vector<const SignalInfo*> getLoads(uint64_t signalId) const;
