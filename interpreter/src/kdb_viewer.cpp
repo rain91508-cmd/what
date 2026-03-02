@@ -415,7 +415,8 @@ void printSignalDriverTrace(const KdbBuilder& builder, const std::string& signal
         uint64_t driverId = driverIds[i];
         const auto* driver = builder.findSignalById(driverId);
         if (driver) {
-            std::cout << "    [" << i + 1 << "] " << driver->fullName 
+            std::cout << "    [" << i + 1 << "] ID=" << driverId 
+                      << " Name=" << driver->fullName 
                       << " [" << signalTypeToString(driver->type) << "]";
             // Show driver line if available
             if (i < driverLines.size()) {
@@ -423,7 +424,7 @@ void printSignalDriverTrace(const KdbBuilder& builder, const std::string& signal
             }
             std::cout << "\n";
         } else {
-            std::cout << "    [" << i + 1 << "] <unknown driver id=" << driverId << ">";
+            std::cout << "    [" << i + 1 << "] ID=" << driverId << " <unknown>";
             if (i < driverLines.size()) {
                 std::cout << " at line " << driverLines[i].line;
             }
