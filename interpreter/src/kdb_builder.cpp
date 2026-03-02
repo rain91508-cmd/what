@@ -826,13 +826,13 @@ bool KdbBuilder::addDriverLineToSignal(const std::string& signalFullName, const 
         SignalInstInfo* inst = getGlobalSignalInst(signalGlobalId);
         if (!inst) return false;
         
-        // Find the last driver location with line=0 (added by addDriverToSignal) and update it
+        // Update ALL driver locations with line=0 (added by addDriverToSignal for this assignment)
+        // A single assignment can have multiple RHS signals, so multiple driverLocations with line=0
         bool updated = false;
-        for (auto it = inst->driverLocations.rbegin(); it != inst->driverLocations.rend(); ++it) {
-            if (it->line == 0) {
-                it->line = location.line;
+        for (auto& driverLoc : inst->driverLocations) {
+            if (driverLoc.line == 0) {
+                driverLoc.line = location.line;
                 updated = true;
-                break;
             }
         }
         
@@ -849,13 +849,12 @@ bool KdbBuilder::addDriverLineToSignal(const std::string& signalFullName, const 
         for (auto& mod : modules_) {
             for (auto& inst : mod->signalInsts) {
                 if (inst.fullName == signalFullName) {
-                    // Find the last driver location with line=0 and update it
+                    // Update ALL driver locations with line=0
                     bool updated = false;
-                    for (auto it = inst.driverLocations.rbegin(); it != inst.driverLocations.rend(); ++it) {
-                        if (it->line == 0) {
-                            it->line = location.line;
+                    for (auto& driverLoc : inst.driverLocations) {
+                        if (driverLoc.line == 0) {
+                            driverLoc.line = location.line;
                             updated = true;
-                            break;
                         }
                     }
                     
