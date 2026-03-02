@@ -571,18 +571,14 @@ void printJson(const KdbBuilder& builder) {
             std::cout << "            \"file_id\": " << signal.declaration.fileId << ",\n";
             std::cout << "            \"line\": " << signal.declaration.line << "\n";
             std::cout << "          },\n";
-            std::cout << "          \"driver_signal_ids\": [";
+            // New format: driver_locations (combines driver_signal_global_id and line)
+            std::cout << "          \"driver_locations\": [\n";
             for (size_t i = 0; i < signal.driverSignalIds.size(); ++i) {
-                if (i > 0) std::cout << ", ";
-                std::cout << signal.driverSignalIds[i];
-            }
-            std::cout << "],\n";
-            std::cout << "          \"driver_lines\": [\n";
-            for (size_t i = 0; i < signal.driverLines.size(); ++i) {
                 if (i > 0) std::cout << ",\n";
                 std::cout << "            {\n";
-                std::cout << "              \"file_id\": " << signal.driverLines[i].fileId << ",\n";
-                std::cout << "              \"line\": " << signal.driverLines[i].line << "\n";
+                std::cout << "              \"driver_signal_global_id\": " << signal.driverSignalIds[i] << ",\n";
+                uint32_t line = (i < signal.driverLines.size()) ? signal.driverLines[i].line : 0;
+                std::cout << "              \"line\": " << line << "\n";
                 std::cout << "            }";
             }
             std::cout << "\n          ]\n";
