@@ -487,7 +487,8 @@ void KdbBuilder::resolveDriverReferences() {
         SignalInstInfo& inst = allSignalInsts_[globalId];
         
         // Resolve driver full names to global IDs and update driverLocations
-        size_t driverIdx = 0;
+        // Find entries with driverSignalGlobalId=0 and update them
+        auto locIt = inst.driverLocations.begin();
         for (const auto& driverName : inst.driverSignalFullNames) {
             auto it = signalFullNameToId_.find(driverName);
             if (it != signalFullNameToId_.end()) {
@@ -501,16 +502,22 @@ void KdbBuilder::resolveDriverReferences() {
                 const ModuleInfo* driverMod = findModuleById(driverModuleId);
                 if (driverMod && driverMod->signalInstsCommitted) {
                     uint64_t driverGlobalId = driverMod->signalInstsStartId + driverLocalIdx;
-                    // Update or create DriverLocation
-                    if (driverIdx < inst.driverLocations.size()) {
-                        inst.driverLocations[driverIdx].driverSignalGlobalId = driverGlobalId;
+                    
+                    // Find the next entry with driverSignalGlobalId=0 and update it
+                    while (locIt != inst.driverLocations.end() && locIt->driverSignalGlobalId != 0) {
+                        ++locIt;
+                    }
+                    
+                    if (locIt != inst.driverLocations.end()) {
+                        locIt->driverSignalGlobalId = driverGlobalId;
+                        ++locIt;
                     } else {
+                        // No more entries with driverSignalGlobalId=0, create new one
                         DriverLocation driverLoc;
                         driverLoc.driverSignalGlobalId = driverGlobalId;
                         driverLoc.line = 0;  // Unknown line
                         inst.driverLocations.push_back(driverLoc);
                     }
-                    driverIdx++;
                 }
             }
         }
@@ -789,18 +796,10 @@ bool KdbBuilder::addDriverToSignal(const std::string& signalFullName, const std:
         SignalInstInfo* inst = getGlobalSignalInst(signalGlobalId);
         if (!inst) return false;
         
-        // Check if driver already exists to avoid duplicates
-        for (auto& driverLoc : inst->driverLocations) {
-            if (driverLoc.driverSignalGlobalId == driverGlobalId) {
-                // Driver already exists, don't add again
-                return true;
-            }
-        }
-        
-        // Add driver location (line will be set by addDriverLineToSignal)
+        // Add driver location
         DriverLocation driverLoc;
         driverLoc.driverSignalGlobalId = driverGlobalId;
-        driverLoc.line = 0;  // Line will be set by addDriverLineToSignal
+        driverLoc.line = 0;  // Line will be added by addDriverLineToSignal
         inst->driverLocations.push_back(driverLoc);
         return true;
     } else {
@@ -808,12 +807,6 @@ bool KdbBuilder::addDriverToSignal(const std::string& signalFullName, const std:
         for (auto& mod : modules_) {
             for (auto& inst : mod->signalInsts) {
                 if (inst.fullName == signalFullName) {
-                    // Check if driver already exists
-                    for (const auto& name : inst.driverSignalFullNames) {
-                        if (name == driverSignalFullName) {
-                            return true;  // Already exists
-                        }
-                    }
                     inst.driverSignalFullNames.push_back(driverSignalFullName);
                     return true;
                 }
@@ -833,38 +826,46 @@ bool KdbBuilder::addDriverLineToSignal(const std::string& signalFullName, const 
         SignalInstInfo* inst = getGlobalSignalInst(signalGlobalId);
         if (!inst) return false;
         
-        // Find an existing driver location with line=0 and update it
-        // or add a new one if all have lines set
-        for (auto& driverLoc : inst->driverLocations) {
-            if (driverLoc.line == 0) {
-                driverLoc.line = location.line;
-                return true;
+        // Find the last driver location with line=0 (added by addDriverToSignal) and update it
+        bool updated = false;
+        for (auto it = inst->driverLocations.rbegin(); it != inst->driverLocations.rend(); ++it) {
+            if (it->line == 0) {
+                it->line = location.line;
+                updated = true;
+                break;
             }
         }
         
-        // All existing drivers have lines, add a new one with unknown driver ID
-        DriverLocation driverLoc;
-        driverLoc.driverSignalGlobalId = 0;  // Unknown driver
-        driverLoc.line = location.line;
-        inst->driverLocations.push_back(driverLoc);
+        // If no entry with line=0 found, create a new one (orphan line without driver)
+        if (!updated) {
+            DriverLocation driverLoc;
+            driverLoc.driverSignalGlobalId = 0;  // Unknown driver
+            driverLoc.line = location.line;
+            inst->driverLocations.push_back(driverLoc);
+        }
         return true;
     } else {
         // Phase 1: Store in module's signalInsts
         for (auto& mod : modules_) {
             for (auto& inst : mod->signalInsts) {
                 if (inst.fullName == signalFullName) {
-                    // Find an existing driver location with line=0 and update it
-                    for (auto& driverLoc : inst.driverLocations) {
-                        if (driverLoc.line == 0) {
-                            driverLoc.line = location.line;
-                            return true;
+                    // Find the last driver location with line=0 and update it
+                    bool updated = false;
+                    for (auto it = inst.driverLocations.rbegin(); it != inst.driverLocations.rend(); ++it) {
+                        if (it->line == 0) {
+                            it->line = location.line;
+                            updated = true;
+                            break;
                         }
                     }
-                    // Add new driver location
-                    DriverLocation driverLoc;
-                    driverLoc.driverSignalGlobalId = 0;  // Will be resolved later
-                    driverLoc.line = location.line;
-                    inst.driverLocations.push_back(driverLoc);
+                    
+                    // If no entry with line=0 found, create a new one
+                    if (!updated) {
+                        DriverLocation driverLoc;
+                        driverLoc.driverSignalGlobalId = 0;  // Will be resolved later
+                        driverLoc.line = location.line;
+                        inst.driverLocations.push_back(driverLoc);
+                    }
                     return true;
                 }
             }
