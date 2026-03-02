@@ -314,8 +314,8 @@ async function clear_kdb_data(kdbId: string): Promise<void> {
   // Clear knowledge base
   await db.delete('knowledge-base', kdbId);
 
-  // Get all keys to delete from each store
-  const stores = ['modules', 'signal-insts', 'source-file-info', 'source-file-content'];
+  // Get all keys to delete from each store (note: source-file-content removed, now in OPFS)
+  const stores = ['modules', 'signal-insts', 'source-file-info'];
   
   for (const storeName of stores) {
     try {
@@ -344,6 +344,36 @@ async function clear_kdb_data(kdbId: string): Promise<void> {
     } catch (e) {
       console.warn(`[KdbStorage] Error clearing ${storeName}:`, e);
     }
+  }
+  
+  // Clear file contents from OPFS
+  try {
+    const root = await navigator.storage.getDirectory();
+    const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
+    
+    // Remove all files in the KDB directory
+    // Note: OPFS doesn't have a direct "clear directory" API, so we iterate
+    // @ts-ignore - FileSystemDirectoryHandle iteration
+    for await (const [name, handle] of kdbDir.entries()) {
+      try {
+        await kdbDir.removeEntry(name, { recursive: true });
+        console.log(`[KdbStorage] Removed OPFS entry: ${name}`);
+      } catch (e) {
+        console.warn(`[KdbStorage] Error removing OPFS entry ${name}:`, e);
+      }
+    }
+    
+    // Try to remove the directory itself
+    try {
+      await root.removeEntry(kdbId);
+      console.log(`[KdbStorage] Removed OPFS directory: ${kdbId}`);
+    } catch (e) {
+      // Directory might not be empty or might not exist
+      console.log(`[KdbStorage] Could not remove OPFS directory (may not be empty): ${kdbId}`);
+    }
+  } catch (e) {
+    // Directory might not exist
+    console.log(`[KdbStorage] OPFS directory not found for KDB: ${kdbId}`);
   }
 
   console.log('[KdbStorage] Cleared data for KDB:', kdbId);
