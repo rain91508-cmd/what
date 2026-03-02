@@ -67,6 +67,8 @@ export {
   store_knowledge_base,
   store_module,
   store_source_file_info,
-  store_source_file_content,
+  store_source_file_content_opfs,
+  get_source_file_content_by_range,
+  get_source_file_lines_by_range,
   clear_kdb_data,
 } from '../../core/storage/kdbStorage';
