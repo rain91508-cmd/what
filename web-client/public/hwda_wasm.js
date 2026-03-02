@@ -142,8 +142,12 @@ function __wbg_get_imports() {
             const ret = window.store_signal_inst(arg0 >>> 0, arg1, getStringFromWasm0(arg2, arg3));
             return ret;
         },
-        __wbg_store_source_file_f83d9f8fa34fed21: function(arg0, arg1, arg2, arg3, arg4, arg5, arg6) {
-            const ret = window.store_source_file(arg0 >>> 0, getStringFromWasm0(arg1, arg2), getStringFromWasm0(arg3, arg4), getStringFromWasm0(arg5, arg6));
+        __wbg_store_source_file_content_opfs_6cea52f09e2839a9: function(arg0, arg1, arg2, arg3, arg4) {
+            const ret = window.store_source_file_content_opfs(arg0 >>> 0, getArrayU8FromWasm0(arg1, arg2), getStringFromWasm0(arg3, arg4));
+            return ret;
+        },
+        __wbg_store_source_file_info_3c1df8bbdf57e847: function(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11) {
+            const ret = window.store_source_file_info(arg0 >>> 0, getStringFromWasm0(arg1, arg2), getStringFromWasm0(arg3, arg4), getStringFromWasm0(arg5, arg6), arg7 >>> 0, getArrayI32FromWasm0(arg8, arg9), getStringFromWasm0(arg10, arg11));
             return ret;
         },
         __wbg_then_098abe61755d12f6: function(arg0, arg1) {
@@ -281,12 +285,30 @@ function debugString(val) {
     return className;
 }
 
+function getArrayI32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getInt32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
+function getArrayU8FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
+}
+
 let cachedDataViewMemory0 = null;
 function getDataViewMemory0() {
     if (cachedDataViewMemory0 === null || cachedDataViewMemory0.buffer.detached === true || (cachedDataViewMemory0.buffer.detached === undefined && cachedDataViewMemory0.buffer !== wasm.memory.buffer)) {
         cachedDataViewMemory0 = new DataView(wasm.memory.buffer);
     }
     return cachedDataViewMemory0;
+}
+
+let cachedInt32ArrayMemory0 = null;
+function getInt32ArrayMemory0() {
+    if (cachedInt32ArrayMemory0 === null || cachedInt32ArrayMemory0.byteLength === 0) {
+        cachedInt32ArrayMemory0 = new Int32Array(wasm.memory.buffer);
+    }
+    return cachedInt32ArrayMemory0;
 }
 
 function getStringFromWasm0(ptr, len) {
@@ -427,6 +449,7 @@ function __wbg_finalize_init(instance, module) {
     wasm = instance.exports;
     wasmModule = module;
     cachedDataViewMemory0 = null;
+    cachedInt32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;
