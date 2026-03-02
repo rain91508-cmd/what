@@ -165,14 +165,49 @@ async function store_source_file_content_opfs(id: number, content: Uint8Array, k
     const fileHandle = await kdbDir.getFileHandle(fileName, { create: true });
     
     // Write content using FileSystemWritableFileStream
+    // Create a new Uint8Array view to ensure we only write the actual data
     const writable = await fileHandle.createWritable();
-    await writable.write(content);
+    const contentView = new Uint8Array(content.buffer, content.byteOffset, content.byteLength);
+    await writable.write(contentView as any);
     await writable.close();
     
     console.log('[KdbStorage] Stored content to OPFS:', fileName);
   } catch (e) {
     console.error('[KdbStorage] Failed to store content to OPFS:', e);
     throw e;
+  }
+}
+
+/**
+ * Get full source file content from OPFS
+ * Returns: string (UTF-8 decoded)
+ */
+async function get_source_file_content(fileId: number, kdbId: string): Promise<string | null> {
+  console.log('[KdbStorage] Getting full content from OPFS:', fileId);
+  
+  try {
+    // Get OPFS root directory
+    const root = await navigator.storage.getDirectory();
+    
+    // Get KDB-specific directory
+    const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
+    
+    // Get file handle
+    const fileName = `file_${fileId}.content`;
+    const fileHandle = await kdbDir.getFileHandle(fileName, { create: false });
+    
+    // Get file and read all content
+    const file = await fileHandle.getFile();
+    const arrayBuffer = await file.arrayBuffer();
+    
+    // Decode UTF-8 bytes to string
+    const content = new TextDecoder().decode(arrayBuffer);
+    
+    console.log('[KdbStorage] Read', content.length, 'chars from OPFS');
+    return content;
+  } catch (e) {
+    console.error('[KdbStorage] Failed to get content from OPFS:', e);
+    return null;
   }
 }
 
@@ -386,6 +421,7 @@ if (typeof window !== 'undefined') {
   (window as any).store_signal_inst = store_signal_inst;
   (window as any).store_source_file_info = store_source_file_info;
   (window as any).store_source_file_content_opfs = store_source_file_content_opfs;
+  (window as any).get_source_file_content = get_source_file_content;
   (window as any).get_source_file_content_by_range = get_source_file_content_by_range;
   (window as any).get_source_file_lines_by_range = get_source_file_lines_by_range;
   (window as any).clear_kdb_data = clear_kdb_data;
@@ -399,6 +435,7 @@ export {
   store_signal_inst,
   store_source_file_info,
   store_source_file_content_opfs,
+  get_source_file_content,
   get_source_file_content_by_range,
   get_source_file_lines_by_range,
   clear_kdb_data,
