@@ -364,7 +364,13 @@ uint64_t KdbBuilder::addSignal(uint32_t moduleId, const SignalInfo& signal) {
     inst.msb = signal.msb;
     inst.lsb = signal.lsb;
     inst.parentModuleId = moduleId;
-    inst.driverLines = signal.driverLines;
+    // Convert driverLines to driverLocations (without file_id)
+    for (const auto& driverLine : signal.driverLines) {
+        DriverLocation driverLoc;
+        driverLoc.driverSignalGlobalId = 0;  // Will be filled later
+        driverLoc.line = driverLine.line;
+        inst.driverLocations.push_back(driverLoc);
+    }
     // Note: driverSignalFullNames will be filled later by addDriverToSignal
     
     mod->addSignalInst(std::move(inst));
@@ -480,7 +486,8 @@ void KdbBuilder::resolveDriverReferences() {
     for (uint32_t globalId = 0; globalId < allSignalInsts_.size(); ++globalId) {
         SignalInstInfo& inst = allSignalInsts_[globalId];
         
-        // Resolve driver full names to global IDs
+        // Resolve driver full names to global IDs and update driverLocations
+        size_t driverIdx = 0;
         for (const auto& driverName : inst.driverSignalFullNames) {
             auto it = signalFullNameToId_.find(driverName);
             if (it != signalFullNameToId_.end()) {
@@ -494,7 +501,16 @@ void KdbBuilder::resolveDriverReferences() {
                 const ModuleInfo* driverMod = findModuleById(driverModuleId);
                 if (driverMod && driverMod->signalInstsCommitted) {
                     uint64_t driverGlobalId = driverMod->signalInstsStartId + driverLocalIdx;
-                    inst.driverSignalGlobalIds.push_back(driverGlobalId);
+                    // Update or create DriverLocation
+                    if (driverIdx < inst.driverLocations.size()) {
+                        inst.driverLocations[driverIdx].driverSignalGlobalId = driverGlobalId;
+                    } else {
+                        DriverLocation driverLoc;
+                        driverLoc.driverSignalGlobalId = driverGlobalId;
+                        driverLoc.line = 0;  // Unknown line
+                        inst.driverLocations.push_back(driverLoc);
+                    }
+                    driverIdx++;
                 }
             }
         }
@@ -629,8 +645,14 @@ SignalInfo KdbBuilder::buildSignalInfo(const SignalInstInfo& inst, const SignalD
     sig.lsb = inst.lsb;
     sig.declaration = def.declaration;
     sig.parentModuleId = inst.parentModuleId;
-    sig.driverSignalIds = inst.driverSignalGlobalIds;
-    sig.driverLines = inst.driverLines;
+    // Convert driverLocations back to driverSignalIds and driverLines for backward compatibility
+    for (const auto& driverLoc : inst.driverLocations) {
+        sig.driverSignalIds.push_back(driverLoc.driverSignalGlobalId);
+        KdbSourceLocation loc;
+        loc.fileId = 0;  // Not stored in new format
+        loc.line = driverLoc.line;
+        sig.driverLines.push_back(loc);
+    }
     return sig;
 }
 
@@ -767,7 +789,11 @@ bool KdbBuilder::addDriverToSignal(const std::string& signalFullName, const std:
         SignalInstInfo* inst = getGlobalSignalInst(signalGlobalId);
         if (!inst) return false;
         
-        inst->driverSignalGlobalIds.push_back(driverGlobalId);
+        // Add driver location
+        DriverLocation driverLoc;
+        driverLoc.driverSignalGlobalId = driverGlobalId;
+        driverLoc.line = 0;  // Line will be added by addDriverLineToSignal
+        inst->driverLocations.push_back(driverLoc);
         return true;
     } else {
         // Phase 1: Store full name for later resolution
@@ -793,14 +819,21 @@ bool KdbBuilder::addDriverLineToSignal(const std::string& signalFullName, const 
         SignalInstInfo* inst = getGlobalSignalInst(signalGlobalId);
         if (!inst) return false;
         
-        inst->driverLines.push_back(location);
+        // Add or update driver location with line number
+        DriverLocation driverLoc;
+        driverLoc.driverSignalGlobalId = 0;  // Unknown at this point
+        driverLoc.line = location.line;
+        inst->driverLocations.push_back(driverLoc);
         return true;
     } else {
-        // Phase 1: Use temporary storage
+        // Phase 1: Store in module's signalInsts
         for (auto& mod : modules_) {
             for (auto& inst : mod->signalInsts) {
                 if (inst.fullName == signalFullName) {
-                    inst.driverLines.push_back(location);
+                    DriverLocation driverLoc;
+                    driverLoc.driverSignalGlobalId = 0;  // Will be resolved later
+                    driverLoc.line = location.line;
+                    inst.driverLocations.push_back(driverLoc);
                     return true;
                 }
             }
@@ -861,8 +894,14 @@ std::vector<SignalInfo> ModuleInfo::getSignals() const {
         sig.lsb = inst->lsb;
         sig.declaration = def.declaration;
         sig.parentModuleId = inst->parentModuleId;
-        sig.driverSignalIds = inst->driverSignalGlobalIds;
-        sig.driverLines = inst->driverLines;
+        // Convert driverLocations to driverSignalIds and driverLines
+        for (const auto& driverLoc : inst->driverLocations) {
+            sig.driverSignalIds.push_back(driverLoc.driverSignalGlobalId);
+            KdbSourceLocation loc;
+            loc.fileId = 0;  // Not stored in new format
+            loc.line = driverLoc.line;
+            sig.driverLines.push_back(loc);
+        }
         result.push_back(std::move(sig));
     }
     return result;
@@ -895,8 +934,14 @@ void ModuleInfo::addSignal(const SignalInfo& sig) {
     inst.msb = sig.msb;
     inst.lsb = sig.lsb;
     inst.parentModuleId = sig.parentModuleId;
-    inst.driverSignalGlobalIds = sig.driverSignalIds;
-    inst.driverLines = sig.driverLines;
+    // Convert driverSignalIds and driverLines to driverLocations
+    size_t driverCount = std::max(sig.driverSignalIds.size(), sig.driverLines.size());
+    for (size_t i = 0; i < driverCount; ++i) {
+        DriverLocation driverLoc;
+        driverLoc.driverSignalGlobalId = (i < sig.driverSignalIds.size()) ? sig.driverSignalIds[i] : 0;
+        driverLoc.line = (i < sig.driverLines.size()) ? sig.driverLines[i].line : 0;
+        inst.driverLocations.push_back(driverLoc);
+    }
     addSignalInst(std::move(inst));
 }
 
@@ -1030,14 +1075,11 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
         protoInst->set_lsb(inst.lsb);
         protoInst->set_parent_module_id(inst.parentModuleId);
 
-        for (uint64_t driverId : inst.driverSignalGlobalIds) {
-            protoInst->add_driver_signal_global_ids(driverId);
-        }
-
-        for (const auto& driverLine : inst.driverLines) {
-            auto* protoDriverLine = protoInst->add_driver_lines();
-            protoDriverLine->set_file_id(driverLine.fileId);
-            protoDriverLine->set_line(driverLine.line);
+        // Serialize driver locations (combined driver_signal_global_ids and driver_lines)
+        for (const auto& driverLoc : inst.driverLocations) {
+            auto* protoDriverLoc = protoInst->add_driver_locations();
+            protoDriverLoc->set_driver_signal_global_id(driverLoc.driverSignalGlobalId);
+            protoDriverLoc->set_line(driverLoc.line);
         }
     }
     
@@ -1143,14 +1185,12 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
         inst.msb = protoInst.msb();
         inst.lsb = protoInst.lsb();
         inst.parentModuleId = protoInst.parent_module_id();
-        for (uint64_t driverId : protoInst.driver_signal_global_ids()) {
-            inst.driverSignalGlobalIds.push_back(driverId);
-        }
-        for (const auto& protoDriverLine : protoInst.driver_lines()) {
-            KdbSourceLocation driverLine;
-            driverLine.fileId = protoDriverLine.file_id();
-            driverLine.line = protoDriverLine.line();
-            inst.driverLines.push_back(driverLine);
+        // Load driver locations (combined driver_signal_global_ids and driver_lines)
+        for (const auto& protoDriverLoc : protoInst.driver_locations()) {
+            DriverLocation driverLoc;
+            driverLoc.driverSignalGlobalId = protoDriverLoc.driver_signal_global_id();
+            driverLoc.line = protoDriverLoc.line();
+            inst.driverLocations.push_back(driverLoc);
         }
         allSignalInsts_.push_back(std::move(inst));
     }

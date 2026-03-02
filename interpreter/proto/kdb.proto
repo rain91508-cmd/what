@@ -72,6 +72,13 @@ message SignalDef {
   PortDirection direction = 5;  // INPUT, OUTPUT, INOUT, or UNKNOWN for internal signals
 }
 
+// Driver location - combines signal ID and source location
+// Note: no id needed, stored as repeated field in SignalInst
+message DriverLocation {
+  uint64 driver_signal_global_id = 1;  // Global ID in all_signal_insts array
+  uint32 line = 2;  // Source line number (file_id not needed)
+}
+
 // Signal instance - specific to each module instance
 // Note: id removed, use module's signal_insts_start_id + array index as global id
 // Note: full_name removed - dynamically reconstructed from module hierarchy + signal_def.name
@@ -81,8 +88,8 @@ message SignalInst {
   uint32 msb = 3;
   uint32 lsb = 4;
   uint32 parent_module_id = 5;  // Module instance ID that owns this signal
-  repeated uint64 driver_signal_global_ids = 6;  // Global IDs in all_signal_insts array
-  repeated SourceLocation driver_lines = 7;  // Source locations where drivers are discovered
+  // Note: driver_signal_global_ids and driver_lines combined into DriverLocation
+  repeated DriverLocation driver_locations = 6;  // Driver signal IDs and their source locations
 }
 
 

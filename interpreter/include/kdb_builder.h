@@ -77,6 +77,13 @@ struct KdbSourceLocation {
     // Note: columnStart and columnEnd removed - not needed
 };
 
+// Driver location - combines signal ID and source location
+// Note: no id needed, stored as repeated field in SignalInst
+struct DriverLocation {
+    uint64_t driverSignalGlobalId;  // Global ID in allSignalInsts array
+    uint32_t line;  // Source line number (file_id not needed)
+};
+
 struct KdbModuleSourceLocation {
     uint32_t fileId;
     uint32_t startLine;
@@ -104,9 +111,9 @@ struct SignalInstInfo {
     uint32_t parentModuleId;  // Module instance ID that owns this signal
     // Phase 1: Store driver full names (before global IDs are assigned)
     std::vector<std::string> driverSignalFullNames;  // Temporary storage for Phase 1
-    // Phase 2: Converted to global IDs (after commit)
-    std::vector<uint64_t> driverSignalGlobalIds;  // Global IDs in allSignalInsts array
-    std::vector<KdbSourceLocation> driverLines;  // Source locations where drivers are discovered
+    // Phase 2: Converted to driver locations (after commit)
+    // Note: driverSignalGlobalIds and driverLines combined into DriverLocation
+    std::vector<DriverLocation> driverLocations;  // Driver signal IDs and their source locations
 };
 
 // Deprecated: Keep for backward compatibility during transition
