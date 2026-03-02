@@ -411,12 +411,24 @@ void printSignalDriverTrace(const KdbBuilder& builder, const std::string& signal
         return;
     }
     
-    std::cout << "  Drivers:\n";
-    for (uint64_t driverId : signal->driverSignalIds) {
+    std::cout << "  Drivers (" << signal->driverSignalIds.size() << "):\n";
+    for (size_t i = 0; i < signal->driverSignalIds.size(); ++i) {
+        uint64_t driverId = signal->driverSignalIds[i];
         const auto* driver = builder.findSignalById(driverId);
         if (driver) {
-            std::cout << "    [" << driver->id << "] " << driver->fullName 
-                      << " [" << signalTypeToString(driver->type) << "]\n";
+            std::cout << "    [" << i + 1 << "] " << driver->fullName 
+                      << " [" << signalTypeToString(driver->type) << "]";
+            // Show driver line if available
+            if (i < signal->driverLines.size()) {
+                std::cout << " at line " << signal->driverLines[i].line;
+            }
+            std::cout << "\n";
+        } else {
+            std::cout << "    [" << i + 1 << "] <unknown driver id=" << driverId << ">";
+            if (i < signal->driverLines.size()) {
+                std::cout << " at line " << signal->driverLines[i].line;
+            }
+            std::cout << "\n";
         }
     }
 }
