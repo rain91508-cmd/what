@@ -614,6 +614,7 @@ export function DesignBrowser({
                 borderBottom: '1px solid #f0f0f0',
                 display: 'flex',
                 alignItems: 'center',
+                userSelect: 'none',  // Prevent text selection on double click
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.backgroundColor = '#f5f5f5';

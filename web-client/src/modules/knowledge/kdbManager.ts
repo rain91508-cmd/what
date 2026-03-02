@@ -12,6 +12,7 @@
 import { apiService } from '../../services/api';
 import { indexedDBManager } from '../../core/storage/indexedDB';
 import { parseKdbWithWasm } from './kdbWasmParser';
+import { wasmManager } from '../../wasm';
 import type { 
   Module, 
   Signal, 
@@ -180,6 +181,37 @@ class KdbManager {
   calculateSignalFullName(parentModuleId: number, signalName: string): string {
     const moduleFullName = this.calculateModuleFullName(parentModuleId);
     return moduleFullName ? `${moduleFullName}.${signalName}` : signalName;
+  }
+
+  /**
+   * Get display range for a module
+   * If the module is an instance, returns the def_module's range and fileId
+   * If the module is not an instance, returns its own range and fileId
+   * @param moduleId Module ID (1-based)
+   * @returns Display range info or null if not found
+   */
+  getDisplayRange(moduleId: number): { fileId: number; startLine: number; endLine: number } | null {
+    const module = this.getModuleById(moduleId);
+    if (!module || !module.definition) return null;
+
+    // If this is an instance, use def_module's range
+    if (module.isInstance && module.defModuleId > 0) {
+      const defModule = this.getModuleById(module.defModuleId);
+      if (defModule && defModule.definition) {
+        return {
+          fileId: defModule.definition.fileId,
+          startLine: defModule.definition.startLine,
+          endLine: defModule.definition.endLine,
+        };
+      }
+    }
+
+    // Not an instance or def_module not found, use own range
+    return {
+      fileId: module.definition.fileId,
+      startLine: module.definition.startLine,
+      endLine: module.definition.endLine,
+    };
   }
 
   /**
@@ -553,6 +585,141 @@ class KdbManager {
    */
   isLoaded(): boolean {
     return this.currentKdbId !== null && this.modules.length > 0;
+  }
+
+  /**
+   * Find instance by name within a module's children (for source code click)
+   * First tries WASM, then falls back to JS implementation
+   * @param moduleId Module ID (1-based) to search in
+   * @param instanceName Instance name to find
+   * @returns Module ID of the found instance, or null if not found
+   */
+  async findInstanceByName(moduleId: number, instanceName: string): Promise<number | null> {
+    console.log(`[KdbManager] findInstanceByName: moduleId=${moduleId}, instanceName=${instanceName}`);
+
+    // Try WASM first if available and KDB is stored in WASM memory
+    if (wasmManager.isInitialized() && this.currentKdbId) {
+      try {
+        const result = await wasmManager.findInstanceByName(this.currentKdbId, moduleId, instanceName);
+        if (result !== null) {
+          console.log(`[KdbManager] Found instance via WASM: ${instanceName} at moduleId=${result}`);
+          return result;
+        }
+      } catch (error) {
+        console.warn('[KdbManager] WASM findInstanceByName failed, falling back to JS:', error);
+      }
+    }
+
+    // Fallback to JS implementation
+    return this.findInstanceByNameJS(moduleId, instanceName);
+  }
+
+  /**
+   * JS fallback for finding instance by name
+   */
+  private async findInstanceByNameJS(moduleId: number, instanceName: string): Promise<number | null> {
+    const module = this.getModuleById(moduleId);
+    if (!module) return null;
+
+    // Search through child modules in batches
+    const BATCH_SIZE = 50;
+    const childIds = module.childModuleIds;
+
+    for (let i = 0; i < childIds.length; i += BATCH_SIZE) {
+      const batch = childIds.slice(i, i + BATCH_SIZE);
+
+      for (const childId of batch) {
+        const child = this.getModuleById(childId);
+        if (child && child.isInstance && child.name === instanceName) {
+          console.log(`[KdbManager] Found instance via JS: ${instanceName} at moduleId=${childId}`);
+          return childId;
+        }
+      }
+
+      // Yield to allow UI updates between batches
+      if (i + BATCH_SIZE < childIds.length) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Find signal by name within a module (for source code click)
+   * First tries WASM, then falls back to JS implementation
+   * @param moduleId Module ID (1-based) to search in
+   * @param signalName Signal name to find
+   * @returns Global signal ID if found, or null if not found
+   */
+  async findSignalByName(moduleId: number, signalName: string): Promise<number | null> {
+    console.log(`[KdbManager] findSignalByName: moduleId=${moduleId}, signalName=${signalName}`);
+
+    // Try WASM first if available and KDB is stored in WASM memory
+    if (wasmManager.isInitialized() && this.currentKdbId) {
+      try {
+        const result = await wasmManager.findSignalByName(this.currentKdbId, moduleId, signalName);
+        if (result !== null) {
+          console.log(`[KdbManager] Found signal via WASM: ${signalName} at globalId=${result}`);
+          return result;
+        }
+      } catch (error) {
+        console.warn('[KdbManager] WASM findSignalByName failed, falling back to JS:', error);
+      }
+    }
+
+    // Fallback to JS implementation
+    return this.findSignalByNameJS(moduleId, signalName);
+  }
+
+  /**
+   * JS fallback for finding signal by name
+   */
+  private async findSignalByNameJS(moduleId: number, signalName: string): Promise<number | null> {
+    const module = this.getModuleById(moduleId);
+    if (!module) return null;
+
+    const signalDefs = this.getSignalDefs(moduleId);
+    const BATCH_SIZE = 100;
+
+    for (let i = 0; i < signalDefs.length; i += BATCH_SIZE) {
+      const endIndex = Math.min(i + BATCH_SIZE, signalDefs.length);
+
+      for (let j = i; j < endIndex; j++) {
+        const signalDef = signalDefs[j];
+        if (signalDef.name === signalName) {
+          const globalId = module.signalInstsStartId + j;
+          console.log(`[KdbManager] Found signal via JS: ${signalName} at globalId=${globalId}`);
+          return globalId;
+        }
+      }
+
+      // Yield to allow UI updates between batches
+      if (endIndex < signalDefs.length) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Store KDB in WASM memory for fast lookup
+   */
+  async storeKdbInWasmMemory(): Promise<void> {
+    if (!this.currentKdbId || !wasmManager.isInitialized()) {
+      console.warn('[KdbManager] Cannot store KDB in WASM: not initialized');
+      return;
+    }
+
+    try {
+      // Get the raw KDB data from IndexedDB or re-download
+      // For now, we'll skip this as the data is already in JS memory
+      // TODO: Implement storing KDB data in WASM memory when loading
+      console.log('[KdbManager] KDB storage in WASM memory not yet implemented');
+    } catch (error) {
+      console.error('[KdbManager] Failed to store KDB in WASM memory:', error);
+    }
   }
 
   /**

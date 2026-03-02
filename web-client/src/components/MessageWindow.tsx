@@ -1,9 +1,56 @@
 import { useRef, useEffect, useState } from 'react';
 import { bookmarkManager, type Bookmark } from '../types/bookmark';
+import { kdbManager } from '../modules/knowledge/kdbManager';
 
 interface MessageWindowProps {
   messages: string[];
   onBookmarkClick?: (bookmark: Bookmark) => void;
+}
+
+// Component to display file name from module index or fileId
+function FileNameCell({ moduleIndex, fileId, width }: { moduleIndex: number; fileId?: number; width: number }) {
+  const [fileName, setFileName] = useState<string>('');
+  
+  useEffect(() => {
+    const loadFileName = async () => {
+      let targetFileId: number | null = null;
+      
+      if (moduleIndex === 0 && fileId) {
+        // File mode: use fileId directly
+        targetFileId = fileId;
+      } else if (moduleIndex > 0) {
+        // Module mode: get fileId from module
+        targetFileId = await kdbManager.getModuleFileId(moduleIndex);
+      }
+      
+      if (targetFileId) {
+        const fileInfo = await kdbManager.getFileInfo(targetFileId);
+        if (fileInfo) {
+          setFileName(fileInfo.fullName);
+        }
+      }
+    };
+    loadFileName();
+  }, [moduleIndex, fileId]);
+  
+  return (
+    <div
+      style={{ 
+        width, 
+        minWidth: 50, 
+        paddingRight: '4px', 
+        color: '#666',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        textAlign: 'right',
+        direction: 'rtl',
+      }}
+      title={fileName}
+    >
+      {fileName}
+    </div>
+  );
 }
 
 type TabType = 'messages' | 'bookmarks';
@@ -217,7 +264,7 @@ export function MessageWindow({ messages, onBookmarkClick }: MessageWindowProps)
                     fontSize: '11px',
                     cursor: 'pointer',
                   }}
-                  title={`${bookmark.fileFullName}:${bookmark.lineNumber}\n${bookmark.lineContent}`}
+                  title={`Line ${bookmark.lineNumber}\n${bookmark.lineContent}`}
                 >
                   {/* Name (editable) */}
                   <div
@@ -263,22 +310,11 @@ export function MessageWindow({ messages, onBookmarkClick }: MessageWindowProps)
                   <div style={{ width: '4px' }} />
 
                   {/* File - right aligned */}
-                  <div
-                    style={{ 
-                      width: colWidths.file, 
-                      minWidth: 50, 
-                      paddingRight: '4px', 
-                      color: '#666',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      textAlign: 'right',
-                      direction: 'rtl',  // Right-to-left for showing end of path
-                    }}
-                    title={bookmark.fileFullName}
-                  >
-                    {bookmark.fileFullName}
-                  </div>
+                  <FileNameCell 
+                    moduleIndex={bookmark.moduleIndex}
+                    fileId={bookmark.fileId}
+                    width={colWidths.file}
+                  />
 
                   {/* Spacer */}
                   <div style={{ width: '4px' }} />

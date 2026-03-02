@@ -246,7 +246,7 @@ function App() {
   // ============================================
   
   // Add a navigation entry to the active source tab
-  const addNavigationEntry = useCallback((fileId: number, line: number) => {
+  const addNavigationEntry = useCallback((fileId: number, line: number, displayModuleIndex?: number) => {
     setTabs(prev => prev.map(tab => {
       if (tab.id !== activeTab || tab.type !== 'source') return tab;
       
@@ -257,7 +257,8 @@ function App() {
       const newEntry: NavigationHistoryEntry = {
         fileId,
         line,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        displayModuleIndex  // Store display module for context restoration
       };
       
       // Remove entries after pointer (if any)
@@ -274,8 +275,111 @@ function App() {
     }));
   }, [activeTab]);
 
+  // ============================================
+  // Unified Source Display Function
+  // ============================================
+  
+  interface SetSourceDisplayOptions {
+    displayModuleId?: number;    // Display module ID (for range lookup)
+    selectedModuleId?: number;   // Selected module ID (for MenuBar info)
+    startFromLine?: number;      // Line to highlight/jump to
+    fileId?: number;             // File ID (fallback if displayModuleId invalid)
+    addToHistory?: boolean;      // Whether to add to navigation history
+  }
+  
+  // Unified function to set source display
+  const setSourceDisplay = useCallback(async (options: SetSourceDisplayOptions) => {
+    const { 
+      displayModuleId, 
+      selectedModuleId, 
+      startFromLine = 1, 
+      fileId: fallbackFileId,
+      addToHistory = true 
+    } = options;
+    
+    // Try to get display range from displayModuleId
+    let displayRange = null;
+    let effectiveFileId = fallbackFileId;
+    
+    if (displayModuleId) {
+      displayRange = kdbManager.getDisplayRange(displayModuleId);
+      if (displayRange) {
+        effectiveFileId = displayRange.fileId;
+      }
+    }
+    
+    // If displayModuleId is 0 or invalid, but fileId is provided,
+    // get the file's total lines to show entire file
+    if (!displayRange && effectiveFileId) {
+      const sourceFile = await kdbManager.getSourceFile(effectiveFileId);
+      if (sourceFile) {
+        const totalLines = sourceFile.content.split('\n').length;
+        displayRange = {
+          fileId: effectiveFileId,
+          startLine: 1,
+          endLine: totalLines
+        };
+      }
+    }
+    
+    // Find or create source tab
+    const existingSourceTab = tabs.find(t => t.type === 'source');
+    
+    if (existingSourceTab) {
+      // Update existing tab
+      setTabs(prev => prev.map(tab => 
+        tab.id === existingSourceTab.id 
+          ? { 
+              ...tab, 
+              // moduleIndex: use selectedModuleId if provided, otherwise displayModuleId (can be 0)
+              moduleIndex: selectedModuleId ?? displayModuleId,
+              // displayModuleIndex: use displayModuleId (can be 0 for file mode)
+              displayModuleIndex: displayModuleId,
+              // fileId: store for loading file directly when displayModuleIndex is 0
+              fileId: effectiveFileId,
+              signalDeclarationLine: startFromLine,
+              // If display range valid, use it; otherwise undefined (show entire file)
+              moduleStartLine: displayRange?.startLine,
+              moduleEndLine: displayRange?.endLine,
+              startFromLine1: !displayRange,  // Start from line 1 if no range
+            } 
+          : tab
+      ));
+      setActiveTab(existingSourceTab.id);
+      
+      // Add to history if requested
+      if (addToHistory && effectiveFileId) {
+        addNavigationEntry(effectiveFileId, startFromLine, displayModuleId);
+      }
+    } else {
+      // Create new tab
+      const newId = `source-${tabCounter.current++}`;
+      const newTab: Tab = {
+        id: newId,
+        label: 'Source',
+        type: 'source',
+        moduleIndex: selectedModuleId ?? displayModuleId,
+        displayModuleIndex: displayModuleId,
+        fileId: effectiveFileId,  // Store for loading file directly when displayModuleIndex is 0
+        signalDeclarationLine: startFromLine,
+        moduleStartLine: displayRange?.startLine,
+        moduleEndLine: displayRange?.endLine,
+        startFromLine1: !displayRange,
+      };
+      setTabs(prev => [...prev, newTab]);
+      setActiveTab(newId);
+      
+      // Add to history after tab creation if requested
+      if (addToHistory && effectiveFileId) {
+        setTimeout(() => addNavigationEntry(effectiveFileId, startFromLine, displayModuleId), 0);
+      }
+    }
+    
+    return { displayRange, fileId: effectiveFileId };
+  }, [activeTab, tabs, addNavigationEntry]);
+
   // Navigate to previous location in history
-  const navigatePrevious = useCallback(() => {
+  const navigatePrevious = useCallback(async () => {
     const activeTabData = tabs.find(t => t.id === activeTab);
     if (!activeTabData || activeTabData.type !== 'source') return;
     
@@ -288,28 +392,27 @@ function App() {
     
     if (!entry) return;
     
-    // Find module that uses this file
-    const modules = kdbManager.getAllModules();
-    const moduleIndex = modules.findIndex(m => m.definition?.fileId === entry.fileId);
+    // Use unified function to restore source display from history
+    // Must provide fileId for navigation
+    await setSourceDisplay({
+      displayModuleId: entry.displayModuleIndex,
+      startFromLine: entry.line,
+      fileId: entry.fileId,      // Required for navigation
+      addToHistory: false        // Don't add to history (already in history)
+    });
     
-    if (moduleIndex >= 0) {
-      const moduleIdx = moduleIndex + 1;
-      setTabs(prev => prev.map(tab => 
-        tab.id === activeTab 
-          ? { 
-              ...tab, 
-              moduleIndex: moduleIdx,
-              signalDeclarationLine: entry.line,
-              navigationPointer: newPointer
-            } 
-          : tab
-      ));
-      addMessage(`Navigate back to line ${entry.line}`);
-    }
-  }, [activeTab, tabs, addMessage]);
+    // Update navigation pointer
+    setTabs(prev => prev.map(tab => 
+      tab.id === activeTab 
+        ? { ...tab, navigationPointer: newPointer }
+        : tab
+    ));
+    
+    addMessage(`Navigate back to line ${entry.line}`);
+  }, [activeTab, tabs, setSourceDisplay, addMessage]);
 
   // Navigate to next location in history
-  const navigateNext = useCallback(() => {
+  const navigateNext = useCallback(async () => {
     const activeTabData = tabs.find(t => t.id === activeTab);
     if (!activeTabData || activeTabData.type !== 'source') return;
     
@@ -323,25 +426,24 @@ function App() {
     
     if (!entry) return;
     
-    // Find module that uses this file
-    const modules = kdbManager.getAllModules();
-    const moduleIndex = modules.findIndex(m => m.definition?.fileId === entry.fileId);
+    // Use unified function to restore source display from history
+    // Must provide fileId for navigation
+    await setSourceDisplay({
+      displayModuleId: entry.displayModuleIndex,
+      startFromLine: entry.line,
+      fileId: entry.fileId,      // Required for navigation
+      addToHistory: false        // Don't add to history (already in history)
+    });
     
-    if (moduleIndex >= 0) {
-      const moduleIdx = moduleIndex + 1;
-      setTabs(prev => prev.map(tab => 
-        tab.id === activeTab 
-          ? { 
-              ...tab, 
-              moduleIndex: moduleIdx,
-              signalDeclarationLine: entry.line,
-              navigationPointer: newPointer
-            } 
-          : tab
-      ));
-      addMessage(`Navigate forward to line ${entry.line}`);
-    }
-  }, [activeTab, tabs, addMessage]);
+    // Update navigation pointer
+    setTabs(prev => prev.map(tab => 
+      tab.id === activeTab 
+        ? { ...tab, navigationPointer: newPointer }
+        : tab
+    ));
+    
+    addMessage(`Navigate forward to line ${entry.line}`);
+  }, [activeTab, tabs, setSourceDisplay, addMessage]);
 
   // Check if navigation is possible
   const canNavigatePrevious = useCallback(() => {
@@ -373,12 +475,6 @@ function App() {
       return;
     }
     
-    const moduleIndex = activeSourceTab.moduleIndex;
-    if (!moduleIndex) {
-      addMessage('Cannot bookmark: no module loaded');
-      return;
-    }
-    
     // Get current line from Monaco editor
     let lineNumber = 1;
     if (monacoEditorRef.current) {
@@ -390,52 +486,36 @@ function App() {
       lineNumber = activeSourceTab.signalDeclarationLine;
     }
     
-    // Get file info
-    const fileId = await kdbManager.getModuleFileId(moduleIndex);
-    if (!fileId) {
-      addMessage('Cannot bookmark: file not found');
-      return;
-    }
-    
-    const fileInfo = await kdbManager.getFileInfo(fileId);
-    if (!fileInfo) {
-      addMessage('Cannot bookmark: file info not found');
-      return;
-    }
-    
-    // Get module info for module start/end line
-    // Use the same logic as hierarchy double click to determine display range
-    const module = kdbManager.getModuleById(moduleIndex);
-    let displayStartLine: number | undefined;
-    let displayEndLine: number | undefined;
-    
-    if (module?.isInstance) {
-      // This is an instance, find the parent module definition
-      const parentModuleId = module.parentModuleId;
-      if (parentModuleId > 0) {
-        const parentModule = kdbManager.getModuleById(parentModuleId);
-        if (parentModule && !parentModule.isInstance) {
-          // Parent is a module definition, use its range
-          displayStartLine = parentModule.definition?.startLine;
-          displayEndLine = parentModule.definition?.endLine;
-        } else if (parentModule && parentModule.isInstance) {
-          // Parent is also an instance, find the def_module_id
-          const defModuleId = parentModule.defModuleId;
-          if (defModuleId > 0) {
-            const defModule = kdbManager.getModuleById(defModuleId);
-            displayStartLine = defModule?.definition?.startLine;
-            displayEndLine = defModule?.definition?.endLine;
-          }
-        }
+    // Check if line is within display range (if range is defined)
+    if (activeSourceTab.moduleStartLine && activeSourceTab.moduleEndLine) {
+      if (lineNumber < activeSourceTab.moduleStartLine || lineNumber > activeSourceTab.moduleEndLine) {
+        addMessage(`Cannot bookmark: line ${lineNumber} is outside the current display range (${activeSourceTab.moduleStartLine}-${activeSourceTab.moduleEndLine})`);
+        return;
       }
-    } else {
-      // This is a module definition, use its own range
-      displayStartLine = module?.definition?.startLine;
-      displayEndLine = module?.definition?.endLine;
+    }
+    
+    // Determine the context for bookmark
+    // Use displayModuleIndex if available (>0), otherwise use fileId (for file mode)
+    const displayModuleIndex = activeSourceTab.displayModuleIndex;
+    const fileId = activeSourceTab.fileId;
+    
+    if (!displayModuleIndex && !fileId) {
+      addMessage('Cannot bookmark: no module or file loaded');
+      return;
     }
     
     // Get line content (we need to fetch the source content)
-    const sourceFile = await kdbManager.getSourceFile(fileId);
+    let sourceFile = null;
+    if (displayModuleIndex && displayModuleIndex > 0) {
+      const moduleFileId = await kdbManager.getModuleFileId(displayModuleIndex);
+      if (moduleFileId) {
+        sourceFile = await kdbManager.getSourceFile(moduleFileId);
+      }
+    } else if (fileId) {
+      // File mode: use fileId directly
+      sourceFile = await kdbManager.getSourceFile(fileId);
+    }
+    
     if (!sourceFile) {
       addMessage('Cannot bookmark: source file not found');
       return;
@@ -444,13 +524,11 @@ function App() {
     const lineContent = lines[lineNumber - 1]?.trim() || '';
     
     // Create bookmark (name will be auto-generated as "Mark N")
+    // Store displayModuleIndex as the module context for this bookmark
+    // If displayModuleIndex is 0 or undefined, store 0 and fileId (file mode bookmark)
     const bookmark = bookmarkManager.addBookmark({
-      moduleIndex: moduleIndex,  // Store module index for navigation
-      moduleStartLine: displayStartLine,  // Store for gray out (normal display range start)
-      moduleEndLine: displayEndLine,      // Store for gray out (normal display range end)
-      fileId: fileId,
-      fileName: fileInfo.name,
-      fileFullName: fileInfo.fullName,
+      moduleIndex: displayModuleIndex ?? 0,  // Store display module (0 for file mode)
+      fileId: (displayModuleIndex === 0 || displayModuleIndex === undefined) ? (fileId ?? undefined) : undefined,  // Store fileId for file mode
       lineNumber: lineNumber,
       lineContent: lineContent,
     });
@@ -459,55 +537,24 @@ function App() {
   }, [activeTab, tabs, addMessage]);
   
   // Handle bookmark click - jump to source
-  const handleBookmarkClick = useCallback((bookmark: Bookmark) => {
-    // Use stored moduleIndex from bookmark
+  const handleBookmarkClick = useCallback(async (bookmark: Bookmark) => {
+    // Use stored moduleIndex from bookmark as both selected and display module
     const moduleIndex = bookmark.moduleIndex;
-    const moduleStartLine = bookmark.moduleStartLine;
-    const moduleEndLine = bookmark.moduleEndLine;
     
-    // Check if there's an active source tab
-    const activeSourceTab = tabs.find(t => t.type === 'source' && t.id === activeTab);
+    // If moduleIndex is 0, it's a file mode bookmark, use fileId
+    const isFileMode = moduleIndex === 0;
     
-    if (activeSourceTab) {
-      // Update existing source tab
-      setTabs(prev => prev.map(tab => 
-        tab.id === activeSourceTab.id 
-          ? { 
-              ...tab, 
-              moduleIndex: moduleIndex,
-              signalDeclarationLine: bookmark.lineNumber,
-              startFromLine1: true,
-              moduleStartLine: moduleStartLine,
-              moduleEndLine: moduleEndLine,
-            } 
-          : tab
-      ));
-      setActiveTab(activeSourceTab.id);
-      
-      // Add navigation entry
-      addNavigationEntry(bookmark.fileId, bookmark.lineNumber);
-      addMessage(`Jump to bookmark: ${bookmark.name}`);
-    } else {
-      // No active source tab, create one
-      const newId = `source-${tabCounter.current++}`;
-      const newTab: Tab = {
-        id: newId,
-        label: 'Source',
-        type: 'source',
-        moduleIndex: moduleIndex,
-        signalDeclarationLine: bookmark.lineNumber,
-        startFromLine1: true,
-        moduleStartLine: moduleStartLine,
-        moduleEndLine: moduleEndLine,
-      };
-      setTabs(prev => [...prev, newTab]);
-      setActiveTab(newId);
-      
-      // Add navigation entry after tab is created
-      setTimeout(() => addNavigationEntry(bookmark.fileId, bookmark.lineNumber), 0);
-      addMessage(`Open source at bookmark: ${bookmark.name}`);
-    }
-  }, [activeTab, tabs, addNavigationEntry, addMessage]);
+    // Use unified function to set source display
+    await setSourceDisplay({
+      displayModuleId: moduleIndex,  // 0 for file mode
+      selectedModuleId: moduleIndex,
+      startFromLine: bookmark.lineNumber,
+      fileId: isFileMode ? bookmark.fileId : undefined,  // Provide fileId for file mode
+      addToHistory: true
+    });
+    
+    addMessage(`Jump to bookmark: ${bookmark.name}`);
+  }, [setSourceDisplay, addMessage]);
 
   // ============================================
   // File Change Detection
@@ -890,7 +937,7 @@ function App() {
     addMessage(`Selected module: ${fullName}`)
   }
 
-  const handleModuleDoubleClick = (moduleIndex: number) => {
+  const handleModuleDoubleClick = async (moduleIndex: number) => {
     console.log('[App] handleModuleDoubleClick called, moduleIndex:', moduleIndex);
     
     // Update global selected module index
@@ -898,88 +945,30 @@ function App() {
     
     // Get module info
     const module = kdbManager.getModuleById(moduleIndex);
-    const fileId = module?.definition?.fileId;
-    const line = module?.definition?.startLine || 1;
     
-    // Determine the display range for gray out
-    // If this is an instance, find the parent module definition
-    // If this is a module definition, use its own range
-    let displayStartLine: number | undefined;
-    let displayEndLine: number | undefined;
+    // For hierarchy double-click:
+    // - selectedModule = clicked module (moduleIndex)
+    // - displayModule = if clicked module is instance, use its parent; otherwise use itself
+    // - highlightLine = selected module's own startLine (instance declaration line)
+    const displayModuleId = module?.isInstance ? (module?.parentModuleId || moduleIndex) : moduleIndex;
+    const highlightLine = module?.definition?.startLine || 1;
     
-    if (module?.isInstance) {
-      // This is an instance, find the parent module definition
-      const parentModuleId = module.parentModuleId;
-      if (parentModuleId > 0) {
-        const parentModule = kdbManager.getModuleById(parentModuleId);
-        if (parentModule && !parentModule.isInstance) {
-          // Parent is a module definition, use its range
-          displayStartLine = parentModule.definition?.startLine;
-          displayEndLine = parentModule.definition?.endLine;
-        } else if (parentModule && parentModule.isInstance) {
-          // Parent is also an instance, find the def_module_id
-          const defModuleId = parentModule.defModuleId;
-          if (defModuleId > 0) {
-            const defModule = kdbManager.getModuleById(defModuleId);
-            displayStartLine = defModule?.definition?.startLine;
-            displayEndLine = defModule?.definition?.endLine;
-          }
-        }
-      }
-    } else {
-      // This is a module definition, use its own range
-      displayStartLine = module?.definition?.startLine;
-      displayEndLine = module?.definition?.endLine;
-    }
+    console.log('[App] highlightLine:', highlightLine, 'displayModuleId:', displayModuleId, 'isInstance:', module?.isInstance);
     
-    console.log('[App] Display range:', displayStartLine, '-', displayEndLine, 'isInstance:', module?.isInstance);
+    // Use unified function to set source display
+    await setSourceDisplay({
+      displayModuleId: displayModuleId,
+      selectedModuleId: moduleIndex,
+      startFromLine: highlightLine,
+      addToHistory: true
+    });
     
-    // Find or create a source tab for this module and switch to it
-    const existingSourceTab = tabs.find(t => t.type === 'source')
-    console.log('[App] Existing source tab:', existingSourceTab);
-    
-    if (existingSourceTab) {
-      // Update existing source tab with the new module index
-      // Clear startFromLine1 and signalDeclarationLine to use module's startLine
-      setTabs(prev => prev.map(tab => 
-        tab.id === existingSourceTab.id 
-          ? { ...tab, moduleIndex, startFromLine1: undefined, signalDeclarationLine: undefined, moduleStartLine: displayStartLine, moduleEndLine: displayEndLine } 
-          : tab
-      ))
-      setActiveTab(existingSourceTab.id)
-      console.log('[App] Updated existing source tab, set active to:', existingSourceTab.id);
-      
-      // Add navigation entry
-      if (fileId) {
-        addNavigationEntry(fileId, line);
-      }
-    } else {
-      // Create a new source tab
-      const newId = `source-${tabCounter.current++}`
-      const newTab: Tab = {
-        id: newId,
-        label: 'Source',
-        type: 'source',
-        moduleIndex,
-        moduleStartLine: displayStartLine,
-        moduleEndLine: displayEndLine,
-      }
-      console.log('[App] Creating new source tab:', newTab);
-      setTabs(prev => [...prev, newTab])
-      setActiveTab(newId)
-      console.log('[App] Created new source tab, set active to:', newId);
-      
-      // Add navigation entry after tab is created and active
-      if (fileId) {
-        setTimeout(() => addNavigationEntry(fileId, line), 0);
-      }
-    }
     // Calculate fullName on demand
     const fullName = kdbManager.calculateModuleFullName(moduleIndex)
     addMessage(`Open source for: ${fullName}`)
   }
 
-  const handleFileDoubleClick = (fileId: number) => {
+  const handleFileDoubleClick = async (fileId: number) => {
     console.log('[App] handleFileDoubleClick called, fileId:', fileId);
     
     // Open file directly - find a module that uses this file
@@ -993,38 +982,16 @@ function App() {
       // Update global selected module index
       setSelectedModuleIndex(moduleIdx)
       
-      // Find or create a source tab for this file and switch to it
-      const existingSourceTab = tabs.find(t => t.type === 'source')
+      // Use unified function to set source display
+      // displayModuleId: 0 (invalid) to show entire file
+      await setSourceDisplay({
+        displayModuleId: 0,        // Invalid ID, show entire file
+        selectedModuleId: moduleIdx,
+        startFromLine: 1,
+        fileId: fileId,            // Must provide fileId
+        addToHistory: true
+      });
       
-      if (existingSourceTab) {
-        // Update existing source tab with the new module index
-        // Clear signalDeclarationLine and module range to show entire file
-        setTabs(prev => prev.map(tab => 
-          tab.id === existingSourceTab.id 
-            ? { ...tab, moduleIndex: moduleIdx, startFromLine1: true, signalDeclarationLine: undefined, moduleStartLine: undefined, moduleEndLine: undefined } 
-            : tab
-        ))
-        setActiveTab(existingSourceTab.id)
-        
-        // Add navigation entry (line 1 for file mode)
-        addNavigationEntry(fileId, 1);
-      } else {
-        // Create a new source tab
-        const newId = `source-${tabCounter.current++}`
-        const newTab: Tab = {
-          id: newId,
-          label: 'Source',
-          type: 'source',
-          moduleIndex: moduleIdx,
-          startFromLine1: true,
-          // Don't set moduleStartLine and moduleEndLine to show entire file
-        }
-        setTabs(prev => [...prev, newTab])
-        setActiveTab(newId)
-        
-        // Add navigation entry after tab is created
-        setTimeout(() => addNavigationEntry(fileId, 1), 0);
-      }
       addMessage(`Open file from line 1`)
     }
   }
@@ -1089,8 +1056,8 @@ function App() {
       ))
       setActiveTab(activeSourceTab.id)
       
-      // Add navigation entry
-      addNavigationEntry(fileId, line);
+      // Add navigation entry with display module
+      addNavigationEntry(fileId, line, displayModuleIndex);
       addMessage(`Jump to ${signal.name} declaration (line ${line})`)
     } else {
       // No active source tab, create one
@@ -1107,8 +1074,8 @@ function App() {
       setTabs(prev => [...prev, newTab])
       setActiveTab(newId)
       
-      // Add navigation entry after tab is created
-      setTimeout(() => addNavigationEntry(fileId, line), 0);
+      // Add navigation entry after tab is created with display module
+      setTimeout(() => addNavigationEntry(fileId, line, displayModuleIndex), 0);
       addMessage(`Open source at ${signal.name} declaration (line ${line})`)
     }
   }
@@ -1116,6 +1083,77 @@ function App() {
   const handleSignalSelect = (signal: Signal) => {
     // Update MenuBar info text with signal's full hierarchy name
     setMenuBarInfoText(signal.fullName)
+  }
+
+  // Handle word click in source code editor
+  const handleWordClick = async (word: string, lineNumber: number, isDoubleClick: boolean) => {
+    console.log('[App] handleWordClick:', word, 'line:', lineNumber, 'double:', isDoubleClick);
+
+    // Get current active source tab
+    const activeTabData = tabs.find(t => t.id === activeTab && t.type === 'source');
+    if (!activeTabData || !activeTabData.moduleIndex) return;
+
+    // Use displayModuleIndex for lookups (the currently displayed module)
+    // If not set, fall back to moduleIndex
+    const lookupModuleIndex = activeTabData.displayModuleIndex || activeTabData.moduleIndex;
+    const module = kdbManager.getModuleById(lookupModuleIndex);
+    if (!module) return;
+
+    // Check if line is within module range
+    if (activeTabData.moduleStartLine && activeTabData.moduleEndLine) {
+      if (lineNumber < activeTabData.moduleStartLine || lineNumber > activeTabData.moduleEndLine) {
+        console.log('[App] Click outside module range');
+        return;
+      }
+    }
+
+    // Try to find instance first (batch search) in the displayed module
+    const instanceId = await kdbManager.findInstanceByName(lookupModuleIndex, word);
+    if (instanceId) {
+      const instance = kdbManager.getModuleById(instanceId);
+      if (instance) {
+        const fullName = kdbManager.calculateModuleFullName(instanceId);
+        setMenuBarInfoText(fullName);
+
+        if (isDoubleClick) {
+          // Use getDisplayRange to get the display range for the found instance
+          const displayRange = kdbManager.getDisplayRange(instanceId);
+          if (displayRange) {
+            // Update global selected module index to the clicked instance (not def_module)
+            // This is the "selected instance" for MenuBar info
+            setSelectedModuleIndex(instanceId);
+            
+            // Use unified function to set source display
+            // For Monaco double-click:
+            // - displayModule = clicked instance (for lookup context)
+            // - highlightLine = def_module's startLine (from getDisplayRange)
+            // - moduleIndex unchanged - keep the previously selected instance context
+            await setSourceDisplay({
+              displayModuleId: instanceId,      // Displayed instance (clicked instance)
+              selectedModuleId: undefined,      // Keep existing moduleIndex unchanged
+              startFromLine: displayRange.startLine,  // Highlight def_module's startLine
+              addToHistory: true
+            });
+            
+            addMessage(`Jump to instance ${instance.name} definition (line ${displayRange.startLine})`);
+          }
+        }
+        return;
+      }
+    }
+
+    // Try to find signal (batch search) in the displayed module
+    const signalGlobalId = await kdbManager.findSignalByName(lookupModuleIndex, word);
+    if (signalGlobalId) {
+      const signal = kdbManager.buildSignal(signalGlobalId);
+      if (signal) {
+        setMenuBarInfoText(signal.fullName);
+        // For double-click on signal, do nothing for now as per requirements
+        return;
+      }
+    }
+
+    console.log('[App] Word not found as instance or signal:', word);
   }
 
   const handleSignalAddToWaveform = (signal: Signal) => {
@@ -1452,12 +1490,16 @@ function App() {
               <MonacoSourceCodeWindow
                 key={activeTabData.id}
                 moduleIndex={activeTabData.moduleIndex || null}
+                displayModuleIndex={activeTabData.displayModuleIndex || null}
+                fileId={activeTabData.fileId || null}
                 startFromLine1={activeTabData.startFromLine1}
                 signalDeclarationLine={activeTabData.signalDeclarationLine}
                 moduleStartLine={activeTabData.moduleStartLine}
                 moduleEndLine={activeTabData.moduleEndLine}
-                moduleFullName={activeTabData.moduleIndex ? kdbManager.calculateModuleFullName(activeTabData.moduleIndex) : undefined}
+                moduleFullName={activeTabData.displayModuleIndex ? kdbManager.calculateModuleFullName(activeTabData.displayModuleIndex) : 
+                  activeTabData.moduleIndex ? kdbManager.calculateModuleFullName(activeTabData.moduleIndex) : undefined}
                 editorRef={monacoEditorRef}
+                onWordClick={handleWordClick}
               />
             ) : activeTabData ? (
               <WaveformWindow

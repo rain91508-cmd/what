@@ -20,18 +20,21 @@ loader.init().catch((err) => {
 });
 
 interface MonacoSourceCodeWindowProps {
-  moduleIndex: number | null;
+  moduleIndex: number | null;  // Selected module (for lookups)
+  displayModuleIndex?: number | null;  // Displayed module (for loading source file, e.g., def_module)
+  fileId?: number | null;      // File ID (for loading file directly when displayModuleIndex is 0)
   startFromLine1?: boolean;
   signalDeclarationLine?: number;
   moduleStartLine?: number;  // Module start line for graying out
   moduleEndLine?: number;    // Module end line for graying out
   moduleFullName?: string;   // Module full hierarchy name for display
   editorRef?: React.MutableRefObject<editor.IStandaloneCodeEditor | null>;
+  onWordClick?: (word: string, lineNumber: number, isDoubleClick: boolean) => void;  // Click handler for word lookup
 }
 
 const modelCache = new Map<string, editor.ITextModel>();
 
-export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDeclarationLine, moduleStartLine, moduleEndLine, moduleFullName, editorRef: externalEditorRef }: MonacoSourceCodeWindowProps) {
+export function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId, startFromLine1, signalDeclarationLine, moduleStartLine, moduleEndLine, moduleFullName, editorRef: externalEditorRef, onWordClick }: MonacoSourceCodeWindowProps) {
   const [content, setContent] = useState<string>('');
   const [filePath, setFilePath] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -166,7 +169,80 @@ export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDecl
   const handleEditorDidMount = useCallback((editor: editor.IStandaloneCodeEditor) => {
     editorRef.current = editor;
     console.log('[MonacoSourceCodeWindow] Editor mounted');
-    
+
+    // Handle single click - use onMouseDown
+    const handleMouseDown = (e: monaco.editor.IEditorMouseEvent) => {
+      if (e.target.type !== monaco.editor.MouseTargetType.CONTENT_TEXT) return;
+
+      const position = e.target.position;
+      if (!position) return;
+
+      const lineNumber = position.lineNumber;
+
+      // Check if line is within module range (if module info is available)
+      if (moduleStartLine && moduleEndLine) {
+        if (lineNumber < moduleStartLine || lineNumber > moduleEndLine) {
+          console.log('[MonacoSourceCodeWindow] Click outside module range:', lineNumber);
+          return; // Outside range, do nothing
+        }
+      }
+
+      // Get the word at the clicked position
+      const model = editor.getModel();
+      if (!model) return;
+
+      const wordInfo = model.getWordAtPosition(position);
+      if (!wordInfo) return;
+
+      const word = wordInfo.word;
+      console.log('[MonacoSourceCodeWindow] Clicked word:', word, 'at line:', lineNumber);
+
+      // Call the callback for single click
+      if (onWordClick) {
+        onWordClick(word, lineNumber, false); // false = single click
+      }
+    };
+
+    // Handle double click - use onDidChangeCursorSelection (Monaco's built-in double click detection)
+    const handleSelectionChange = (e: monaco.editor.ICursorSelectionChangedEvent) => {
+      // Check if this is a double-click selection (selection is not empty and reason is 'word')
+      if (e.reason !== monaco.editor.CursorChangeReason.Explicit) return;
+
+      const selection = e.selection;
+      if (selection.isEmpty()) return;
+
+      // Check if it's a single line selection (word selection from double click)
+      if (selection.startLineNumber !== selection.endLineNumber) return;
+
+      const lineNumber = selection.startLineNumber;
+
+      // Check if line is within module range (if module info is available)
+      if (moduleStartLine && moduleEndLine) {
+        if (lineNumber < moduleStartLine || lineNumber > moduleEndLine) {
+          console.log('[MonacoSourceCodeWindow] Double-click outside module range:', lineNumber);
+          return; // Outside range, do nothing
+        }
+      }
+
+      // Get the selected text (word)
+      const model = editor.getModel();
+      if (!model) return;
+
+      const word = model.getValueInRange(selection);
+      if (!word) return;
+
+      console.log('[MonacoSourceCodeWindow] Double-clicked word:', word, 'at line:', lineNumber);
+
+      // Call the callback for double click
+      if (onWordClick) {
+        onWordClick(word, lineNumber, true); // true = double click
+      }
+    };
+
+    // Subscribe to events
+    const disposable1 = editor.onMouseDown(handleMouseDown);
+    const disposable2 = editor.onDidChangeCursorSelection(handleSelectionChange);
+
     // Check if there's a pending highlight to apply
     setTimeout(() => {
       if (pendingHighlightRef.current) {
@@ -175,19 +251,42 @@ export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDecl
       } else if (highlightLine) {
         applyHighlight(editor, highlightLine);
       }
-      
+
       // Apply gray out decoration if module range is set
       if (moduleStartLine && moduleEndLine && content) {
         const totalLines = content.split('\n').length;
         applyGrayOutDecoration(editor, moduleStartLine, moduleEndLine, totalLines);
       }
     }, 100);
-  }, [highlightLine, applyHighlight, moduleStartLine, moduleEndLine, content, applyGrayOutDecoration]);
+
+    // Cleanup function
+    return () => {
+      disposable1.dispose();
+      disposable2.dispose();
+    };
+  }, [highlightLine, applyHighlight, moduleStartLine, moduleEndLine, content, applyGrayOutDecoration, onWordClick]);
 
   // Load source file when module or highlight settings change
   useEffect(() => {
     loadSourceFile();
-  }, [moduleIndex, startFromLine1, signalDeclarationLine]);
+  }, [moduleIndex, displayModuleIndex, startFromLine1, signalDeclarationLine]);
+
+  // Re-apply gray out decoration when module range changes
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || !content) return;
+
+    if (moduleStartLine && moduleEndLine) {
+      const totalLines = content.split('\n').length;
+      applyGrayOutDecoration(editor, moduleStartLine, moduleEndLine, totalLines);
+    } else {
+      // Clear gray out decorations if no range specified
+      if (grayOutDecorationsRef.current.length > 0) {
+        editor.deltaDecorations(grayOutDecorationsRef.current, []);
+        grayOutDecorationsRef.current = [];
+      }
+    }
+  }, [moduleStartLine, moduleEndLine, content, applyGrayOutDecoration]);
 
   // Register Verilog language
   useEffect(() => {
@@ -298,9 +397,41 @@ export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDecl
   }, [signalDeclarationLine, content, applyHighlight]);
 
   const loadSourceFile = async () => {
-    console.log('[MonacoSourceCodeWindow] loadSourceFile called, moduleIndex:', moduleIndex);
+    console.log('[MonacoSourceCodeWindow] loadSourceFile called, moduleIndex:', moduleIndex, 'displayModuleIndex:', displayModuleIndex, 'fileId:', fileId);
     
-    if (!moduleIndex) {
+    // Determine how to load the file:
+    // 1. If displayModuleIndex > 0, use it to get module and fileId
+    // 2. If fileId is provided (for file mode when displayModuleIndex is 0), use it directly
+    // 3. Otherwise, try moduleIndex
+    let targetFileId: number | null = null;
+    let targetModuleName: string = '';
+    let targetModuleStartLine: number | null = null;
+    
+    if (displayModuleIndex && displayModuleIndex > 0) {
+      // Use displayModuleIndex to get module info
+      const module = kdbManager.getModuleById(displayModuleIndex);
+      if (module) {
+        targetFileId = module.definition?.fileId || null;
+        targetModuleName = module.name;
+        targetModuleStartLine = module.definition?.startLine || null;
+      }
+    } else if (fileId) {
+      // Use fileId directly (file mode)
+      targetFileId = fileId;
+      targetModuleName = '';
+      targetModuleStartLine = null;
+    } else if (moduleIndex) {
+      // Fallback to moduleIndex
+      const module = kdbManager.getModuleById(moduleIndex);
+      if (module) {
+        targetFileId = module.definition?.fileId || null;
+        targetModuleName = module.name;
+        targetModuleStartLine = module.definition?.startLine || null;
+      }
+    }
+    
+    if (!targetFileId) {
+      console.log('[MonacoSourceCodeWindow] No fileId available');
       setContent('');
       setFilePath('');
       setHighlightLine(null);
@@ -311,19 +442,10 @@ export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDecl
     try {
       setLoading(true);
       
-      const module = kdbManager.getModuleById(moduleIndex);
-      if (!module) {
-        setContent('// Module not found');
-        setFilePath('');
-        setHighlightLine(null);
-        setModuleName('');
-        return;
-      }
+      setModuleName(targetModuleName);
+      console.log('[MonacoSourceCodeWindow] Loading source file for fileId:', targetFileId, 'moduleName:', targetModuleName);
       
-      setModuleName(module.name);
-      console.log('[MonacoSourceCodeWindow] Loading source file for module:', module.name, 'fileId:', module.definition?.fileId);
-      
-      const sourceFile = await kdbManager.getSourceFile(module.definition.fileId);
+      const sourceFile = await kdbManager.getSourceFile(targetFileId);
       console.log('[MonacoSourceCodeWindow] Source file result:', sourceFile);
       
       if (sourceFile) {
@@ -338,15 +460,15 @@ export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDecl
         } else if (startFromLine1) {
           console.log('[MonacoSourceCodeWindow] Opening from line 1 (file mode)');
           setHighlightLine(1);
-        } else if (module.definition?.startLine) {
-          console.log('[MonacoSourceCodeWindow] Highlight line:', module.definition.startLine);
-          setHighlightLine(module.definition.startLine);
+        } else if (targetModuleStartLine) {
+          console.log('[MonacoSourceCodeWindow] Highlight line:', targetModuleStartLine);
+          setHighlightLine(targetModuleStartLine);
         } else {
           setHighlightLine(null);
         }
       } else {
-        console.log('[MonacoSourceCodeWindow] Source file not found for fileId:', module.definition?.fileId);
-        setContent(`// Source file not found for module: ${module.name}\n// File ID: ${module.definition?.fileId}`);
+        console.log('[MonacoSourceCodeWindow] Source file not found for fileId:', targetFileId);
+        setContent(`// Source file not found\n// File ID: ${targetFileId}`);
         setFilePath('');
         setHighlightLine(null);
       }

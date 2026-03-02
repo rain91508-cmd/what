@@ -3,14 +3,10 @@
 export interface Bookmark {
   id: string;
   name: string;
-  moduleIndex: number;  // 1-based module index for navigation
-  moduleStartLine?: number;  // Module definition start line for gray out
-  moduleEndLine?: number;    // Module definition end line for gray out
-  fileId: number;
-  fileName: string;
-  fileFullName: string;
-  lineNumber: number;
-  lineContent: string;
+  moduleIndex: number;  // 1-based module index (display module when bookmark was created, 0 for file mode)
+  fileId?: number;      // File ID (for file mode when moduleIndex is 0)
+  lineNumber: number;   // Line number to highlight
+  lineContent: string;  // Line content for display
   timestamp: number;
 }
 

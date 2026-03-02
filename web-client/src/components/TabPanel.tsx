@@ -78,6 +78,7 @@ export interface NavigationHistoryEntry {
   fileId: number;
   line: number;
   timestamp: number;
+  displayModuleIndex?: number;  // Displayed module for source context
 }
 
 export interface Tab {
@@ -85,11 +86,13 @@ export interface Tab {
   label: string;
   type: 'source' | 'waveform';
   // Tab-specific data
-  moduleIndex?: number | null;  // For source tabs - 1-based module index
+  moduleIndex?: number | null;  // For source tabs - 1-based module index (selected instance)
+  displayModuleIndex?: number | null; // For source tabs - 1-based module index (displayed instance, e.g., def_module)
+  fileId?: number | null;       // For source tabs - file ID (for loading file directly when displayModuleIndex is 0)
   startFromLine1?: boolean;     // For source tabs - open from line 1 instead of module start line
   signalDeclarationLine?: number; // For source tabs - jump to signal declaration line
-  moduleStartLine?: number;     // For source tabs - module definition start line
-  moduleEndLine?: number;       // For source tabs - module definition end line
+  moduleStartLine?: number;     // For source tabs - module definition start line (display range)
+  moduleEndLine?: number;       // For source tabs - module definition end line (display range)
   // Source navigation history
   navigationHistory?: NavigationHistoryEntry[];
   navigationPointer?: number;   // Points to next insertion position
