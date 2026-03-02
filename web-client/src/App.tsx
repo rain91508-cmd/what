@@ -96,6 +96,9 @@ function App() {
   
   // Global selected module index for hierarchy/signal panel (1-based)
   const [selectedModuleIndex, setSelectedModuleIndex] = useState<number | null>(null)
+
+  // Info text for MenuBar (full hierarchy name)
+  const [menuBarInfoText, setMenuBarInfoText] = useState<string>('')
   
   // Helper function to create default groups
   const createDefaultGroups = () => ({
@@ -882,6 +885,8 @@ function App() {
     setSelectedModuleIndex(moduleIndex)
     // Calculate fullName on demand
     const fullName = kdbManager.calculateModuleFullName(moduleIndex)
+    // Update MenuBar info text
+    setMenuBarInfoText(fullName)
     addMessage(`Selected module: ${fullName}`)
   }
 
@@ -1106,6 +1111,11 @@ function App() {
       setTimeout(() => addNavigationEntry(fileId, line), 0);
       addMessage(`Open source at ${signal.name} declaration (line ${line})`)
     }
+  }
+
+  const handleSignalSelect = (signal: Signal) => {
+    // Update MenuBar info text with signal's full hierarchy name
+    setMenuBarInfoText(signal.fullName)
   }
 
   const handleSignalAddToWaveform = (signal: Signal) => {
@@ -1363,6 +1373,7 @@ function App() {
         onCloseWave={handleCloseWave}
         hasKdbLoaded={kdbLoaded}
         hasWaveLoaded={!!currentWaveName}
+        infoText={menuBarInfoText}
       />
 
       {/* Tool Bar */}
@@ -1419,6 +1430,7 @@ function App() {
             selectedModuleIndex={selectedModuleIndex}
             onSignalAddToWaveform={handleSignalAddToWaveform}
             onSignalDoubleClick={handleSignalDoubleClick}
+            onSignalSelect={handleSignalSelect}
             activeTabType={tabs.find(t => t.id === activeTab)?.type}
           />
         </div>
@@ -1444,6 +1456,7 @@ function App() {
                 signalDeclarationLine={activeTabData.signalDeclarationLine}
                 moduleStartLine={activeTabData.moduleStartLine}
                 moduleEndLine={activeTabData.moduleEndLine}
+                moduleFullName={activeTabData.moduleIndex ? kdbManager.calculateModuleFullName(activeTabData.moduleIndex) : undefined}
                 editorRef={monacoEditorRef}
               />
             ) : activeTabData ? (

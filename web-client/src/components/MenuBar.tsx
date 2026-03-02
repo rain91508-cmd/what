@@ -10,6 +10,7 @@ interface MenuBarProps {
   onCloseWave: () => void;
   hasKdbLoaded: boolean;
   hasWaveLoaded: boolean;
+  infoText?: string;  // Info text to display (full hierarchy name)
 }
 
 interface MenuItem {
@@ -24,7 +25,7 @@ interface Menu {
   items: MenuItem[];
 }
 
-export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onOpenWaveList, onCloseKdb, onCloseWave, hasKdbLoaded, hasWaveLoaded }: MenuBarProps) {
+export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onOpenWaveList, onCloseKdb, onCloseWave, hasKdbLoaded, hasWaveLoaded, infoText }: MenuBarProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const menuBarRef = useRef<HTMLDivElement>(null);
 
@@ -173,6 +174,26 @@ export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onO
         </div>
       ))}
       <div style={{ flex: 1 }}></div>
+      {/* Info text display area */}
+      {infoText && (
+        <div
+          className="menu-bar-info"
+          style={{
+            padding: '0 16px',
+            fontSize: '12px',
+            color: '#666',
+            maxWidth: '600px',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            borderLeft: '1px solid #e0e0e0',
+            marginRight: '8px',
+          }}
+          title={infoText}
+        >
+          {infoText}
+        </div>
+      )}
       <div 
         className="menu-bar-item"
         style={{ 

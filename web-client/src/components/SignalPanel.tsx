@@ -8,12 +8,13 @@ interface SignalPanelProps {
   selectedModuleIndex: number | null;  // 1-based module index
   onSignalAddToWaveform?: (signal: Signal) => void;
   onSignalDoubleClick?: (signal: Signal, moduleIndex: number) => void;
+  onSignalSelect?: (signal: Signal) => void;  // Called when a signal is selected
   activeTabType?: 'source' | 'waveform' | null;  // Current active tab type
 }
 
 const DEFAULT_PAGE_SIZE = 50;
 
-export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSignalDoubleClick, activeTabType }: SignalPanelProps) {
+export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSignalDoubleClick, onSignalSelect, activeTabType }: SignalPanelProps) {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -611,7 +612,13 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
                   userSelect: 'none',
                   backgroundColor: selectedSignalGlobalId === signal.globalId ? '#e3f2fd' : 'transparent',
                 }}
-                onClick={() => setSelectedSignalGlobalId(signal.globalId)}
+                onClick={() => {
+                  setSelectedSignalGlobalId(signal.globalId);
+                  // Notify parent component about signal selection
+                  if (onSignalSelect) {
+                    onSignalSelect(signal);
+                  }
+                }}
                 onDoubleClick={() => {
                   // If source tab is active or no tab, jump to declaration (will open source tab)
                   if ((activeTabType === 'source' || !activeTabType) && onSignalDoubleClick && selectedModuleIndex) {

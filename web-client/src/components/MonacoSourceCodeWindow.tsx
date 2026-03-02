@@ -25,12 +25,13 @@ interface MonacoSourceCodeWindowProps {
   signalDeclarationLine?: number;
   moduleStartLine?: number;  // Module start line for graying out
   moduleEndLine?: number;    // Module end line for graying out
+  moduleFullName?: string;   // Module full hierarchy name for display
   editorRef?: React.MutableRefObject<editor.IStandaloneCodeEditor | null>;
 }
 
 const modelCache = new Map<string, editor.ITextModel>();
 
-export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDeclarationLine, moduleStartLine, moduleEndLine, editorRef: externalEditorRef }: MonacoSourceCodeWindowProps) {
+export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDeclarationLine, moduleStartLine, moduleEndLine, moduleFullName, editorRef: externalEditorRef }: MonacoSourceCodeWindowProps) {
   const [content, setContent] = useState<string>('');
   const [filePath, setFilePath] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -42,6 +43,12 @@ export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDecl
   const decorationsRef = useRef<string[]>([]);
   const grayOutDecorationsRef = useRef<string[]>([]);
   const monacoInstance = useMonaco();
+
+  // Widths for header sections (module info and file path)
+  const [moduleInfoWidth, setModuleInfoWidth] = useState(300);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartX = useRef(0);
+  const dragStartWidth = useRef(0);
 
   // Apply highlight to a specific line
   const applyHighlight = useCallback((editor: editor.IStandaloneCodeEditor, line: number) => {
@@ -123,6 +130,37 @@ export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDecl
       console.log('[MonacoSourceCodeWindow] Applied', decorations.length, 'gray out decorations');
     }
   }, []);
+
+  // Handle drag start for resizing module info width
+  const handleDragStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+    dragStartX.current = e.clientX;
+    dragStartWidth.current = moduleInfoWidth;
+  };
+
+  // Handle drag move
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDragging) return;
+      const delta = e.clientX - dragStartX.current;
+      const newWidth = Math.max(100, Math.min(600, dragStartWidth.current + delta));
+      setModuleInfoWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    if (isDragging) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  }, [isDragging, moduleInfoWidth]);
 
   // Handle editor mount
   const handleEditorDidMount = useCallback((editor: editor.IStandaloneCodeEditor) => {
@@ -387,6 +425,15 @@ export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDecl
     );
   }
 
+  // Format long text to show rightmost part
+  const formatLongText = (text: string, maxLen: number = 50): string => {
+    if (!text || text.length <= maxLen) return text || '';
+    return '...' + text.slice(-(maxLen - 3));
+  };
+
+  // Check if we should show module info (only when moduleFullName is provided and not from file tab)
+  const showModuleInfo = moduleFullName && moduleStartLine && moduleEndLine;
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div style={{
@@ -395,14 +442,50 @@ export function MonacoSourceCodeWindow({ moduleIndex, startFromLine1, signalDecl
         borderBottom: '1px solid #a0b0c0',
         display: 'flex',
         alignItems: 'center',
-        padding: '0 6px',
         fontSize: '11px',
         fontWeight: 600,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
       }}>
-        {filePath ? `Source: ${filePath}` : moduleName ? `Source: ${moduleName}` : 'Source Code'}
+        {/* Module info section (only show when module info is available) */}
+        {showModuleInfo && (
+          <>
+            <div style={{
+              width: moduleInfoWidth,
+              minWidth: 100,
+              maxWidth: 600,
+              padding: '0 6px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              direction: 'rtl',
+              textAlign: 'left',
+            }} title={moduleFullName}>
+              <span style={{ color: '#1976d2' }}>{moduleFullName}</span>
+            </div>
+            {/* Draggable splitter */}
+            <div
+              style={{
+                width: '4px',
+                cursor: 'col-resize',
+                background: isDragging ? '#1976d2' : 'transparent',
+                height: '100%',
+              }}
+              onMouseDown={handleDragStart}
+              title="Drag to resize"
+            />
+            <div style={{ width: '1px', height: '100%', background: '#a0b0c0' }} />
+          </>
+        )}
+        {/* File path section */}
+        <div style={{
+          flex: 1,
+          padding: '0 6px',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          direction: 'rtl',  // Show rightmost part
+          textAlign: 'left',
+        }} title={filePath}>
+          {formatLongText(filePath, 60) || moduleName || 'Source Code'}
+        </div>
       </div>
       <div style={{ flex: 1, overflow: 'hidden' }}>
         <Editor
