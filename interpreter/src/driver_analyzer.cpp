@@ -315,13 +315,14 @@ void DriverAnalyzer::extractRhsSignals(const UHDM::expr* expr, const std::string
 }
 
 void DriverAnalyzer::applyDriverRelationships() {
-    // First apply driver signal relationships
+    // Apply driver signal relationships with their line numbers
+    // Note: extractRhsSignals already calls addDriverLocation directly, so we only handle port connections here
     for (auto& [drivenSignalName, driverInfos] : signalToDriverNames_) {
         for (auto& [driverSignalName, driverLocation] : driverInfos) {
-            // Use the new method to add driver by full name (will be resolved to global ID in Phase 2)
-            if (builder_.addDriverToSignal(drivenSignalName, driverSignalName)) {
+            // Use addDriverLocation to add both driver ID and line at once
+            if (builder_.addDriverLocation(drivenSignalName, driverSignalName, driverLocation.line)) {
                 std::cerr << "DEBUG: Added driver " << driverSignalName 
-                          << " to " << drivenSignalName << "\n";
+                          << " to " << drivenSignalName << " at line " << driverLocation.line << "\n";
             } else {
                 std::cerr << "DEBUG: Could not add driver " << driverSignalName 
                           << " to " << drivenSignalName << "\n";
@@ -329,18 +330,7 @@ void DriverAnalyzer::applyDriverRelationships() {
         }
     }
     
-    // Then apply driver lines (including those without RHS signals)
-    for (auto& [signalName, locations] : signalDriverLines_) {
-        for (const auto& loc : locations) {
-            // Use the new method to directly add driver line to signalInsts
-            if (builder_.addDriverLineToSignal(signalName, loc)) {
-                std::cerr << "DEBUG: Added driver line " << loc.line << " to " << signalName << "\n";
-            } else {
-                std::cerr << "DEBUG: Could not find signal for driver lines: " << signalName << "\n";
-            }
-        }
-    }
-    
+    // Clear the temporary storage
     signalToDriverNames_.clear();
     signalDriverLines_.clear();
 }

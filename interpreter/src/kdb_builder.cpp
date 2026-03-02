@@ -634,9 +634,9 @@ const SignalInfo* KdbBuilder::findSignalById(uint64_t id) const {
     const auto& defs = mod->getSignalDefs();
     if (localIdx >= defs.size()) return nullptr;
     
-    static thread_local SignalInfo result;
-    result = buildSignalInfo(inst, defs[localIdx]);
-    return &result;
+    static thread_local SignalInfo resultById;
+    resultById = buildSignalInfo(inst, defs[localIdx]);
+    return &resultById;
 }
 
 SignalInfo KdbBuilder::buildSignalInfo(const SignalInstInfo& inst, const SignalDefInfo& def) const {

@@ -406,27 +406,26 @@ void printSignalDriverTrace(const KdbBuilder& builder, const std::string& signal
     std::cout << "\n=== Driver Trace for: " << signal->fullName << " ===\n";
     std::cout << "  Type: " << signalTypeToString(signal->type) << "\n";
     
-    if (signal->driverSignalIds.empty()) {
-        std::cout << "  (No drivers found - this is likely a primary input or constant)\n";
-        return;
-    }
+    // Copy driver data to local variables to avoid modification
+    std::vector<uint64_t> driverIds = signal->driverSignalIds;
+    std::vector<KdbSourceLocation> driverLines = signal->driverLines;
     
-    std::cout << "  Drivers (" << signal->driverSignalIds.size() << "):\n";
-    for (size_t i = 0; i < signal->driverSignalIds.size(); ++i) {
-        uint64_t driverId = signal->driverSignalIds[i];
+    std::cout << "  Drivers (" << driverIds.size() << "):\n";
+    for (size_t i = 0; i < driverIds.size(); ++i) {
+        uint64_t driverId = driverIds[i];
         const auto* driver = builder.findSignalById(driverId);
         if (driver) {
             std::cout << "    [" << i + 1 << "] " << driver->fullName 
                       << " [" << signalTypeToString(driver->type) << "]";
             // Show driver line if available
-            if (i < signal->driverLines.size()) {
-                std::cout << " at line " << signal->driverLines[i].line;
+            if (i < driverLines.size()) {
+                std::cout << " at line " << driverLines[i].line;
             }
             std::cout << "\n";
         } else {
             std::cout << "    [" << i + 1 << "] <unknown driver id=" << driverId << ">";
-            if (i < signal->driverLines.size()) {
-                std::cout << " at line " << signal->driverLines[i].line;
+            if (i < driverLines.size()) {
+                std::cout << " at line " << driverLines[i].line;
             }
             std::cout << "\n";
         }
