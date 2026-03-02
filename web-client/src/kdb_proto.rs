@@ -20,17 +20,26 @@ pub struct KDBHeader {
     pub created_at: String,
 }
 
-/// Source File
+/// Source File Content - stored as byte array (UTF-8 encoded)
+/// Note: id removed, use array index + 1 as implicit ID
 #[derive(Clone, PartialEq, Message)]
-pub struct SourceFile {
-    #[prost(uint32, tag = "1")]
-    pub id: u32,
-    #[prost(string, tag = "2")]
+pub struct SourceFileContent {
+    #[prost(bytes, tag = "1")]
+    pub content: Vec<u8>,  // UTF-8 encoded file content
+}
+
+/// Source File Info - metadata for quick access without loading content
+/// Note: id removed, use array index + 1 as implicit ID
+#[derive(Clone, PartialEq, Message)]
+pub struct SourceFileInfo {
+    #[prost(string, tag = "1")]
     pub path: String,
-    #[prost(string, tag = "3")]
-    pub content: String,
-    #[prost(uint32, tag = "4")]
-    pub total_lines: u32,
+    #[prost(uint32, tag = "2")]
+    pub total_lines: u32,  // Total number of lines in the source file
+    /// Line index for fast seeking: line_index_offset[n] = byte offset of line (256*n + 1)
+    /// For example: line_index_offset[0] = offset of line 1, line_index_offset[1] = offset of line 257
+    #[prost(uint32, repeated, tag = "3")]
+    pub line_index_offset: Vec<u32>,
 }
 
 /// Source Location
@@ -155,13 +164,16 @@ pub struct DesignHierarchy {
 pub struct KnowledgeBase {
     #[prost(message, optional, tag = "1")]
     pub header: Option<KDBHeader>,
+    /// Note: SourceFile split into SourceFileInfo and SourceFileContent
     #[prost(message, repeated, tag = "2")]
-    pub files: Vec<SourceFile>,
+    pub file_infos: Vec<SourceFileInfo>,      // File metadata (path, total_lines, line_index_offset)
     #[prost(message, repeated, tag = "3")]
-    pub modules: Vec<Module>,
+    pub file_contents: Vec<SourceFileContent>, // File content (UTF-8 byte arrays)
     #[prost(message, repeated, tag = "4")]
-    pub hierarchies: Vec<DesignHierarchy>,
-    // New: Global signal instances array for memory optimization
+    pub modules: Vec<Module>,
     #[prost(message, repeated, tag = "5")]
+    pub hierarchies: Vec<DesignHierarchy>,
+    // Global signal instances array for memory optimization
+    #[prost(message, repeated, tag = "6")]
     pub all_signal_insts: Vec<SignalInst>,
 }

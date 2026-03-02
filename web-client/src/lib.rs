@@ -29,11 +29,17 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window)]
     fn store_signal_inst(global_index: u32, data: &JsValue, kdb_id: &str) -> js_sys::Promise;
     
+    // Store file info (metadata) to IndexedDB
     #[wasm_bindgen(js_namespace = window)]
-    fn store_source_file_info(id: u32, path: &str, name: &str, full_name: &str, total_lines: u32, kdb_id: &str) -> js_sys::Promise;
+    fn store_source_file_info(id: u32, path: &str, name: &str, full_name: &str, total_lines: u32, line_index_offset: &[i32], kdb_id: &str) -> js_sys::Promise;
     
+    // Store file content (large data) to OPFS
     #[wasm_bindgen(js_namespace = window)]
-    fn store_source_file_content(id: u32, content: &str, kdb_id: &str) -> js_sys::Promise;
+    fn store_source_file_content_opfs(id: u32, content: &[u8], kdb_id: &str) -> js_sys::Promise;
+    
+    // Get content by byte range from OPFS (using index offset)
+    #[wasm_bindgen(js_namespace = window)]
+    fn get_source_file_content_by_range(file_id: u32, start_byte: u32, end_byte: u32, kdb_id: &str) -> js_sys::Promise;
     
     #[wasm_bindgen(js_namespace = window)]
     fn clear_kdb_data(kdb_id: &str) -> js_sys::Promise;
@@ -297,31 +303,43 @@ async fn store_kdb_to_indexeddb(kdb_data: &KnowledgeBase, kdb_id: &str) -> Resul
     console_log!("[WASM] Stored {} signal instances", kdb_data.all_signal_insts.len());
     
     // 4. Store source files - separate info and content
-    console_log!("[WASM] Storing {} source files...", kdb_data.files.len());
-    for file in &kdb_data.files {
-        // Extract file name from path
-        let name = file.path.split('/').last().unwrap_or(&file.path);
+    // Note: file_infos and file_contents have same length and order
+    let file_count = kdb_data.file_infos.len();
+    console_log!("[WASM] Storing {} source files...", file_count);
+    
+    for i in 0..file_count {
+        let file_info = &kdb_data.file_infos[i];
+        let file_content = &kdb_data.file_contents[i];
+        let file_id = (i + 1) as u32;  // 1-based ID
         
-        // Store file info (metadata)
+        // Extract file name from path
+        let name = file_info.path.split('/').last().unwrap_or(&file_info.path);
+        
+        // Store file info (metadata) to IndexedDB
         let info_promise = store_source_file_info(
-            file.id, 
-            &file.path, 
+            file_id, 
+            &file_info.path, 
             name, 
-            &file.path,  // full_name same as path for now
-            file.total_lines, 
+            &file_info.path,  // full_name same as path for now
+            file_info.total_lines,
+            &file_info.line_index_offset.iter().map(|&x| x as i32).collect::<Vec<i32>>(),
             kdb_id
         );
         if let Err(e) = wasm_bindgen_futures::JsFuture::from(info_promise).await {
-            console_log!("[WASM] Failed to store file info {}: {:?}", file.id, e);
+            console_log!("[WASM] Failed to store file info {}: {:?}", file_id, e);
         }
         
-        // Store file content (large data)
-        let content_promise = store_source_file_content(file.id, &file.content, kdb_id);
+        // Store file content (large data) to OPFS via JS
+        let content_promise = store_source_file_content_opfs(
+            file_id, 
+            &file_content.content,  // bytes
+            kdb_id
+        );
         if let Err(e) = wasm_bindgen_futures::JsFuture::from(content_promise).await {
-            console_log!("[WASM] Failed to store file content {}: {:?}", file.id, e);
+            console_log!("[WASM] Failed to store file content {}: {:?}", file_id, e);
         }
     }
-    console_log!("[WASM] Stored {} source files", kdb_data.files.len());
+    console_log!("[WASM] Stored {} source files", file_count);
     
     Ok(())
 }
@@ -334,12 +352,16 @@ fn create_mock_kdb_data(kdb_id: &str) -> KnowledgeBase {
             project_name: kdb_id.to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
         }),
-        files: vec![
-            SourceFile {
-                id: 1,
+        file_infos: vec![
+            SourceFileInfo {
                 path: "top.v".to_string(),
-                content: "module top();\nendmodule".to_string(),
                 total_lines: 2,
+                line_index_offset: vec![0],  // Line 1 starts at byte 0
+            }
+        ],
+        file_contents: vec![
+            SourceFileContent {
+                content: "module top();\nendmodule".as_bytes().to_vec(),
             }
         ],
         modules: vec![
