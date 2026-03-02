@@ -29,6 +29,8 @@ pub struct SourceFile {
     pub path: String,
     #[prost(string, tag = "3")]
     pub content: String,
+    #[prost(uint32, tag = "4")]
+    pub total_lines: u32,
 }
 
 /// Source Location

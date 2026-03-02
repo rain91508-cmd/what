@@ -117,19 +117,20 @@ async function store_signal_inst(globalIndex: number, data: any, kdbId: string):
 
 /**
  * Store source file
- * WASM calls: store_source_file(id, path, content, kdbId)
+ * WASM calls: store_source_file(id, path, content, totalLines, kdbId)
  */
-async function store_source_file(id: number, path: string, content: string, kdbId: string): Promise<void> {
+async function store_source_file(id: number, path: string, content: string, totalLines: number, kdbId: string): Promise<void> {
   await indexedDBManager.initialize();
   const db = (indexedDBManager as any).db;
   if (!db) throw new Error('IndexedDB not initialized');
   
-  console.log('[KdbStorage] Storing source file:', id, 'path:', path, 'content length:', content?.length || 0);
+  console.log('[KdbStorage] Storing source file:', id, 'path:', path, 'totalLines:', totalLines, 'content length:', content?.length || 0);
   
   await db.put('source-files', {
     id,
     path,
     content,
+    totalLines,
     kdbId,
   });
 }

@@ -30,7 +30,7 @@ extern "C" {
     fn store_signal_inst(global_index: u32, data: &JsValue, kdb_id: &str) -> js_sys::Promise;
     
     #[wasm_bindgen(js_namespace = window)]
-    fn store_source_file(id: u32, path: &str, content: &str, kdb_id: &str) -> js_sys::Promise;
+    fn store_source_file(id: u32, path: &str, content: &str, total_lines: u32, kdb_id: &str) -> js_sys::Promise;
     
     #[wasm_bindgen(js_namespace = window)]
     fn clear_kdb_data(kdb_id: &str) -> js_sys::Promise;
@@ -296,7 +296,7 @@ async fn store_kdb_to_indexeddb(kdb_data: &KnowledgeBase, kdb_id: &str) -> Resul
     // 4. Store source files (key is numeric id)
     console_log!("[WASM] Storing {} source files...", kdb_data.files.len());
     for file in &kdb_data.files {
-        let file_promise = store_source_file(file.id, &file.path, &file.content, kdb_id);
+        let file_promise = store_source_file(file.id, &file.path, &file.content, file.total_lines, kdb_id);
         if let Err(e) = wasm_bindgen_futures::JsFuture::from(file_promise).await {
             console_log!("[WASM] Failed to store file {}: {:?}", file.id, e);
         }
@@ -319,6 +319,7 @@ fn create_mock_kdb_data(kdb_id: &str) -> KnowledgeBase {
                 id: 1,
                 path: "top.v".to_string(),
                 content: "module top();\nendmodule".to_string(),
+                total_lines: 2,
             }
         ],
         modules: vec![

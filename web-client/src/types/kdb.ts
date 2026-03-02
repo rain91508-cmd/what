@@ -26,6 +26,7 @@ export interface SourceFile {
   id: number;
   path: string;
   content: string;
+  totalLines: number;  // proto: total_lines - Total number of lines in the source file
 }
 
 /**
