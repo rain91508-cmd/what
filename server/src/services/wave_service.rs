@@ -238,17 +238,22 @@ impl WaveService {
             // 获取各个字段
             let date = reader.date().unwrap_or("Unknown");
             let version = reader.version().unwrap_or("Unknown");
-            let start_time = reader.start_time();
-            let end_time = reader.end_time();
+            let start_time_fst = reader.start_time();
+            let end_time_fst = reader.end_time();
             let var_count = reader.var_count();
 
             info!("FST 文件元数据: vars={}, start={}, end={}, version={}",
-                var_count, start_time, end_time, version);
+                var_count, start_time_fst, end_time_fst, version);
 
             // 从 FST 文件 header 读取时间单位 (offset 73, 1-byte signed integer)
             // 0=1s, -3=1ms, -6=1us, -9=1ns, -12=1ps, -15=1fs
             let time_unit = Self::read_fst_timescale(&path_str)?;
             info!("FST 文件时间单位: {}", time_unit);
+
+            // 将 FST 内部时间单位转换为飞秒 (fs)
+            let start_time = Self::fst_time_to_fs(start_time_fst, &time_unit);
+            let end_time = Self::fst_time_to_fs(end_time_fst, &time_unit);
+            info!("转换后的时间范围: {} fs - {} fs", start_time, end_time);
 
             Ok::<_, ServerError>(WaveInfo {
                 name: wave_name,
@@ -355,20 +360,20 @@ impl WaveService {
         let metadata = fs::metadata(wave_path).await?;
         let file_size = metadata.len();
 
-        // 解析时间单位
-        let time_unit = if header.timescale_exponent < 0 {
-            format!("{}s", 10f64.powi(header.timescale_exponent as i32))
-        } else {
-            format!("{}s", 10f64.powi(header.timescale_exponent as i32))
-        };
+        // 解析时间单位字符串
+        let time_unit = Self::exponent_to_time_unit(header.timescale_exponent);
+
+        // 将 FST 内部时间单位转换为飞秒 (fs)
+        let start_time = Self::fst_time_to_fs(header.start_time, &time_unit);
+        let end_time = Self::fst_time_to_fs(header.end_time, &time_unit);
 
         Ok(WaveInfo {
             name: wave_name.to_string(),
             file_size,
             time_unit: time_unit.clone(),
             time_precision: time_unit,
-            start_time: header.start_time,
-            end_time: header.end_time,
+            start_time,
+            end_time,
             signal_count: header.var_count as usize,
             version: header.version.clone(),
             date: header.date.clone(),
