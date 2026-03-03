@@ -52,9 +52,9 @@ pub struct SignalListQuery {
 pub struct WaveDataQuery {
     /// LoD 层级 (0-11)
     lod: Option<u32>,
-    /// 起始时间 (皮秒)
+    /// 起始时间 (飞秒, femtoseconds)
     start: i64,
-    /// 结束时间 (皮秒)
+    /// 结束时间 (飞秒, femtoseconds)
     end: i64,
     /// 压缩算法 (none, zstd, lz4)
     #[serde(default)]
