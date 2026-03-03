@@ -172,27 +172,26 @@ impl WaveService {
     }
 
     /// 验证 FST 文件的有效性
+    /// 简化验证：仅通过文件扩展名 .fst 判断
+    /// 实际格式验证在读取时由 fstapi 处理
     async fn validate_fst_file(&self, path: &PathBuf) -> Result<bool> {
-        // 检查文件大小
+        // 检查文件大小（至少要有一些内容）
         let metadata = fs::metadata(path).await?;
-        if metadata.len() < FST_MIN_SIZE {
+        if metadata.len() < 1 {
             return Ok(false);
         }
 
-        // 读取文件头部检查魔数
-        let header = fs::read(&path).await?;
-        if header.len() < FST_MAGIC.len() {
-            return Ok(false);
+        // 仅通过扩展名判断
+        let is_valid = path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("fst"))
+            .unwrap_or(false);
+
+        if is_valid {
+            debug!("FST 文件验证成功（通过扩展名）：{:?}", path);
         }
 
-        // 检查魔数
-        let valid = &header[..FST_MAGIC.len()] == FST_MAGIC;
-
-        if !valid {
-            warn!("文件 {:?} 不是有效的 FST 文件", path);
-        }
-
-        Ok(valid)
+        Ok(is_valid)
     }
 
     /// 获取波形文件的完整路径
