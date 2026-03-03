@@ -54,14 +54,12 @@ import { bookmarkManager, type Bookmark } from './types/bookmark'
 // Types
 import type { Signal } from './types/kdb'
 import type { WaveformInfo, ColumnWidths, TimeConfig, Tab, NavigationHistoryEntry } from './components/TabPanel'
+import { initTimeConfig } from './components/TabPanel'
 
 // 默认时间配置
-// 默认 10ns/px = 10,000 ps/px
-const DEFAULT_TIME_CONFIG: TimeConfig = {
-  unitTimePs: 10000,  // 默认 10,000 ps/px (10 ns/px)
-  unit: 'ns',
-  pixelsPerUnit: 10,  // 固定 10 像素每单位
-}
+// DisplayUnitPerLoD0Unit = 1 表示 1 DisplayUnit = 1 LoD0Unit
+// 这样时间标尺上显示的数值就是 LoD0Unit 的值
+const DEFAULT_TIME_CONFIG: TimeConfig = initTimeConfig(1, 3);
 
 function App() {
   const [initialized, setInitialized] = useState(false)
@@ -1341,6 +1339,9 @@ function App() {
       groups: type === 'waveform' ? createDefaultGroups() : undefined,
       selectedGroup: type === 'waveform' ? 'group_1' : undefined,
       timeConfig: type === 'waveform' ? { ...DEFAULT_TIME_CONFIG } : undefined,
+      // Initialize viewport with default range (0 to 100 LoD0Units for 800px width with shift=3)
+      viewport: type === 'waveform' ? { timeStart: 0, timeEnd: 100 } : undefined,
+      cursorPosition: type === 'waveform' ? 50 : undefined, // Default cursor at middle
     }
     setTabs(prev => [...prev, newTab])
     setActiveTab(newId)
@@ -1354,50 +1355,112 @@ function App() {
     ))
   }
 
-  // Zoom in (decrease unit time by half, but not below minUnitTime)
+  // Zoom in: move timeStart and timeEnd towards cursor (half distance)
+  // Using bit shift (>> 1) instead of divide by 2 for integer calculation
   const handleZoomIn = () => {
     const currentTab = tabs.find(t => t.id === activeTab)
-    if (currentTab?.type === 'waveform' && currentTab.timeConfig) {
-      // Calculate new unit time (half of current, but at least 1 ps)
-      const newUnitTimePs = Math.max(1, Math.floor(currentTab.timeConfig.unitTimePs / 2))
+    if (currentTab?.type === 'waveform' && currentTab.viewport) {
+      const { timeStart, timeEnd } = currentTab.viewport
+      const cursorPos = currentTab.cursorPosition ?? ((timeStart + timeEnd) >> 1)
+      
+      console.log(`[Zoom In] Before: start=${timeStart}, cursor=${cursorPos}, end=${timeEnd}`)
       
       // Check if we can zoom in further
-      if (newUnitTimePs < currentTab.timeConfig.unitTimePs) {
-        handleTimeConfigChange(activeTab, {
-          ...currentTab.timeConfig,
-          unitTimePs: newUnitTimePs,
-        })
-        addMessage(`Zoom in: ${newUnitTimePs} ps/px`)
-      } else {
+      // Cannot zoom if start or end is already at cursor (distance <= 1)
+      const canZoomStart = Math.abs(cursorPos - timeStart) > 1
+      const canZoomEnd = Math.abs(cursorPos - timeEnd) > 1
+      
+      console.log(`[Zoom In] canZoomStart=${canZoomStart}, canZoomEnd=${canZoomEnd}`)
+      
+      if (!canZoomStart && !canZoomEnd) {
+        console.log('[Zoom In] Already at maximum zoom')
         addMessage('Already at maximum zoom')
+        return
       }
+      
+      // Calculate new boundaries: move halfway towards cursor
+      // newStart = cursor - (cursor - start) / 2 = (cursor + start) / 2
+      // Using bit shift for integer division: (a + b) >> 1
+      // Only zoom the side that can still zoom
+      const newStart = canZoomStart ? (cursorPos + timeStart) >> 1 : timeStart
+      const newEnd = canZoomEnd ? (cursorPos + timeEnd) >> 1 : timeEnd
+      
+      console.log(`[Zoom In] After: newStart=${newStart}, newEnd=${newEnd}`)
+      
+      // Clamp cursor to new viewport range to ensure it stays visible
+      const newCursorPos = Math.max(newStart, Math.min(newEnd, cursorPos))
+      setTabs(prev => prev.map(tab =>
+        tab.id === activeTab ? {
+          ...tab,
+          viewport: {
+            timeStart: newStart,
+            timeEnd: newEnd,
+          },
+          cursorPosition: newCursorPos,
+        } : tab
+      ))
+      addMessage(`Zoom in: ${newStart} to ${newEnd} LoD0Units`)
     }
   }
 
-  // Zoom out (increase unit time by double, but not beyond max time range)
+  // Zoom out: move timeStart and timeEnd away from cursor (double distance)
   const handleZoomOut = () => {
     const currentTab = tabs.find(t => t.id === activeTab)
-    if (currentTab?.type === 'waveform' && currentTab.timeConfig) {
-      // Get max time from mock data (assume 1,000,000 ps = 1000 ns for now)
-      const maxTimePs = 1000000
+    if (currentTab?.type === 'waveform' && currentTab.viewport) {
+      const { timeStart, timeEnd } = currentTab.viewport
+      const cursorPos = currentTab.cursorPosition ?? ((timeStart + timeEnd) >> 1)
+      const maxLod0Units = 1000000  // Max waveform time in LoD0Units
       
-      // Calculate new unit time (double of current)
-      const newUnitTimePs = currentTab.timeConfig.unitTimePs * 2
+      console.log(`[Zoom Out] Before: start=${timeStart}, cursor=${cursorPos}, end=${timeEnd}`)
       
-      // Calculate current viewport width (assume 800px for now)
-      const viewportWidth = 800
-      const newTimeRange = (viewportWidth / currentTab.timeConfig.pixelsPerUnit) * newUnitTimePs
+      // Calculate new boundaries: double the distance from cursor
+      // newStart = cursor - (cursor - start) * 2 = 2 * start - cursor
+      // But we need to ensure we don't go below 0
+      const distStart = cursorPos - timeStart
+      const distEnd = timeEnd - cursorPos
       
-      // Check if new time range would exceed max time
-      if (newTimeRange <= maxTimePs) {
-        handleTimeConfigChange(activeTab, {
-          ...currentTab.timeConfig,
-          unitTimePs: newUnitTimePs,
-        })
-        addMessage(`Zoom out: ${newUnitTimePs} ps/px`)
-      } else {
+      let newStart = cursorPos - (distStart << 1)
+      let newEnd = cursorPos + (distEnd << 1)
+      
+      console.log(`[Zoom Out] Raw: newStart=${newStart}, newEnd=${newEnd}`)
+      
+      // Clamp to valid range [0, maxLod0Units]
+      const clampedStart = Math.max(0, newStart)
+      const clampedEnd = Math.min(maxLod0Units, newEnd)
+      
+      console.log(`[Zoom Out] Clamped: clampedStart=${clampedStart}, clampedEnd=${clampedEnd}`)
+      
+      // Check if each side can zoom out (before clamping it was different and after clamping it's also different from original)
+      const canZoomOutStart = newStart < timeStart && clampedStart !== timeStart
+      const canZoomOutEnd = newEnd > timeEnd && clampedEnd !== timeEnd
+      
+      console.log(`[Zoom Out] canZoomOutStart=${canZoomOutStart}, canZoomOutEnd=${canZoomOutEnd}`)
+      
+      if (!canZoomOutStart && !canZoomOutEnd) {
+        console.log('[Zoom Out] Already at minimum zoom')
         addMessage('Already at minimum zoom (max time range reached)')
+        return
       }
+      
+      // Only zoom out the side that can still zoom out
+      const finalStart = canZoomOutStart ? clampedStart : timeStart
+      const finalEnd = canZoomOutEnd ? clampedEnd : timeEnd
+      
+      console.log(`[Zoom Out] After: finalStart=${finalStart}, finalEnd=${finalEnd}`)
+      
+      // Clamp cursor to new viewport range to ensure it stays visible
+      const newCursorPos = Math.max(finalStart, Math.min(finalEnd, cursorPos))
+      setTabs(prev => prev.map(tab =>
+        tab.id === activeTab ? {
+          ...tab,
+          viewport: {
+            timeStart: finalStart,
+            timeEnd: finalEnd,
+          },
+          cursorPosition: newCursorPos,
+        } : tab
+      ))
+      addMessage(`Zoom out: ${finalStart} to ${finalEnd} LoD0Units`)
     }
   }
 
@@ -1405,20 +1468,29 @@ function App() {
   const handleZoomFit = () => {
     const currentTab = tabs.find(t => t.id === activeTab)
     if (currentTab?.type === 'waveform' && currentTab.timeConfig) {
-      // Get max time from mock data
-      const maxTimePs = 1000000
+      // Get max LoD0Unit from mock data
+      const maxLod0Units = 1000000
       
       // Calculate viewport width (assume 800px for now)
       const viewportWidth = 800
       
-      // Calculate unit time to fit entire waveform: maxTime / (width / pixelsPerUnit)
-      const newUnitTimePs = Math.floor(maxTimePs / (viewportWidth / currentTab.timeConfig.pixelsPerUnit))
+      // viewport LoD0Unit count = width >> pixels2LoD0UnitShift
+      const viewportLod0Count = viewportWidth >> currentTab.timeConfig.pixels2LoD0UnitShift
       
-      handleTimeConfigChange(activeTab, {
-        ...currentTab.timeConfig,
-        unitTimePs: Math.max(1, newUnitTimePs),
-      })
-      addMessage('Zoom to fit: 0 to 1000 ns')
+      // Calculate DisplayUnitPerLoD0Unit to fit entire waveform
+      // We want: viewportLod0Count / DisplayUnitPerLoD0Unit = maxLod0Units / DisplayUnitPerLoD0Unit
+      // Actually we want the viewport to show maxLod0Units
+      // So: viewportLod0Count = maxLod0Units (in LoD0Units)
+      // DisplayUnitPerLoD0Unit can stay the same, we just center the view
+      // Or we can adjust it to fit a certain number of DisplayUnits
+      
+      // For now, let's fit the entire waveform into the viewport
+      // Target: viewport shows maxLod0Units LoD0Units
+      // viewportLod0Count = width >> shift
+      // We want: viewportLod0Count * DisplayUnitPerLoD0Unit (in DisplayUnits) to cover maxLod0Units
+      // Actually simpler: just set the view range to 0..maxLod0Units
+      
+      addMessage('Zoom to fit: 0 to 1000000 LoD0Units')
     }
   }
 
@@ -1530,7 +1602,9 @@ function App() {
         canNavigateNext={canNavigateNext()}
         timeConfig={activeTabData?.timeConfig}
         onTimeConfigChange={(config) => handleTimeConfigChange(activeTab, config)}
-        maxWaveformTimePs={1000000}
+        waveformTimeUnit={activeTabData?.waveformTimeUnit ?? 2} // Default to ns (2) = 1000 ps/LoD0Unit
+        waveformTimeUnitStr={activeTabData?.waveformTimeUnitStr} // 如 "1ps", "3ns"
+        maxWaveformTimeLod0={1000000}
         onConnect={() => setShowConnectionDialog(true)}
         onOpenKdb={() => setShowKdbSelectionDialog(true)}
         onOpenWaveform={() => setShowWaveSelectionDialog(true)}
@@ -1611,6 +1685,18 @@ function App() {
                 selectedGroup={activeTabData.selectedGroup || 'group_1'}
                 columnWidths={activeTabData.columnWidths}
                 timeConfig={activeTabData.timeConfig}
+                viewport={activeTabData.viewport}
+                onViewportChange={(viewport) => {
+                  setTabs(prev => prev.map(tab =>
+                    tab.id === activeTabData.id ? { ...tab, viewport } : tab
+                  ))
+                }}
+                cursorPosition={activeTabData.cursorPosition}
+                onCursorPositionChange={(position) => {
+                  setTabs(prev => prev.map(tab =>
+                    tab.id === activeTabData.id ? { ...tab, cursorPosition: position } : tab
+                  ))
+                }}
                 onSignalRemove={handleSignalRemove}
                 onGroupsUpdate={(groups) => handleGroupsUpdate(activeTabData.id, groups)}
                 onSelectedGroupUpdate={(selectedGroup) => handleSelectedGroupUpdate(activeTabData.id, selectedGroup)}

@@ -10,8 +10,8 @@
 // OPFS -> WASM decode -> TypedArray -> Canvas 2D draw
 
 import type { RenderChunk, Segment, Viewport } from '../../types';
-import type { TimeUnit } from '../../components/TabPanel';
-import { psToDisplayValue } from '../../components/TabPanel';
+import type { TimeConfig } from '../../components/TabPanel';
+import { lod0ToDisplay } from '../../components/TabPanel';
 
 class WaveformRenderer {
   private canvas: HTMLCanvasElement | null = null;
@@ -20,6 +20,9 @@ class WaveformRenderer {
   // Configuration
   private signalHeight = 20;
   private signalSpacing = 4;
+
+  // Current time config for display
+  private timeConfig: TimeConfig | null = null;
 
   async initialize(canvas: HTMLCanvasElement): Promise<void> {
     this.canvas = canvas;
@@ -36,17 +39,16 @@ class WaveformRenderer {
     return this.canvas !== null && this.ctx !== null;
   }
 
-  // Current time unit for display
-  private currentTimeUnit: TimeUnit = 'ns';
-
-  // Set time unit for display
-  setTimeUnit(unit: TimeUnit): void {
-    this.currentTimeUnit = unit;
+  // Set time config for display
+  setTimeConfig(timeConfig: TimeConfig): void {
+    this.timeConfig = timeConfig;
   }
 
-  // Format time value according to current unit (returns integer)
-  private formatTime(timePs: number): string {
-    const displayValue = psToDisplayValue(timePs, this.currentTimeUnit);
+  // Format time value - DisplayUnit (returns integer, no unit)
+  // timeLod0: LoD0Unit value
+  private formatTime(timeLod0: number): string {
+    if (!this.timeConfig) return timeLod0.toString();
+    const displayValue = lod0ToDisplay(timeLod0, this.timeConfig);
     return Math.round(displayValue).toString();
   }
 
@@ -116,7 +118,7 @@ class WaveformRenderer {
     // Draw ruler background
     this.ctx.fillStyle = '#f5f5f5';
     this.ctx.fillRect(0, 0, width, height);
-    
+
     // Draw bottom border
     this.ctx.strokeStyle = '#c0c0c0';
     this.ctx.lineWidth = 1;
@@ -126,17 +128,18 @@ class WaveformRenderer {
     this.ctx.stroke();
 
     // Draw time labels
-    const timeRange = viewport.timeEnd - viewport.timeStart;
+    // viewport.timeStart 和 timeEnd 现在是 LoD0Unit
+    const lod0Range = viewport.timeEnd - viewport.timeStart;
     const gridCount = 10;
 
     for (let i = 0; i <= gridCount; i++) {
       const x = (i / gridCount) * width;
-      
-      // Draw time label (formatted according to current unit)
-      const timePs = viewport.timeStart + (i / gridCount) * timeRange;
+
+      // Draw time label (DisplayUnit, 纯数字，不带单位)
+      const lod0Time = viewport.timeStart + (i / gridCount) * lod0Range;
       this.ctx.fillStyle = '#333';
       this.ctx.font = '11px Consolas, Monaco, monospace';
-      this.ctx.fillText(this.formatTime(timePs), x + 2, height - 4);
+      this.ctx.fillText(this.formatTime(lod0Time), x + 2, height - 4);
     }
   }
 
