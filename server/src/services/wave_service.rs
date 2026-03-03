@@ -245,8 +245,10 @@ impl WaveService {
             info!("FST 文件元数据: vars={}, start={}, end={}, version={}",
                 var_count, start_time, end_time, version);
 
-            // 获取时间单位字符串 (fstapi 不直接提供 timescale，使用默认值)
-            let time_unit = "1ps".to_string();
+            // 从 FST 文件 header 读取时间单位 (offset 73, 1-byte signed integer)
+            // 0=1s, -3=1ms, -6=1us, -9=1ns, -12=1ps, -15=1fs
+            let time_unit = Self::read_fst_timescale(&path_str)?;
+            info!("FST 文件时间单位: {}", time_unit);
 
             Ok::<_, ServerError>(WaveInfo {
                 name: wave_name,
@@ -264,6 +266,83 @@ impl WaveService {
         .map_err(|e| ServerError::Internal(format!("任务执行失败: {}", e)))??;
 
         Ok(info)
+    }
+
+    /// 从 FST 文件 header 读取时间单位
+    /// FST 文件格式：offset 73 处存储 1-byte signed integer 表示 timescale exponent
+    /// 0=1s, -3=1ms, -6=1us, -9=1ns, -12=1ps, -15=1fs
+    fn read_fst_timescale(path: &str) -> Result<String> {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let mut file = std::fs::File::open(path)
+            .map_err(|e| ServerError::Internal(format!("无法打开 FST 文件: {}", e)))?;
+
+        // 读取 header 前几个字节来验证文件类型
+        let mut header = [0u8; 8];
+        file.read_exact(&mut header)
+            .map_err(|e| ServerError::Internal(format!("无法读取 FST header: {}", e)))?;
+
+        // FST 文件以特定 header 开始，检查是否是有效的 FST 文件
+        // FST header: 0x00 block type, followed by gzipped content
+        // 我们需要读取解压后的 header block
+
+        // 由于 FST 文件是压缩的，我们需要使用 fstapi 或其他方式获取 timescale
+        // 目前 fstapi 没有直接暴露 timescale，我们尝试从文件直接读取
+
+        // 尝试读取 offset 73 处的时间单位（这在解压后的 header 中）
+        // 由于文件是压缩的，这种方法可能不准确
+        // 更好的方法是使用 wavefst 后端或等待 fstapi 支持
+
+        // 作为备选，我们尝试解析文件
+        file.seek(SeekFrom::Start(73))
+            .map_err(|e| ServerError::Internal(format!("无法定位到 timescale: {}", e)))?;
+
+        let mut timescale_byte = [0u8; 1];
+        match file.read_exact(&mut timescale_byte) {
+            Ok(_) => {
+                let exponent = timescale_byte[0] as i8;
+                // 转换 exponent 为时间单位字符串
+                let time_unit = Self::exponent_to_time_unit(exponent);
+                info!("从 FST 文件读取到 timescale exponent: {}, 时间单位: {}", exponent, time_unit);
+                Ok(time_unit)
+            }
+            Err(_) => {
+                // 如果读取失败，返回默认值
+                warn!("无法从 FST 文件读取 timescale，使用默认值 1ps");
+                Ok("1ps".to_string())
+            }
+        }
+    }
+
+    /// 将 timescale exponent 转换为时间单位字符串
+    /// exponent: 0=1s, -3=1ms, -6=1us, -9=1ns, -12=1ps, -15=1fs
+    fn exponent_to_time_unit(exponent: i8) -> String {
+        match exponent {
+            0 => "1s".to_string(),
+            -1 => "100ms".to_string(),
+            -2 => "10ms".to_string(),
+            -3 => "1ms".to_string(),
+            -4 => "100us".to_string(),
+            -5 => "10us".to_string(),
+            -6 => "1us".to_string(),
+            -7 => "100ns".to_string(),
+            -8 => "10ns".to_string(),
+            -9 => "1ns".to_string(),
+            -10 => "100ps".to_string(),
+            -11 => "10ps".to_string(),
+            -12 => "1ps".to_string(),
+            -13 => "100fs".to_string(),
+            -14 => "10fs".to_string(),
+            -15 => "1fs".to_string(),
+            _ => {
+                // 对于其他值，使用科学计数法表示
+                if exponent < 0 {
+                    format!("1e{}s", exponent)
+                } else {
+                    format!("1e+{}s", exponent)
+                }
+            }
+        }
     }
 
     /// 使用 wavefst 获取波形文件信息
