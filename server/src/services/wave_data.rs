@@ -146,14 +146,14 @@ impl LodLevel {
         Self(level.min(Self::MAX_LEVEL))
     }
 
-    /// 获取 bucket 大小（2^level）
+    /// 获取 bucket 大小（2^level 个转换点）
+    ///
+    /// LoD 0: 1 (原始数据)
+    /// LoD 1: 2 (每2个点合并)
+    /// LoD 2: 4 (每4个点合并)
+    /// LoD n: 2^n
     pub fn bucket_size(&self) -> usize {
         1usize << self.0
-    }
-
-    /// 获取时间窗口倍数
-    pub fn time_window_multiplier(&self) -> u64 {
-        1u64 << self.0
     }
 
     /// 判断是否为有效层级
@@ -163,11 +163,12 @@ impl LodLevel {
 }
 
 /// LoD 配置
+///
+/// 注意：LoD 是基于数据点数量的降采样，与时间窗口无关。
+/// 每个 LoD 层级使用 bucket_size = 2^level 个转换点进行 min/max 降采样。
 #[derive(Debug, Clone)]
 pub struct LodConfig {
-    /// 基础时间窗口（皮秒）
-    pub base_window_ps: u64,
-    /// LoD 层级数量
+    /// LoD 层级数量 (0 表示原始数据，1+ 表示降采样层级)
     pub levels: u32,
     /// 每个 chunk 的最大转换点数
     pub max_transitions_per_chunk: usize,
@@ -178,7 +179,6 @@ pub struct LodConfig {
 impl Default for LodConfig {
     fn default() -> Self {
         Self {
-            base_window_ps: 1_000, // 1ns = 1000ps
             levels: 6,
             max_transitions_per_chunk: 10_000,
             enable_compression: true,
@@ -571,36 +571,28 @@ impl WaveDataManager {
         time_range: (u64, u64),
     ) -> Result<Vec<(u32, u16, Vec<u8>)>> {
         let (start_time, end_time) = time_range;
-        let total_duration = end_time - start_time;
 
-        // 计算每个 chunk 的时间窗口
-        let chunk_duration = self.config.base_window_ps * self.config.max_transitions_per_chunk as u64;
-        let num_chunks = ((total_duration + chunk_duration - 1) / chunk_duration).max(1) as u32;
-
+        // 为每个 LoD 层级生成 chunk
+        // 注意：LoD 是基于数据点数量的降采样，与时间窗口无关
         let mut chunks = Vec::new();
+        let chunk_id = 0u32;
 
-        for chunk_id in 0..num_chunks {
-            let chunk_start = start_time + chunk_id as u64 * chunk_duration;
-            let chunk_end = (chunk_start + chunk_duration).min(end_time);
+        for level in 0..=self.config.levels {
+            let lod_level = LodLevel(level);
 
-            // 为每个 LoD 层级生成 chunk
-            for level in 0..=self.config.levels {
-                let lod_level = LodLevel(level);
+            // 生成该 LoD 层级的数据
+            let lod_data = self.generator.generate_level(signal, lod_level);
 
-                // 生成该 LoD 层级的数据
-                let lod_data = self.generator.generate_level(signal, lod_level);
+            // 序列化为 chunk
+            let chunk_data = ChunkSerializer::serialize(
+                chunk_id,
+                level as u16,
+                &[&lod_data],
+                (start_time, end_time),
+                CompressionAlgorithm::None,
+            )?;
 
-                // 序列化为 chunk（使用默认无压缩）
-                let chunk_data = ChunkSerializer::serialize(
-                    chunk_id,
-                    level as u16,
-                    &[&lod_data],
-                    (chunk_start, chunk_end),
-                    CompressionAlgorithm::None,
-                )?;
-
-                chunks.push((chunk_id, level as u16, chunk_data));
-            }
+            chunks.push((chunk_id, level as u16, chunk_data));
         }
 
         Ok(chunks)
