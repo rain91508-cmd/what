@@ -27,16 +27,63 @@ async fn main() -> anyhow::Result<()> {
     let state = ServerState::new(config.clone());
 
     // 记录启动信息
-    tracing::info!("启动硬件设计分析器数据服务器");
-    tracing::info!("绑定地址：{}", config.bind_address());
-    tracing::info!("知识库目录：{:?}", config.kdb_dir);
-    tracing::info!("波形文件目录：{:?}", config.wave_dir);
-    tracing::info!("日志级别：{}", config.log_level);
+    tracing::info!("========================================");
+    tracing::info!("  硬件设计分析器数据服务器 (HWDA Server)");
+    tracing::info!("========================================");
+    tracing::info!("");
+    tracing::info!("【服务器配置】");
+    tracing::info!("  绑定地址：{}", config.bind_address());
+    tracing::info!("  日志级别：{}", config.log_level);
+    tracing::info!("  CORS 启用：{}", config.enable_cors);
+    tracing::info!("  FST 后端：{}", config.fst_backend);
+    tracing::info!("");
+    tracing::info!("【数据目录】");
+    tracing::info!("  知识库目录：{:?}", config.kdb_dir);
+    tracing::info!("  波形文件目录：{:?}", config.wave_dir);
+    
+    // 检查目录是否存在
+    if config.kdb_dir.exists() {
+        let kdb_count = std::fs::read_dir(&config.kdb_dir)
+            .map(|entries| entries.filter(|e| {
+                e.as_ref().map(|entry| {
+                    entry.path().extension().map(|ext| ext == "kdb").unwrap_or(false)
+                }).unwrap_or(false)
+            }).count())
+            .unwrap_or(0);
+        tracing::info!("    - 发现 {} 个 KDB 文件", kdb_count);
+    } else {
+        tracing::warn!("    - 知识库目录不存在！");
+    }
+    
+    if config.wave_dir.exists() {
+        let wave_count = std::fs::read_dir(&config.wave_dir)
+            .map(|entries| entries.filter(|e| {
+                e.as_ref().map(|entry| {
+                    entry.path().extension().map(|ext| ext == "fst").unwrap_or(false)
+                }).unwrap_or(false)
+            }).count())
+            .unwrap_or(0);
+        tracing::info!("    - 发现 {} 个 FST 文件", wave_count);
+    } else {
+        tracing::warn!("    - 波形文件目录不存在！");
+    }
     
     // 如果配置了 web 目录，记录信息
     if let Some(ref web_dir) = config.web_dir {
-        tracing::info!("Web 客户端目录：{:?}", web_dir);
+        tracing::info!("  Web 客户端目录：{:?}", web_dir);
+        if web_dir.exists() {
+            tracing::info!("    - 目录存在");
+        } else {
+            tracing::warn!("    - 目录不存在！");
+        }
     }
+    
+    tracing::info!("");
+    tracing::info!("【缓存配置】");
+    tracing::info!("  缓存容量：{} MB", config.cache_capacity_mb);
+    tracing::info!("  数据块大小：{} KB", config.chunk_size_kb);
+    tracing::info!("");
+    tracing::info!("========================================");
 
     // 创建 CORS 层
     let cors = if config.enable_cors {
