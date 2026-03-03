@@ -960,191 +960,27 @@ WebGL Rendering
 
 ### 6.5 API接口定义
 
+> **注意**: 完整的 API 文档请参考 [`server/API.md`](../../../server/API.md)
+
 **Requirement: SV-004 知识库API**
 
-```
-GET /api/kdb
-  描述: 获取完整知识库文件
-  响应: 二进制知识库数据（.kdb文件）
-  支持Range: 否（必须一次性获取完整知识库）
-  说明: 知识库包含设计层次、信号信息、连接关系、源代码等所有元数据
-
-GET /api/kdb/info
-  描述: 获取知识库元信息
-  响应:
-  {
-    "design_name": "top",
-    "version": "1.0.0",
-    "signal_count": 100000,
-    "module_count": 500,
-    "file_size": 10485760,
-    "checksum": "sha256:abc123..."
-  }
-
-GET /api/kdb/list
-  描述: 获取所有可用知识库文件列表（包含缓存验证元数据）
-  响应:
-  {
-    "status": "success",
-    "data": {
-      "kdbs": [
-        {
-          "name": "riscv2",
-          "file_size": 4758,
-          "is_valid": true,
-          "modified_time": 1772362874,
-          "checksum": "8d04a6b5d54c8f814a6117c6080192853020561e6bd38e286976519b0016b0c0"
-        }
-      ],
-      "summary": {
-        "total": 1,
-        "valid": 1,
-        "invalid": 0
-      }
-    }
-  }
-  说明:
-    - modified_time: Unix时间戳，用于检测文件是否更新
-    - checksum: SHA256校验和，用于验证文件完整性
-    - 客户端可通过比较modified_time或checksum判断是否需要重新下载
-```
+- `GET /api/kdb` - 获取知识库列表
+- `GET /api/kdb/{name}` - 获取知识库元信息
+- `GET /api/kdb/{name}/file` - 下载知识库文件
 
 **Requirement: SV-005 波形数据API（HTTP Range + 压缩）**
 
-```
-GET /api/wave/:waveform_name/signals/:signal_name/data?lod=<level>&start=<time>&end=<time>&compress=<algo>
-  描述: 获取指定波形中指定信号的波形数据
-  参数:
-    - waveform_name: 波形文件名（不含扩展名）
-    - signal_name: 信号完整路径（URL编码）
-    - lod: LoD层级 (0-11, 默认: 0)
-    - start: 起始时间（ps, 默认: 0）
-    - end: 结束时间（ps, 默认: 波形结束时间）
-    - compress: 压缩算法 (none, zstd, lz4, 默认: none)
-  响应: 
-    - Content-Type: application/octet-stream
-    - 二进制波形数据（Chunk格式，见6.4.1节）
-  支持Range: 是（用于断点续传）
-  数据格式: 
-    - ChunkHeader (32 bytes) + SignalBlockHeader(s) + 压缩后的时间/值数组
-    - 采用SoA (Structure of Arrays) 布局
-    - 支持自动解压（根据SignalBlockHeader.compression字段）
+- `GET /api/wave/list` - 获取波形文件列表
+- `GET /api/wave/{waveform_name}/info` - 获取波形元信息
+- `GET /api/wave/{waveform_name}/signals` - 获取信号列表（支持过滤和分页）
+- `GET /api/wave/{waveform_name}/signals/{signal_name}/info` - 获取信号元信息
+- `GET /api/wave/{waveform_name}/signals/{signal_name}/data` - 获取波形数据（支持 LoD、压缩、Range）
 
-  示例:
-    # 获取原始精度数据，无压缩
-    GET /api/wave/hdl-example/signals/fejkon_fc_debug.clk/data?lod=0&start=0&end=1000000
-    
-    # 获取LoD 2数据，使用zstd压缩
-    GET /api/wave/hdl-example/signals/fejkon_fc_debug.clk/data?lod=2&start=0&end=1000000&compress=zstd
-    
-    # 获取数据并使用HTTP Range（断点续传）
-    GET /api/wave/hdl-example/signals/fejkon_fc_debug.clk/data?lod=0&start=0&end=1000000
-    Range: bytes=0-1023
-
-GET /api/wave/list
-  描述: 获取所有可用波形文件列表（包含缓存验证元数据）
-  响应:
-  {
-    "status": "success",
-    "data": {
-      "waves": [
-        {
-          "name": "riscv2",
-          "file_size": 1243,
-          "is_valid": true,
-          "modified_time": 1772362874,
-          "checksum": "8d04a6b5d54c8f814a6117c6080192853020561e6bd38e286976519b0016b0c0"
-        }
-      ],
-      "summary": {
-        "total": 1,
-        "valid": 1,
-        "invalid": 0
-      }
-    }
-  }
-  说明:
-    - modified_time: Unix时间戳，用于检测文件是否更新
-    - checksum: SHA256校验和，用于验证文件完整性
-    - 客户端可通过比较modified_time或checksum判断是否需要重新下载
-    - 避免在文件未变化时重复下载大文件
-
-GET /api/wave/:waveform_name/info/:signal_name
-  描述: 获取指定波形中指定信号的元信息
-  响应:
-  {
-    "waveform_name": "tb_top",
-    "signal_name": "top.clk",
-    "time_range": {"start": 0, "end": 1000000000, "unit": "ps"},
-    "transition_count": 1000000,
-    "lod_levels": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
-  }
-
-GET /api/wave/:waveform_name/signals?name_regex=<pattern>&handle_from=<n>&handle_to=<n>&limit=<n>&offset=<n>
-  描述: 获取指定波形中可用信号列表（支持过滤和分页）
-  参数:
-    - name_regex: 信号名称正则表达式过滤（可选）
-    - handle_from: 起始handle（包含，可选）
-    - handle_to: 结束handle（包含，可选）
-    - limit: 最大返回数量（可选，默认无限制）
-    - offset: 跳过前N个信号（可选，默认0）
-  响应: 
-    {
-      "status": "success",
-      "data": {
-        "waveform_name": "riscv2",
-        "signal_count": 2,
-        "signals": [
-          {
-            "name": "tb_top.u_dut.u_cluster0.mem_arvalid",
-            "handle": 1,
-            "signal_type": "VcdWire",
-            "width": 1
-          }
-        ]
-      }
-    }
-  
-  示例:
-    # 获取所有信号
-    GET /api/wave/riscv2/signals
-    
-    # 正则过滤包含"clk"的信号
-    GET /api/wave/riscv/signals?name_regex=.*clk.*&limit=10
-    
-    # 按handle范围过滤
-    GET /api/wave/riscv/signals?handle_from=100&handle_to=200
-    
-    # 分页获取
-    GET /api/wave/riscv/signals?limit=50&offset=100
-```
-
-**Requirement: SV-006 HTTP Range支持**
-
-服务端必须支持HTTP/1.1 Range请求头：
-
-```
-Request:
-  GET /api/wave/top.clk?lod=2 HTTP/1.1
-  Range: bytes=0-65535
-
-Response:
-  HTTP/1.1 206 Partial Content
-  Content-Type: application/octet-stream
-  Content-Range: bytes 0-65535/1048576
-  
-  [binary waveform data]
-```
-
-**Range请求优势：**
-
-* 支持断点续传
-
-* 支持分块并行下载
-
-* 客户端可以精确控制下载范围
-
-* 与OPFS文件系统配合，实现流式写入
+**主要特性：**
+- HTTP Range 支持（断点续传、分块下载）
+- LoD (Level of Detail) 层级 0-11
+- 压缩支持（zstd, lz4）
+- 缓存验证（modified_time, checksum）
 
 **Requirement: SV-006-1 Server启动选项**
 
@@ -1512,17 +1348,7 @@ Client                          Server
 **Requirement: DF-003 API响应格式**
 API响应应采用统一的JSON格式，适用于所有JSON格式的API响应。
 
-**使用场景：**
-
-* 知识库元信息查询 (`GET /api/kdb/info`)
-
-* 波形文件列表查询 (`GET /api/wave/list`)
-
-* 波形信号元信息查询 (`GET /api/wave/:waveform_name/info/:signal_name`)
-
-* 波形信号列表查询 (`GET /api/wave/:waveform_name/signals`)
-
-* 所有其他返回JSON数据的API
+> **注意**: 完整的 API 文档请参考 [`server/API.md`](../../../server/API.md)
 
 **成功响应格式：**
 
@@ -1540,10 +1366,7 @@ API响应应采用统一的JSON格式，适用于所有JSON格式的API响应。
 {
   "status": "error",
   "data": null,
-  "error": {
-    "code": "SIGNAL_NOT_FOUND",
-    "message": "Signal 'top.invalid' not found"
-  }
+  "error": "错误描述信息"
 }
 ```
 
