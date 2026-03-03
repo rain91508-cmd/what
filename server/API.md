@@ -330,12 +330,14 @@ GET /api/wave/{waveform_name}/info
 - `name`: 波形名称
 - `file_size`: 文件大小（字节）
 - `signal_count`: 信号数量
-- `start_time`: 起始时间（皮秒）
-- `end_time`: 结束时间（皮秒）
+- `start_time`: 起始时间（飞秒 fs）
+- `end_time`: 结束时间（飞秒 fs）
 - `time_unit`: 时间单位
 - `time_precision`: 时间精度
 - `version`: 波形文件版本/生成工具
 - `date`: 生成日期
+
+**注意**: 所有时间值都以**飞秒 (fs)** 为单位，这是服务器内部处理的最小时间精度。
 
 ---
 
@@ -391,6 +393,8 @@ GET /api/wave/{waveform_name}/signals
 - `width`: 信号位宽
 - `type`: 信号类型（如 VcdReg, VcdWire 等）
 - `direction`: 信号方向（如 Input, Output, Implicit 等）
+- `start_time`: 信号起始时间（飞秒 fs）
+- `end_time`: 信号结束时间（飞秒 fs）
 
 ---
 
@@ -439,9 +443,15 @@ GET /api/wave/{waveform_name}/signals/{signal_name}/data
 
 **查询参数**:
 - `lod`: 可选，LoD (Level of Detail) 层级 0-11，默认 0
-- `start`: 可选，起始时间（皮秒），默认 0
-- `end`: 可选，结束时间（皮秒），默认文件结束时间
+- `start`: 可选，起始时间（飞秒 fs），默认 0
+- `end`: 可选，结束时间（飞秒 fs），默认文件结束时间
 - `compress`: 可选，压缩算法（"none", "zstd", "lz4"），默认 "none"
+
+**时间单位说明**:
+- API 使用**飞秒 (fs, femtoseconds)** 作为时间单位
+- 1 fs = 10^-15 秒
+- 服务器会自动将 fs 转换为 FST 文件内部的时间单位
+- 支持的最小时间精度为 1 fs
 
 **请求头**:
 - `Range`: 可选，支持断点续传（如 `bytes=0-1023`）
