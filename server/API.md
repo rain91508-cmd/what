@@ -315,7 +315,7 @@ GET /api/wave/{waveform_name}/info
       "file_size": 52894,
       "signal_count": 2,
       "start_time": 0,
-      "end_time": 14277227000,
+      "end_time": 14277227000000,
       "time_unit": "1ps",
       "time_precision": "1ps",
       "version": "Chronologic Simulation VCS Release T-2022.06-SP2-1_Full64",
@@ -332,12 +332,15 @@ GET /api/wave/{waveform_name}/info
 - `signal_count`: 信号数量
 - `start_time`: 起始时间（飞秒 fs）
 - `end_time`: 结束时间（飞秒 fs）
-- `time_unit`: 时间单位
-- `time_precision`: 时间精度
+- `time_unit`: FST 文件原始时间单位（如 "1ps", "1ns"）
+- `time_precision`: 时间精度（与 time_unit 相同）
 - `version`: 波形文件版本/生成工具
 - `date`: 生成日期
 
-**注意**: 所有时间值都以**飞秒 (fs)** 为单位，这是服务器内部处理的最小时间精度。
+**注意**: 
+- 所有时间值（`start_time`, `end_time`）都以**飞秒 (fs)** 为单位
+- `time_unit` 和 `time_precision` 显示 FST 文件的原始时间单位
+- 服务器自动将 FST 内部时间转换为飞秒
 
 ---
 
