@@ -1,4 +1,6 @@
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsValue;
+use js_sys::{Object, Array, Reflect};
 use ruzstd::StreamingDecoder;
 use std::io::Read;
 use prost::Message;
@@ -218,24 +220,30 @@ async fn store_kdb_to_indexeddb(kdb_data: &KnowledgeBase, kdb_id: &str) -> Resul
     
     // 1. Store knowledge base metadata (header + hierarchies only, no topModuleIds)
     let header = kdb_data.header.as_ref();
-    let kb_data = serde_json::json!({
-        "id": kdb_id,
-        "header": {
-            "version": header.map(|h| h.version.clone()).unwrap_or_default(),
-            "projectName": header.map(|h| h.project_name.clone()).unwrap_or_else(|| kdb_id.to_string()),
-            "createdAt": header.map(|h| h.created_at.clone()).unwrap_or_default(),
-        },
-        "hierarchies": kdb_data.hierarchies.iter().map(|h| serde_json::json!({
-            "topModuleId": h.top_module_id,
-            "moduleIds": h.module_ids.clone(),
-        })).collect::<Vec<_>>(),
-        "timestamp": js_sys::Date::now() as u64,
-    });
+    let kb_obj = Object::new();
+    Reflect::set(&kb_obj, &"id".into(), &kdb_id.into())?;
     
-    let kb_value = serde_wasm_bindgen::to_value(&kb_data)?;
+    // Header object
+    let header_obj = Object::new();
+    Reflect::set(&header_obj, &"version".into(), &header.map(|h| h.version.clone()).unwrap_or_default().into())?;
+    Reflect::set(&header_obj, &"projectName".into(), &header.map(|h| h.project_name.clone()).unwrap_or_else(|| kdb_id.to_string()).into())?;
+    Reflect::set(&header_obj, &"createdAt".into(), &header.map(|h| h.created_at.clone()).unwrap_or_default().into())?;
+    Reflect::set(&kb_obj, &"header".into(), &header_obj)?;
+    
+    // Hierarchies array
+    let hierarchies_arr = Array::new();
+    for h in &kdb_data.hierarchies {
+        let h_obj = Object::new();
+        Reflect::set(&h_obj, &"topModuleId".into(), &h.top_module_id.into())?;
+        let module_ids_arr = h.module_ids.iter().map(|&id| JsValue::from(id)).collect::<Array>();
+        Reflect::set(&h_obj, &"moduleIds".into(), &module_ids_arr)?;
+        hierarchies_arr.push(&h_obj);
+    }
+    Reflect::set(&kb_obj, &"hierarchies".into(), &hierarchies_arr)?;
+    Reflect::set(&kb_obj, &"timestamp".into(), &(js_sys::Date::now() as u64).into())?;
+    
     console_log!("[WASM] Storing knowledge base...");
-    
-    let kb_promise = store_knowledge_base(kdb_id, &kb_value);
+    let kb_promise = store_knowledge_base(kdb_id, &kb_obj);
     match wasm_bindgen_futures::JsFuture::from(kb_promise).await {
         Ok(_) => console_log!("[WASM] Stored knowledge base successfully"),
         Err(e) => {
@@ -249,31 +257,47 @@ async fn store_kdb_to_indexeddb(kdb_data: &KnowledgeBase, kdb_id: &str) -> Resul
     for (index, module) in kdb_data.modules.iter().enumerate() {
         let module_id = (index + 1) as u32;  // 1-based ID
         
-        let module_data = serde_json::json!({
-            "name": &module.name,
-            "parentModuleId": module.parent_module_id,
-            "definition": module.definition.as_ref().map(|d| serde_json::json!({
-                "fileId": d.file_id,
-                "startLine": d.start_line,
-                "endLine": d.end_line,
-            })),
-            "signalDefs": module.signal_defs.iter().map(|s| serde_json::json!({
-                "name": &s.name,
-                "type": s.r#type,
-                "declaration": s.declaration.as_ref().map(|d| serde_json::json!({
-                    "fileId": d.file_id,
-                    "line": d.line,
-                })),
-                "direction": s.direction,
-            })).collect::<Vec<_>>(),
-            "isInstance": module.is_instance,
-            "childModuleIds": module.child_module_ids.clone(),
-            "defModuleId": module.def_module_id,
-            "signalInstsStartId": module.signal_insts_start_id,
-        });
-        let module_value = serde_wasm_bindgen::to_value(&module_data)?;
+        // Create module object using js_sys
+        let module_obj = Object::new();
+        Reflect::set(&module_obj, &"name".into(), &module.name.clone().into())?;
+        Reflect::set(&module_obj, &"parentModuleId".into(), &module.parent_module_id.into())?;
         
-        let module_promise = store_module(module_id, &module_value, kdb_id);
+        // Definition object
+        if let Some(def) = &module.definition {
+            let def_obj = Object::new();
+            Reflect::set(&def_obj, &"fileId".into(), &def.file_id.into())?;
+            Reflect::set(&def_obj, &"startLine".into(), &def.start_line.into())?;
+            Reflect::set(&def_obj, &"endLine".into(), &def.end_line.into())?;
+            Reflect::set(&module_obj, &"definition".into(), &def_obj)?;
+        }
+        
+        // Signal definitions array
+        let signal_defs_arr = Array::new();
+        for s in &module.signal_defs {
+            let s_obj = Object::new();
+            Reflect::set(&s_obj, &"name".into(), &s.name.clone().into())?;
+            Reflect::set(&s_obj, &"type".into(), &s.r#type.into())?;
+            if let Some(decl) = &s.declaration {
+                let decl_obj = Object::new();
+                Reflect::set(&decl_obj, &"fileId".into(), &decl.file_id.into())?;
+                Reflect::set(&decl_obj, &"line".into(), &decl.line.into())?;
+                Reflect::set(&s_obj, &"declaration".into(), &decl_obj)?;
+            }
+            Reflect::set(&s_obj, &"direction".into(), &s.direction.into())?;
+            signal_defs_arr.push(&s_obj);
+        }
+        Reflect::set(&module_obj, &"signalDefs".into(), &signal_defs_arr)?;
+        
+        Reflect::set(&module_obj, &"isInstance".into(), &module.is_instance.into())?;
+        
+        // Child module IDs array
+        let child_ids_arr = module.child_module_ids.iter().map(|&id| JsValue::from(id)).collect::<Array>();
+        Reflect::set(&module_obj, &"childModuleIds".into(), &child_ids_arr)?;
+        
+        Reflect::set(&module_obj, &"defModuleId".into(), &module.def_module_id.into())?;
+        Reflect::set(&module_obj, &"signalInstsStartId".into(), &module.signal_insts_start_id.into())?;
+        
+        let module_promise = store_module(module_id, &module_obj, kdb_id);
         if let Err(e) = wasm_bindgen_futures::JsFuture::from(module_promise).await {
             console_log!("[WASM] Failed to store module {}: {:?}", module_id, e);
         }
@@ -282,20 +306,25 @@ async fn store_kdb_to_indexeddb(kdb_data: &KnowledgeBase, kdb_id: &str) -> Resul
     
     // 3. Store signal instances (key is global index 0-based)
     console_log!("[WASM] Storing {} signal instances...", kdb_data.all_signal_insts.len());
+    
     for (global_index, signal_inst) in kdb_data.all_signal_insts.iter().enumerate() {
-        let inst_data = serde_json::json!({
-            "msb": signal_inst.msb,
-            "lsb": signal_inst.lsb,
-            "parentModuleId": signal_inst.parent_module_id,
-            "driverSignalGlobalIds": signal_inst.driver_signal_global_ids.clone(),
-            "driverLines": signal_inst.driver_lines.iter().map(|d| serde_json::json!({
-                "fileId": d.file_id,
-                "line": d.line,
-            })).collect::<Vec<_>>(),
-        });
-        let inst_value = serde_wasm_bindgen::to_value(&inst_data)?;
+        // Create JavaScript object directly using js_sys
+        let inst_obj = Object::new();
+        Reflect::set(&inst_obj, &"msb".into(), &signal_inst.msb.into())?;
+        Reflect::set(&inst_obj, &"lsb".into(), &signal_inst.lsb.into())?;
+        Reflect::set(&inst_obj, &"parentModuleId".into(), &signal_inst.parent_module_id.into())?;
         
-        let inst_promise = store_signal_inst(global_index as u32, &inst_value, kdb_id);
+        // Create driverLocations array
+        let driver_locations_arr = Array::new();
+        for driver in &signal_inst.driver_locations {
+            let driver_obj = Object::new();
+            Reflect::set(&driver_obj, &"driverSignalGlobalId".into(), &driver.driver_signal_global_id.into())?;
+            Reflect::set(&driver_obj, &"line".into(), &driver.line.into())?;
+            driver_locations_arr.push(&driver_obj);
+        }
+        Reflect::set(&inst_obj, &"driverLocations".into(), &driver_locations_arr)?;
+        
+        let inst_promise = store_signal_inst(global_index as u32, &inst_obj, kdb_id);
         if let Err(e) = wasm_bindgen_futures::JsFuture::from(inst_promise).await {
             console_log!("[WASM] Failed to store signal instance {}: {:?}", global_index, e);
         }
@@ -433,8 +462,7 @@ fn create_mock_kdb_data(kdb_id: &str) -> KnowledgeBase {
                 msb: 0,
                 lsb: 0,
                 parent_module_id: 2,
-                driver_signal_global_ids: vec![],
-                driver_lines: vec![],
+                driver_locations: vec![],
             },
         ],
     }

@@ -51,6 +51,15 @@ pub struct SourceLocation {
     pub line: u32,
 }
 
+/// Driver Location - combines signal ID and source location
+#[derive(Clone, PartialEq, Message)]
+pub struct DriverLocation {
+    #[prost(uint64, tag = "1")]
+    pub driver_signal_global_id: u64,
+    #[prost(uint32, tag = "2")]
+    pub line: u32,
+}
+
 /// Module Source Location (with start/end line)
 #[derive(Clone, PartialEq, Message)]
 pub struct ModuleSourceLocation {
@@ -117,10 +126,8 @@ pub struct SignalInst {
     pub lsb: u32,
     #[prost(uint32, tag = "5")]
     pub parent_module_id: u32,
-    #[prost(uint64, repeated, tag = "6")]
-    pub driver_signal_global_ids: Vec<u64>,
-    #[prost(message, repeated, tag = "7")]
-    pub driver_lines: Vec<SourceLocation>,
+    #[prost(message, repeated, tag = "6")]
+    pub driver_locations: Vec<DriverLocation>,
 }
 
 /// Module - can be a module definition or an instance
