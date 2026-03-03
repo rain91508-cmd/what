@@ -268,11 +268,7 @@ class KdbManager {
    */
   getDriverBySignalId(signalGlobalId: number): import('../../types/kdb').DriverLocation[] {
     const inst = this.getSignalInstByGlobalId(signalGlobalId);
-    if (!inst) {
-      console.warn(`[KdbManager] Signal instance not found for globalId: ${signalGlobalId}`);
-      return [];
-    }
-    
+    if (!inst) return [];
     return inst.driverLocations || [];
   }
 

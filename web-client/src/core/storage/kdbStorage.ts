@@ -104,24 +104,21 @@ async function store_signal_inst(globalIndex: number, data: any, kdbId: string):
     return data[key];
   };
   
-  // Handle both old format (driverSignalGlobalIds + driverLines) and new format (driverLocations)
+  // Process driverLocations (new format only)
   const driverLocations = getValue('driverLocations');
   let driverLocationsArray = [];
   
   if (driverLocations && Array.isArray(driverLocations)) {
-    // New format: driverLocations is already an array of {driverSignalGlobalId, line}
-    driverLocationsArray = driverLocations.map((loc: any) => ({
-      driverSignalGlobalId: loc.driverSignalGlobalId || loc.driver_signal_global_id || 0,
-      line: loc.line || 0,
-    }));
-  } else {
-    // Old format or fallback: combine driverSignalGlobalIds and driverLines
-    const driverSignalGlobalIds = getValue('driverSignalGlobalIds') || [];
-    const driverLines = getValue('driverLines') || [];
-    driverLocationsArray = driverSignalGlobalIds.map((id: number, idx: number) => ({
-      driverSignalGlobalId: id,
-      line: driverLines[idx]?.line || 0,
-    }));
+    // driverLocations is an array of {driverSignalGlobalId, line}
+    // Note: driverSignalGlobalId may be BigInt from WASM, convert to Number
+    // Also need to convert each location from js_sys::Object to plain object
+    driverLocationsArray = driverLocations.map((loc: any) => {
+      const plainLoc = convertToPlainObject(loc);
+      return {
+        driverSignalGlobalId: Number(plainLoc.driverSignalGlobalId || plainLoc.driver_signal_global_id || 0),
+        line: Number(plainLoc.line || 0),
+      };
+    });
   }
   
   await db.put('signal-insts', {
