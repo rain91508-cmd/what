@@ -3,7 +3,7 @@ import { waveformRenderer } from '../core/render/waveformRenderer';
 import { cursorRenderer } from '../core/render/cursorRenderer';
 import type { Viewport, Segment, Signal } from '../types';
 import type { WaveformSignal, ColumnWidths, TimeConfig } from './TabPanel';
-import { psToDisplayValue } from './TabPanel';
+import { lod0ToDisplay, initTimeConfig } from './TabPanel';
 import { FilterInput } from './FilterInput';
 import { wildcardMatch } from '../utils/wildcardMatch';
 import { getOrCreateMockData, getValueAtTime } from '../utils/mockWaveformData';
@@ -28,6 +28,10 @@ interface WaveformWindowProps {
   onSelectedGroupUpdate: (selectedGroup: string) => void;
   onSignalsProcessed: (processedIds: number[]) => void;  // 通知父组件已处理的信号 ID
   onColumnWidthsChange?: (widths: ColumnWidths) => void;  // 列宽变化回调
+  viewport?: Viewport;          // 外部控制的 viewport（可选）
+  onViewportChange?: (viewport: Viewport) => void;  // viewport 变化回调
+  cursorPosition?: number;      // 外部控制的 cursor 位置（可选）
+  onCursorPositionChange?: (position: number) => void;  // cursor 位置变化回调
 }
 
 interface CursorState {
@@ -53,12 +57,8 @@ const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
 };
 
 // 默认时间配置
-// 默认 10ns/px = 10,000 ps/px
-const DEFAULT_TIME_CONFIG: TimeConfig = {
-  unitTimePs: 10000,  // 默认 10,000 ps/px (10 ns/px)
-  unit: 'ns',
-  pixelsPerUnit: 10,  // 固定 10 像素每单位
-};
+// DisplayUnitPerLoD0Unit = 1 表示 1 DisplayUnit = 1 LoD0Unit
+const DEFAULT_TIME_CONFIG: TimeConfig = initTimeConfig(1, 3);
 
 export function WaveformWindow({
   signals,
@@ -71,6 +71,10 @@ export function WaveformWindow({
   onSelectedGroupUpdate,
   onSignalsProcessed,
   onColumnWidthsChange,
+  viewport: externalViewport,
+  onViewportChange,
+  cursorPosition: externalCursorPosition,
+  onCursorPositionChange,
 }: WaveformWindowProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cursorCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -79,12 +83,13 @@ export function WaveformWindow({
   const [canvasWidth, setCanvasWidth] = useState(0);
   
   // 根据 canvas 宽度和时间配置计算 viewport
+  // 所有时间值使用 LoD0Unit（整数）
   const calculateViewport = useCallback((width: number): Viewport => {
-    // 时间范围 = 宽度 / 每单位像素 * 单位时间(ps)
-    const timeRange = (width / timeConfig.pixelsPerUnit) * timeConfig.unitTimePs;
+    // viewport 能显示的 LoD0Unit 数量 = 宽度 >> pixels2LoD0UnitShift
+    const lod0UnitCount = width >> timeConfig.pixels2LoD0UnitShift;
     return {
-      timeStart: 0,
-      timeEnd: timeRange,
+      timeStart: 0,           // LoD0Unit
+      timeEnd: lod0UnitCount, // LoD0Unit
       signalStart: 0,
       signalEnd: 10,
       pixelsPerTime: 1,
@@ -92,7 +97,38 @@ export function WaveformWindow({
     };
   }, [timeConfig]);
   
-  const [viewport, setViewport] = useState<Viewport>(() => calculateViewport(800));
+  // 使用外部 viewport 或内部 state
+  const [internalViewport, setInternalViewport] = useState<Viewport>(() => calculateViewport(800));
+  const viewport = externalViewport ?? internalViewport;
+  const setViewport = useCallback((newViewport: Viewport | ((prev: Viewport) => Viewport)) => {
+    if (externalViewport === undefined) {
+      setInternalViewport(newViewport);
+    }
+    if (onViewportChange) {
+      const resolvedViewport = typeof newViewport === 'function' 
+        ? newViewport(viewport) 
+        : newViewport;
+      onViewportChange(resolvedViewport);
+    }
+  }, [externalViewport, onViewportChange, viewport]);
+  
+  // 使用外部 cursorPosition 或内部 state
+  const [internalCursor, setInternalCursor] = useState<CursorState>({ position: 500, visible: true });
+  const cursor = externalCursorPosition !== undefined 
+    ? { position: externalCursorPosition, visible: true }
+    : internalCursor;
+  const setCursor = useCallback((newCursor: CursorState | ((prev: CursorState) => CursorState)) => {
+    if (externalCursorPosition === undefined) {
+      setInternalCursor(newCursor);
+    }
+    if (onCursorPositionChange) {
+      const resolvedCursor = typeof newCursor === 'function'
+        ? newCursor(cursor)
+        : newCursor;
+      onCursorPositionChange(resolvedCursor.position);
+    }
+  }, [externalCursorPosition, onCursorPositionChange, cursor]);
+  
   const [signalValues] = useState<Record<string, string>>({
     'top.clk': '1',
     'top.rst_n': '0',
@@ -103,7 +139,7 @@ export function WaveformWindow({
   });
   const [selectedSignal, setSelectedSignal] = useState<number | null>(null);
   const [expandedSignals, setExpandedSignals] = useState<Set<number>>(new Set());
-  const [cursor, setCursor] = useState<CursorState>({ position: 500, visible: true });
+  // cursor state is now managed above with external support
   const [mouseX, setMouseX] = useState<number | null>(null);
   const [displayMouseX, setDisplayMouseX] = useState<number | null>(null); // Debounced for display
   const mouseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -226,11 +262,18 @@ export function WaveformWindow({
 
   // 监听时间配置变化，更新 viewport
   useEffect(() => {
-    if (canvasWidth > 0) {
+    if (canvasWidth > 0 && externalViewport === undefined) {
       setViewport(calculateViewport(canvasWidth));
+    }
+  }, [timeConfig, canvasWidth, calculateViewport, externalViewport, setViewport]);
+
+  // 监听 viewport 变化，重新渲染波形
+  useEffect(() => {
+    if (canvasWidth > 0) {
       renderWaveform();
     }
-  }, [timeConfig, canvasWidth, calculateViewport]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewport, groups, selectedSignal, displaySignals]);
 
   // Cleanup mouse timeout on unmount
   useEffect(() => {
@@ -310,8 +353,8 @@ export function WaveformWindow({
     // Reserve space for time ruler at top
     const rulerHeight = 20;
 
-    // Set current time unit for renderer
-    waveformRenderer.setTimeUnit(timeConfig.unit);
+    // Set time config for renderer
+    waveformRenderer.setTimeConfig(timeConfig);
 
     waveformRenderer.render(segments, viewport, width, height, rulerHeight);
 
@@ -350,36 +393,22 @@ export function WaveformWindow({
     canvasWidthRef.current = canvasWidth;
   }, [canvasWidth]);
 
-  // RequestAnimationFrame loop for smooth cursor updates
-  // This loop directly updates cursorRenderer using refs (no React state dependency)
+  // Update cursorRenderer when viewport or cursor changes
   useEffect(() => {
-    let animationId: number;
-
-    const updateCursor = () => {
-      // Always update cursorRenderer with latest refs
-      if (cursorRenderer.isInitialized()) {
-        cursorRenderer.updateState({
-          cursor: cursorRef.current,
-          mouseX: mousePosRef.current,
-          viewport: {
-            timeStart: viewportRef.current.timeStart,
-            timeEnd: viewportRef.current.timeEnd,
-          },
-          timeUnit: timeConfigRef.current.unit,
-          containerWidth: canvasWidthRef.current,
-          rulerHeight: 20,
-        });
-      }
-
-      animationId = requestAnimationFrame(updateCursor);
-    };
-
-    animationId = requestAnimationFrame(updateCursor);
-
-    return () => {
-      cancelAnimationFrame(animationId);
-    };
-  }, []); // No dependencies - uses refs for all state
+    if (cursorRenderer.isInitialized()) {
+      cursorRenderer.updateState({
+        cursor: cursorRef.current,
+        mouseX: mousePosRef.current,
+        viewport: {
+          timeStart: viewportRef.current.timeStart,
+          timeEnd: viewportRef.current.timeEnd,
+        },
+        timeConfig: timeConfigRef.current,
+        containerWidth: canvasWidthRef.current,
+        rulerHeight: 20,
+      });
+    }
+  }, [viewport, cursor, canvasWidth]);
 
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current) return;
@@ -392,7 +421,17 @@ export function WaveformWindow({
     // Also update mouseX for other purposes (like click handling and info bar)
     setMouseX(newMouseX);
     setDisplayMouseX(newMouseX);
-  }, []);
+
+    // Update canvasWidth to ensure alignment (in case it changed)
+    if (rect.width !== canvasWidth) {
+      setCanvasWidth(rect.width);
+    }
+
+    // Use incremental mouse rendering for better performance
+    if (cursorRenderer.isInitialized()) {
+      cursorRenderer.updateMousePosition(newMouseX, rect.width);
+    }
+  }, [canvasWidth]);
 
   const handleCanvasMouseLeave = useCallback(() => {
     mousePosRef.current = null;
@@ -1198,7 +1237,7 @@ export function WaveformWindow({
           {mouseX !== null && (
             <div style={{
               position: 'absolute',
-              left: `${(mouseX / (containerRef.current?.clientWidth || 1)) * 100}%`,
+              left: `${(mouseX / (canvasWidth || 1)) * 100}%`,
               top: 0,
               bottom: 0,
               width: '1px',
@@ -1206,7 +1245,7 @@ export function WaveformWindow({
               zIndex: 1,
             }} />
           )}
-          
+
           {/* Cursor name and time */}
           {cursor.visible && (
             <span style={{
@@ -1217,21 +1256,21 @@ export function WaveformWindow({
               fontWeight: 'bold',
               zIndex: 2,
             }}>
-              Cursor: {Math.round(psToDisplayValue(cursor.position, timeConfig.unit))} {timeConfig.unit}
+              Cursor: {Math.round(lod0ToDisplay(cursor.position, timeConfig))}
             </span>
           )}
-          
+
           {/* Mouse name and time - using debounced displayMouseX for value */}
           {displayMouseX !== null && mouseX !== null && (
             <span style={{
               position: 'absolute',
-              left: `${(mouseX / (containerRef.current?.clientWidth || 1)) * 100}%`,
+              left: `${(mouseX / (canvasWidth || 1)) * 100}%`,
               transform: 'translateX(4px)',
               color: '#00ffff',
               fontWeight: 'bold',
               zIndex: 2,
             }}>
-              Mouse: {Math.round(psToDisplayValue(viewport.timeStart + (displayMouseX / (containerRef.current?.clientWidth || 1)) * (viewport.timeEnd - viewport.timeStart), timeConfig.unit))} {timeConfig.unit}
+              Mouse: {Math.round(lod0ToDisplay(viewport.timeStart + (displayMouseX / (canvasWidth || 1)) * (viewport.timeEnd - viewport.timeStart), timeConfig))}
             </span>
           )}
         </div>

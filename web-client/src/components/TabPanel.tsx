@@ -20,7 +20,8 @@ export interface WaveformInfo {
   name: string;
   file: string;
   timeRange: { start: number; end: number };
-  timeUnit: number;
+  timeUnit: number;        // 数字枚举 (0=fs, 1=ps, 2=ns, 3=us, 4=ms, 5=s)
+  timeUnitStr: string;     // 原始字符串如 "1ps", "3ns"
   signalCount: number;
 }
 
@@ -32,10 +33,212 @@ export interface ColumnWidths {
   panel: number;      // 信号面板宽度
 }
 
-// 时间单位类型
+// WaveformInfo.timeUnit 转换（服务器返回的是数字枚举）
+// 0=fs, 1=ps, 2=ns, 3=us, 4=ms, 5=s
+// 以 fs 为基准单位
+export const WAVEFORM_TIME_UNIT_MULTIPLIERS = [
+  1,           // fs
+  1000,        // ps = 1000 fs
+  1000000,     // ns = 1000000 fs
+  1000000000,  // us = 1000000000 fs
+  1000000000000,  // ms = 1000000000000 fs
+  1000000000000000, // s = 1000000000000000 fs
+];
+
+// 时间单位字符串到数字枚举的映射
+const TIME_UNIT_STR_TO_ENUM: Record<string, number> = {
+  'fs': 0,
+  'ps': 1,
+  'ns': 2,
+  'us': 3,
+  'ms': 4,
+  's': 5,
+};
+
+// 时间单位字符串到乘数的映射（转换为 fs）
+// 以 fs 为基准单位
+const TIME_UNIT_STR_TO_MULTIPLIER: Record<string, number> = {
+  'fs': 1,
+  'ps': 1000,
+  'ns': 1000000,
+  'us': 1000000000,
+  'ms': 1000000000000,
+  's': 1000000000000000,
+};
+
+/**
+ * 解析服务器返回的 time_unit 字符串（如 "1ps", "3ns"）
+ * @param timeUnitStr 时间单位字符串，如 "1ps", "3ns"
+ * @returns { value: number, unit: string, fsMultiplier: number, unitEnum: number }
+ */
+export function parseTimeUnitStr(timeUnitStr: string): { 
+  value: number; 
+  unit: string; 
+  fsMultiplier: number; 
+  unitEnum: number;
+} {
+  // 匹配数字部分和单位部分
+  const match = timeUnitStr.match(/^(\d+)\s*(fs|ps|ns|us|ms|s)$/i);
+  if (!match) {
+    // 默认返回 1ns
+    return { value: 1, unit: 'ns', fsMultiplier: 1000000, unitEnum: 2 };
+  }
+  
+  const value = parseInt(match[1], 10);
+  const unit = match[2].toLowerCase();
+  const fsMultiplier = TIME_UNIT_STR_TO_MULTIPLIER[unit] * value;
+  const unitEnum = TIME_UNIT_STR_TO_ENUM[unit] ?? 2;
+  
+  return { value, unit, fsMultiplier, unitEnum };
+}
+
+/**
+ * 将 WaveformInfo.timeUnit 转换为 ps 乘数
+ * @deprecated 使用 parseTimeUnitStr 获取更精确的 psMultiplier
+ */
+export function timeUnitToPsMultiplier(timeUnit: number): number {
+  return WAVEFORM_TIME_UNIT_MULTIPLIERS[timeUnit] || 1000;
+}
+
+// 时间配置
+// 内部使用 LoD0Unit（整数），显示使用 DisplayUnit（纯数字）
+export interface TimeConfig {
+  DisplayUnitPerLoD0Unit: number;  // 每个 DisplayUnit 对应多少个 LoD0Unit
+                                   // 默认 1，表示 1 DisplayUnit = 1 LoD0Unit
+  pixels2LoD0UnitShift: number;    // LoD0 单位对应的像素位移（默认 3，即 8 像素/单位）
+  // 内部预计算的倒数，用于快速乘法转换
+  _displayPerLod0?: number;        // 1 / DisplayUnitPerLoD0Unit
+}
+
+/**
+ * 初始化 TimeConfig，预计算倒数
+ */
+export function initTimeConfig(
+  displayUnitPerLoD0Unit: number,
+  pixels2LoD0UnitShift: number = 3
+): TimeConfig {
+  return {
+    DisplayUnitPerLoD0Unit: displayUnitPerLoD0Unit,
+    pixels2LoD0UnitShift,
+    _displayPerLod0: 1 / displayUnitPerLoD0Unit,
+  };
+}
+
+/**
+ * 获取 LoD0 单位对应的像素数
+ * pixelsPerUnit = 1 << pixels2LoD0UnitShift
+ * 例如: shift=3 → 8 像素/单位
+ */
+export function getPixelsPerUnit(timeConfig: TimeConfig): number {
+  return 1 << timeConfig.pixels2LoD0UnitShift;
+}
+
+/**
+ * LoD0Unit → DisplayUnit（使用预计算的倒数，乘法比除法快）
+ * @param lod0Units LoD0Unit 值（整数）
+ * @param timeConfig 时间配置
+ * @returns DisplayUnit 值（纯数字，不带单位）
+ */
+export function lod0ToDisplay(lod0Units: number, timeConfig: TimeConfig): number {
+  const multiplier = timeConfig._displayPerLod0 ?? (1 / timeConfig.DisplayUnitPerLoD0Unit);
+  return lod0Units * multiplier;
+}
+
+/**
+ * DisplayUnit → LoD0Unit（取整）
+ * @param displayUnits DisplayUnit 值
+ * @param timeConfig 时间配置
+ * @returns LoD0Unit 值（整数）
+ */
+export function displayToLod0(displayUnits: number, timeConfig: TimeConfig): number {
+  return Math.floor(displayUnits * timeConfig.DisplayUnitPerLoD0Unit);
+}
+
+/**
+ * LoD0Unit → Real Time fs（绝对时间，以 fs 为单位）
+ * @param lod0Units LoD0Unit 值（整数）
+ * @param waveformTimeUnit WaveformInfo.timeUnit（服务器返回的数字枚举）
+ * @returns 绝对时间（fs）
+ */
+export function lod0ToFs(lod0Units: number, waveformTimeUnit: number): number {
+  return lod0Units * WAVEFORM_TIME_UNIT_MULTIPLIERS[waveformTimeUnit];
+}
+
+/**
+ * LoD0Unit → Real Time fs（绝对时间）- 支持 timeUnitStr
+ * @param lod0Units LoD0Unit 值（整数）
+ * @param waveformTimeUnit WaveformInfo.timeUnit（服务器返回的数字枚举）
+ * @param waveformTimeUnitStr WaveformInfo.timeUnitStr（如 "1ps", "3ns"）
+ * @returns 绝对时间（fs）
+ */
+export function lod0ToFsWithStr(
+  lod0Units: number,
+  waveformTimeUnit: number,
+  waveformTimeUnitStr?: string
+): number {
+  if (waveformTimeUnitStr) {
+    const parsed = parseTimeUnitStr(waveformTimeUnitStr);
+    return lod0Units * parsed.fsMultiplier;
+  }
+  return lod0ToFs(lod0Units, waveformTimeUnit);
+}
+
+/**
+ * Real Time fs → LoD0Unit（取整）
+ * @param fs 绝对时间（fs）
+ * @param waveformTimeUnit WaveformInfo.timeUnit（服务器返回的数字枚举）
+ * @returns LoD0Unit 值（整数）
+ */
+export function fsToLod0(fs: number, waveformTimeUnit: number): number {
+  return Math.floor(fs / WAVEFORM_TIME_UNIT_MULTIPLIERS[waveformTimeUnit]);
+}
+
+/**
+ * Real Time fs → LoD0Unit（取整）- 支持 timeUnitStr
+ * @param fs 绝对时间（fs）
+ * @param waveformTimeUnit WaveformInfo.timeUnit（服务器返回的数字枚举）
+ * @param waveformTimeUnitStr WaveformInfo.timeUnitStr（如 "1ps", "3ns"）
+ * @returns LoD0Unit 值（整数）
+ */
+export function fsToLod0WithStr(
+  fs: number,
+  waveformTimeUnit: number,
+  waveformTimeUnitStr?: string
+): number {
+  if (waveformTimeUnitStr) {
+    const parsed = parseTimeUnitStr(waveformTimeUnitStr);
+    return Math.floor(fs / parsed.fsMultiplier);
+  }
+  return fsToLod0(fs, waveformTimeUnit);
+}
+
+/**
+ * LoD0Unit → Real Time PS（绝对时间）
+ * @param lod0Units LoD0Unit 值（整数）
+ * @param waveformTimeUnit WaveformInfo.timeUnit（服务器返回的数字枚举）
+ * @returns 绝对时间（ps）
+ * @deprecated 使用 lod0ToFs 或 lod0ToFsWithStr
+ */
+export function lod0ToPs(lod0Units: number, waveformTimeUnit: number): number {
+  return Math.floor(lod0ToFs(lod0Units, waveformTimeUnit) / 1000);
+}
+
+/**
+ * Real Time PS → LoD0Unit（取整）
+ * @param ps 绝对时间（ps）
+ * @param waveformTimeUnit WaveformInfo.timeUnit（服务器返回的数字枚举）
+ * @returns LoD0Unit 值（整数）
+ * @deprecated 使用 fsToLod0 或 fsToLod0WithStr
+ */
+export function psToLod0(ps: number, waveformTimeUnit: number): number {
+  return fsToLod0(ps * 1000, waveformTimeUnit);
+}
+
+// 保留旧函数用于兼容（标记为废弃）
+/** @deprecated 使用新的 lod0ToDisplay 或 displayToLod0 */
 export type TimeUnit = 'ps' | 'ns' | 'us' | 'ms' | 's';
 
-// 时间单位转换乘数（转换为 ps）
+/** @deprecated 使用新的时间单位体系 */
 export const TIME_UNIT_MULTIPLIERS: Record<TimeUnit, number> = {
   ps: 1,
   ns: 1000,
@@ -44,33 +247,16 @@ export const TIME_UNIT_MULTIPLIERS: Record<TimeUnit, number> = {
   s: 1000000000000,
 };
 
-// 时间配置
-// 内部存储的单位时间始终是整数 ps
-// 显示时根据 unit 进行转换
-export interface TimeConfig {
-  unitTimePs: number;    // 单位时间（整数 ps/px）
-  unit: TimeUnit;        // 显示用的时间单位
-  pixelsPerUnit: number; // 每个时间单位的像素宽度（固定为10）
+/** @deprecated 使用 lod0ToDisplay */
+export function psToDisplayValue(psValue: number, _unit: TimeUnit): number {
+  // 临时兼容，实际应该使用 lod0ToDisplay
+  return psValue;
 }
 
-/**
- * 将显示值转换为 ps
- * @param displayValue 显示的值（根据 unit）
- * @param unit 时间单位
- * @returns 对应的 ps 值（整数）
- */
-export function displayValueToPs(displayValue: number, unit: TimeUnit): number {
-  return Math.max(1, Math.floor(displayValue * TIME_UNIT_MULTIPLIERS[unit]));
-}
-
-/**
- * 将 ps 转换为显示值
- * @param psValue ps 值
- * @param unit 目标时间单位
- * @returns 显示值
- */
-export function psToDisplayValue(psValue: number, unit: TimeUnit): number {
-  return psValue / TIME_UNIT_MULTIPLIERS[unit];
+/** @deprecated 使用 displayToLod0 */
+export function displayValueToPs(displayValue: number, _unit: TimeUnit): number {
+  // 临时兼容，实际应该使用 displayToLod0
+  return Math.floor(displayValue);
 }
 
 // Navigation history entry for source tabs
@@ -101,6 +287,14 @@ export interface Tab {
   selectedGroup?: string;       // For waveform tabs - currently selected group
   columnWidths?: ColumnWidths;  // For waveform tabs - 列宽配置
   timeConfig?: TimeConfig;      // For waveform tabs - 时间配置
+  waveformTimeUnit?: number;    // For waveform tabs - WaveformInfo.timeUnit (0=fs, 1=ps, 2=ns, 3=us, 4=ms, 5=s), default 2 (ns)
+  waveformTimeUnitStr?: string; // For waveform tabs - WaveformInfo.timeUnitStr 如 "1ps", "3ns"
+  // Viewport state for waveform tabs (time in LoD0Unit)
+  viewport?: {
+    timeStart: number;  // LoD0Unit
+    timeEnd: number;    // LoD0Unit
+  };
+  cursorPosition?: number;  // LoD0Unit, cursor position for zoom operations
 }
 
 interface TabPanelProps {

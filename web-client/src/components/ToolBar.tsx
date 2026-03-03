@@ -1,6 +1,29 @@
 import { useState, useEffect, useRef } from 'react';
-import type { TimeConfig, TimeUnit } from './TabPanel';
-import { psToDisplayValue, displayValueToPs, TIME_UNIT_MULTIPLIERS } from './TabPanel';
+import type { TimeConfig } from './TabPanel';
+import { displayToLod0, fsToLod0, parseTimeUnitStr } from './TabPanel';
+
+// 时间单位类型（用户可选择）
+type TimeUnit = 'fs' | 'ps' | 'ns' | 'us' | 'ms' | 's';
+
+// 时间单位到 fs 乘数的映射（以 fs 为基准）
+const TIME_UNIT_MULTIPLIERS: Record<TimeUnit, number> = {
+  fs: 1,
+  ps: 1000,
+  ns: 1000000,
+  us: 1000000000,
+  ms: 1000000000000,
+  s: 1000000000000000,
+};
+
+// 数字枚举到单位字符串的映射
+const TIME_UNIT_ENUM_TO_STR: Record<number, TimeUnit> = {
+  0: 'fs',
+  1: 'ps',
+  2: 'ns',
+  3: 'us',
+  4: 'ms',
+  5: 's',
+};
 
 interface ToolBarProps {
   onZoomIn: () => void;
@@ -17,8 +40,11 @@ interface ToolBarProps {
   // Time configuration for waveform tabs
   timeConfig?: TimeConfig;
   onTimeConfigChange?: (config: TimeConfig) => void;
-  // Maximum waveform time in ps (for validation)
-  maxWaveformTimePs?: number;
+  // Waveform info for time unit conversion
+  waveformTimeUnit?: number; // WaveformInfo.timeUnit (0=fs, 1=ps, 2=ns, 3=us, 4=ms, 5=s)
+  waveformTimeUnitStr?: string; // WaveformInfo.timeUnitStr 如 "1ps", "3ns"
+  // Maximum waveform time in LoD0Unit (for validation)
+  maxWaveformTimeLod0?: number;
   // Connection and file actions
   onConnect?: () => void;
   onOpenKdb?: () => void;
@@ -45,7 +71,9 @@ export function ToolBar({
   canNavigateNext = false,
   timeConfig,
   onTimeConfigChange,
-  maxWaveformTimePs = 1000000, // Default 1,000,000 ps = 1000 ns
+  waveformTimeUnit = 2, // Default to ns (2)
+  waveformTimeUnitStr, // 如 "1ps", "3ns"
+  maxWaveformTimeLod0 = 1000000, // Default 1,000,000 LoD0Units
   onConnect,
   onOpenKdb,
   onOpenWaveform,
@@ -56,29 +84,78 @@ export function ToolBar({
   onAddBookmark,
 }: ToolBarProps) {
   // Local state for input value (only committed on Enter)
+  // 用户输入的是绝对时间数值，单位由 selectedUnit 决定
   const [inputValue, setInputValue] = useState<string>('');
+  const [selectedUnit, setSelectedUnit] = useState<TimeUnit>('ns');
   const [isEditing, setIsEditing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // 获取 fs 乘数（根据 waveformTimeUnitStr 或 waveformTimeUnit）
+  const getFsPerLod0Unit = (): number => {
+    if (waveformTimeUnitStr) {
+      // 使用服务器返回的原始字符串（如 "3ns"）
+      const parsed = parseTimeUnitStr(waveformTimeUnitStr);
+      return parsed.fsMultiplier;
+    }
+    // 使用数字枚举（如 2 = ns）
+    return TIME_UNIT_MULTIPLIERS[TIME_UNIT_ENUM_TO_STR[waveformTimeUnit] ?? 'ns'];
+  };
+
+  // 根据 waveformTimeUnitStr 更新选中单位（如果提供了）
+  useEffect(() => {
+    if (waveformTimeUnitStr) {
+      const parsed = parseTimeUnitStr(waveformTimeUnitStr);
+      const unit = parsed.unit as TimeUnit;
+      // 只更新为有效的单位选项
+      if (TIME_UNIT_MULTIPLIERS[unit]) {
+        setSelectedUnit(unit);
+      }
+    }
+  }, [waveformTimeUnitStr]);
+
   // Update input value when timeConfig changes (from external sources like zoom buttons)
+  // 将 DisplayUnitPerLoD0Unit 转换为当前单位的显示值
   useEffect(() => {
     if (!isEditing && timeConfig) {
-      const displayValue = psToDisplayValue(timeConfig.unitTimePs, timeConfig.unit);
+      // DisplayUnitPerLoD0Unit 表示每个 DisplayUnit 对应多少个 LoD0Unit
+      // 我们需要将其转换为绝对时间的显示值
+      // 1 LoD0Unit = getFsPerLod0Unit() fs
+      // DisplayUnit 的绝对时间 = DisplayUnitPerLoD0Unit * getFsPerLod0Unit() fs
+      // 然后转换为 selectedUnit 单位的数值
+      const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;
+      const fsPerLod0Unit = getFsPerLod0Unit();
+      const fsPerDisplayUnit = lod0PerDisplayUnit * fsPerLod0Unit;
+      const displayValue = fsPerDisplayUnit / TIME_UNIT_MULTIPLIERS[selectedUnit];
       setInputValue(displayValue.toString());
     }
-  }, [timeConfig, isEditing]);
+  }, [timeConfig, isEditing, waveformTimeUnit, waveformTimeUnitStr, selectedUnit]);
 
   // Initialize input value
   useEffect(() => {
     if (timeConfig && inputValue === '') {
-      const displayValue = psToDisplayValue(timeConfig.unitTimePs, timeConfig.unit);
+      const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;
+      const fsPerLod0Unit = getFsPerLod0Unit();
+      const fsPerDisplayUnit = lod0PerDisplayUnit * fsPerLod0Unit;
+      const displayValue = fsPerDisplayUnit / TIME_UNIT_MULTIPLIERS[selectedUnit];
       setInputValue(displayValue.toString());
     }
-  }, [timeConfig]);
+  }, [timeConfig, waveformTimeUnit, waveformTimeUnitStr, selectedUnit]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInputValue(e.target.value);
     setIsEditing(true);
+  };
+
+  const handleUnitChange = (newUnit: TimeUnit) => {
+    setSelectedUnit(newUnit);
+    // 单位改变时，重新计算输入值
+    if (timeConfig && !isEditing) {
+      const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;
+      const fsPerLod0Unit = getFsPerLod0Unit();
+      const fsPerDisplayUnit = lod0PerDisplayUnit * fsPerLod0Unit;
+      const displayValue = fsPerDisplayUnit / TIME_UNIT_MULTIPLIERS[newUnit];
+      setInputValue(displayValue.toString());
+    }
   };
 
   const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -87,7 +164,10 @@ export function ToolBar({
     } else if (e.key === 'Escape') {
       // Restore original value
       if (timeConfig) {
-        const displayValue = psToDisplayValue(timeConfig.unitTimePs, timeConfig.unit);
+        const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;
+        const fsPerLod0Unit = getFsPerLod0Unit();
+        const fsPerDisplayUnit = lod0PerDisplayUnit * fsPerLod0Unit;
+        const displayValue = fsPerDisplayUnit / TIME_UNIT_MULTIPLIERS[selectedUnit];
         setInputValue(displayValue.toString());
       }
       setIsEditing(false);
@@ -98,7 +178,10 @@ export function ToolBar({
   const handleInputBlur = () => {
     // Restore original value on blur (cancel edit)
     if (timeConfig) {
-      const displayValue = psToDisplayValue(timeConfig.unitTimePs, timeConfig.unit);
+      const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;
+      const fsPerLod0Unit = getFsPerLod0Unit();
+      const fsPerDisplayUnit = lod0PerDisplayUnit * fsPerLod0Unit;
+      const displayValue = fsPerDisplayUnit / TIME_UNIT_MULTIPLIERS[selectedUnit];
       setInputValue(displayValue.toString());
     }
     setIsEditing(false);
@@ -110,53 +193,55 @@ export function ToolBar({
     const numValue = parseFloat(inputValue);
     if (isNaN(numValue) || numValue <= 0) {
       // Invalid input, restore original value
-      const displayValue = psToDisplayValue(timeConfig.unitTimePs, timeConfig.unit);
+      const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;
+      const fsPerLod0Unit = getFsPerLod0Unit();
+      const fsPerDisplayUnit = lod0PerDisplayUnit * fsPerLod0Unit;
+      const displayValue = fsPerDisplayUnit / TIME_UNIT_MULTIPLIERS[selectedUnit];
       setInputValue(displayValue.toString());
       setIsEditing(false);
       return;
     }
 
-    // Convert display value to ps
-    const newUnitTimePs = displayValueToPs(numValue, timeConfig.unit);
-    
-    // Validate: unit time cannot exceed max waveform time
-    if (newUnitTimePs > maxWaveformTimePs) {
-      // Exceeds limit, restore original value
-      const displayValue = psToDisplayValue(timeConfig.unitTimePs, timeConfig.unit);
+    // 用户输入的是绝对时间数值（带单位）
+    // 1. 转换为 fs: inputValue * TIME_UNIT_MULTIPLIERS[selectedUnit]
+    const inputFs = numValue * TIME_UNIT_MULTIPLIERS[selectedUnit];
+
+    // 2. 转换为 LoD0Unit: fs / fsPerLod0Unit
+    const fsPerLod0Unit = getFsPerLod0Unit();
+    const lod0Units = Math.floor(inputFs / fsPerLod0Unit);
+
+    // 3. 这就是新的 DisplayUnitPerLoD0Unit（必须是整数）
+    const newDisplayUnitPerLoD0Unit = Math.max(1, lod0Units);
+
+    // Validate: cannot be too large
+    if (newDisplayUnitPerLoD0Unit > maxWaveformTimeLod0) {
+      const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;
+      const fsPerDisplayUnit = lod0PerDisplayUnit * fsPerLod0Unit;
+      const displayValue = fsPerDisplayUnit / TIME_UNIT_MULTIPLIERS[selectedUnit];
       setInputValue(displayValue.toString());
       setIsEditing(false);
-      // Optionally show a message or tooltip
       return;
     }
 
     // Commit the change
     onTimeConfigChange({
       ...timeConfig,
-      unitTimePs: newUnitTimePs,
+      DisplayUnitPerLoD0Unit: newDisplayUnitPerLoD0Unit,
+      _displayPerLod0: 1 / newDisplayUnitPerLoD0Unit,
     });
     setIsEditing(false);
   };
 
-  const handleUnitChange = (newUnit: TimeUnit) => {
-    if (timeConfig && onTimeConfigChange) {
-      // Keep the same ps value, just change the display unit
-      onTimeConfigChange({
-        ...timeConfig,
-        unit: newUnit,
-      });
-    }
-  };
-
   // Calculate step size based on current unit
   const getStepSize = (): string => {
-    if (!timeConfig) return '0.1';
-    const multiplier = TIME_UNIT_MULTIPLIERS[timeConfig.unit];
-    // Step should be meaningful in the current unit
-    if (multiplier >= 1000000000) return '0.001'; // s
-    if (multiplier >= 1000000) return '0.001'; // ms
-    if (multiplier >= 1000) return '0.001'; // us
-    if (multiplier >= 1) return '0.001'; // ns
-    return '1'; // ps
+    switch (selectedUnit) {
+      case 's': return '0.001';
+      case 'ms': return '0.001';
+      case 'us': return '0.001';
+      case 'ns': return '0.001';
+      case 'ps': return '1';
+      default: return '0.001';
+    }
   };
 
   return (
@@ -220,10 +305,10 @@ export function ToolBar({
           }}
           min="0.000001"
           step={getStepSize()}
-          title={timeConfig ? `Time per pixel (${timeConfig.unit}, press Enter to confirm)` : 'Time per pixel'}
+          title={timeConfig ? `Time per division (${selectedUnit}, press Enter to confirm)` : 'Time scale'}
         />
         <select
-          value={timeConfig?.unit || 'ns'}
+          value={selectedUnit}
           onChange={(e) => handleUnitChange(e.target.value as TimeUnit)}
           style={{
             padding: '2px 4px',
@@ -234,6 +319,7 @@ export function ToolBar({
           }}
           title="Time unit"
         >
+          <option value="fs">fs</option>
           <option value="ps">ps</option>
           <option value="ns">ns</option>
           <option value="us">us</option>
