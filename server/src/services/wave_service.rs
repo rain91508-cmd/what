@@ -541,6 +541,8 @@ impl WaveService {
     /// 获取波形数据 (支持 HTTP Range 和 LoD)
     ///
     /// 根据请求的 LoD 层级和时间范围，返回对应的 chunk 数据
+    /// 
+    /// 注意：API 传入的时间参数单位是皮秒 (ps)，需要转换为 FST 内部时间单位
     pub async fn get_wave_data(
         &self,
         wave_name: &str,
@@ -561,18 +563,26 @@ impl WaveService {
             return Err(ServerError::InvalidLod(lod));
         }
 
-        // 解析时间范围
-        let time_start = start.max(0) as u64;
-        let time_end = if end > 0 {
+        // 获取 FST 文件的时间单位
+        let fst_time_unit = self.read_fst_timescale_str(&wave_path).await?;
+        
+        // 将 API 传入的皮秒时间转换为 FST 内部时间单位
+        let api_time_start = start.max(0) as u64;
+        let api_time_end = if end > 0 {
             end as u64
         } else {
-            // 从 FST 文件获取结束时间
-            self.get_wave_end_time(&wave_path).await.unwrap_or(time_start + 1_000_000)
+            // 从 FST 文件获取结束时间（转换为皮秒）
+            let fst_end_time = self.get_wave_end_time(&wave_path).await.unwrap_or(1_000_000);
+            Self::fst_time_to_ps(fst_end_time, &fst_time_unit)
         };
 
+        // 转换皮秒时间为 FST 内部时间单位（取整）
+        let time_start = Self::ps_to_fst_time(api_time_start, &fst_time_unit);
+        let time_end = Self::ps_to_fst_time(api_time_end, &fst_time_unit);
+
         info!(
-            "获取波形数据: wave={}, signal={}, lod={}, time={}-{}, compression={}",
-            wave_name, signal_name, lod, time_start, time_end, compression.name()
+            "获取波形数据: wave={}, signal={}, lod={}, api_time={}-{} ps, fst_time={}-{} (unit={}), compression={}",
+            wave_name, signal_name, lod, api_time_start, api_time_end, time_start, time_end, fst_time_unit, compression.name()
         );
 
         // 根据后端选择数据获取方式
@@ -605,6 +615,84 @@ impl WaveService {
         };
 
         Ok((data, file_size, content_length))
+    }
+
+    /// 读取 FST 文件的时间单位字符串
+    async fn read_fst_timescale_str(&self, wave_path: &PathBuf) -> Result<String> {
+        let path_str = wave_path.to_string_lossy().to_string();
+        
+        tokio::task::spawn_blocking(move || {
+            Self::read_fst_timescale(&path_str)
+        })
+        .await
+        .map_err(|e| ServerError::Internal(format!("读取时间单位失败: {}", e)))?
+    }
+
+    /// 将皮秒 (ps) 转换为 FST 内部时间单位（取整）
+    /// 
+    /// 例如：
+    /// - 1000 ps, timescale="1ps" -> 1000
+    /// - 1000 ps, timescale="1ns" -> 1
+    /// - 1500 ps, timescale="1ns" -> 2 (四舍五入)
+    fn ps_to_fst_time(ps: u64, timescale: &str) -> u64 {
+        let scale_factor = Self::timescale_to_factor(timescale);
+        // 使用四舍五入： (ps + scale_factor/2) / scale_factor
+        (ps + scale_factor / 2) / scale_factor
+    }
+
+    /// 将 FST 内部时间单位转换为皮秒 (ps)
+    ///
+    /// 例如：
+    /// - 1000, timescale="1ps" -> 1000 ps
+    /// - 1, timescale="1ns" -> 1000 ps
+    fn fst_time_to_ps(fst_time: u64, timescale: &str) -> u64 {
+        let scale_factor = Self::timescale_to_factor(timescale);
+        fst_time * scale_factor
+    }
+
+    /// 将时间单位字符串转换为皮秒倍数
+    ///
+    /// "1ps" -> 1
+    /// "1ns" -> 1000
+    /// "1us" -> 1_000_000
+    /// "1ms" -> 1_000_000_000
+    /// "1s" -> 1_000_000_000_000
+    fn timescale_to_factor(timescale: &str) -> u64 {
+        match timescale {
+            "1fs" => 1, // 0.001 ps, 但最小单位是 ps，所以返回 1
+            "10fs" => 1,
+            "100fs" => 1,
+            "1ps" => 1,
+            "10ps" => 10,
+            "100ps" => 100,
+            "1ns" => 1_000,
+            "10ns" => 10_000,
+            "100ns" => 100_000,
+            "1us" => 1_000_000,
+            "10us" => 10_000_000,
+            "100us" => 100_000_000,
+            "1ms" => 1_000_000_000,
+            "10ms" => 10_000_000_000,
+            "100ms" => 100_000_000_000,
+            "1s" => 1_000_000_000_000,
+            _ => {
+                // 尝试解析科学计数法格式，如 "1e-12s"
+                if let Some(exp) = timescale.strip_prefix("1e") {
+                    if let Some(exp) = exp.strip_suffix('s') {
+                        if let Ok(exp) = exp.parse::<i32>() {
+                            // 1e-12 s = 1 ps
+                            let ps_exp = exp + 12; // 转换为以 ps 为单位的指数
+                            if ps_exp >= 0 {
+                                return 10_u64.pow(ps_exp as u32);
+                            }
+                        }
+                    }
+                }
+                // 默认返回 1 (1ps)
+                warn!("未知的时间单位格式: {}, 默认使用 1ps", timescale);
+                1
+            }
+        }
     }
 
     /// 使用 fstapi 获取波形数据
