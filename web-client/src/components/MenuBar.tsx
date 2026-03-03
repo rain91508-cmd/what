@@ -11,6 +11,7 @@ interface MenuBarProps {
   hasKdbLoaded: boolean;
   hasWaveLoaded: boolean;
   infoText?: string;  // Info text to display (full hierarchy name)
+  onOpenDebugTool?: () => void;  // Open KDB debug tool
 }
 
 interface MenuItem {
@@ -25,7 +26,7 @@ interface Menu {
   items: MenuItem[];
 }
 
-export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onOpenWaveList, onCloseKdb, onCloseWave, hasKdbLoaded, hasWaveLoaded, infoText }: MenuBarProps) {
+export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onOpenWaveList, onCloseKdb, onCloseWave, hasKdbLoaded, hasWaveLoaded, infoText, onOpenDebugTool }: MenuBarProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const menuBarRef = useRef<HTMLDivElement>(null);
 
@@ -90,6 +91,8 @@ export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onO
     {
       label: 'Help',
       items: [
+        { label: 'KDB Debug Tool', onClick: onOpenDebugTool },
+        { separator: true, label: '' },
         { label: 'About' },
       ],
     },

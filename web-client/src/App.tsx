@@ -545,6 +545,45 @@ function App() {
     addMessage(`Jump to bookmark: ${bookmark.name}`);
   }, [setSourceDisplay, addMessage]);
 
+  // Handle driver click - jump to driver signal location
+  const handleDriverClick = useCallback(async (driver: { signalGlobalId: number; line: number; fileId?: number }) => {
+    // Build the driver signal to get its information
+    const signal = kdbManager.buildSignal(driver.signalGlobalId);
+    if (!signal) {
+      addMessage(`Driver signal not found: ${driver.signalGlobalId}`);
+      return;
+    }
+    
+    // Get the parent module of the driver signal
+    const parentModuleId = signal.parentModuleId;
+    const parentModule = kdbManager.getModuleById(parentModuleId);
+    
+    if (!parentModule) {
+      addMessage(`Parent module not found for driver signal: ${signal.name}`);
+      return;
+    }
+    
+    // Get file ID from parent module or use provided fileId
+    const fileId = driver.fileId || parentModule.definition?.fileId;
+    
+    if (!fileId) {
+      addMessage(`File not found for driver signal: ${signal.name}`);
+      return;
+    }
+    
+    // Use unified function to set source display
+    // Display module is the driver's parent module
+    await setSourceDisplay({
+      displayModuleId: parentModuleId,
+      selectedModuleId: parentModuleId,
+      startFromLine: driver.line,
+      fileId: fileId,
+      addToHistory: true
+    });
+    
+    addMessage(`Jump to driver: ${signal.name} (line ${driver.line})`);
+  }, [setSourceDisplay, addMessage]);
+
   // ============================================
   // File Change Detection
   // ============================================
@@ -1100,7 +1139,9 @@ function App() {
     }
 
     // Try to find instance first (batch search) in the displayed module
+    console.log('[App] Looking for instance:', word);
     const instanceId = await kdbManager.findInstanceByName(lookupModuleIndex, word);
+    console.log('[App] instanceId:', instanceId);
     if (instanceId) {
       const instance = kdbManager.getModuleById(instanceId);
       if (instance) {
@@ -1135,12 +1176,70 @@ function App() {
     }
 
     // Try to find signal (batch search) in the displayed module
+    console.log('[App] Looking for signal:', word);
     const signalGlobalId = await kdbManager.findSignalByName(lookupModuleIndex, word);
+    console.log('[App] signalGlobalId:', signalGlobalId);
     if (signalGlobalId) {
       const signal = kdbManager.buildSignal(signalGlobalId);
+      console.log('[App] built signal:', signal?.name, 'isDoubleClick:', isDoubleClick);
       if (signal) {
         setMenuBarInfoText(signal.fullName);
-        // For double-click on signal, do nothing for now as per requirements
+        
+        // For double-click on signal, add to Drivers tab
+        if (isDoubleClick) {
+          console.log('[App] Getting drivers for signal:', signalGlobalId);
+          // Get driver information for this signal
+          const driverLocations = await kdbManager.getDriverBySignalId(signalGlobalId);
+          console.log('[App] driverLocations:', driverLocations);
+          console.log('[App] driverLocations detailed:', driverLocations.map((d: any) => ({ 
+            driverSignalGlobalId: d.driverSignalGlobalId, 
+            line: d.line,
+            raw: d 
+          })));
+          
+          if (driverLocations && driverLocations.length > 0) {
+            // Get current file info
+            let fileId = activeTabData.fileId;
+            let fileName = '';
+            
+            if (!fileId && activeTabData.displayModuleIndex) {
+              const displayModule = kdbManager.getModuleById(activeTabData.displayModuleIndex);
+              if (displayModule?.definition?.fileId) {
+                fileId = displayModule.definition.fileId;
+              }
+            }
+            
+            // Get file name
+            if (fileId) {
+              const fileInfo = await kdbManager.getFileInfo(fileId);
+              if (fileInfo) {
+                fileName = fileInfo.fullName;
+              }
+            }
+            
+            // Import driverManager dynamically to avoid circular dependency
+            const { driverManager } = await import('./modules/knowledge/driverManager');
+            
+            // Add driver group
+            driverManager.addDriverGroup({
+              targetSignal: {
+                globalId: signalGlobalId,
+                fullName: signal.fullName,
+                parentModuleId: signal.parentModuleId,
+              },
+              clickLocation: {
+                fileId: fileId || 0,
+                lineNumber: lineNumber,
+                fileName: fileName || 'Unknown',
+              },
+              drivers: driverLocations,
+            });
+            
+            addMessage(`Added ${driverLocations.length} driver(s) for signal: ${signal.name}`);
+          } else {
+            addMessage(`No drivers found for signal: ${signal.name}`);
+          }
+        }
         return;
       }
     }
@@ -1404,6 +1503,7 @@ function App() {
         hasKdbLoaded={kdbLoaded}
         hasWaveLoaded={!!currentWaveName}
         infoText={menuBarInfoText}
+        onOpenDebugTool={() => window.open('/test-drivers.html', '_blank', 'width=1200,height=800')}
       />
 
       {/* Tool Bar */}
@@ -1520,7 +1620,7 @@ function App() {
         className="bottom-panel"
         style={{ height: messageHeight, minHeight: 60 }}
       >
-        <MessageWindow messages={messages} onBookmarkClick={handleBookmarkClick} />
+        <MessageWindow messages={messages} onBookmarkClick={handleBookmarkClick} onDriverClick={handleDriverClick} />
       </div>
 
       {/* Connection Dialog */}
