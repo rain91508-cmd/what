@@ -1220,6 +1220,16 @@ function App() {
             // Import driverManager dynamically to avoid circular dependency
             const { driverManager } = await import('./modules/knowledge/driverManager');
             
+            // Get driver declaration lines for each driver
+            const driversWithDeclaration = driverLocations.map(d => {
+              const driverSignal = kdbManager.buildSignal(d.driverSignalGlobalId);
+              return {
+                driverSignalGlobalId: d.driverSignalGlobalId,
+                line: d.line,
+                driverDeclarationLine: driverSignal?.declaration?.line,
+              };
+            });
+            
             // Add driver group
             driverManager.addDriverGroup({
               targetSignal: {
@@ -1232,7 +1242,7 @@ function App() {
                 lineNumber: lineNumber,
                 fileName: fileName || 'Unknown',
               },
-              drivers: driverLocations,
+              drivers: driversWithDeclaration,
             });
             
             addMessage(`Added ${driverLocations.length} driver(s) for signal: ${signal.name}`);

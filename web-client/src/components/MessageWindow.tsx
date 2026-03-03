@@ -497,23 +497,69 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick }: Mess
           </div>
         ) : (
           // Drivers Tab
-          <div style={{ padding: '4px', overflow: 'auto' }}>
+          <div style={{ overflow: 'auto' }}>
             {driverGroups.length === 0 ? (
               <div style={{ color: '#999', padding: '8px', fontSize: '12px' }}>
                 No drivers. Double-click on a signal in the source code to view its drivers.
               </div>
             ) : (
-              driverGroups.map((group) => (
-                <DriverGroupComponent
-                  key={group.id}
-                  group={group}
-                  colWidths={driverColWidths}
-                  onToggle={() => handleToggleGroup(group.id)}
-                  onDelete={(e) => handleDeleteDriverGroup(e, group.id)}
-                  onDriverDoubleClick={handleDriverDoubleClick}
-                  onResizeStart={handleResizeStart}
-                />
-              ))
+              <>
+                {/* Common Header */}
+                <div
+                  style={{
+                    display: 'flex',
+                    borderBottom: '1px solid #ddd',
+                    fontWeight: 'bold',
+                    fontSize: '11px',
+                    padding: '4px 8px',
+                    color: '#666',
+                    background: '#f5f5f5',
+                    position: 'sticky',
+                    top: 0,
+                    zIndex: 1,
+                  }}
+                >
+                  <div style={{ width: '20px' }}></div>
+                  <div style={{ width: driverColWidths.signal, minWidth: 50, paddingRight: '4px' }}>Driver Signal</div>
+                  <div
+                    style={{ width: '4px', cursor: 'col-resize', background: '#eee' }}
+                    onMouseDown={(e) => handleResizeStart(e, 'drivers', 'signal')}
+                  />
+                  <div style={{ width: driverColWidths.file, minWidth: 50, paddingRight: '4px' }}>File</div>
+                  <div
+                    style={{ width: '4px', cursor: 'col-resize', background: '#eee' }}
+                    onMouseDown={(e) => handleResizeStart(e, 'drivers', 'file')}
+                  />
+                  <div style={{ width: driverColWidths.line, minWidth: 40, paddingRight: '4px', textAlign: 'center' }}>Line</div>
+                  <div style={{ width: '4px' }} />
+                  <div style={{ width: '60px', textAlign: 'center' }}>Source</div>
+                  <div style={{ width: '24px' }} />
+                </div>
+
+                {/* Driver Groups */}
+                <div style={{ padding: '4px' }}>
+                  {driverGroups.map((group) => (
+                    <DriverGroupComponent
+                      key={group.id}
+                      group={group}
+                      colWidths={driverColWidths}
+                      onToggle={() => handleToggleGroup(group.id)}
+                      onDelete={(e) => handleDeleteDriverGroup(e, group.id)}
+                      onParentDoubleClick={() => {
+                        // Navigate to parent signal source
+                        if (onDriverClick) {
+                          onDriverClick({
+                            signalGlobalId: group.targetSignal.globalId,
+                            line: group.clickLocation.lineNumber,
+                            fileId: group.clickLocation.fileId,
+                          });
+                        }
+                      }}
+                      onDriverDoubleClick={handleDriverDoubleClick}
+                    />
+                  ))}
+                </div>
+              </>
             )}
           </div>
         )}
@@ -528,8 +574,8 @@ interface DriverGroupComponentProps {
   colWidths: typeof DEFAULT_DRIVER_COL_WIDTHS;
   onToggle: () => void;
   onDelete: (e: React.MouseEvent) => void;
+  onParentDoubleClick: () => void;
   onDriverDoubleClick: (driver: DriverEntry) => void;
-  onResizeStart: (e: React.MouseEvent, tab: TabType, col: string) => void;
 }
 
 function DriverGroupComponent({
@@ -537,144 +583,108 @@ function DriverGroupComponent({
   colWidths,
   onToggle,
   onDelete,
+  onParentDoubleClick,
   onDriverDoubleClick,
-  onResizeStart,
 }: DriverGroupComponentProps) {
   return (
-    <div style={{ marginBottom: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
-      {/* Group Header */}
+    <div style={{ marginBottom: '2px' }}>
+      {/* Compact Group Header */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          padding: '6px 8px',
-          background: 'linear-gradient(to bottom, #f5f5f5, #e8e8e8)',
-          borderBottom: group.isExpanded ? '1px solid #ddd' : 'none',
-          cursor: 'pointer',
+          padding: '2px 4px',
+          background: '#fafafa',
+          borderBottom: '1px solid #eee',
           userSelect: 'none',
+          fontSize: '10px',
+          color: '#666',
         }}
-        onClick={onToggle}
       >
-        {/* Expand/Collapse Icon */}
-        <div style={{ width: '20px', fontSize: '12px', color: '#666' }}>
+        {/* Expand/Collapse Icon - Click to toggle */}
+        <div 
+          style={{ width: '16px', fontSize: '10px', cursor: 'pointer' }}
+          onClick={onToggle}
+        >
           {group.isExpanded ? '▼' : '▶'}
         </div>
 
-        {/* Target Signal Full Name */}
-        <div
-          style={{
-            flex: 1,
-            fontWeight: 'bold',
-            fontSize: '12px',
-            color: '#333',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
+        {/* Target Signal Info - Double click to navigate */}
+        <div 
+          style={{ 
+            flex: 1, 
+            overflow: 'hidden', 
+            textOverflow: 'ellipsis', 
             whiteSpace: 'nowrap',
+            cursor: 'pointer',
           }}
-          title={group.targetSignal.fullName}
+          onDoubleClick={onParentDoubleClick}
+          title="Double-click to navigate to signal"
         >
-          {group.targetSignal.fullName}
+          <span style={{ fontWeight: 'bold', color: '#0d47a1' }}>{group.targetSignal.fullName}</span>
+          <span style={{ marginLeft: '8px', color: '#999' }}>
+            ({group.drivers.length} drivers)
+          </span>
         </div>
 
-        {/* Click Location File */}
-        <div
-          style={{
-            width: '150px',
-            color: '#666',
-            fontSize: '11px',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            textAlign: 'right',
-            direction: 'rtl',
-            marginRight: '8px',
-          }}
-          title={group.clickLocation.fileName}
-        >
-          {group.clickLocation.fileName}
-        </div>
-
-        {/* Click Location Line */}
-        <div
-          style={{
-            width: '50px',
-            color: '#1976d2',
-            fontSize: '11px',
-            textAlign: 'center',
-          }}
-        >
-          L{group.clickLocation.lineNumber}
+        {/* Source Location */}
+        <div style={{ color: '#1976d2', marginRight: '8px' }}>
+          {group.clickLocation.fileName.split('/').pop()}:{group.clickLocation.lineNumber}
         </div>
 
         {/* Delete Button */}
         <button
-          onClick={onDelete}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(e);
+          }}
           style={{
-            width: '24px',
-            height: '24px',
-            marginLeft: '8px',
+            width: '16px',
+            height: '16px',
             padding: '0',
-            fontSize: '12px',
-            border: '1px solid #ddd',
-            borderRadius: '2px',
-            background: '#fff',
+            fontSize: '10px',
+            border: 'none',
+            background: 'transparent',
             cursor: 'pointer',
             color: '#d32f2f',
           }}
-          title="Delete driver group"
+          title="Delete"
         >
           ✕
         </button>
       </div>
 
-      {/* Driver List */}
+      {/* Driver Rows */}
       {group.isExpanded && (
-        <div style={{ padding: '4px' }}>
-          {/* Header */}
-          <div
-            style={{
-              display: 'flex',
-              borderBottom: '1px solid #eee',
-              fontWeight: 'bold',
-              fontSize: '10px',
-              padding: '4px 0',
-              color: '#666',
-            }}
-          >
-            <div style={{ width: '20px' }}></div>
-            <div style={{ width: colWidths.signal, minWidth: 50, paddingRight: '4px' }}>Driver Signal</div>
-            <div
-              style={{ width: '4px', cursor: 'col-resize', background: '#eee' }}
-              onMouseDown={(e) => onResizeStart(e, 'drivers', 'signal')}
-            />
-            <div style={{ width: colWidths.file, minWidth: 50, paddingRight: '4px' }}>File</div>
-            <div
-              style={{ width: '4px', cursor: 'col-resize', background: '#eee' }}
-              onMouseDown={(e) => onResizeStart(e, 'drivers', 'file')}
-            />
-            <div style={{ width: colWidths.line, minWidth: 40, paddingRight: '4px', textAlign: 'center' }}>Line</div>
-            <div
-              style={{ width: '4px', cursor: 'col-resize', background: '#eee' }}
-              onMouseDown={(e) => onResizeStart(e, 'drivers', 'line')}
-            />
-          </div>
-
-          {/* Driver Rows */}
+        <div>
           {group.drivers.map((driver, index) => (
             <div
               key={index}
               onDoubleClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                onDriverDoubleClick(driver);
+                // Check if double-clicked on driver signal name column
+                const target = e.target as HTMLElement;
+                const isDriverSignalColumn = target.closest('.driver-signal-name') !== null;
+                
+                if (isDriverSignalColumn && driver.driverDeclarationLine) {
+                  // Jump to driver signal declaration line
+                  onDriverDoubleClick({
+                    ...driver,
+                    line: driver.driverDeclarationLine,
+                  });
+                } else {
+                  // Jump to driver assignment line (original behavior)
+                  onDriverDoubleClick(driver);
+                }
               }}
               onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f5f5f5'; }}
               onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                padding: '4px 0',
-                borderBottom: '1px solid #f0f0f0',
+                padding: '2px 4px',
+                borderBottom: '1px solid #f5f5f5',
                 fontSize: '11px',
                 cursor: 'pointer',
                 userSelect: 'none',
@@ -684,6 +694,7 @@ function DriverGroupComponent({
               
               {/* Driver Signal Full Name */}
               <div
+                className="driver-signal-name"
                 style={{
                   width: colWidths.signal,
                   minWidth: 50,
@@ -693,7 +704,7 @@ function DriverGroupComponent({
                   whiteSpace: 'nowrap',
                   color: '#333',
                 }}
-                title={driver.driverFullName || `Signal ${driver.driverSignalGlobalId}`}
+                title={driver.driverFullName || `Signal ${driver.driverSignalGlobalId}${driver.driverDeclarationLine ? ` (declared at line ${driver.driverDeclarationLine})` : ''}`}
               >
                 {driver.driverFullName || `Signal ${driver.driverSignalGlobalId}`}
               </div>
@@ -722,6 +733,14 @@ function DriverGroupComponent({
 
               {/* Spacer */}
               <div style={{ width: '4px' }} />
+
+              {/* Source Info */}
+              <div style={{ width: '60px', textAlign: 'center', fontSize: '10px', color: '#999' }}>
+                -{'>'.replace('>', '')}
+              </div>
+
+              {/* Spacer for delete button alignment */}
+              <div style={{ width: '24px' }} />
             </div>
           ))}
         </div>

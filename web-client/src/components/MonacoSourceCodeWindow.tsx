@@ -665,6 +665,11 @@ export function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId
     return '...' + text.slice(-(maxLen - 3));
   };
 
+  // Remove trailing slash from path
+  const removeTrailingSlash = (path: string): string => {
+    return path.replace(/\/$/, '');
+  };
+
   // Check if we should show module info (only when moduleFullName is provided and not from file tab)
   const showModuleInfo = moduleFullName && moduleStartLine && moduleEndLine;
 
@@ -692,8 +697,8 @@ export function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId
               textOverflow: 'ellipsis',
               direction: 'rtl',
               textAlign: 'left',
-            }} title={moduleFullName}>
-              <span style={{ color: '#1976d2' }}>{moduleFullName}</span>
+            }} title={removeTrailingSlash(moduleFullName || '')}>
+              <span style={{ color: '#1976d2' }}>{removeTrailingSlash(moduleFullName || '')}</span>
             </div>
             {/* Draggable splitter */}
             <div
@@ -717,8 +722,8 @@ export function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId
           textOverflow: 'ellipsis',
           direction: 'rtl',  // Show rightmost part
           textAlign: 'left',
-        }} title={filePath}>
-          {formatLongText(filePath, 60) || moduleName || 'Source Code'}
+        }} title={removeTrailingSlash(filePath)}>
+          {formatLongText(removeTrailingSlash(filePath), 60) || moduleName || 'Source Code'}
         </div>
       </div>
       <div style={{ flex: 1, overflow: 'hidden' }}>
