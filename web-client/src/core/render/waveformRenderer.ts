@@ -241,7 +241,7 @@ class WaveformRenderer {
   }
 
   /**
-   * 绘制 X 波形：红色交叉线
+   * 绘制 X 波形：红色交叉线（不显示X字符）
    */
   private drawXWaveform(x0: number, x1: number, y: number, waveHeight: number): void {
     if (!this.ctx) return;
@@ -263,19 +263,11 @@ class WaveformRenderer {
     this.ctx.lineTo(x1, yHigh);
     this.ctx.stroke();
 
-    // 绘制 X 标签
-    const width = x1 - x0;
-    if (width > 15) {
-      this.ctx.fillStyle = '#ff0000';
-      this.ctx.font = 'bold 10px Arial';
-      const textWidth = this.ctx.measureText('X').width;
-      const textX = x0 + (width - textWidth) / 2;
-      this.ctx.fillText('X', textX, y - waveHeight - 4);
-    }
+    // 不绘制 X 字符标签
   }
 
   /**
-   * 绘制 Z 波形：蓝色虚线（中间）
+   * 绘制 Z 波形：蓝色虚线（中间，不显示Z字符）
    */
   private drawZWaveform(x0: number, x1: number, y: number): void {
     if (!this.ctx) return;
@@ -290,15 +282,7 @@ class WaveformRenderer {
     this.ctx.stroke();
     this.ctx.setLineDash([]);
 
-    // 绘制 Z 标签
-    const width = x1 - x0;
-    if (width > 15) {
-      this.ctx.fillStyle = '#0066ff';
-      this.ctx.font = 'bold 10px Arial';
-      const textWidth = this.ctx.measureText('Z').width;
-      const textX = x0 + (width - textWidth) / 2;
-      this.ctx.fillText('Z', textX, y - 6);
-    }
+    // 不绘制 Z 字符标签
   }
 
   /**
