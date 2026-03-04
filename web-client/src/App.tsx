@@ -70,10 +70,10 @@ const DEFAULT_TIME_CONFIG: TimeConfig = initTimeConfig(1, 3);
 
 // 默认列宽配置
 const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
+  hierarchy: 100,
   name: 150,
   value: 80,
-  type: 80,
-  group: 100,
+  panel: 250,
 };
 
 function App() {
