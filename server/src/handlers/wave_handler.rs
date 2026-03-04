@@ -317,6 +317,154 @@ fn parse_range_header(
     }
 }
 
+/// 获取多个信号的波形数据（新 API，LoD 在路径中，支持前缀压缩）
+/// 
+/// # 路径格式
+/// - 无前缀: `/api/wave/{waveform}/lod/{lod}/signals/{names}/data`
+/// - 有前缀: `/api/wave/{waveform}/lod/{lod}/signals/p:{prefix}/{names}/data`
+pub async fn get_wave_data_multi(
+    State(state): State<ServerState>,
+    Path((waveform_name, lod, signal_pattern)): Path<(String, u32, String)>,
+    Query(query): Query<WaveDataQuery>,
+    headers: HeaderMap,
+) -> Result<Response<Body>> {
+    state.stats.record_request(crate::state::RequestType::Wave).await;
+
+    // 验证 LoD 层级
+    if lod > 11 {
+        return Err(ServerError::InvalidLod(lod));
+    }
+
+    // 解析信号模式（支持前缀压缩）
+    let (prefix, signal_names) = parse_signal_pattern(&signal_pattern);
+    
+    // 展开完整信号名
+    let full_signal_names: Vec<String> = if let Some(prefix) = prefix {
+        signal_names
+            .iter()
+            .map(|name| format!("{}{}", prefix, name))
+            .collect()
+    } else {
+        signal_names
+    };
+
+    info!(
+        "获取多信号波形数据: {}.{} (LoD {}, {} 个信号)",
+        waveform_name,
+        full_signal_names.join(","),
+        lod,
+        full_signal_names.len()
+    );
+
+    let wave_service = create_wave_service(&state);
+
+    // 解析压缩算法
+    let compression = match query.compress.as_deref() {
+        Some("zstd") => crate::services::CompressionAlgorithm::Zstd,
+        Some("lz4") => crate::services::CompressionAlgorithm::Lz4,
+        _ => crate::services::CompressionAlgorithm::None,
+    };
+
+    // 解析 Range 头
+    let range = parse_range_header(headers.get("range"))?;
+
+    // 获取波形数据
+    let (data, file_size, content_length) = wave_service
+        .get_wave_data_multi(
+            &waveform_name,
+            &full_signal_names,
+            lod,
+            query.start,
+            query.end,
+            range,
+            compression,
+        )
+        .await?;
+
+    // 构建响应
+    let body = Body::from(data);
+    let mut response = Response::new(body);
+
+    // 设置 Content-Type
+    response.headers_mut().insert(
+        "content-type",
+        "application/octet-stream".parse().unwrap(),
+    );
+
+    // 设置 CDN 缓存头
+    response.headers_mut().insert(
+        "cache-control",
+        "public, max-age=3600, immutable".parse().unwrap(),
+    );
+
+    // 设置 Content-Length
+    if let Some(len) = content_length {
+        response
+            .headers_mut()
+            .insert("content-length", len.to_string().parse().unwrap());
+    }
+
+    // 设置 Accept-Ranges
+    response
+        .headers_mut()
+        .insert("accept-ranges", "bytes".parse().unwrap());
+
+    // 如果有 Range 请求，返回 206 Partial Content
+    if let Some((start, end)) = range {
+        let end_str = end.map(|e| e.to_string()).unwrap_or_default();
+        response.headers_mut().insert(
+            "content-range",
+            format!("bytes {}-{}/{}", start, end_str, file_size)
+                .parse()
+                .unwrap(),
+        );
+        *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+    }
+
+    info!(
+        "返回多信号波形数据：{} (LoD {}, {} 个信号)",
+        waveform_name, lod, full_signal_names.len()
+    );
+    Ok(response)
+}
+
+/// 解析信号模式
+/// 
+/// # 格式
+/// - "clk,reset,data" -> (None, ["clk", "reset", "data"])
+/// - "p:cpu_/alu,reg,pc" -> (Some("cpu_"), ["alu", "reg", "pc"])
+fn parse_signal_pattern(pattern: &str) -> (Option<String>, Vec<String>) {
+    if pattern.starts_with("p:") {
+        // 有前缀格式：p:prefix/names
+        let rest = &pattern[2..]; // 去掉 "p:"
+        if let Some(sep_pos) = rest.find('/') {
+            let prefix = rest[..sep_pos].to_string();
+            let names: Vec<String> = rest[sep_pos + 1..]
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            (Some(prefix), names)
+        } else {
+            // 格式错误，当作普通名称处理
+            let names: Vec<String> = pattern
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            (None, names)
+        }
+    } else {
+        // 无前缀格式：names
+        let names: Vec<String> = pattern
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        (None, names)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,5 +483,19 @@ mod tests {
         let json = r#"{"start": 0, "end": 1000000}"#;
         let query: WaveDataQuery = serde_json::from_str(json).unwrap();
         assert_eq!(query.lod, None);
+    }
+
+    #[test]
+    fn test_parse_signal_pattern_no_prefix() {
+        let (prefix, names) = parse_signal_pattern("clk,reset,data");
+        assert_eq!(prefix, None);
+        assert_eq!(names, vec!["clk", "reset", "data"]);
+    }
+
+    #[test]
+    fn test_parse_signal_pattern_with_prefix() {
+        let (prefix, names) = parse_signal_pattern("p:cpu_/alu,reg,pc");
+        assert_eq!(prefix, Some("cpu_".to_string()));
+        assert_eq!(names, vec!["alu", "reg", "pc"]);
     }
 }

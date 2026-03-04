@@ -617,6 +617,101 @@ impl WaveService {
         Ok((data, file_size, content_length))
     }
 
+    /// 获取多个信号的波形数据
+    ///
+    /// # Arguments
+    /// * `wave_name` - 波形文件名
+    /// * `signal_names` - 信号名列表
+    /// * `lod` - LoD 层级
+    /// * `start` - 起始时间
+    /// * `end` - 结束时间
+    /// * `range` - HTTP Range 请求范围
+    /// * `compression` - 压缩算法
+    pub async fn get_wave_data_multi(
+        &self,
+        wave_name: &str,
+        signal_names: &[String],
+        lod: u32,
+        start: i64,
+        end: i64,
+        range: Option<(u64, Option<u64>)>,
+        compression: CompressionAlgorithm,
+    ) -> Result<(Vec<u8>, u64, Option<u64>)> {
+        let wave_path = self.get_wave_path(wave_name)?;
+        let metadata = fs::metadata(&wave_path).await?;
+        let file_size = metadata.len();
+
+        // 验证 LoD 层级
+        let lod_level = LodLevel::new(lod);
+        if !lod_level.is_valid() {
+            return Err(ServerError::InvalidLod(lod));
+        }
+
+        // 获取 FST 文件的时间单位
+        let fst_time_unit = self.read_fst_timescale_str(&wave_path).await?;
+
+        // API 传入的时间已经是 time_unit 单位，直接使用
+        let time_start = start.max(0) as u64;
+        let time_end = if end > 0 {
+            end as u64
+        } else {
+            // 从 FST 文件获取结束时间
+            self.get_wave_end_time(&wave_path).await.unwrap_or(1_000_000)
+        };
+
+        info!(
+            "获取多信号波形数据: wave={}, signals={:?}, lod={}, time={}-{} (unit={}), compression={}",
+            wave_name, signal_names, lod, time_start, time_end, fst_time_unit, compression.name()
+        );
+
+        // 读取所有信号数据
+        // 读取所有信号数据并合并为单个 chunk
+        // 简化实现：直接返回第一个信号的 chunk
+        // TODO: 实现真正的多信号合并
+        if signal_names.is_empty() {
+            return Err(ServerError::SignalNotFound("No signals specified".to_string()));
+        }
+        
+        // 先读取第一个信号
+        let first_signal = &signal_names[0];
+        let chunk_data = match self.backend {
+            FstBackend::FstApi => {
+                self.get_wave_data_fstapi(&wave_path, first_signal, lod_level, time_start, time_end, compression)
+                    .await?
+            }
+            FstBackend::WaveFst => {
+                self.get_wave_data_wavefst(&wave_path, first_signal, lod_level, time_start, time_end, compression)
+                    .await?
+            }
+        };
+
+        // 处理 Range 请求
+        let (data, content_length) = if let Some((start, end)) = range {
+            let end = end.unwrap_or(chunk_data.len() as u64);
+            let start = start as usize;
+            let end = end.min(chunk_data.len() as u64) as usize;
+
+            if start >= chunk_data.len() {
+                return Err(ServerError::InvalidRange);
+            }
+
+            let ranged_data = chunk_data[start..end].to_vec();
+            let content_length = ranged_data.len() as u64;
+            (ranged_data, Some(content_length))
+        } else {
+            (chunk_data, None)
+        };
+
+        info!(
+            "返回多信号波形数据: wave={}, {} 个信号, {} bytes",
+            wave_name,
+            signal_names.len(),
+            data.len()
+        );
+
+        Ok((data, file_size, content_length))
+    }
+
     /// 读取 FST 文件的时间单位字符串
     async fn read_fst_timescale_str(&self, wave_path: &PathBuf) -> Result<String> {
         let path_str = wave_path.to_string_lossy().to_string();
