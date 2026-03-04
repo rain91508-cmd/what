@@ -59,7 +59,9 @@ export class MockDataProvider implements DataProvider {
     // 为每个信号生成 mock 数据（如果不存在）
     for (const signal of signals) {
       if (!this.mockData.has(signal.name)) {
-        this.mockData.set(signal.name, this.generateMockData(signal.name));
+        // 使用 UI 提供的 width，如果没有则根据信号名推断
+        const width = signal.width ?? this.inferWidthFromName(signal.name);
+        this.mockData.set(signal.name, this.generateMockData(signal.name, width));
       }
     }
   }
@@ -73,7 +75,9 @@ export class MockDataProvider implements DataProvider {
     // 为新增的信号生成 mock 数据
     for (const signal of signals) {
       if (!this.mockData.has(signal.name)) {
-        this.mockData.set(signal.name, this.generateMockData(signal.name));
+        // 使用 UI 提供的 width，如果没有则根据信号名推断
+        const width = signal.width ?? this.inferWidthFromName(signal.name);
+        this.mockData.set(signal.name, this.generateMockData(signal.name, width));
       }
     }
   }
@@ -202,8 +206,11 @@ export class MockDataProvider implements DataProvider {
         continue;
       }
 
+      // 使用 UI 提供的 width，如果没有则使用 signalData 推断的 width
+      const width = signal.width ?? signalData.width;
+
       const rawValue = this.getValueAtTime(signalData, time);
-      const formattedValue = this.formatValue(rawValue, signalData.width);
+      const formattedValue = this.formatValue(rawValue, width);
       values.set(signal.name, formattedValue.displayStr);
     }
 
@@ -220,11 +227,10 @@ export class MockDataProvider implements DataProvider {
 
   /**
    * 生成 mock 数据
+   * @param signalName 信号名
+   * @param width 位宽（由 UI 提供或推断）
    */
-  private generateMockData(signalName: string): MockSignalData {
-    // 根据信号名决定位宽
-    const width = this.inferWidthFromName(signalName);
-
+  private generateMockData(signalName: string, width: number): MockSignalData {
     // 生成随机跳变
     const transitions: Array<{ time: number; value: string }> = [];
     const step = 100;
@@ -347,8 +353,14 @@ export class MockDataProvider implements DataProvider {
       type = 'numeric';
     }
 
+    // 如果原始值是单bit但width>1，扩展为多bit格式
+    let adjustedRawValue = rawValue;
+    if (width > 1 && (rawValue === '0' || rawValue === '1')) {
+      adjustedRawValue = '0x' + parseInt(rawValue, 10).toString(16).toUpperCase().padStart(Math.ceil(width / 4), '0');
+    }
+
     // 格式化显示字符串
-    let displayStr = this.convertFormat(rawValue, width);
+    let displayStr = this.convertFormat(adjustedRawValue, width);
 
     return {
       type,

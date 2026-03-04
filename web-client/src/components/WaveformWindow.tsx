@@ -147,6 +147,12 @@ export function WaveformWindow({
   const [editingGroup, setEditingGroup] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
 
+  // 拖动选择放大功能的状态
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectionStart, setSelectionStart] = useState<number | null>(null);
+  const [selectionEnd, setSelectionEnd] = useState<number | null>(null);
+  const selectionStartRef = useRef<number | null>(null);
+
   // 使用 props 中的列宽，如果没有则使用默认值
   const widths = columnWidths || DEFAULT_COLUMN_WIDTHS;
   const hierarchyColumnWidth = widths.hierarchy;
@@ -388,15 +394,99 @@ export function WaveformWindow({
 
     // Render
     waveformRenderer.render(segments, viewport, width, height, 20);
+
+    // 绘制选择区域高亮
+    if (isSelecting && selectionStart !== null && selectionEnd !== null) {
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        const startX = Math.min(selectionStart, selectionEnd);
+        const endX = Math.max(selectionStart, selectionEnd);
+        const selectionWidth = endX - startX;
+
+        // 绘制半透明蓝色选择区域
+        ctx.fillStyle = 'rgba(100, 150, 255, 0.3)';
+        ctx.fillRect(startX, 20, selectionWidth, height - 20);
+
+        // 绘制边框
+        ctx.strokeStyle = 'rgba(100, 150, 255, 0.8)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(startX, 20, selectionWidth, height - 20);
+      }
+    }
   };
 
-  const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  // 鼠标按下：开始选择或设置 cursor
+  const handleCanvasMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const time = viewport.timeStart + (x / rect.width) * (viewport.timeEnd - viewport.timeStart);
-    setCursor({ position: Math.round(time), visible: true });
-  }, [viewport]);
+    
+    // 开始拖动选择
+    setIsSelecting(true);
+    setSelectionStart(x);
+    setSelectionEnd(x);
+    selectionStartRef.current = x;
+  }, []);
+
+  // 鼠标移动：更新选择区域
+  const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+
+    // Update ref immediately (no re-render)
+    mousePosRef.current = x;
+
+    // Queue rAF-throttled update for rendering
+    pendingMouseXRef.current = x;
+
+    // Also update mouseX for other purposes (like click handling and info bar)
+    setMouseX(x);
+    setDisplayMouseX(x);
+
+    // Update canvasWidth to ensure alignment (in case it changed)
+    if (rect.width !== canvasWidth) {
+      setCanvasWidth(rect.width);
+    }
+
+    // 如果在选择中，只更新选择结束位置
+    if (isSelecting) {
+      setSelectionEnd(x);
+    }
+    // 注意：不在这里更新 cursor，只在单击时更新
+  }, [viewport, isSelecting, canvasWidth]);
+
+  // 鼠标释放：结束选择并放大
+  const handleCanvasMouseUp = useCallback(() => {
+    if (!isSelecting || !canvasRef.current) return;
+    
+    const canvasWidth = canvasRef.current.width;
+    const startX = Math.min(selectionStart ?? 0, selectionEnd ?? 0);
+    const endX = Math.max(selectionStart ?? 0, selectionEnd ?? 0);
+    
+    // 如果选择区域太小（小于10像素），则不放大，只设置 cursor
+    if (endX - startX < 10) {
+      const time = viewport.timeStart + ((selectionStart ?? 0) / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
+      setCursor({ position: Math.round(time), visible: true });
+    } else {
+      // 计算新的 viewport 时间范围
+      const newTimeStart = viewport.timeStart + (startX / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
+      const newTimeEnd = viewport.timeStart + (endX / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
+      
+      setViewport(prev => ({
+        ...prev,
+        timeStart: newTimeStart,
+        timeEnd: newTimeEnd,
+      }));
+    }
+    
+    // 重置选择状态
+    setIsSelecting(false);
+    setSelectionStart(null);
+    setSelectionEnd(null);
+    selectionStartRef.current = null;
+  }, [isSelecting, selectionStart, selectionEnd, viewport, setViewport, setCursor]);
 
   // Use refs for all cursor state to avoid dependency on React state in rAF loop
   const mousePosRef = useRef<number | null>(null);
@@ -420,27 +510,6 @@ export function WaveformWindow({
 
   useEffect(() => {
     canvasWidthRef.current = canvasWidth;
-  }, [canvasWidth]);
-
-  const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!canvasRef.current) return;
-    const rect = canvasRef.current.getBoundingClientRect();
-    const newMouseX = e.clientX - rect.left;
-
-    // Update ref immediately (no re-render)
-    mousePosRef.current = newMouseX;
-
-    // Queue rAF-throttled update for rendering
-    pendingMouseXRef.current = newMouseX;
-
-    // Also update mouseX for other purposes (like click handling and info bar)
-    setMouseX(newMouseX);
-    setDisplayMouseX(newMouseX);
-
-    // Update canvasWidth to ensure alignment (in case it changed)
-    if (rect.width !== canvasWidth) {
-      setCanvasWidth(rect.width);
-    }
   }, [canvasWidth]);
 
   const handleCanvasMouseLeave = useCallback(() => {
@@ -1307,8 +1376,9 @@ export function WaveformWindow({
               cursor: 'crosshair',
               background: selectedSignal ? '#f8f8ff' : '#fff',
             }}
-            onClick={handleCanvasClick}
+            onMouseDown={handleCanvasMouseDown}
             onMouseMove={handleCanvasMouseMove}
+            onMouseUp={handleCanvasMouseUp}
             onMouseLeave={handleCanvasMouseLeave}
           />
           {/* Cursor vertical line - HTML overlay */}
