@@ -506,20 +506,50 @@ GET /api/wave/{waveform_name}/signals/{signal_name}/data
 | 12 | 4B | transition_count | 转换点数量 |
 | 16 | 1B | compression | 压缩类型 (0=无, 1=zstd, 2=lz4) |
 
-**数据区格式**：
+**数据区格式（仿 FST 格式）**：
 
 - **时间数组**: `[t0, t1, t2, ...]` (u64 数组，小端序)
-- **值数组**: `[len0, value0..., len1, value1..., ...]` (变长格式)
+- **值数组**: `[type0, len0, value0..., type1, len1, value1..., ...]` (变长格式)
+  - `type`: u8，值类型 (0=Numeric, 1=String, 2=Real, 3=BinaryCompressed)
   - `len`: u16，值字节长度
-  - `value`: 值字节数组，支持任意位宽
+  - `value`: 值字节数组
 
-**值存储格式**:
+**值类型说明**:
 
-- **数值信号** (wire/reg/logic)：紧凑的二进制字节，MSB在前
-  - 例如：32位值 0xDEADBEEF → `[0xDE, 0xAD, 0xBE, 0xEF]`
-  - 例如：4位值 "1010" → `[0x0A]`
-- **字符串信号** (string)：null-terminated ASCII
-  - 例如："Hello" → `[0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x00]`
+| 类型 | 值 | 格式 | 说明 |
+|------|-----|------|------|
+| Numeric | 0 | ASCII 字符串 | "0", "1", "X", "Z", "b1010", "bX1Z0" |
+| String | 1 | ASCII 字符串 | "Hello" (非 null-terminated) |
+| Real | 2 | f64 (8 bytes) | IEEE 754 双精度浮点数 |
+| BinaryCompressed | 3 | 二进制字节 | 紧凑二进制，MSB在前 |
+
+**值存储示例**:
+
+```
+Numeric "b1010":
+[type=0, len=6, "b", "1", "0", "1", "0"]
+-> [0x00, 0x06, 0x00, 0x62, 0x31, 0x30, 0x31, 0x30]
+
+String "Hello":
+[type=1, len=5, "H", "e", "l", "l", "o"]
+-> [0x01, 0x05, 0x00, 0x48, 0x65, 0x6C, 0x6C, 0x6F]
+
+Real 3.14:
+[type=2, len=8, f64_bytes...]
+-> [0x02, 0x08, 0x00, ...8 bytes...]
+```
+
+**四态逻辑支持**:
+
+- **0**: 逻辑 0
+- **1**: 逻辑 1
+- **X**: 未知状态
+- **Z**: 高阻状态
+
+LoD 降采样时遵循四态逻辑规则：
+- 0 vs 1: min=0, max=1
+- 任何值 vs X: 结果=X
+- 任何值 vs Z: 结果=Z
 
 **示例**:
 ```bash
