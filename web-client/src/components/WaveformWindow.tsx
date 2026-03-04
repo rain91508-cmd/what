@@ -342,6 +342,7 @@ export function WaveformWindow({
             name: signal.fullName || signal.name,
             row: currentRow,
             displayName: signal.name,
+            width: signal.msb - signal.lsb + 1,  // 提供位宽
           });
           currentRow++;
           
@@ -353,15 +354,18 @@ export function WaveformWindow({
               name: `${signal.fullName || signal.name}[${bitIndex}]`,
               row: currentRow,
               displayName: `${signal.name}[${bitIndex}]`,
+              width: 1,  // 单个bit
             });
             currentRow++;
           }
         } else {
           // 折叠状态或单bit信号：作为一个整体
+          const width = signal.msb !== signal.lsb ? signal.msb - signal.lsb + 1 : 1;
           signalList.push({
             name: signal.fullName || signal.name,
             row: currentRow,
             displayName: signal.name,
+            width,  // 提供位宽
           });
           currentRow++;
         }

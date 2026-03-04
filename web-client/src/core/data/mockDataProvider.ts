@@ -117,6 +117,9 @@ export class MockDataProvider implements DataProvider {
       // 信号列表的 row 0 对应波形区域 ruler 下方的第一行
       const y = this.rulerHeight + signal.row * this.rowHeight + this.rowHeight / 2;
 
+      // 使用 UI 提供的 width，如果没有则使用 signalData 推断的 width
+      const width = signal.width ?? signalData.width;
+
       // 获取视口范围内的 transitions
       const visibleTransitions = this.getVisibleTransitions(signalData);
 
@@ -130,7 +133,7 @@ export class MockDataProvider implements DataProvider {
           x0,
           x1,
           y,
-          value: this.formatValue(value, signalData.width),
+          value: this.formatValue(value, width),
           signalName: signal.name,
           displayName: signal.displayName,
         });
@@ -147,7 +150,7 @@ export class MockDataProvider implements DataProvider {
             x0,
             x1,
             y,
-            value: this.formatValue(lastValue, signalData.width),
+            value: this.formatValue(lastValue, width),
             signalName: signal.name,
             displayName: signal.displayName,
           });
@@ -164,7 +167,7 @@ export class MockDataProvider implements DataProvider {
           x0,
           x1,
           y,
-          value: this.formatValue(lastValue, signalData.width),
+          value: this.formatValue(lastValue, width),
           signalName: signal.name,
           displayName: signal.displayName,
         });
