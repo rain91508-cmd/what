@@ -28,7 +28,7 @@ const TIME_UNIT_ENUM_TO_STR: Record<number, TimeUnit> = {
 interface ToolBarProps {
   onZoomIn: () => void;
   onZoomOut: () => void;
-  onZoomFit: () => void;
+  onZoomFull: () => void;
   onSearch: () => void;
   onAddSourceTab?: () => void;
   onAddWaveformTab?: () => void;
@@ -61,7 +61,7 @@ interface ToolBarProps {
 export function ToolBar({ 
   onZoomIn, 
   onZoomOut, 
-  onZoomFit, 
+  onZoomFull, 
   onSearch,
   onAddSourceTab,
   onAddWaveformTab,
@@ -277,7 +277,7 @@ export function ToolBar({
       <button className="tool-bar-button" title="Zoom Out" onClick={onZoomOut}>
         🔍-
       </button>
-      <button className="tool-bar-button" title="Zoom Fit" onClick={onZoomFit}>
+      <button className="tool-bar-button" title="Zoom Full" onClick={onZoomFull}>
         ⬛
       </button>
       

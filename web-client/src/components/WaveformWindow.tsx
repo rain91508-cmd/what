@@ -7,6 +7,7 @@ import { lod0ToDisplay, initTimeConfig } from './TabPanel';
 import type { SignalInfo, DisplayFormat } from '../types/dataProvider';
 import { FilterInput } from './FilterInput';
 import { wildcardMatch } from '../utils/wildcardMatch';
+import { zoomIn, zoomOut } from '../utils/zoomHelpers';
 
 interface SignalGroup {
   id: string;
@@ -151,8 +152,10 @@ export function WaveformWindow({
 
   // 拖动选择放大功能的状态
   const [isSelecting, setIsSelecting] = useState(false);
-  const [selectionStart, setSelectionStart] = useState<number | null>(null);
-  const [selectionEnd, setSelectionEnd] = useState<number | null>(null);
+  const [selectionStartX, setSelectionStartX] = useState<number | null>(null);
+  const [selectionStartY, setSelectionStartY] = useState<number | null>(null);
+  const [selectionEndX, setSelectionEndX] = useState<number | null>(null);
+  const [selectionEndY, setSelectionEndY] = useState<number | null>(null);
   const selectionStartRef = useRef<number | null>(null);
 
   // 使用 props 中的列宽，如果没有则使用默认值
@@ -397,23 +400,29 @@ export function WaveformWindow({
     // Render
     waveformRenderer.render(segments, viewport, width, height, 20);
 
-    // 绘制选择区域高亮
-    if (isSelecting && selectionStart !== null && selectionEnd !== null) {
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        const startX = Math.min(selectionStart, selectionEnd);
-        const endX = Math.max(selectionStart, selectionEnd);
-        const selectionWidth = endX - startX;
+    // 绘制选择区域高亮（只在水平拖动时显示）
+    if (isSelecting && selectionStartX !== null && selectionEndX !== null && selectionStartY !== null && selectionEndY !== null) {
+      const deltaX = Math.abs(selectionEndX - selectionStartX);
+      const deltaY = Math.abs(selectionEndY - selectionStartY);
 
-        // 绘制半透明蓝色选择区域
-        ctx.fillStyle = 'rgba(100, 150, 255, 0.3)';
-        ctx.fillRect(startX, 20, selectionWidth, height - 20);
+      // 只在水平拖动时显示选择框
+      if (deltaX >= deltaY) {
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          const startX = Math.min(selectionStartX, selectionEndX);
+          const endX = Math.max(selectionStartX, selectionEndX);
+          const selectionWidth = endX - startX;
 
-        // 绘制边框
-        ctx.strokeStyle = 'rgba(100, 150, 255, 0.8)';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(startX, 20, selectionWidth, height - 20);
+          // 绘制半透明蓝色选择区域
+          ctx.fillStyle = 'rgba(100, 150, 255, 0.3)';
+          ctx.fillRect(startX, 20, selectionWidth, height - 20);
+
+          // 绘制边框
+          ctx.strokeStyle = 'rgba(100, 150, 255, 0.8)';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(startX, 20, selectionWidth, height - 20);
+        }
       }
     }
   };
@@ -428,9 +437,9 @@ export function WaveformWindow({
     const canvasWidth = rect.width;
     const clickTime = viewport.timeStart + (x / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
     
-    // 获取可见信号列表进行吸附
+    // 获取可见信号列表进行吸附（无论是否使用 mock 数据都启用吸附）
     const visibleSignals = mockDataProvider.getSignalNames();
-    if (visibleSignals.length > 0 && useMockData) {
+    if (visibleSignals.length > 0) {
       // 使用第一个可见信号进行吸附
       const signalName = visibleSignals[0];
       const { prev, next } = mockDataProvider.findTransitionsAround(signalName, clickTime);
@@ -449,17 +458,21 @@ export function WaveformWindow({
     }
     
     // 开始拖动选择
+    const y = e.clientY - rect.top;
     setIsSelecting(true);
-    setSelectionStart(x);
-    setSelectionEnd(x);
+    setSelectionStartX(x);
+    setSelectionStartY(y);
+    setSelectionEndX(x);
+    setSelectionEndY(y);
     selectionStartRef.current = x;
-  }, [viewport, setCursor, useMockData]);
+  }, [viewport, setCursor]);
 
   // 鼠标移动：更新选择区域
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
 
     // Update ref immediately (no re-render)
     mousePosRef.current = x;
@@ -476,43 +489,74 @@ export function WaveformWindow({
       setCanvasWidth(rect.width);
     }
 
-    // 如果在选择中，只更新选择结束位置
+    // 如果在选择中，更新选择结束位置
     if (isSelecting) {
-      setSelectionEnd(x);
+      setSelectionEndX(x);
+      setSelectionEndY(y);
     }
     // 注意：不在这里更新 cursor，只在单击时更新
   }, [viewport, isSelecting, canvasWidth]);
 
-  // 鼠标释放：结束选择并放大（cursor 已在 mousedown 时设置）
+  // 鼠标释放：结束选择并处理放大/缩小（cursor 已在 mousedown 时设置）
   const handleCanvasMouseUp = useCallback(() => {
     if (!isSelecting || !canvasRef.current) return;
 
     // 使用 getBoundingClientRect 获取实际显示宽度
     const rect = canvasRef.current.getBoundingClientRect();
     const canvasWidth = rect.width;
-    const startX = Math.min(selectionStart ?? 0, selectionEnd ?? 0);
-    const endX = Math.max(selectionStart ?? 0, selectionEnd ?? 0);
 
-    // 如果选择区域足够大（大于等于10像素），则放大
-    if (endX - startX >= 10) {
-      // 计算新的 viewport 时间范围
-      const newTimeStart = viewport.timeStart + (startX / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
-      const newTimeEnd = viewport.timeStart + (endX / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
+    // 计算拖动距离
+    const deltaX = Math.abs((selectionEndX ?? 0) - (selectionStartX ?? 0));
+    const deltaY = Math.abs((selectionEndY ?? 0) - (selectionStartY ?? 0));
 
-      setViewport(prev => ({
-        ...prev,
-        timeStart: newTimeStart,
-        timeEnd: newTimeEnd,
-      }));
+    // 判断拖动方向：以距离较大的方向为准
+    const isHorizontalDrag = deltaX >= deltaY;
+
+    if (isHorizontalDrag) {
+      // 水平拖动：放大到选择的时间范围
+      const startX = Math.min(selectionStartX ?? 0, selectionEndX ?? 0);
+      const endX = Math.max(selectionStartX ?? 0, selectionEndX ?? 0);
+
+      // 如果选择区域足够大（大于等于10像素），则放大
+      if (endX - startX >= 10) {
+        const newTimeStart = viewport.timeStart + (startX / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
+        const newTimeEnd = viewport.timeStart + (endX / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
+
+        setViewport(prev => ({
+          ...prev,
+          timeStart: newTimeStart,
+          timeEnd: newTimeEnd,
+        }));
+      }
+    } else {
+      // 垂直拖动：根据方向放大或缩小
+      const dragY = (selectionEndY ?? 0) - (selectionStartY ?? 0);
+
+      if (dragY < -20) {
+        // 向上拖动超过20像素：放大（Zoom In）
+        const newViewport = zoomIn(viewport, cursor.position);
+        if (newViewport) {
+          setViewport(newViewport);
+        }
+      } else if (dragY > 20) {
+        // 向下拖动超过20像素：缩小（Zoom Out）
+        const newViewport = zoomOut(viewport, cursor.position);
+        if (newViewport) {
+          setViewport(newViewport);
+        }
+      }
+      // 如果垂直拖动距离小于20像素，视为单击，不执行缩放
     }
     // 注意：cursor 已在 mousedown 时设置，这里不再重复设置
 
     // 重置选择状态
     setIsSelecting(false);
-    setSelectionStart(null);
-    setSelectionEnd(null);
+    setSelectionStartX(null);
+    setSelectionStartY(null);
+    setSelectionEndX(null);
+    setSelectionEndY(null);
     selectionStartRef.current = null;
-  }, [isSelecting, selectionStart, selectionEnd, viewport, setViewport]);
+  }, [isSelecting, selectionStartX, selectionStartY, selectionEndX, selectionEndY, viewport, setViewport, cursor]);
 
   // Use refs for all cursor state to avoid dependency on React state in rAF loop
   const mousePosRef = useRef<number | null>(null);
@@ -1380,8 +1424,16 @@ export function WaveformWindow({
               fontWeight: 'bold',
               zIndex: 2,
               pointerEvents: 'none',
+              whiteSpace: 'nowrap',
             }}>
-              Mouse: {Math.round(lod0ToDisplay(viewport.timeStart + (displayMouseX / (canvasWidth || 1)) * (viewport.timeEnd - viewport.timeStart), timeConfig))}
+              {(() => {
+                const mouseTime = viewport.timeStart + (displayMouseX / (canvasWidth || 1)) * (viewport.timeEnd - viewport.timeStart);
+                const mouseTimeDisplay = Math.round(lod0ToDisplay(mouseTime, timeConfig));
+                const cursorTimeDisplay = Math.round(lod0ToDisplay(cursor.position, timeConfig));
+                const delta = mouseTimeDisplay - cursorTimeDisplay;
+                const deltaStr = delta >= 0 ? `+${delta}` : `${delta}`;
+                return `Mouse: ${mouseTimeDisplay} (${deltaStr})`;
+              })()}
             </span>
           )}
         </div>
