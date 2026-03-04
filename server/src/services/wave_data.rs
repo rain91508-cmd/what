@@ -38,9 +38,207 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
 
+/// 四态逻辑值（Verilog 四态逻辑）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogicState {
+    /// 逻辑 0
+    Zero = 0,
+    /// 逻辑 1
+    One = 1,
+    /// 未知 X
+    X = 2,
+    /// 高阻 Z
+    Z = 3,
+}
+
+impl LogicState {
+    /// 从字符解析四态值
+    pub fn from_char(c: char) -> Option<Self> {
+        match c {
+            '0' => Some(Self::Zero),
+            '1' => Some(Self::One),
+            'x' | 'X' => Some(Self::X),
+            'z' | 'Z' => Some(Self::Z),
+            _ => None,
+        }
+    }
+
+    /// 转换为字符
+    pub fn to_char(self) -> char {
+        match self {
+            Self::Zero => '0',
+            Self::One => '1',
+            Self::X => 'X',
+            Self::Z => 'Z',
+        }
+    }
+}
+
+/// 四态逻辑值（支持任意位宽）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FourStateValue {
+    /// 每 2bit 表示一个逻辑状态
+    /// 00=0, 01=1, 10=X, 11=Z
+    pub data: Vec<u8>,
+    /// 位宽
+    pub width: u16,
+}
+
+impl FourStateValue {
+    /// 创建新的四态值
+    pub fn new(width: u16) -> Self {
+        let bytes = ((width as usize * 2 + 7) / 8).max(1);
+        Self {
+            data: vec![0u8; bytes],
+            width,
+        }
+    }
+
+    /// 从二进制字符串创建（支持 X/Z）
+    /// 
+    /// # Examples
+    /// ```
+    /// let v = FourStateValue::from_string("10X1");
+    /// // bit 3: 1, bit 2: 0, bit 1: X, bit 0: 1
+    /// ```
+    pub fn from_string(s: &str) -> Self {
+        let s = s.trim().trim_start_matches('b');
+        let width = s.len() as u16;
+        let mut value = Self::new(width);
+
+        for (i, c) in s.chars().enumerate() {
+            if let Some(state) = LogicState::from_char(c) {
+                let bit_pos = (width as usize).saturating_sub(1 + i);
+                value.set_bit(bit_pos, state);
+            }
+        }
+
+        value
+    }
+
+    /// 设置指定位的值
+    pub fn set_bit(&mut self, bit: usize, state: LogicState) {
+        if bit >= self.width as usize {
+            return;
+        }
+
+        let byte_idx = bit / 4;
+        let bit_idx = (bit % 4) * 2;
+
+        if byte_idx < self.data.len() {
+            // 清除原来的 2bit
+            self.data[byte_idx] &= !(0b11 << bit_idx);
+            // 设置新的 2bit
+            self.data[byte_idx] |= (state as u8) << bit_idx;
+        }
+    }
+
+    /// 获取指定位的值
+    pub fn get_bit(&self, bit: usize) -> LogicState {
+        if bit >= self.width as usize {
+            return LogicState::X;
+        }
+
+        let byte_idx = bit / 4;
+        let bit_idx = (bit % 4) * 2;
+
+        if byte_idx < self.data.len() {
+            let state_val = (self.data[byte_idx] >> bit_idx) & 0b11;
+            match state_val {
+                0 => LogicState::Zero,
+                1 => LogicState::One,
+                2 => LogicState::X,
+                3 => LogicState::Z,
+                _ => LogicState::X,
+            }
+        } else {
+            LogicState::X
+        }
+    }
+
+    /// 转换为字符串表示
+    pub fn to_string(&self) -> String {
+        let mut result = String::with_capacity(self.width as usize);
+        for i in (0..self.width as usize).rev() {
+            result.push(self.get_bit(i).to_char());
+        }
+        result
+    }
+
+    /// 检查是否包含 X 或 Z
+    pub fn has_xz(&self) -> bool {
+        for i in 0..self.width as usize {
+            match self.get_bit(i) {
+                LogicState::X | LogicState::Z => return true,
+                _ => continue,
+            }
+        }
+        false
+    }
+}
+
+/// 四态 min 计算
+/// 
+/// 规则：
+/// - 0 vs 1: min=0, max=1
+/// - 任何值 vs X: 结果=X
+/// - 任何值 vs Z: 结果=Z
+pub fn four_state_min(a: &FourStateValue, b: &FourStateValue) -> FourStateValue {
+    let width = a.width.max(b.width);
+    let mut result = FourStateValue::new(width);
+
+    for i in 0..width as usize {
+        let bit_a = if i < a.width as usize { a.get_bit(i) } else { LogicState::Zero };
+        let bit_b = if i < b.width as usize { b.get_bit(i) } else { LogicState::Zero };
+
+        let min_bit = match (bit_a, bit_b) {
+            // 0 和 1 比较
+            (LogicState::Zero, LogicState::One) => LogicState::Zero,
+            (LogicState::One, LogicState::Zero) => LogicState::Zero,
+            // 任何值与 X 比较
+            (LogicState::X, _) | (_, LogicState::X) => LogicState::X,
+            // 任何值与 Z 比较
+            (LogicState::Z, _) | (_, LogicState::Z) => LogicState::Z,
+            // 相等
+            _ => bit_a,
+        };
+
+        result.set_bit(i, min_bit);
+    }
+
+    result
+}
+
+/// 四态 max 计算
+pub fn four_state_max(a: &FourStateValue, b: &FourStateValue) -> FourStateValue {
+    let width = a.width.max(b.width);
+    let mut result = FourStateValue::new(width);
+
+    for i in 0..width as usize {
+        let bit_a = if i < a.width as usize { a.get_bit(i) } else { LogicState::Zero };
+        let bit_b = if i < b.width as usize { b.get_bit(i) } else { LogicState::Zero };
+
+        let max_bit = match (bit_a, bit_b) {
+            // 0 和 1 比较
+            (LogicState::Zero, LogicState::One) => LogicState::One,
+            (LogicState::One, LogicState::Zero) => LogicState::One,
+            // 任何值与 X 比较
+            (LogicState::X, _) | (_, LogicState::X) => LogicState::X,
+            // 任何值与 Z 比较
+            (LogicState::Z, _) | (_, LogicState::Z) => LogicState::Z,
+            // 相等
+            _ => bit_a,
+        };
+
+        result.set_bit(i, max_bit);
+    }
+
+    result
+}
+
 /// 比较两个字节数组的大小（按字典序）
 ///
-/// 用于 LoD min/max 计算
+/// 用于 LoD min/max 计算（仅用于纯二进制值，不含 X/Z）
 pub fn compare_bytes(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
     let len = a.len().min(b.len());
     for i in 0..len {
@@ -66,6 +264,141 @@ pub fn max_bytes(a: &[u8], b: &[u8]) -> Vec<u8> {
         std::cmp::Ordering::Less => b.to_vec(),
         std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => a.to_vec(),
     }
+}
+
+/// 信号值类型（仿 FST VarType）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SignalValueType {
+    /// 数值类型（wire/reg/logic/integer）
+    /// 存储格式：ASCII 字符串，如 "0", "1", "b1010", "bX1Z0"
+    #[default]
+    Numeric = 0,
+    
+    /// 字符串类型（string）
+    /// 存储格式：null-terminated ASCII
+    String = 1,
+    
+    /// 实数类型（real）
+    /// 存储格式：IEEE 754 f64
+    Real = 2,
+    
+    /// 二进制压缩类型（优化传输，纯 0/1 无 X/Z）
+    /// 存储格式：紧凑二进制
+    BinaryCompressed = 3,
+}
+
+impl SignalValueType {
+    /// 从 u8 解析
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::String,
+            2 => Self::Real,
+            3 => Self::BinaryCompressed,
+            _ => Self::Numeric,
+        }
+    }
+}
+
+/// 信号值（仿 FST 格式）
+#[derive(Debug, Clone, PartialEq)]
+pub enum SignalValue {
+    /// 数值类型（四态字符串）
+    /// 
+    /// # 格式
+    /// - 1bit: "0", "1", "X", "Z"
+    /// - n-bit: "b1010", "bX1Z0", "bZZZZ"
+    Numeric(String),
+    
+    /// 字符串类型（null-terminated）
+    String(String),
+    
+    /// 实数类型
+    Real(f64),
+    
+    /// 二进制压缩（用于高效传输纯 0/1 信号）
+    Binary {
+        width: u16,
+        data: Vec<u8>,
+    },
+}
+
+impl SignalValue {
+    /// 从 FST 原始值解析
+    pub fn from_fst(value: &[u8], value_type: SignalValueType) -> Self {
+        match value_type {
+            SignalValueType::String => {
+                // null-terminated 字符串
+                let s = parse_null_terminated_string(value);
+                Self::String(s)
+            }
+            SignalValueType::Real => {
+                // IEEE 754 f64
+                if value.len() >= 8 {
+                    let f = f64::from_le_bytes(value[..8].try_into().unwrap());
+                    Self::Real(f)
+                } else {
+                    Self::Real(0.0)
+                }
+            }
+            SignalValueType::BinaryCompressed => {
+                // 二进制压缩类型需要额外元数据
+                Self::Numeric(String::from_utf8_lossy(value).to_string())
+            }
+            _ => {
+                // 数值类型（包括 wire/reg/integer）
+                let s = String::from_utf8_lossy(value).trim().to_string();
+                Self::Numeric(s)
+            }
+        }
+    }
+    
+    /// 转换为四态值（用于 LoD 计算）
+    pub fn to_four_state(&self) -> Option<FourStateValue> {
+        match self {
+            Self::Numeric(s) => Some(FourStateValue::from_string(s)),
+            _ => None,
+        }
+    }
+    
+    /// 检查是否为纯 0/1（无 X/Z）
+    pub fn is_pure_binary(&self) -> bool {
+        match self {
+            Self::Numeric(s) => !s.chars().any(|c| c == 'X' || c == 'x' || c == 'Z' || c == 'z'),
+            Self::Binary { .. } => true,
+            _ => false,
+        }
+    }
+    
+    /// 获取字符串表示
+    pub fn to_string(&self) -> String {
+        match self {
+            Self::Numeric(s) => s.clone(),
+            Self::String(s) => s.clone(),
+            Self::Real(f) => f.to_string(),
+            Self::Binary { width, data } => {
+                // 将二进制数据转换为字符串
+                let mut result = String::with_capacity(*width as usize + 1);
+                result.push('b');
+                for i in (0..*width as usize).rev() {
+                    let byte_idx = i / 8;
+                    let bit_idx = i % 8;
+                    if byte_idx < data.len() {
+                        let bit = (data[byte_idx] >> bit_idx) & 1;
+                        result.push(if bit == 1 { '1' } else { '0' });
+                    } else {
+                        result.push('0');
+                    }
+                }
+                result
+            }
+        }
+    }
+}
+
+/// 解析 null-terminated 字符串
+fn parse_null_terminated_string(value: &[u8]) -> String {
+    let nul_pos = value.iter().position(|&b| b == 0).unwrap_or(value.len());
+    String::from_utf8_lossy(&value[..nul_pos]).to_string()
 }
 
 /// 压缩算法类型
@@ -142,73 +475,98 @@ impl CompressionAlgorithm {
     }
 }
 
-/// 波形数据转换点（支持任意位宽）
+/// 波形数据转换点（支持任意位宽和四态逻辑）
 #[derive(Debug, Clone, PartialEq)]
 pub struct Transition {
     /// 时间戳
     pub time: u64,
-    /// 值（字节数组，支持任意位宽）
-    /// 
-    /// 存储方式：
-    /// - 数值信号：紧凑的二进制字节，MSB在前
-    ///   例如：32位值 0xDEADBEEF → [0xDE, 0xAD, 0xBE, 0xEF]
-    /// - 字符串信号：null-terminated ASCII
-    pub value: Vec<u8>,
+    /// 值（仿 FST 格式）
+    pub value: SignalValue,
 }
 
 impl Transition {
-    /// 从二进制字符串创建转换点（支持任意位宽）
+    /// 从 FST 原始数据创建转换点
     /// 
     /// # Arguments
     /// * `time` - 时间戳
-    /// * `bin_str` - 二进制字符串，如 "1010" 或 "b1010"
-    /// 
-    /// # Examples
-    /// ```
-    /// let t = Transition::from_binary_string(100, "b1010");
-    /// assert_eq!(t.value, vec![0x0A]); // 4位值
-    /// 
-    /// let t = Transition::from_binary_string(200, "1111000011110000");
-    /// assert_eq!(t.value, vec![0xF0, 0xF0]); // 16位值
-    /// ```
-    pub fn from_binary_string(time: u64, bin_str: &str) -> Self {
-        let bin_str = bin_str.trim().trim_start_matches('b');
-        let bits = bin_str.len();
-        let bytes = (bits + 7) / 8;
-        let mut value = vec![0u8; bytes];
-        
-        // 解析二进制字符串到字节数组（MSB在前）
-        for (i, c) in bin_str.chars().enumerate() {
-            let byte_idx = i / 8;
-            let bit_idx = 7 - (i % 8);  // MSB first
-            if c == '1' {
-                value[byte_idx] |= 1 << bit_idx;
-            }
-        }
-        
+    /// * `fst_value` - FST 原始值字节
+    /// * `value_type` - 值类型
+    pub fn from_fst(time: u64, fst_value: &[u8], value_type: SignalValueType) -> Self {
+        let value = SignalValue::from_fst(fst_value, value_type);
         Self { time, value }
     }
 
-    /// 从 u64 创建转换点（兼容原有代码）
+    /// 从数值字符串创建（支持四态 X/Z）
+    /// 
+    /// # Examples
+    /// ```
+    /// let t = Transition::from_numeric(100, "b1010");
+    /// let t = Transition::from_numeric(200, "bX1Z0");
+    /// ```
+    pub fn from_numeric(time: u64, value_str: &str) -> Self {
+        Self {
+            time,
+            value: SignalValue::Numeric(value_str.to_string()),
+        }
+    }
+
+    /// 从字符串创建
+    pub fn from_string(time: u64, s: &str) -> Self {
+        Self {
+            time,
+            value: SignalValue::String(s.to_string()),
+        }
+    }
+
+    /// 从实数创建
+    pub fn from_real(time: u64, f: f64) -> Self {
+        Self {
+            time,
+            value: SignalValue::Real(f),
+        }
+    }
+
+    /// 从 u64 创建转换点（兼容原有代码，纯二进制）
     pub fn from_u64(time: u64, value: u64, width: u16) -> Self {
         let bytes = ((width + 7) / 8).max(1) as usize;
-        let mut value_vec = vec![0u8; bytes];
+        let mut data = vec![0u8; bytes];
         
         // 小端序存储
         for i in 0..bytes {
-            value_vec[i] = ((value >> (i * 8)) & 0xFF) as u8;
+            data[i] = ((value >> (i * 8)) & 0xFF) as u8;
         }
         
-        Self { time, value: value_vec }
+        Self {
+            time,
+            value: SignalValue::Binary { width, data },
+        }
     }
 
-    /// 将值转换为 u64（仅当位宽 ≤ 64 时有效）
-    pub fn to_u64(&self) -> u64 {
-        let mut result = 0u64;
-        for (i, &byte) in self.value.iter().enumerate().take(8) {
-            result |= (byte as u64) << (i * 8);
+    /// 将值转换为 u64（仅当位宽 ≤ 64 且纯二进制时有效）
+    pub fn to_u64(&self) -> Option<u64> {
+        match &self.value {
+            SignalValue::Numeric(s) => {
+                // 尝试解析为 u64
+                if s.starts_with('b') {
+                    u64::from_str_radix(&s[1..], 2).ok()
+                } else {
+                    s.parse::<u64>().ok()
+                }
+            }
+            SignalValue::Binary { data, .. } => {
+                let mut result = 0u64;
+                for (i, &byte) in data.iter().enumerate().take(8) {
+                    result |= (byte as u64) << (i * 8);
+                }
+                Some(result)
+            }
+            _ => None,
         }
-        result
+    }
+
+    /// 获取值的字符串表示
+    pub fn value_to_string(&self) -> String {
+        self.value.to_string()
     }
 }
 
@@ -219,16 +577,19 @@ pub struct SignalWaveData {
     pub handle: u32,
     /// 信号位宽
     pub width: u16,
+    /// 值类型
+    pub value_type: SignalValueType,
     /// 转换点列表（已按时间排序）
     pub transitions: Vec<Transition>,
 }
 
 impl SignalWaveData {
     /// 创建新的信号波形数据
-    pub fn new(handle: u32, width: u16) -> Self {
+    pub fn new(handle: u32, width: u16, value_type: SignalValueType) -> Self {
         Self {
             handle,
             width,
+            value_type,
             transitions: Vec::new(),
         }
     }
@@ -251,6 +612,17 @@ impl SignalWaveData {
             .unwrap_or_else(|i| i.saturating_sub(1));
 
         self.transitions.get(idx)
+    }
+
+    /// 检查是否包含 X/Z
+    pub fn has_xz(&self) -> bool {
+        self.transitions.iter().any(|t| {
+            if let SignalValue::Numeric(s) = &t.value {
+                s.chars().any(|c| c == 'X' || c == 'x' || c == 'Z' || c == 'z')
+            } else {
+                false
+            }
+        })
     }
 }
 
@@ -318,12 +690,12 @@ impl LodPyramidGenerator {
         Self { config }
     }
 
-    /// 使用 min/max bucket 算法生成单个 LoD 层级
+    /// 生成单个 LoD 层级
     ///
-    /// 算法说明：
-    /// 1. 将时间轴分成大小为 2^level 的 bucket
-    /// 2. 每个 bucket 记录该时间段内的 min 和 max 值
-    /// 3. 保留边沿信息，确保波形特征不丢失
+    /// 根据值类型选择不同的降采样策略：
+    /// - Numeric：使用四态 min/max
+    /// - String/Real：采样第一个值
+    /// - BinaryCompressed：数值 min/max
     pub fn generate_level(
         &self,
         source: &SignalWaveData,
@@ -333,11 +705,31 @@ impl LodPyramidGenerator {
             return source.clone();
         }
 
-        let bucket_size = level.bucket_size();
-        let mut result = SignalWaveData::new(source.handle, source.width);
+        match source.value_type {
+            SignalValueType::Numeric => self.generate_numeric_level(source, level),
+            SignalValueType::String | SignalValueType::Real => {
+                self.generate_sample_level(source, level)
+            }
+            SignalValueType::BinaryCompressed => self.generate_binary_level(source, level),
+        }
+    }
 
-        let mut bucket_min = source.transitions[0].value.clone();
-        let mut bucket_max = source.transitions[0].value.clone();
+    /// 数值类型的四态 min/max 降采样
+    fn generate_numeric_level(
+        &self,
+        source: &SignalWaveData,
+        level: LodLevel,
+    ) -> SignalWaveData {
+        let bucket_size = level.bucket_size();
+        let mut result = SignalWaveData::new(source.handle, source.width, source.value_type);
+
+        // 获取第一个转换点的四态值
+        let first_fs = source.transitions[0]
+            .value
+            .to_four_state()
+            .unwrap_or_else(|| FourStateValue::new(source.width));
+        let mut bucket_min = first_fs.clone();
+        let mut bucket_max = first_fs.clone();
         let mut bucket_start_time = source.transitions[0].time;
         let mut last_value = source.transitions[0].value.clone();
         let mut bucket_idx = 0usize;
@@ -345,24 +737,33 @@ impl LodPyramidGenerator {
         for (i, trans) in source.transitions.iter().enumerate() {
             let current_bucket = i / bucket_size;
 
+            // 获取当前转换点的四态值
+            let trans_fs = trans
+                .value
+                .to_four_state()
+                .unwrap_or_else(|| FourStateValue::new(source.width));
+
             if current_bucket > bucket_idx {
                 // 输出上一个 bucket 的 min/max
-                if bucket_min != last_value {
-                    result.add_transition(Transition { time: bucket_start_time, value: bucket_min.clone() });
+                let min_str = bucket_min.to_string();
+                let max_str = bucket_max.to_string();
+
+                if SignalValue::Numeric(min_str.clone()) != last_value {
+                    result.add_transition(Transition::from_numeric(bucket_start_time, &min_str));
                 }
-                if bucket_max != bucket_min && bucket_max != last_value {
-                    result.add_transition(Transition { time: bucket_start_time, value: bucket_max.clone() });
+                if max_str != min_str && SignalValue::Numeric(max_str.clone()) != last_value {
+                    result.add_transition(Transition::from_numeric(bucket_start_time, &max_str));
                 }
 
                 // 开始新 bucket
                 bucket_idx = current_bucket;
                 bucket_start_time = trans.time;
-                bucket_min = trans.value.clone();
-                bucket_max = trans.value.clone();
+                bucket_min = trans_fs.clone();
+                bucket_max = trans_fs.clone();
             } else {
-                // 更新当前 bucket 的 min/max（字节数组比较）
-                bucket_min = min_bytes(&bucket_min, &trans.value);
-                bucket_max = max_bytes(&bucket_max, &trans.value);
+                // 更新当前 bucket 的 min/max（四态比较）
+                bucket_min = four_state_min(&bucket_min, &trans_fs);
+                bucket_max = four_state_max(&bucket_max, &trans_fs);
             }
 
             last_value = trans.value.clone();
@@ -370,11 +771,124 @@ impl LodPyramidGenerator {
 
         // 输出最后一个 bucket
         if bucket_idx < (source.transitions.len() + bucket_size - 1) / bucket_size {
+            let min_str = bucket_min.to_string();
+            let max_str = bucket_max.to_string();
+
+            if SignalValue::Numeric(min_str.clone()) != last_value {
+                result.add_transition(Transition::from_numeric(bucket_start_time, &min_str));
+            }
+            if max_str != min_str {
+                result.add_transition(Transition::from_numeric(bucket_start_time, &max_str));
+            }
+        }
+
+        result
+    }
+
+    /// 字符串/实数类型的采样降采样
+    fn generate_sample_level(
+        &self,
+        source: &SignalWaveData,
+        level: LodLevel,
+    ) -> SignalWaveData {
+        let bucket_size = level.bucket_size();
+        let mut result = SignalWaveData::new(source.handle, source.width, source.value_type);
+
+        for (i, trans) in source.transitions.iter().enumerate().step_by(bucket_size) {
+            result.add_transition(trans.clone());
+        }
+
+        result
+    }
+
+    /// 二进制压缩类型的数值 min/max
+    fn generate_binary_level(
+        &self,
+        source: &SignalWaveData,
+        level: LodLevel,
+    ) -> SignalWaveData {
+        // 二进制压缩类型使用字节数组比较
+        let bucket_size = level.bucket_size();
+        let mut result = SignalWaveData::new(source.handle, source.width, source.value_type);
+
+        if source.transitions.is_empty() {
+            return result;
+        }
+
+        // 获取第一个值
+        let first_value = match &source.transitions[0].value {
+            SignalValue::Binary { data, .. } => data.clone(),
+            _ => vec![0],
+        };
+
+        let mut bucket_min = first_value.clone();
+        let mut bucket_max = first_value.clone();
+        let mut bucket_start_time = source.transitions[0].time;
+        let mut last_value = first_value.clone();
+        let mut bucket_idx = 0usize;
+
+        for (i, trans) in source.transitions.iter().enumerate() {
+            let current_bucket = i / bucket_size;
+
+            let trans_value = match &trans.value {
+                SignalValue::Binary { data, .. } => data.clone(),
+                _ => vec![0],
+            };
+
+            if current_bucket > bucket_idx {
+                // 输出上一个 bucket 的 min/max
+                if bucket_min != last_value {
+                    result.add_transition(Transition {
+                        time: bucket_start_time,
+                        value: SignalValue::Binary {
+                            width: source.width,
+                            data: bucket_min.clone(),
+                        },
+                    });
+                }
+                if bucket_max != bucket_min && bucket_max != last_value {
+                    result.add_transition(Transition {
+                        time: bucket_start_time,
+                        value: SignalValue::Binary {
+                            width: source.width,
+                            data: bucket_max.clone(),
+                        },
+                    });
+                }
+
+                // 开始新 bucket
+                bucket_idx = current_bucket;
+                bucket_start_time = trans.time;
+                bucket_min = trans_value.clone();
+                bucket_max = trans_value.clone();
+            } else {
+                // 更新当前 bucket 的 min/max（字节数组比较）
+                bucket_min = min_bytes(&bucket_min, &trans_value);
+                bucket_max = max_bytes(&bucket_max, &trans_value);
+            }
+
+            last_value = trans_value.clone();
+        }
+
+        // 输出最后一个 bucket
+        if bucket_idx < (source.transitions.len() + bucket_size - 1) / bucket_size {
             if bucket_min != last_value {
-                result.add_transition(Transition { time: bucket_start_time, value: bucket_min.clone() });
+                result.add_transition(Transition {
+                    time: bucket_start_time,
+                    value: SignalValue::Binary {
+                        width: source.width,
+                        data: bucket_min.clone(),
+                    },
+                });
             }
             if bucket_max != bucket_min {
-                result.add_transition(Transition { time: bucket_start_time, value: bucket_max.clone() });
+                result.add_transition(Transition {
+                    time: bucket_start_time,
+                    value: SignalValue::Binary {
+                        width: source.width,
+                        data: bucket_max.clone(),
+                    },
+                });
             }
         }
 
@@ -575,13 +1089,39 @@ impl ChunkSerializer {
                 .flat_map(|t| t.time.to_le_bytes())
                 .collect();
 
-            // 值数组（变长字节数组，支持任意位宽）
-            // 格式：[值长度(u16), 值字节...] × 转换点数量
+            // 值数组（仿 FST 格式，支持多种类型）
+            // 格式：[类型(u8), 长度(u16), 值字节...] × 转换点数量
             let mut value_array = Vec::new();
             for t in &filtered {
-                let value_len = t.value.len() as u16;
-                value_array.extend_from_slice(&value_len.to_le_bytes());
-                value_array.extend_from_slice(&t.value);
+                // 写入类型
+                let type_byte = match &t.value {
+                    SignalValue::Numeric(_) => SignalValueType::Numeric as u8,
+                    SignalValue::String(_) => SignalValueType::String as u8,
+                    SignalValue::Real(_) => SignalValueType::Real as u8,
+                    SignalValue::Binary { .. } => SignalValueType::BinaryCompressed as u8,
+                };
+                value_array.push(type_byte);
+                
+                // 写入值
+                match &t.value {
+                    SignalValue::Numeric(s) | SignalValue::String(s) => {
+                        let bytes = s.as_bytes();
+                        let value_len = bytes.len() as u16;
+                        value_array.extend_from_slice(&value_len.to_le_bytes());
+                        value_array.extend_from_slice(bytes);
+                    }
+                    SignalValue::Real(f) => {
+                        let bytes = f.to_le_bytes();
+                        let value_len = bytes.len() as u16;
+                        value_array.extend_from_slice(&value_len.to_le_bytes());
+                        value_array.extend_from_slice(&bytes);
+                    }
+                    SignalValue::Binary { data, .. } => {
+                        let value_len = data.len() as u16;
+                        value_array.extend_from_slice(&value_len.to_le_bytes());
+                        value_array.extend_from_slice(data);
+                    }
+                }
             }
 
             // 压缩数据
@@ -660,25 +1200,27 @@ impl ChunkSerializer {
             for j in 0..block_header.transition_count as usize {
                 let time_offset = j * 8;
                 
-                // 确保不越界
-                if time_offset + 8 > time_bytes.len() || value_offset + 2 > value_bytes.len() {
+                // 确保不越界（至少需要类型+长度）
+                if time_offset + 8 > time_bytes.len() || value_offset + 3 > value_bytes.len() {
                     break;
                 }
                 
                 let time = u64::from_le_bytes(time_bytes[time_offset..time_offset + 8].try_into().unwrap());
                 
-                // 值数组格式：[长度(u16), 值字节...]
-                let value_len = u16::from_le_bytes(value_bytes[value_offset..value_offset + 2].try_into().unwrap()) as usize;
+                // 值数组格式：[类型(u8), 长度(u16), 值字节...]
+                let value_type = SignalValueType::from_u8(value_bytes[value_offset]);
+                let value_len = u16::from_le_bytes(value_bytes[value_offset + 1..value_offset + 3].try_into().unwrap()) as usize;
                 
-                if value_offset + 2 + value_len > value_bytes.len() {
+                if value_offset + 3 + value_len > value_bytes.len() {
                     break;
                 }
                 
-                let value = value_bytes[value_offset + 2..value_offset + 2 + value_len].to_vec();
+                let value_data = &value_bytes[value_offset + 3..value_offset + 3 + value_len];
+                let value = SignalValue::from_fst(value_data, value_type);
                 transitions.push(Transition { time, value });
                 
                 // 移动到下一个值
-                value_offset += 2 + value_len;
+                value_offset += 3 + value_len;
             }
 
             signals.push((block_header, transitions));

@@ -1,5 +1,5 @@
 use crate::error::{Result, ServerError};
-use crate::services::wave_data::{LodConfig, LodLevel, SignalWaveData, Transition, ChunkSerializer, CompressionAlgorithm};
+use crate::services::wave_data::{LodConfig, LodLevel, SignalWaveData, Transition, ChunkSerializer, CompressionAlgorithm, SignalValueType};
 use crate::services::compute_file_hash;
 use crate::state::ServerState;
 use std::path::PathBuf;
@@ -740,8 +740,8 @@ impl WaveService {
 
             info!("找到信号: {} (handle={:?}, width={})", signal_name, handle, signal_width);
 
-            // 读取信号波形数据
-            let mut signal_data = SignalWaveData::new(handle.into(), signal_width);
+            // 读取信号波形数据（使用 Numeric 类型）
+            let mut signal_data = SignalWaveData::new(handle.into(), signal_width, SignalValueType::Numeric);
 
             // 设置 mask 只读取目标信号
             reader.set_mask(handle);
@@ -753,26 +753,8 @@ impl WaveService {
             let mut transition_count = 0u64;
             reader.for_each_block(|time, h, value, _var_len| {
                 if h == handle {
-                    // 解析值（支持任意位宽）
-                    let val_str = String::from_utf8_lossy(value);
-                    let transition = if signal_width <= 64 {
-                        // ≤64位：尝试解析为数字
-                        let val = match val_str.trim() {
-                            "0" => 0u64,
-                            "1" => 1u64,
-                            s => {
-                                if s.starts_with('b') {
-                                    u64::from_str_radix(&s[1..], 2).unwrap_or(0)
-                                } else {
-                                    s.parse::<u64>().unwrap_or(0)
-                                }
-                            }
-                        };
-                        Transition::from_u64(time, val, signal_width)
-                    } else {
-                        // >64位：使用二进制字符串解析
-                        Transition::from_binary_string(time, &val_str)
-                    };
+                    // 解析值（仿 FST 格式，支持四态 X/Z）
+                    let transition = Transition::from_fst(time, value, SignalValueType::Numeric);
                     signal_data.add_transition(transition);
                     transition_count += 1;
                 }
@@ -818,7 +800,7 @@ impl WaveService {
         // 返回一个空的 chunk 作为占位符
         info!("wavefst 后端暂不支持波形数据读取，返回空数据");
 
-        let signal_data = SignalWaveData::new(0, 1);
+        let signal_data = SignalWaveData::new(0, 1, SignalValueType::Numeric);
         let chunk = ChunkSerializer::serialize(
             0,
             lod.0 as u16,
