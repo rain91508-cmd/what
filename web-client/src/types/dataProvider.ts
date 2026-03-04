@@ -133,9 +133,22 @@ export interface DataProvider {
    * @returns Map<信号名, 显示值字符串>
    */
   getValuesAtTime(time: number): Map<string, string>;
-  
+
+  /**
+   * 查找信号在指定时间前后的 transition 时间
+   * @param signalName 信号名
+   * @param time 当前时间
+   * @returns { prev: 前一个transition时间, next: 后一个transition时间 }
+   */
+  findTransitionsAround(signalName: string, time: number): { prev: number | null; next: number | null };
+
   /**
    * 获取信号位宽
    */
   getSignalWidth(signalName: string): number;
+
+  /**
+   * 获取当前可见信号名称列表
+   */
+  getSignalNames(): string[];
 }
