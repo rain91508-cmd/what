@@ -1679,7 +1679,7 @@ function App() {
         console.log('[Session] Step 3: Loading KDB:', session.kdb.name)
         setSessionLoadingMessage(`Loading KDB: ${session.kdb.name}...`)
         try {
-          await loadKdbFromServer(session.kdb.name)
+          await handleKdbSelect(session.kdb.name, false)
           console.log('[Session] Step 3: KDB loaded successfully')
         } catch (error) {
           console.error('[Session] Step 3: Failed to load KDB:', error)
@@ -1700,7 +1700,7 @@ function App() {
         } else if (session.waveform.name) {
           setSessionLoadingMessage(`Loading waveform: ${session.waveform.name}...`)
           try {
-            await loadWaveFromServer(session.waveform.name)
+            await handleWaveSelect(session.waveform.name)
             console.log('[Session] Step 4: Waveform loaded successfully')
           } catch (error) {
             console.error('[Session] Step 4: Failed to load waveform:', error)
