@@ -226,6 +226,35 @@ export class MockDataProvider implements DataProvider {
   }
 
   /**
+   * 获取当前可见信号名称列表
+   */
+  getSignalNames(): string[] {
+    return this.signals.map(s => s.name);
+  }
+
+  /**
+   * 查找信号在指定时间前后的 transition 时间
+   */
+  findTransitionsAround(signalName: string, time: number): { prev: number | null; next: number | null } {
+    const signalData = this.mockData.get(signalName);
+    if (!signalData) return { prev: null, next: null };
+
+    let prev: number | null = null;
+    let next: number | null = null;
+
+    for (const transition of signalData.transitions) {
+      if (transition.time <= time) {
+        prev = transition.time;
+      } else if (next === null) {
+        next = transition.time;
+        break;
+      }
+    }
+
+    return { prev, next };
+  }
+
+  /**
    * 生成 mock 数据
    * @param signalName 信号名
    * @param width 位宽（由 UI 提供或推断）
