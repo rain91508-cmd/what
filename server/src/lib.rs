@@ -44,6 +44,7 @@ pub mod handlers;
 pub mod middleware;
 pub mod services;
 pub mod state;
+pub mod utils;
 
 // 重新导出常用类型
 pub use config::ServerConfig;

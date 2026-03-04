@@ -6,6 +6,32 @@ pub use kdb_handler::*;
 pub use wave_handler::*;
 pub use stats_handler::*;
 
+/// 解码信号名列表（支持 Base64 和 Trie 压缩）
+/// 
+/// 格式：
+/// - b64:base64encodedstring - 普通 Base64 编码
+/// - trie:base64encodedstring - Trie 压缩编码
+/// 
+/// 示例：
+/// - b64:dGJfdG9wLmNsa2EscmVzZXQsZGF0YQ==
+/// - trie:SGVsbG8gV29ybGQh
+pub fn decode_signal_names(encoded: &str) -> Result<Vec<String>, crate::error::ServerError> {
+    crate::utils::decode_signals(encoded)
+        .map_err(|e| crate::error::ServerError::InvalidParameter(e))
+}
+
+/// 编码信号名列表（自动选择 Base64 或 Trie 压缩）
+/// 
+/// - 单个信号：使用 Base64
+/// - 多个信号：使用 Trie 压缩
+/// 
+/// 格式：
+/// - b64:base64encodedstring
+/// - trie:base64encodedstring
+pub fn encode_signal_names(names: &[String]) -> String {
+    crate::utils::encode_signals_with_trie(names)
+}
+
 use axum::{
     middleware::from_fn_with_state,
     routing::get,
@@ -37,12 +63,12 @@ pub fn create_router(state: ServerState) -> Router<ServerState> {
             "/api/wave/:waveform_name/signals/:signal_name/info",
             get(get_signal_info),
         )
-        // 波形数据 API：支持多信号，LoD 在路径中，支持前缀压缩
-        // 格式：/api/wave/{waveform}/lod/{lod}/signals/{signal_pattern}/data
-        // 示例：/api/wave/riscv2/lod/2/signals/clk,reset,data/data
-        // 示例（有前缀）：/api/wave/riscv2/lod/2/signals/p:cpu_/alu,reg,pc/data
+        // 波形数据 API：支持多信号，LoD 在路径中，支持 Trie 压缩
+        // 格式：/api/wave/{waveform}/lod/{lod}/signals/{signal_names}/data
+        // 示例：/api/wave/riscv2/lod/2/signals/b64:xxx/data
+        // 示例（Trie 压缩）：/api/wave/riscv2/lod/2/signals/trie:xxx/data
         .route(
-            "/api/wave/:waveform_name/lod/:lod/signals/:signal_pattern/data",
+            "/api/wave/:waveform_name/lod/:lod/signals/:signal_names/data",
             get(get_wave_data_multi),
         );
 

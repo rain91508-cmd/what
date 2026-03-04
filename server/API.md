@@ -435,33 +435,61 @@ GET /api/wave/{waveform_name}/signals/{signal_name}/info
 #### 3.5 获取波形数据（支持多信号）
 
 ```http
-GET /api/wave/{waveform_name}/lod/{lod}/signals/{signal_pattern}/data
+GET /api/wave/{waveform_name}/lod/{lod}/signals/{signal_names}/data
 ```
 
-**描述**: 获取一个或多个信号的波形数据，LoD 在路径中，支持前缀压缩
+**描述**: 获取一个或多个信号的波形数据，LoD 在路径中
 
 **路径参数**:
 - `waveform_name`: 波形文件名
 - `lod`: LoD (Level of Detail) 层级 0-11
-- `signal_pattern`: 信号模式（支持多信号和前缀压缩）
+- `signal_names`: 信号名称，逗号分隔多个信号
 
-**信号模式格式**:
+**信号名编码（必须 Base64）**:
+- 所有信号名必须使用 Base64 编码，格式: `b64:base64encodedstring`
+- 编码对象: 整个逗号分隔的信号列表
+- 示例: `clk,reset,data` → `b64:Y2xrLHJlc2V0LGRhdGE=`
 
-| 格式 | 示例 | 说明 |
-|------|------|------|
-| 单个信号 | `clk` | 获取单个信号 |
-| 多个信号 | `clk,reset,data` | 逗号分隔多个信号 |
-| 前缀压缩 | `p:cpu_/alu,reg,pc` | `p:` 前缀 + `/` 分隔，展开为 `cpu_alu,cpu_reg,cpu_pc` |
+**示例**:
+- 单个信号: `/api/wave/riscv2/lod/0/signals/b64:Y2xr/data` (clk)
+- 多个信号: `/api/wave/riscv2/lod/0/signals/b64:Y2xrLHJlc2V0LGRhdGE=/data` (clk,reset,data)
+- 复杂信号: `/api/wave/riscv2/lod/0/signals/b64:dGJfdG9wLnVfZHV0LmNsa2EscmVzZXQsZGF0YQ==/data`
 
-**前缀压缩优势**:
-- 减少 URL 长度
-- CDN 缓存友好（每个 LoD 层级独立缓存）
+---
+
+#### 3.6 信号名编码格式
+
+**支持两种编码格式**:
+
+| 格式 | 说明 | 适用场景 |
+|------|------|---------|
+| `b64:` | 普通 Base64 编码 | 单个信号 |
+| `trie:` | Trie 树压缩编码 | 多个信号（自动提取公共前缀） |
+
+**Trie 压缩优势**:
+- 自动提取公共前缀，减少 URL 长度
+- 多个信号有公共前缀时压缩率更高
+- CDN 缓存友好
+
+**示例**:
+```
+原始信号列表:
+tb_top.u_dut.sig1,tb_top.u_dut.sig2,tb_top.u_dut.sig3
+
+Trie 压缩后:
+前缀: tb_top.u_dut.
+后缀: sig1,sig2,sig3
+
+URL: /api/wave/riscv2/lod/0/signals/trie:base64encodedstring/data
+```
 
 **URL 对比**:
 
-| 场景 | 原始 URL | 压缩 URL | 节省 |
-|------|---------|---------|------|
-| 4 个 cpu 信号 | `cpu_alu,cpu_reg,cpu_pc,cpu_mem` (31) | `p:cpu_/alu,reg,pc,mem` (22) | 29% |
+| 场景 | 原始长度 | Base64 编码 | Trie 压缩 | 节省 |
+|------|---------|------------|-----------|------|
+| 1 个信号 | ~20 chars | ~28 chars | ~28 chars | - |
+| 3 个信号（有公共前缀） | ~60 chars | ~80 chars | ~40 chars | ~50% |
+| 10 个信号（有公共前缀） | ~200 chars | ~268 chars | ~80 chars | ~70% |
 
 **查询参数**:
 - `start`: 可选，起始时间（与波形文件的 `time_unit` 单位一致），默认 0
