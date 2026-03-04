@@ -47,9 +47,16 @@ import { WaveSelectionDialog } from './components/WaveSelectionDialog'
 import { FileChangeDialog } from './components/FileChangeDialog'
 import { MockDataDialog } from './components/MockDataDialog'
 import { Splitter } from './components/ResizablePanel'
+import { SessionDialog } from './components/SessionDialog'
+import { SessionLoadingOverlay } from './components/SessionLoadingOverlay'
 
 // Bookmark
 import { bookmarkManager, type Bookmark } from './types/bookmark'
+
+// Session
+import { sessionManager } from './modules/session/sessionManager'
+import type { Session } from './types/session'
+import { SESSION_VERSION } from './types/session'
 
 // Types
 import type { Signal } from './types/kdb'
@@ -86,11 +93,17 @@ function App() {
   // File change dialog state
   const [showFileChangeDialog, setShowFileChangeDialog] = useState(false)
   const [pendingFileChanges, setPendingFileChanges] = useState<{ kdbChanged: boolean; waveChanged: boolean }>({ kdbChanged: false, waveChanged: false })
-  
+
   // Mock data state for waveform when no real wave file is loaded
   const [useMockData, setUseMockData] = useState(false)
   const [showMockDataDialog, setShowMockDataDialog] = useState(false)
   const [pendingMockSignal, setPendingMockSignal] = useState<Signal | null>(null)
+
+  // Session dialog state
+  const [showSessionDialog, setShowSessionDialog] = useState(false)
+  const [sessionDialogMode, setSessionDialogMode] = useState<'save' | 'restore'>('save')
+  const [isSessionLoading, setIsSessionLoading] = useState(false)
+  const [sessionLoadingMessage, setSessionLoadingMessage] = useState('')
   
   // Global selected module index for hierarchy/signal panel (1-based)
   const [selectedModuleIndex, setSelectedModuleIndex] = useState<number | null>(null)
@@ -1540,9 +1553,241 @@ function App() {
   }
 
   const handleRenameTab = (tabId: string, newLabel: string) => {
-    setTabs(prev => prev.map(t => 
+    setTabs(prev => prev.map(t =>
       t.id === tabId ? { ...t, label: newLabel } : t
     ))
+  }
+
+  // ============================================
+  // Session Save/Restore Functions
+  // ============================================
+
+  const handleSaveSession = async (name: string) => {
+    setIsSessionLoading(true)
+    setSessionLoadingMessage('Saving session...')
+
+    try {
+      // Get server info from apiService
+      const serverUrl = apiService.getBaseUrl()
+      const serverMatch = serverUrl.match(/http:\/\/([^:]+):(\d+)/)
+      const server = serverMatch
+        ? { host: serverMatch[1], port: parseInt(serverMatch[2]) }
+        : { host: 'localhost', port: 8080 }
+
+      // Build source tabs data
+      const sourceTabsData = tabs
+        .filter(tab => tab.type === 'source')
+        .map(tab => ({
+          id: tab.id,
+          moduleIndex: tab.moduleIndex ?? null,
+          displayModuleIndex: tab.displayModuleIndex ?? null,
+          signalDeclarationLine: tab.signalDeclarationLine,
+        }))
+
+      // Build waveform tabs data
+      const waveformTabsData = tabs
+        .filter(tab => tab.type === 'waveform')
+        .map(tab => ({
+          id: tab.id,
+          label: tab.label,
+          nextSignalUniqueId: nextWaveformSignalIdRef.current,
+          groups: tab.groups || {},
+          selectedGroup: tab.selectedGroup,
+        }))
+
+      // Get bookmarks
+      const bookmarksData = bookmarkManager.getBookmarks().map(b => ({
+        name: b.name,
+        moduleIndex: b.moduleIndex,
+        fileId: b.fileId,
+        lineNumber: b.lineNumber,
+        lineContent: b.lineContent,
+      }))
+
+      const session: Session = {
+        version: SESSION_VERSION,
+        name,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        server,
+        kdb: {
+          name: currentKdbName || '',
+        },
+        waveform: currentWaveName
+          ? {
+              name: currentWaveName,
+              useMockData,
+            }
+          : undefined,
+        sourceTabs: sourceTabsData,
+        activeSourceTabId: activeTab,
+        waveformTabs: waveformTabsData,
+        activeWaveformTabId: activeTab,
+        bookmarks: bookmarksData,
+      }
+
+      sessionManager.saveSession(session)
+      addMessage(`Session "${name}" saved successfully`)
+    } catch (error) {
+      console.error('[App] Failed to save session:', error)
+      addMessage(`Failed to save session: ${error}`)
+    } finally {
+      setIsSessionLoading(false)
+      setShowSessionDialog(false)
+    }
+  }
+
+  const handleRestoreSession = async (name: string) => {
+    setIsSessionLoading(true)
+    setSessionLoadingMessage('Restoring session...')
+
+    try {
+      const session = sessionManager.getSession(name)
+      if (!session) {
+        addMessage(`Session "${name}" not found`)
+        return
+      }
+
+      // Step 1: Close current state
+      setSessionLoadingMessage('Closing current state...')
+      await handleCloseKdb()
+      await handleCloseWave()
+      setTabs([])
+      setActiveTab('')
+      bookmarkManager.clearAll()
+
+      // Step 2: Connect to server
+      setSessionLoadingMessage('Connecting to server...')
+      const { host, port } = session.server
+      const connected = await apiService.connect(host, port)
+      if (!connected) {
+        // Show connection dialog for manual input
+        setShowConnectionDialog(true)
+        addMessage('Failed to connect to server. Please enter server address.')
+        return
+      }
+      setConnected(true)
+
+      // Step 3: Load KDB
+      if (session.kdb.name) {
+        setSessionLoadingMessage(`Loading KDB: ${session.kdb.name}...`)
+        try {
+          await loadKdbFromServer(session.kdb.name)
+        } catch (error) {
+          // Show KDB selection dialog
+          setShowKdbSelectionDialog(true)
+          addMessage(`Failed to load KDB "${session.kdb.name}". Please select KDB.`)
+          return
+        }
+      }
+
+      // Step 4: Load Waveform
+      if (session.waveform) {
+        if (session.waveform.useMockData) {
+          setUseMockData(true)
+          addMessage('Using mock data for waveform')
+        } else if (session.waveform.name) {
+          setSessionLoadingMessage(`Loading waveform: ${session.waveform.name}...`)
+          try {
+            await loadWaveFromServer(session.waveform.name)
+          } catch (error) {
+            setShowWaveSelectionDialog(true)
+            addMessage(`Failed to load waveform "${session.waveform.name}". Please select waveform.`)
+            return
+          }
+        }
+      }
+
+      // Step 5: Restore source tabs
+      setSessionLoadingMessage('Restoring source tabs...')
+      const restoredTabs: Tab[] = []
+      for (const sourceTab of session.sourceTabs) {
+        if (sourceTab.displayModuleIndex) {
+          const module = kdbManager.getModuleById(sourceTab.displayModuleIndex)
+          if (module) {
+            const newTab: Tab = {
+              id: sourceTab.id,
+              label: 'Source',
+              type: 'source',
+              moduleIndex: sourceTab.moduleIndex,
+              displayModuleIndex: sourceTab.displayModuleIndex,
+              signalDeclarationLine: sourceTab.signalDeclarationLine,
+              moduleStartLine: module.definition?.startLine,
+              moduleEndLine: module.definition?.endLine,
+            }
+            restoredTabs.push(newTab)
+          }
+        }
+      }
+
+      // Step 6: Restore waveform tabs
+      setSessionLoadingMessage('Restoring waveform tabs...')
+      for (const waveTab of session.waveformTabs) {
+        // Restore nextSignalUniqueId
+        nextWaveformSignalIdRef.current = waveTab.nextSignalUniqueId
+
+        // Rebuild signals from globalIds
+        const restoredGroups: Record<string, SignalGroup> = {}
+        for (const [groupId, group] of Object.entries(waveTab.groups)) {
+          const restoredSignals: Array<Signal & { unique_id: number }> = []
+          for (const sig of group.signals) {
+            const signal = kdbManager.buildSignal(sig.globalId)
+            if (signal) {
+              restoredSignals.push({
+                ...signal,
+                unique_id: sig.unique_id,
+              })
+            }
+          }
+          restoredGroups[groupId] = {
+            ...group,
+            signals: restoredSignals,
+          }
+        }
+
+        const newTab: Tab = {
+          id: waveTab.id,
+          label: waveTab.label,
+          type: 'waveform',
+          groups: restoredGroups,
+          selectedGroup: waveTab.selectedGroup,
+          columnWidths: DEFAULT_COLUMN_WIDTHS,
+          timeConfig: DEFAULT_TIME_CONFIG,
+          waveformTimeUnit: 2, // Default to ns
+        }
+        restoredTabs.push(newTab)
+      }
+
+      setTabs(restoredTabs)
+
+      // Step 7: Restore active tab
+      const activeTabId = session.activeSourceTabId || session.activeWaveformTabId
+      if (activeTabId && restoredTabs.find(t => t.id === activeTabId)) {
+        setActiveTab(activeTabId)
+      } else if (restoredTabs.length > 0) {
+        setActiveTab(restoredTabs[0].id)
+      }
+
+      // Step 8: Restore bookmarks
+      setSessionLoadingMessage('Restoring bookmarks...')
+      for (const bookmark of session.bookmarks) {
+        bookmarkManager.addBookmark({
+          moduleIndex: bookmark.moduleIndex,
+          fileId: bookmark.fileId,
+          lineNumber: bookmark.lineNumber,
+          lineContent: bookmark.lineContent,
+          name: bookmark.name,
+        })
+      }
+
+      addMessage(`Session "${name}" restored successfully`)
+    } catch (error) {
+      console.error('[App] Failed to restore session:', error)
+      addMessage(`Failed to restore session: ${error}`)
+    } finally {
+      setIsSessionLoading(false)
+      setShowSessionDialog(false)
+    }
   }
 
   // Use refs to store start values during resize
@@ -1586,6 +1831,14 @@ function App() {
         hasWaveLoaded={!!currentWaveName}
         infoText={menuBarInfoText}
         onOpenDebugTool={() => window.open('/test-drivers.html', '_blank', 'width=1200,height=800')}
+        onSaveSession={() => {
+          setSessionDialogMode('save')
+          setShowSessionDialog(true)
+        }}
+        onRestoreSession={() => {
+          setSessionDialogMode('restore')
+          setShowSessionDialog(true)
+        }}
       />
 
       {/* Tool Bar */}
@@ -1764,6 +2017,21 @@ function App() {
           onCancel={handleMockDataCancel}
         />
       )}
+
+      {/* Session Dialog */}
+      <SessionDialog
+        mode={sessionDialogMode}
+        isOpen={showSessionDialog}
+        onClose={() => setShowSessionDialog(false)}
+        onSave={handleSaveSession}
+        onRestore={handleRestoreSession}
+      />
+
+      {/* Session Loading Overlay */}
+      <SessionLoadingOverlay
+        isVisible={isSessionLoading}
+        message={sessionLoadingMessage}
+      />
     </div>
   )
 }

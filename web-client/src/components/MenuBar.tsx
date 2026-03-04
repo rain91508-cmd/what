@@ -12,6 +12,8 @@ interface MenuBarProps {
   hasWaveLoaded: boolean;
   infoText?: string;  // Info text to display (full hierarchy name)
   onOpenDebugTool?: () => void;  // Open KDB debug tool
+  onSaveSession?: () => void;    // Save session
+  onRestoreSession?: () => void; // Restore session
 }
 
 interface MenuItem {
@@ -26,7 +28,7 @@ interface Menu {
   items: MenuItem[];
 }
 
-export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onOpenWaveList, onCloseKdb, onCloseWave, hasKdbLoaded, hasWaveLoaded, infoText, onOpenDebugTool }: MenuBarProps) {
+export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onOpenWaveList, onCloseKdb, onCloseWave, hasKdbLoaded, hasWaveLoaded, infoText, onOpenDebugTool, onSaveSession, onRestoreSession }: MenuBarProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const menuBarRef = useRef<HTMLDivElement>(null);
 
@@ -52,6 +54,9 @@ export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onO
         { separator: true, label: '' },
         { label: 'Close KDB', onClick: onCloseKdb, disabled: !hasKdbLoaded },
         { label: 'Close Waveform', onClick: onCloseWave, disabled: !hasWaveLoaded },
+        { separator: true, label: '' },
+        { label: 'Save Session...', onClick: onSaveSession },
+        { label: 'Restore Session...', onClick: onRestoreSession },
       ],
     },
     {

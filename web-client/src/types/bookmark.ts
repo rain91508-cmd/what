@@ -51,6 +51,11 @@ class BookmarkManager {
     return () => this.listeners.delete(listener);
   }
 
+  clearAll(): void {
+    this.bookmarks = [];
+    this.notifyListeners();
+  }
+
   private notifyListeners(): void {
     this.listeners.forEach(listener => listener());
   }
