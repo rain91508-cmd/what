@@ -2,11 +2,71 @@
 //!
 //! 本模块实现了基于 min/max bucket 算法的 LOD 金字塔生成，
 //! 以及 chunk 化的波形数据存储和传输格式。
+//!
+//! # 数据格式说明
+//!
+//! ## Transition 值存储
+//!
+//! 值使用 `Vec<u8>` 存储，支持任意位宽：
+//! - **数值信号** (wire/reg/logic)：紧凑的二进制字节，MSB在前
+//!   - 例如：32位值 0xDEADBEEF → `[0xDE, 0xAD, 0xBE, 0xEF]`
+//!   - 例如：4位值 "1010" → `[0x0A]`
+//! - **字符串信号** (string)：null-terminated ASCII
+//!   - 例如："Hello" → `[0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x00]`
+//!
+//! ## Chunk 二进制格式
+//!
+//! 服务器返回的波形数据是自定义二进制格式：
+//!
+//! ```
+//! +------------------+
+//! |   ChunkHeader    | 32 bytes
+//! |   (文件头)       |
+//! +------------------+
+//! | SignalBlockHeader| 17 bytes × 信号数
+//! |   (信号块表)     |
+//! +------------------+
+//! | Compressed Data  |
+//! |   (压缩数据区)   |
+//! +------------------+
+//! ```
+//!
+//! 详见 API.md 文档。
 
 use crate::error::{Result, ServerError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
+
+/// 比较两个字节数组的大小（按字典序）
+///
+/// 用于 LoD min/max 计算
+pub fn compare_bytes(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
+    let len = a.len().min(b.len());
+    for i in 0..len {
+        match a[i].cmp(&b[i]) {
+            std::cmp::Ordering::Equal => continue,
+            other => return other,
+        }
+    }
+    a.len().cmp(&b.len())
+}
+
+/// 获取两个字节数组中的较小值
+pub fn min_bytes(a: &[u8], b: &[u8]) -> Vec<u8> {
+    match compare_bytes(a, b) {
+        std::cmp::Ordering::Less | std::cmp::Ordering::Equal => a.to_vec(),
+        std::cmp::Ordering::Greater => b.to_vec(),
+    }
+}
+
+/// 获取两个字节数组中的较大值
+pub fn max_bytes(a: &[u8], b: &[u8]) -> Vec<u8> {
+    match compare_bytes(a, b) {
+        std::cmp::Ordering::Less => b.to_vec(),
+        std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => a.to_vec(),
+    }
+}
 
 /// 压缩算法类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -82,13 +142,74 @@ impl CompressionAlgorithm {
     }
 }
 
-/// 波形数据转换点
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// 波形数据转换点（支持任意位宽）
+#[derive(Debug, Clone, PartialEq)]
 pub struct Transition {
-    /// 时间戳（皮秒）
+    /// 时间戳
     pub time: u64,
-    /// 值（以字节数组存储，支持任意位宽）
-    pub value: u64, // 简化：最多支持64位
+    /// 值（字节数组，支持任意位宽）
+    /// 
+    /// 存储方式：
+    /// - 数值信号：紧凑的二进制字节，MSB在前
+    ///   例如：32位值 0xDEADBEEF → [0xDE, 0xAD, 0xBE, 0xEF]
+    /// - 字符串信号：null-terminated ASCII
+    pub value: Vec<u8>,
+}
+
+impl Transition {
+    /// 从二进制字符串创建转换点（支持任意位宽）
+    /// 
+    /// # Arguments
+    /// * `time` - 时间戳
+    /// * `bin_str` - 二进制字符串，如 "1010" 或 "b1010"
+    /// 
+    /// # Examples
+    /// ```
+    /// let t = Transition::from_binary_string(100, "b1010");
+    /// assert_eq!(t.value, vec![0x0A]); // 4位值
+    /// 
+    /// let t = Transition::from_binary_string(200, "1111000011110000");
+    /// assert_eq!(t.value, vec![0xF0, 0xF0]); // 16位值
+    /// ```
+    pub fn from_binary_string(time: u64, bin_str: &str) -> Self {
+        let bin_str = bin_str.trim().trim_start_matches('b');
+        let bits = bin_str.len();
+        let bytes = (bits + 7) / 8;
+        let mut value = vec![0u8; bytes];
+        
+        // 解析二进制字符串到字节数组（MSB在前）
+        for (i, c) in bin_str.chars().enumerate() {
+            let byte_idx = i / 8;
+            let bit_idx = 7 - (i % 8);  // MSB first
+            if c == '1' {
+                value[byte_idx] |= 1 << bit_idx;
+            }
+        }
+        
+        Self { time, value }
+    }
+
+    /// 从 u64 创建转换点（兼容原有代码）
+    pub fn from_u64(time: u64, value: u64, width: u16) -> Self {
+        let bytes = ((width + 7) / 8).max(1) as usize;
+        let mut value_vec = vec![0u8; bytes];
+        
+        // 小端序存储
+        for i in 0..bytes {
+            value_vec[i] = ((value >> (i * 8)) & 0xFF) as u8;
+        }
+        
+        Self { time, value: value_vec }
+    }
+
+    /// 将值转换为 u64（仅当位宽 ≤ 64 时有效）
+    pub fn to_u64(&self) -> u64 {
+        let mut result = 0u64;
+        for (i, &byte) in self.value.iter().enumerate().take(8) {
+            result |= (byte as u64) << (i * 8);
+        }
+        result
+    }
 }
 
 /// 单个信号的波形数据
@@ -113,12 +234,12 @@ impl SignalWaveData {
     }
 
     /// 添加转换点
-    pub fn add_transition(&mut self, time: u64, value: u64) {
-        self.transitions.push(Transition { time, value });
+    pub fn add_transition(&mut self, transition: Transition) {
+        self.transitions.push(transition);
     }
 
     /// 获取指定时间点的值（使用二分查找）
-    pub fn value_at(&self, time: u64) -> Option<u64> {
+    pub fn value_at(&self, time: u64) -> Option<&Transition> {
         if self.transitions.is_empty() {
             return None;
         }
@@ -129,7 +250,7 @@ impl SignalWaveData {
             .binary_search_by_key(&time, |t| t.time)
             .unwrap_or_else(|i| i.saturating_sub(1));
 
-        self.transitions.get(idx).map(|t| t.value)
+        self.transitions.get(idx)
     }
 }
 
@@ -215,10 +336,10 @@ impl LodPyramidGenerator {
         let bucket_size = level.bucket_size();
         let mut result = SignalWaveData::new(source.handle, source.width);
 
-        let mut bucket_min = source.transitions[0].value;
-        let mut bucket_max = source.transitions[0].value;
+        let mut bucket_min = source.transitions[0].value.clone();
+        let mut bucket_max = source.transitions[0].value.clone();
         let mut bucket_start_time = source.transitions[0].time;
-        let mut last_value = source.transitions[0].value;
+        let mut last_value = source.transitions[0].value.clone();
         let mut bucket_idx = 0usize;
 
         for (i, trans) in source.transitions.iter().enumerate() {
@@ -227,33 +348,33 @@ impl LodPyramidGenerator {
             if current_bucket > bucket_idx {
                 // 输出上一个 bucket 的 min/max
                 if bucket_min != last_value {
-                    result.add_transition(bucket_start_time, bucket_min);
+                    result.add_transition(Transition { time: bucket_start_time, value: bucket_min.clone() });
                 }
                 if bucket_max != bucket_min && bucket_max != last_value {
-                    result.add_transition(bucket_start_time, bucket_max);
+                    result.add_transition(Transition { time: bucket_start_time, value: bucket_max.clone() });
                 }
 
                 // 开始新 bucket
                 bucket_idx = current_bucket;
                 bucket_start_time = trans.time;
-                bucket_min = trans.value;
-                bucket_max = trans.value;
+                bucket_min = trans.value.clone();
+                bucket_max = trans.value.clone();
             } else {
-                // 更新当前 bucket 的 min/max
-                bucket_min = bucket_min.min(trans.value);
-                bucket_max = bucket_max.max(trans.value);
+                // 更新当前 bucket 的 min/max（字节数组比较）
+                bucket_min = min_bytes(&bucket_min, &trans.value);
+                bucket_max = max_bytes(&bucket_max, &trans.value);
             }
 
-            last_value = trans.value;
+            last_value = trans.value.clone();
         }
 
         // 输出最后一个 bucket
         if bucket_idx < (source.transitions.len() + bucket_size - 1) / bucket_size {
             if bucket_min != last_value {
-                result.add_transition(bucket_start_time, bucket_min);
+                result.add_transition(Transition { time: bucket_start_time, value: bucket_min.clone() });
             }
             if bucket_max != bucket_min {
-                result.add_transition(bucket_start_time, bucket_max);
+                result.add_transition(Transition { time: bucket_start_time, value: bucket_max.clone() });
             }
         }
 
@@ -454,11 +575,14 @@ impl ChunkSerializer {
                 .flat_map(|t| t.time.to_le_bytes())
                 .collect();
 
-            // 值数组（u64 数组，简化处理）
-            let value_array: Vec<u8> = filtered
-                .iter()
-                .flat_map(|t| t.value.to_le_bytes())
-                .collect();
+            // 值数组（变长字节数组，支持任意位宽）
+            // 格式：[值长度(u16), 值字节...] × 转换点数量
+            let mut value_array = Vec::new();
+            for t in &filtered {
+                let value_len = t.value.len() as u16;
+                value_array.extend_from_slice(&value_len.to_le_bytes());
+                value_array.extend_from_slice(&t.value);
+            }
 
             // 压缩数据
             let compressed_time = compression.compress(&time_array)?;
@@ -531,18 +655,30 @@ impl ChunkSerializer {
 
             // 重建转换点
             let mut transitions = Vec::new();
+            let mut value_offset = 0usize;
+            
             for j in 0..block_header.transition_count as usize {
                 let time_offset = j * 8;
-                let value_offset = j * 8;
                 
                 // 确保不越界
-                if time_offset + 8 > time_bytes.len() || value_offset + 8 > value_bytes.len() {
+                if time_offset + 8 > time_bytes.len() || value_offset + 2 > value_bytes.len() {
                     break;
                 }
                 
                 let time = u64::from_le_bytes(time_bytes[time_offset..time_offset + 8].try_into().unwrap());
-                let value = u64::from_le_bytes(value_bytes[value_offset..value_offset + 8].try_into().unwrap());
+                
+                // 值数组格式：[长度(u16), 值字节...]
+                let value_len = u16::from_le_bytes(value_bytes[value_offset..value_offset + 2].try_into().unwrap()) as usize;
+                
+                if value_offset + 2 + value_len > value_bytes.len() {
+                    break;
+                }
+                
+                let value = value_bytes[value_offset + 2..value_offset + 2 + value_len].to_vec();
                 transitions.push(Transition { time, value });
+                
+                // 移动到下一个值
+                value_offset += 2 + value_len;
             }
 
             signals.push((block_header, transitions));
