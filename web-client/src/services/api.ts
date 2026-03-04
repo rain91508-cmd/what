@@ -18,7 +18,6 @@ import type {
   ServerKdbFileInfo,
   ServerWaveFileInfo,
 } from '../types';
-import { lod0ToFsWithStr } from '../components/TabPanel';
 
 interface KdbInfoResponse {
   kdb_info: {
@@ -247,13 +246,11 @@ class ApiService {
 
   /**
    * Download waveform chunk with LoD0Unit time range
-   * Automatically converts LoD0Unit to fs using waveform's time unit
+   * Server API now uses LoD0Unit directly
    * @param waveformName - Waveform name
    * @param signalName - Signal name
    * @param lod - Level of detail
    * @param lod0TimeRange - Time range in LoD0Units { start, end }
-   * @param waveformTimeUnit - WaveformInfo.timeUnit (0=fs, 1=ps, 2=ns, 3=us, 4=ms, 5=s)
-   * @param waveformTimeUnitStr - WaveformInfo.timeUnitStr (如 "1ps", "3ns")
    * @param range - Optional byte range for partial download
    * @param compress - Compression type
    */
@@ -262,23 +259,15 @@ class ApiService {
     signalName: string,
     lod: number,
     lod0TimeRange: { start: number; end: number },
-    waveformTimeUnit: number,
-    waveformTimeUnitStr?: string,
     range?: { start: number; end: number },
     compress?: 'none' | 'zstd' | 'lz4'
   ): Promise<ArrayBuffer | null> {
-    // Convert LoD0Unit to fs using timeUnitStr if available
-    // Server API now uses fs as base unit
-    const fsTimeRange = {
-      start: lod0ToFsWithStr(lod0TimeRange.start, waveformTimeUnit, waveformTimeUnitStr),
-      end: lod0ToFsWithStr(lod0TimeRange.end, waveformTimeUnit, waveformTimeUnitStr),
-    };
-
+    // Server API now uses LoD0Unit directly, no conversion needed
     return this.downloadWaveformChunk(
       waveformName,
       signalName,
       lod,
-      fsTimeRange,
+      lod0TimeRange,
       range,
       compress
     );

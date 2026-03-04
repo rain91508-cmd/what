@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import type { TimeConfig } from './TabPanel';
-import { displayToLod0, fsToLod0, parseTimeUnitStr } from './TabPanel';
+import { displayToLod0, parseTimeUnitStr } from './TabPanel';
 
 // 时间单位类型（用户可选择）
 type TimeUnit = 'fs' | 'ps' | 'ns' | 'us' | 'ms' | 's';

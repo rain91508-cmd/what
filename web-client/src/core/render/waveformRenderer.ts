@@ -127,20 +127,73 @@ class WaveformRenderer {
     this.ctx.lineTo(width, height - 1);
     this.ctx.stroke();
 
-    // Draw time labels
-    // viewport.timeStart 和 timeEnd 现在是 LoD0Unit
     const lod0Range = viewport.timeEnd - viewport.timeStart;
-    const gridCount = 10;
 
-    for (let i = 0; i <= gridCount; i++) {
-      const x = (i / gridCount) * width;
+    // Calculate major step (for labels) - target ~100 pixels between labels
+    const targetLabelCount = Math.max(2, Math.floor(width / 100));
+    const majorStep = this.calculateNiceStep(lod0Range / targetLabelCount);
 
-      // Draw time label (DisplayUnit, 纯数字，不带单位)
-      const lod0Time = viewport.timeStart + (i / gridCount) * lod0Range;
-      this.ctx.fillStyle = '#333';
-      this.ctx.font = '11px Consolas, Monaco, monospace';
-      this.ctx.fillText(this.formatTime(lod0Time), x + 2, height - 4);
+    // Minor step is 1/10 of major step
+    const minorStep = majorStep / 10;
+
+    // Calculate first and last major ticks
+    const firstMajorTick = Math.ceil(viewport.timeStart / majorStep) * majorStep;
+    const lastMajorTick = Math.floor(viewport.timeEnd / majorStep) * majorStep;
+
+    // Draw minor ticks (no labels) - same color as major ticks
+    this.ctx.strokeStyle = '#666';
+    this.ctx.lineWidth = 1;
+
+    const firstMinorTick = Math.ceil(viewport.timeStart / minorStep) * minorStep;
+    const lastMinorTick = Math.floor(viewport.timeEnd / minorStep) * minorStep;
+
+    for (let tick = firstMinorTick; tick <= lastMinorTick; tick += minorStep) {
+      // Skip if this is a major tick
+      if (Math.abs(tick % majorStep) < minorStep / 2) continue;
+
+      const x = ((tick - viewport.timeStart) / lod0Range) * width;
+
+      // Determine tick height: middle tick (5th) is longer (8px)
+      const minorIndex = Math.round((tick % majorStep) / minorStep);
+      const tickHeight = minorIndex === 5 ? 8 : 4;
+
+      this.ctx.beginPath();
+      this.ctx.moveTo(x, height - tickHeight);
+      this.ctx.lineTo(x, height - 1);
+      this.ctx.stroke();
     }
+
+    // Draw major ticks (with labels)
+    this.ctx.fillStyle = '#333';
+    this.ctx.font = '11px Consolas, Monaco, monospace';
+    this.ctx.strokeStyle = '#666';
+    this.ctx.lineWidth = 1;
+
+    for (let tick = firstMajorTick; tick <= lastMajorTick; tick += majorStep) {
+      const x = ((tick - viewport.timeStart) / lod0Range) * width;
+
+      // Draw major tick line
+      this.ctx.beginPath();
+      this.ctx.moveTo(x, height - 10);
+      this.ctx.lineTo(x, height - 1);
+      this.ctx.stroke();
+
+      // Draw time label
+      this.ctx.fillText(this.formatTime(tick), x + 2, height - 12);
+    }
+  }
+
+  // Calculate a "nice" step value (1, 2, 5, 10, 20, 50, 100...)
+  private calculateNiceStep(rawStep: number): number {
+    if (rawStep <= 0) return 1;
+
+    const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    const normalizedStep = rawStep / magnitude;
+
+    if (normalizedStep < 1.5) return 1 * magnitude;
+    if (normalizedStep < 3.5) return 2 * magnitude;
+    if (normalizedStep < 7.5) return 5 * magnitude;
+    return 10 * magnitude;
   }
 
   // Render from RenderChunk (GPU-ready data)
