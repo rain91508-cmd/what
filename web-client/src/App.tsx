@@ -1657,26 +1657,21 @@ function App() {
       }
 
       // Step 1: Close current state
-      console.log('[Session] Step 1: Closing current state...')
       setSessionLoadingMessage('Closing current state...')
       await handleCloseKdb()
       await handleCloseWave()
       setTabs([])
       setActiveTab('')
       bookmarkManager.clearAll()
-      console.log('[Session] Step 1: Current state closed')
 
       // Step 2: Connect to server
-      console.log('[Session] Step 2: Connecting to server...', session.server)
       setSessionLoadingMessage('Connecting to server...')
       const { host, port } = session.server
       apiService.configure({ host, port, useHttps: false })
       const isConnected = await apiService.testConnection()
       setConnected(isConnected)
-      console.log('[Session] Step 2: Server connected:', isConnected)
       
       if (!isConnected) {
-        console.error('[Session] Step 2: Failed to connect to server')
         setShowConnectionDialog(true)
         addMessage('Failed to connect to server. Please enter server address.')
         return
@@ -1684,51 +1679,37 @@ function App() {
 
       // Step 3: Load KDB (auto-load without confirmation)
       if (session.kdb.name) {
-        console.log('[Session] Step 3: Loading KDB:', session.kdb.name)
         setSessionLoadingMessage(`Loading KDB: ${session.kdb.name}...`)
         try {
           await handleKdbSelect(session.kdb.name, false)
-          console.log('[Session] Step 3: KDB loaded successfully')
         } catch (error) {
-          console.error('[Session] Step 3: Failed to load KDB:', error)
           addMessage(`Failed to load KDB "${session.kdb.name}". Please load KDB manually.`)
           // Continue without KDB, user can load manually
         }
-      } else {
-        console.log('[Session] Step 3: No KDB in session')
       }
 
       // Step 4: Load Waveform (auto-load without confirmation)
       if (session.waveform) {
-        console.log('[Session] Step 4: Loading waveform:', session.waveform)
         if (session.waveform.useMockData) {
-          console.log('[Session] Step 4: Using mock data')
           setUseMockData(true)
           addMessage('Using mock data for waveform')
         } else if (session.waveform.name) {
           setSessionLoadingMessage(`Loading waveform: ${session.waveform.name}...`)
           try {
             await handleWaveSelect(session.waveform.name)
-            console.log('[Session] Step 4: Waveform loaded successfully')
           } catch (error) {
-            console.error('[Session] Step 4: Failed to load waveform:', error)
             addMessage(`Failed to load waveform "${session.waveform.name}". Please load waveform manually.`)
             // Continue without waveform, user can load manually
           }
         }
-      } else {
-        console.log('[Session] Step 4: No waveform in session')
       }
 
       // Step 5: Restore source tabs
-      console.log('[Session] Step 5: Restoring source tabs...', session.sourceTabs.length, 'tabs')
       setSessionLoadingMessage('Restoring source tabs...')
       const restoredTabs: Tab[] = []
       for (const sourceTab of session.sourceTabs) {
-        console.log('[Session] Step 5: Restoring source tab:', sourceTab)
         if (sourceTab.displayModuleIndex) {
           const module = kdbManager.getModuleById(sourceTab.displayModuleIndex)
-          console.log('[Session] Step 5: Found module:', module?.name)
           if (module) {
             const newTab: Tab = {
               id: sourceTab.id,
@@ -1741,27 +1722,19 @@ function App() {
               moduleEndLine: module.definition?.endLine,
             }
             restoredTabs.push(newTab)
-            console.log('[Session] Step 5: Source tab restored:', newTab.id)
-          } else {
-            console.warn('[Session] Step 5: Module not found for index:', sourceTab.displayModuleIndex)
           }
         }
       }
-      console.log('[Session] Step 5: Restored', restoredTabs.length, 'source tabs')
 
       // Step 6: Restore waveform tabs
-      console.log('[Session] Step 6: Restoring waveform tabs...', session.waveformTabs.length, 'tabs')
       setSessionLoadingMessage('Restoring waveform tabs...')
       for (const waveTab of session.waveformTabs) {
-        console.log('[Session] Step 6: Restoring waveform tab:', waveTab.id, 'nextSignalUniqueId:', waveTab.nextSignalUniqueId)
         // Restore nextSignalUniqueId
         nextWaveformSignalIdRef.current = waveTab.nextSignalUniqueId
-        console.log('[Session] Step 6: Set nextSignalUniqueId to:', waveTab.nextSignalUniqueId)
 
         // Rebuild signals from globalIds
         const restoredGroups: Record<string, SignalGroup> = {}
         for (const [groupId, group] of Object.entries(waveTab.groups)) {
-          console.log('[Session] Step 6: Restoring group:', groupId, 'with', group.signals.length, 'signals')
           const restoredSignals: Array<Signal & { unique_id: number }> = []
           for (const sig of group.signals) {
             const signal = kdbManager.buildSignal(sig.globalId)
@@ -1770,16 +1743,12 @@ function App() {
                 ...signal,
                 unique_id: sig.unique_id,
               })
-              console.log('[Session] Step 6: Signal restored:', sig.globalId, '->', signal.fullName)
-            } else {
-              console.warn('[Session] Step 6: Signal not found for globalId:', sig.globalId)
             }
           }
           restoredGroups[groupId] = {
             ...group,
             signals: restoredSignals,
           }
-          console.log('[Session] Step 6: Group restored:', groupId, 'with', restoredSignals.length, 'signals')
         }
 
         const newTab: Tab = {
@@ -1793,31 +1762,21 @@ function App() {
           waveformTimeUnit: 2, // Default to ns
         }
         restoredTabs.push(newTab)
-        console.log('[Session] Step 6: Waveform tab restored:', newTab.id)
       }
 
-      console.log('[Session] Setting tabs:', restoredTabs.length, 'tabs')
       setTabs(restoredTabs)
 
       // Step 7: Restore active tab
-      console.log('[Session] Step 7: Restoring active tab...')
       const activeTabId = session.activeSourceTabId || session.activeWaveformTabId
-      console.log('[Session] Step 7: Active tab ID from session:', activeTabId)
       if (activeTabId && restoredTabs.find(t => t.id === activeTabId)) {
         setActiveTab(activeTabId)
-        console.log('[Session] Step 7: Active tab restored:', activeTabId)
       } else if (restoredTabs.length > 0) {
         setActiveTab(restoredTabs[0].id)
-        console.log('[Session] Step 7: First tab set as active:', restoredTabs[0].id)
-      } else {
-        console.log('[Session] Step 7: No tabs to activate')
       }
 
       // Step 8: Restore bookmarks
-      console.log('[Session] Step 8: Restoring bookmarks...', session.bookmarks.length, 'bookmarks')
       setSessionLoadingMessage('Restoring bookmarks...')
       for (const bookmark of session.bookmarks) {
-        console.log('[Session] Step 8: Adding bookmark:', bookmark.name)
         bookmarkManager.addBookmark({
           moduleIndex: bookmark.moduleIndex,
           fileId: bookmark.fileId,
@@ -1826,7 +1785,6 @@ function App() {
           name: bookmark.name,
         })
       }
-      console.log('[Session] Step 8: Bookmarks restored')
 
       console.log('[Session] Session restored successfully:', name)
       addMessage(`Session "${name}" restored successfully`)
