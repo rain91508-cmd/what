@@ -1659,14 +1659,16 @@ function App() {
       // Step 2: Connect to server
       setSessionLoadingMessage('Connecting to server...')
       const { host, port } = session.server
-      const connected = await apiService.connect(host, port)
-      if (!connected) {
+      apiService.configure({ host, port, useHttps: false })
+      const isConnected = await apiService.testConnection()
+      setConnected(isConnected)
+      
+      if (!isConnected) {
         // Show connection dialog for manual input
         setShowConnectionDialog(true)
         addMessage('Failed to connect to server. Please enter server address.')
         return
       }
-      setConnected(true)
 
       // Step 3: Load KDB
       if (session.kdb.name) {
