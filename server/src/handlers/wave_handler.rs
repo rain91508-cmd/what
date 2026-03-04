@@ -53,8 +53,10 @@ pub struct WaveDataQuery {
     /// LoD 层级 (0-11)
     lod: Option<u32>,
     /// 起始时间 (time_unit 单位，与波形文件的 time_unit 一致)
+    #[serde(default)]
     start: i64,
     /// 结束时间 (time_unit 单位，与波形文件的 time_unit 一致)
+    #[serde(default)]
     end: i64,
     /// 压缩算法 (none, zstd, lz4)
     #[serde(default)]
@@ -324,7 +326,7 @@ fn parse_range_header(
 /// - 有前缀: `/api/wave/{waveform}/lod/{lod}/signals/p:{prefix}/{names}/data`
 pub async fn get_wave_data_multi(
     State(state): State<ServerState>,
-    Path((waveform_name, lod, signal_pattern)): Path<(String, u32, String)>,
+    Path((waveform_name, lod, signal_names)): Path<(String, u32, String)>,
     Query(query): Query<WaveDataQuery>,
     headers: HeaderMap,
 ) -> Result<Response<Body>> {
@@ -335,18 +337,13 @@ pub async fn get_wave_data_multi(
         return Err(ServerError::InvalidLod(lod));
     }
 
-    // 解析信号模式（支持前缀压缩）
-    let (prefix, signal_names) = parse_signal_pattern(&signal_pattern);
-    
-    // 展开完整信号名
-    let full_signal_names: Vec<String> = if let Some(prefix) = prefix {
-        signal_names
-            .iter()
-            .map(|name| format!("{}{}", prefix, name))
-            .collect()
-    } else {
-        signal_names
-    };
+    // URL 解码信号名
+    let signal_names = urlencoding::decode(&signal_names)
+        .map_err(|_| ServerError::SignalNotFound(signal_names.clone()))?
+        .to_string();
+
+    // 解析信号名列表（支持 Base64 编码整个列表）
+    let full_signal_names = crate::handlers::decode_signal_names(&signal_names)?;
 
     info!(
         "获取多信号波形数据: {}.{} (LoD {}, {} 个信号)",
@@ -434,10 +431,10 @@ pub async fn get_wave_data_multi(
 /// - "clk,reset,data" -> (None, ["clk", "reset", "data"])
 /// - "p:cpu_/alu,reg,pc" -> (Some("cpu_"), ["alu", "reg", "pc"])
 fn parse_signal_pattern(pattern: &str) -> (Option<String>, Vec<String>) {
-    if pattern.starts_with("p:") {
-        // 有前缀格式：p:prefix/names
-        let rest = &pattern[2..]; // 去掉 "p:"
-        if let Some(sep_pos) = rest.find('/') {
+    if pattern.starts_with("pfx~") {
+        // 有前缀格式：pfx~prefix~names
+        let rest = &pattern[4..]; // 去掉 "pfx~"
+        if let Some(sep_pos) = rest.find('~') {
             let prefix = rest[..sep_pos].to_string();
             let names: Vec<String> = rest[sep_pos + 1..]
                 .split(',')
@@ -494,7 +491,7 @@ mod tests {
 
     #[test]
     fn test_parse_signal_pattern_with_prefix() {
-        let (prefix, names) = parse_signal_pattern("p:cpu_/alu,reg,pc");
+        let (prefix, names) = parse_signal_pattern("pfx~cpu_~alu,reg,pc");
         assert_eq!(prefix, Some("cpu_".to_string()));
         assert_eq!(names, vec!["alu", "reg", "pc"]);
     }
