@@ -461,16 +461,16 @@ export function WaveformWindow({
   const handleCanvasMouseUp = useCallback(() => {
     if (!isSelecting || !canvasRef.current) return;
 
-    const canvasWidth = canvasRef.current.width;
+    // 使用 getBoundingClientRect 获取实际显示宽度
+    const rect = canvasRef.current.getBoundingClientRect();
+    const canvasWidth = rect.width;
     const startX = Math.min(selectionStart ?? 0, selectionEnd ?? 0);
     const endX = Math.max(selectionStart ?? 0, selectionEnd ?? 0);
 
     // 如果选择区域太小（小于10像素），则不放大，只设置 cursor
     if (endX - startX < 10) {
-      const clickTime = viewport.timeStart + ((selectionStart ?? 0) / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
-
-      // 找到点击位置对应的信号（根据Y坐标）
-      const clickY = selectionStartRef.current ? 0 : 0; // 简化处理，使用第一个信号
+      // 使用鼠标释放时的位置（endX），而不是 selectionStart
+      const clickTime = viewport.timeStart + (endX / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
 
       // 获取可见信号列表
       const visibleSignals = mockDataProvider.getSignalNames();
@@ -480,24 +480,17 @@ export function WaveformWindow({
         const signalName = visibleSignals[0];
         const { prev, next } = mockDataProvider.findTransitionsAround(signalName, clickTime);
 
-        // 将 transition 时间转换为像素位置
+        // 基于时间距离进行吸附（而非像素距离）
+        // 吸附阈值：时间范围的 2% 或至少 10 个时间单位
         const timeRange = viewport.timeEnd - viewport.timeStart;
+        const snapThreshold = Math.max(timeRange * 0.02, 10);
+
         let finalTime = clickTime;
 
-        if (prev !== null) {
-          const prevX = ((prev - viewport.timeStart) / timeRange) * canvasWidth;
-          const clickX = ((clickTime - viewport.timeStart) / timeRange) * canvasWidth;
-          if (Math.abs(clickX - prevX) <= 20) {
-            finalTime = prev;
-          }
-        }
-
-        if (next !== null && finalTime === clickTime) {
-          const nextX = ((next - viewport.timeStart) / timeRange) * canvasWidth;
-          const clickX = ((clickTime - viewport.timeStart) / timeRange) * canvasWidth;
-          if (Math.abs(clickX - nextX) <= 20) {
-            finalTime = next;
-          }
+        if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
+          finalTime = prev;
+        } else if (next !== null && Math.abs(next - clickTime) <= snapThreshold) {
+          finalTime = next;
         }
 
         setCursor({ position: Math.round(finalTime), visible: true });
