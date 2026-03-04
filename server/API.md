@@ -467,6 +467,60 @@ GET /api/wave/{waveform_name}/signals/{signal_name}/data
 - `Content-Range`: 数据范围（如果有 Range 请求）
 - `Accept-Ranges`: bytes
 
+**响应数据格式（二进制）**:
+
+服务器返回的二进制数据采用自定义 chunk 格式，结构如下：
+
+```
++------------------+
+|   ChunkHeader    | 32 bytes
+|   (文件头)       |
++------------------+
+| SignalBlockHeader| 17 bytes × 信号数
+|   (信号块表)     |
++------------------+
+| Compressed Data  |
+|   (压缩数据区)   |
++------------------+
+```
+
+**ChunkHeader 结构（32字节）**:
+
+| 偏移 | 大小 | 字段 | 说明 |
+|------|------|------|------|
+| 0 | 4B | magic | 魔数 0x57415645 ("WAVE") |
+| 4 | 2B | version | 版本号 (当前为 1) |
+| 6 | 2B | level | LoD 层级 |
+| 8 | 4B | chunk_id | Chunk ID |
+| 12 | 8B | time_start | 起始时间 |
+| 20 | 8B | time_end | 结束时间 |
+| 28 | 4B | signal_count | 信号数量 |
+
+**SignalBlockHeader 结构（17字节）**:
+
+| 偏移 | 大小 | 字段 | 说明 |
+|------|------|------|------|
+| 0 | 4B | signal_handle | 信号句柄 |
+| 4 | 4B | time_array_offset | 时间数组偏移 |
+| 8 | 4B | value_array_offset | 值数组偏移 |
+| 12 | 4B | transition_count | 转换点数量 |
+| 16 | 1B | compression | 压缩类型 (0=无, 1=zstd, 2=lz4) |
+
+**数据区格式**：
+
+- **时间数组**: `[t0, t1, t2, ...]` (u64 数组，小端序)
+- **值数组**: `[len0, value0..., len1, value1..., ...]` (变长格式)
+  - `len`: u16，值字节长度
+  - `value`: 值字节数组，支持任意位宽
+
+**值存储格式**:
+
+- **数值信号** (wire/reg/logic)：紧凑的二进制字节，MSB在前
+  - 例如：32位值 0xDEADBEEF → `[0xDE, 0xAD, 0xBE, 0xEF]`
+  - 例如：4位值 "1010" → `[0x0A]`
+- **字符串信号** (string)：null-terminated ASCII
+  - 例如："Hello" → `[0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x00]`
+
 **示例**:
 ```bash
 # 获取完整波形数据
@@ -477,6 +531,41 @@ curl "http://localhost:8080/api/wave/riscv2/signals/clk/data?lod=2&start=0&end=1
 
 # 获取压缩的波形数据
 curl "http://localhost:8080/api/wave/riscv2/signals/clk/data?compress=zstd" -o clk.zst
+```
+
+**客户端解析示例（JavaScript）**:
+```javascript
+// 解析 chunk 数据
+function parseWaveChunk(buffer) {
+  const view = new DataView(buffer);
+  
+  // 解析 ChunkHeader
+  const header = {
+    magic: view.getUint32(0, true),
+    version: view.getUint16(4, true),
+    level: view.getUint16(6, true),
+    chunk_id: view.getUint32(8, true),
+    time_start: view.getBigUint64(12, true),
+    time_end: view.getBigUint64(20, true),
+    signal_count: view.getUint32(28, true)
+  };
+  
+  // 解析 SignalBlockHeader
+  let offset = 32;
+  const signals = [];
+  for (let i = 0; i < header.signal_count; i++) {
+    signals.push({
+      handle: view.getUint32(offset, true),
+      time_offset: view.getUint32(offset + 4, true),
+      value_offset: view.getUint32(offset + 8, true),
+      transition_count: view.getUint32(offset + 12, true),
+      compression: view.getUint8(offset + 16)
+    });
+    offset += 17;
+  }
+  
+  return { header, signals };
+}
 ```
 
 ---

@@ -753,21 +753,27 @@ impl WaveService {
             let mut transition_count = 0u64;
             reader.for_each_block(|time, h, value, _var_len| {
                 if h == handle {
-                    // 将字符串值转换为 u64
+                    // 解析值（支持任意位宽）
                     let val_str = String::from_utf8_lossy(value);
-                    let val = match val_str.trim() {
-                        "0" => 0u64,
-                        "1" => 1u64,
-                        s => {
-                            // 尝试解析二进制字符串
-                            if s.starts_with('b') {
-                                u64::from_str_radix(&s[1..], 2).unwrap_or(0)
-                            } else {
-                                s.parse::<u64>().unwrap_or(0)
+                    let transition = if signal_width <= 64 {
+                        // ≤64位：尝试解析为数字
+                        let val = match val_str.trim() {
+                            "0" => 0u64,
+                            "1" => 1u64,
+                            s => {
+                                if s.starts_with('b') {
+                                    u64::from_str_radix(&s[1..], 2).unwrap_or(0)
+                                } else {
+                                    s.parse::<u64>().unwrap_or(0)
+                                }
                             }
-                        }
+                        };
+                        Transition::from_u64(time, val, signal_width)
+                    } else {
+                        // >64位：使用二进制字符串解析
+                        Transition::from_binary_string(time, &val_str)
                     };
-                    signal_data.add_transition(time, val);
+                    signal_data.add_transition(transition);
                     transition_count += 1;
                 }
             }).map_err(|e| ServerError::Internal(format!("读取波形数据失败: {:?}", e)))?;
