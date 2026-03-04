@@ -1962,6 +1962,7 @@ function App() {
                 onSelectedGroupUpdate={(selectedGroup) => handleSelectedGroupUpdate(activeTabData.id, selectedGroup)}
                 onSignalsProcessed={(processedIds) => handleSignalsProcessed(activeTabData.id, processedIds)}
                 onColumnWidthsChange={(widths) => handleColumnWidthsChange(activeTabData.id, widths)}
+                useMockData={useMockData}
               />
             ) : null}
           </TabPanel>
