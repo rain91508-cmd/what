@@ -24,6 +24,9 @@ export interface SignalInfo {
   
   /** 显示名称（可选，用于标签） */
   displayName?: string;
+  
+  /** 位宽（可选，用于正确渲染多bit信号） */
+  width?: number;
 }
 
 /**
