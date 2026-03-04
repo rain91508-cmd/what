@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { waveformRenderer } from '../core/render/waveformRenderer';
-import type { Viewport, Segment, Signal } from '../types';
+import { mockDataProvider } from '../core/data/mockDataProvider';
+import type { Viewport, Signal } from '../types';
 import type { WaveformSignal, ColumnWidths, TimeConfig } from './TabPanel';
 import { lod0ToDisplay, initTimeConfig } from './TabPanel';
+import type { SignalInfo, DisplayFormat } from '../types/dataProvider';
 import { FilterInput } from './FilterInput';
 import { wildcardMatch } from '../utils/wildcardMatch';
-import { getOrCreateMockData, getValueAtTime } from '../utils/mockWaveformData';
 
 interface SignalGroup {
   id: string;
@@ -127,14 +128,8 @@ export function WaveformWindow({
     }
   }, [externalCursorPosition, onCursorPositionChange, cursor]);
   
-  const [signalValues] = useState<Record<string, string>>({
-    'top.clk': '1',
-    'top.rst_n': '0',
-    'top.data_in': '0x1234',
-    'top.data_out': '0xABCD',
-    'top.state': '0x3',
-    'top.counter': '0x00FF',
-  });
+  // 信号值（由 DataProvider 根据 cursor 位置提供）
+  const [signalValues, setSignalValues] = useState<Map<string, string>>(new Map());
   const [selectedSignal, setSelectedSignal] = useState<number | null>(null);
   const [expandedSignals, setExpandedSignals] = useState<Set<number>>(new Set());
   // cursor state is now managed above with external support
@@ -255,7 +250,7 @@ export function WaveformWindow({
     };
   }, []);
 
-  // 监听窗口大小变化，更新 canvas 尺寸和 viewport
+  // 监听窗口大小变化，更新 canvas 尺寸
   useEffect(() => {
     const handleResize = () => {
       if (containerRef.current && canvasRef.current) {
@@ -264,8 +259,7 @@ export function WaveformWindow({
         canvasRef.current.width = width;
         canvasRef.current.height = height;
         waveformRenderer.resize(width, height);
-        // 根据新宽度重新计算 viewport
-        setViewport(calculateViewport(width));
+        // 只更新 canvas 尺寸，不重置 viewport
         renderWaveform();
       }
     };
@@ -273,15 +267,25 @@ export function WaveformWindow({
     handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
+    // 注意：不依赖 groups/selectedSignal/displaySignals，避免加入信号时重置 view
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups, selectedSignal, displaySignals]);
+  }, []);
 
-  // 监听时间配置变化，更新 viewport
+  // 监听时间配置变化，更新 viewport（保留当前时间范围）
   useEffect(() => {
     if (canvasWidth > 0 && externalViewport === undefined) {
-      setViewport(calculateViewport(canvasWidth));
+      // 保留当前的 timeStart/timeEnd，只更新其他属性
+      setViewport(prev => ({
+        ...prev,
+        signalStart: 0,
+        signalEnd: 10,
+        pixelsPerTime: 1,
+        pixelsPerSignal: 24,
+      }));
     }
-  }, [timeConfig, canvasWidth, calculateViewport, externalViewport, setViewport]);
+    // 注意：不监听 timeConfig，避免重置时间范围
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvasWidth, externalViewport, setViewport]);
 
   // 监听 viewport 变化，重新渲染波形
   useEffect(() => {
@@ -289,7 +293,7 @@ export function WaveformWindow({
       renderWaveform();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewport, groups, selectedSignal, displaySignals]);
+  }, [viewport, groups, selectedSignal, displaySignals, expandedSignals]);
 
   // Cleanup mouse timeout on unmount
   useEffect(() => {
@@ -300,6 +304,15 @@ export function WaveformWindow({
     };
   }, []);
 
+  // 监听 cursor 变化，更新信号值
+  useEffect(() => {
+    if (!cursor.visible) return;
+    
+    // 从 DataProvider 获取当前可见信号在 cursor 位置的值
+    const values = mockDataProvider.getValuesAtTime(cursor.position);
+    setSignalValues(values);
+  }, [cursor.position, cursor.visible, displaySignals, expandedSignals]);
+
   const renderWaveform = () => {
     if (!canvasRef.current) return;
 
@@ -307,76 +320,70 @@ export function WaveformWindow({
     
     console.log(`[WaveformWindow] renderWaveform: width=${width}, height=${height}, viewport=${viewport.timeStart}-${viewport.timeEnd}`);
 
-    // Generate segments from mock data - only for visible signals in treeNodes
-    const segments: Segment[] = [];
-
-    // Calculate row index for each signal, considering group rows
+    // Build visible signal list from treeNodes
+    // UI 决定哪些信号可见，以及它们的 row 顺序
+    const signalList: SignalInfo[] = [];
     let currentRow = 0;
+    
     treeNodes.forEach((node) => {
       if (node.type === 'group') {
         // Group row - no waveform, just increment row counter
         currentRow++;
       } else if (node.type === 'signal' && node.signal) {
-        // Signal row - render waveform from mock data
-        const signalPath = node.signal.fullName || node.signal.name;
-        const mockData = getOrCreateMockData(signalPath);
+        const signal = node.signal as Signal & { unique_id: number };
         
-        // Get transitions within the viewport time range
-        const visibleTransitions = mockData.transitions.filter(
-          t => t.time >= viewport.timeStart && t.time <= viewport.timeEnd
-        );
+        // 检查信号是否展开（多bit信号）
+        const isExpanded = expandedSignals.has(signal.unique_id);
+        const isBus = signal.msb !== signal.lsb;
         
-        if (visibleTransitions.length === 0) {
-          // No transitions in viewport, show constant value
-          const value = getValueAtTime(mockData, viewport.timeStart);
-          segments.push({
-            t0: viewport.timeStart,
-            t1: viewport.timeEnd,
+        if (isBus && isExpanded) {
+          // 展开状态：先绘制原始多bit信号（第一行），再绘制各个bit
+          signalList.push({
+            name: signal.fullName || signal.name,
             row: currentRow,
-            value,
+            displayName: signal.name,
           });
-        } else {
-          // Render transitions within viewport
-          let lastTime = viewport.timeStart;
-          let lastValue = getValueAtTime(mockData, viewport.timeStart);
+          currentRow++;
           
-          for (const transition of visibleTransitions) {
-            // Add segment from lastTime to transition time
-            if (lastTime < transition.time) {
-              segments.push({
-                t0: lastTime,
-                t1: transition.time,
-                row: currentRow,
-                value: lastValue,
-              });
-            }
-            lastTime = transition.time;
-            lastValue = transition.value;
-          }
-          
-          // Add final segment to timeEnd
-          if (lastTime < viewport.timeEnd) {
-            segments.push({
-              t0: lastTime,
-              t1: viewport.timeEnd,
+          // 为每个bit创建单独的信号项
+          const bitCount = Math.min(signal.msb - signal.lsb + 1, 32);
+          for (let i = 0; i < bitCount; i++) {
+            const bitIndex = signal.msb - i;
+            signalList.push({
+              name: `${signal.fullName || signal.name}[${bitIndex}]`,
               row: currentRow,
-              value: lastValue,
+              displayName: `${signal.name}[${bitIndex}]`,
             });
+            currentRow++;
           }
+        } else {
+          // 折叠状态或单bit信号：作为一个整体
+          signalList.push({
+            name: signal.fullName || signal.name,
+            row: currentRow,
+            displayName: signal.name,
+          });
+          currentRow++;
         }
-        currentRow++;
       }
     });
 
-    // Reserve space for time ruler at top
-    const rulerHeight = 20;
+    // Initialize DataProvider with visible signals
+    // rowHeight = 25 (24px + 1px border)
+    mockDataProvider.initialize(
+      signalList,
+      viewport,
+      'hex' as DisplayFormat,  // TODO: make this configurable
+      width,
+      25,  // rowHeight (24px height + 1px border)
+      20   // rulerHeight
+    );
 
-    // Set time config for renderer
-    waveformRenderer.setTimeConfig(timeConfig);
+    // Get segments from DataProvider (already formatted and coordinate-converted)
+    const segments = mockDataProvider.getSegments();
 
-    waveformRenderer.render(segments, viewport, width, height, rulerHeight);
-
-    // Note: cursorRenderer is updated separately in the rAF loop for smooth mouse following
+    // Render
+    waveformRenderer.render(segments, viewport, width, height, 20);
   };
 
   const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -626,7 +633,8 @@ export function WaveformWindow({
   };
 
   const getSignalValue = (signal: Signal) => {
-    return signalValues[signal.fullName] || '0x0';
+    // 从 Map 获取信号值，如果没有则返回默认值
+    return signalValues.get(signal.fullName) || '0x0';
   };
 
   const getHierarchyDisplay = (signal: Signal): string => {
@@ -1171,7 +1179,7 @@ export function WaveformWindow({
                             
                             {/* Value column */}
                             <span className="waveform-signal-value" style={{ flex: 1 }}>
-                              {Math.random() > 0.5 ? '1' : '0'}
+                              {signalValues.get(`${signal.fullName}[${bitIndex}]`) || '0'}
                             </span>
                           </div>
                         );

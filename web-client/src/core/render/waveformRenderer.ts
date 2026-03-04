@@ -1,28 +1,20 @@
 // ============================================
-// Canvas 2D Waveform Renderer (Simplified)
+// Canvas 2D Waveform Renderer (Pure Rendering)
 // ============================================
 // 
-// Architecture (per spec.md & hint2.md):
-// - Canvas 2D API for waveform rendering
-// - Simple and stable implementation
-//
-// Data Flow:
-// OPFS -> WASM decode -> TypedArray -> Canvas 2D draw
+// 纯渲染层，只负责绘制，不做任何计算：
+// - 接收已包含像素坐标的 RenderSegment
+// - 根据 value.type 和 width 选择样式
+// - 单bit：带跳变边沿的方波
+// - 多bit：矩形块 + 中间数值
 
-import type { RenderChunk, Segment, Viewport } from '../../types';
-import type { TimeConfig } from '../../components/TabPanel';
-import { lod0ToDisplay } from '../../components/TabPanel';
+import type { RenderSegment, FormattedValue } from '../../types/dataProvider';
+import type { Viewport } from '../../types';
 
 class WaveformRenderer {
   private canvas: HTMLCanvasElement | null = null;
   private ctx: CanvasRenderingContext2D | null = null;
-
-  // Configuration
-  private signalHeight = 20;
-  private signalSpacing = 4;
-
-  // Current time config for display
-  private timeConfig: TimeConfig | null = null;
+  private rowHeight = 25;  // 行高，用于计算波形高度（24px + 1px border）
 
   async initialize(canvas: HTMLCanvasElement): Promise<void> {
     this.canvas = canvas;
@@ -39,22 +31,16 @@ class WaveformRenderer {
     return this.canvas !== null && this.ctx !== null;
   }
 
-  // Set time config for display
-  setTimeConfig(timeConfig: TimeConfig): void {
-    this.timeConfig = timeConfig;
-  }
-
-  // Format time value - DisplayUnit (returns integer, no unit)
-  // timeLod0: LoD0Unit value
-  private formatTime(timeLod0: number): string {
-    if (!this.timeConfig) return timeLod0.toString();
-    const displayValue = lod0ToDisplay(timeLod0, this.timeConfig);
-    return Math.round(displayValue).toString();
-  }
-
-  // Render waveform data
+  /**
+   * 渲染波形
+   * @param segments 已包含像素坐标的 segments
+   * @param viewport 用于绘制标尺
+   * @param canvasWidth 画布宽度
+   * @param canvasHeight 画布高度
+   * @param rulerHeight 标尺高度
+   */
   render(
-    segments: Segment[],
+    segments: RenderSegment[],
     viewport: Viewport,
     canvasWidth: number,
     canvasHeight: number,
@@ -68,50 +54,287 @@ class WaveformRenderer {
     this.ctx.fillStyle = '#ffffff';
     this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-    const timeRange = viewport.timeEnd - viewport.timeStart;
-
-    // Always draw time ruler at top
+    // Draw time ruler at top
     this.drawTimeRuler(canvasWidth, rulerHeight, viewport);
 
-    // Draw segments (below ruler)
-    if (segments.length > 0) {
-      this.ctx.lineWidth = 2;
-      
-      for (const seg of segments) {
-        const x0 = ((seg.t0 - viewport.timeStart) / timeRange) * canvasWidth;
-        const x1 = ((seg.t1 - viewport.timeStart) / timeRange) * canvasWidth;
-        const yOffset = rulerHeight + seg.row * (this.signalHeight + this.signalSpacing);
-        const y = yOffset + (seg.value > 0.5 ? 2 : this.signalHeight - 2);
-
-        // Set color based on value
-        if (seg.value < 0.25) {
-          this.ctx.strokeStyle = '#000000'; // 0 - Black
-        } else if (seg.value < 0.75) {
-          this.ctx.strokeStyle = '#ff0000'; // X - Red
-        } else if (seg.value < 1.25) {
-          this.ctx.strokeStyle = '#00aa00'; // 1 - Green
-        } else {
-          this.ctx.strokeStyle = '#ff00ff'; // Z - Magenta
-        }
-
-        // Draw horizontal line
-        this.ctx.beginPath();
-        this.ctx.moveTo(x0, y);
-        this.ctx.lineTo(x1, y);
-        this.ctx.stroke();
-
-        // Draw vertical edge (transition)
-        if (x1 < canvasWidth) {
-          const nextY = yOffset + (seg.value > 0.5 ? this.signalHeight - 2 : 2);
-          this.ctx.beginPath();
-          this.ctx.moveTo(x1, y);
-          this.ctx.lineTo(x1, nextY);
-          this.ctx.stroke();
-        }
-      }
+    // Draw segments (直接使用 x0, x1, y)
+    for (const seg of segments) {
+      this.drawSegment(seg);
     }
   }
 
+  /**
+   * 绘制单个 segment
+   */
+  private drawSegment(seg: RenderSegment): void {
+    const { x0, x1, y, value } = seg;
+    const width = x1 - x0;
+
+    // 根据位宽选择绘制方式
+    if (value.width === 1) {
+      // 单bit：带跳变边沿的方波
+      this.drawSingleBitWaveform(x0, x1, y, value, width);
+    } else {
+      // 多bit：矩形块 + 中间数值
+      this.drawMultiBitWaveform(x0, x1, y, value, width);
+    }
+  }
+
+  /**
+   * 绘制单bit波形：带跳变边沿的方波
+   * 
+   * 样式：
+   * - 0：低电平（下方）
+   * - 1：高电平（上方）
+   * - X：红色交叉线
+   * - Z：蓝色虚线（中间）
+   */
+  private drawSingleBitWaveform(
+    x0: number,
+    x1: number,
+    y: number,
+    value: FormattedValue,
+    width: number
+  ): void {
+    if (!this.ctx) return;
+
+    const waveHeight = this.rowHeight * 0.35;  // 波形高度
+    const yLow = y + waveHeight;   // 低电平Y
+    const yHigh = y - waveHeight;  // 高电平Y
+    const yMid = y;                // 中间Y（用于Z）
+
+    this.ctx.lineWidth = 2;
+    this.ctx.setLineDash([]);
+
+    switch (value.type) {
+      case 'zero':
+        // 低电平：在下方绘制水平线
+        this.ctx.strokeStyle = '#000000';
+        this.ctx.beginPath();
+        this.ctx.moveTo(x0, yLow);
+        this.ctx.lineTo(x1, yLow);
+        this.ctx.stroke();
+        break;
+
+      case 'one':
+        // 高电平：在上方绘制水平线
+        this.ctx.strokeStyle = '#00aa00';
+        this.ctx.beginPath();
+        this.ctx.moveTo(x0, yHigh);
+        this.ctx.lineTo(x1, yHigh);
+        this.ctx.stroke();
+        break;
+
+      case 'all_x':
+        // X：红色交叉线
+        this.drawXWaveform(x0, x1, y, waveHeight);
+        break;
+
+      case 'all_z':
+        // Z：蓝色虚线（中间）
+        this.drawZWaveform(x0, x1, yMid);
+        break;
+
+      case 'mixed':
+      case 'numeric':
+      default:
+        // 数值：根据值选择高低（简化处理，实际应该根据前一个值决定跳变）
+        this.ctx.strokeStyle = '#00aa00';
+        this.ctx.beginPath();
+        this.ctx.moveTo(x0, yHigh);
+        this.ctx.lineTo(x1, yHigh);
+        this.ctx.stroke();
+        break;
+    }
+
+    // 绘制跳变边沿（垂直线）- 在 segment 结束时
+    if (width > 2) {
+      this.ctx.strokeStyle = '#000000';
+      this.ctx.lineWidth = 1;
+      this.ctx.beginPath();
+      this.ctx.moveTo(x1, yHigh);
+      this.ctx.lineTo(x1, yLow);
+      this.ctx.stroke();
+    }
+  }
+
+  /**
+   * 绘制多bit波形：矩形块 + 中间数值
+   * 
+   * 类似 wavedrom 的样式：
+   * ┌─────────────┐
+   * │   0xFF      │  ← 数值显示在矩形中间
+   * └─────────────┘
+   */
+  private drawMultiBitWaveform(
+    x0: number,
+    x1: number,
+    y: number,
+    value: FormattedValue,
+    width: number
+  ): void {
+    if (!this.ctx) return;
+
+    const rectHeight = this.rowHeight * 0.75;  // 矩形高度（增大占比）
+    const rectY = y - rectHeight / 2;          // 矩形顶部Y
+
+    // 根据类型选择颜色
+    let strokeColor: string;
+    let fillColor: string;
+    let textColor: string;
+
+    switch (value.type) {
+      case 'all_x':
+        strokeColor = '#ff0000';
+        fillColor = '#ffeeee';
+        textColor = '#ff0000';
+        break;
+      case 'all_z':
+        strokeColor = '#0066ff';
+        fillColor = '#eeeeff';
+        textColor = '#0066ff';
+        break;
+      case 'mixed':
+        strokeColor = '#ff8800';
+        fillColor = '#fff8ee';
+        textColor = '#ff8800';
+        break;
+      default:
+        strokeColor = '#00aa00';
+        fillColor = '#eeffee';
+        textColor = '#000000';
+        break;
+    }
+
+    // 绘制矩形背景
+    this.ctx.fillStyle = fillColor;
+    this.ctx.fillRect(x0, rectY, width, rectHeight);
+
+    // 绘制矩形边框
+    this.ctx.strokeStyle = strokeColor;
+    this.ctx.lineWidth = 1;
+    this.ctx.strokeRect(x0, rectY, width, rectHeight);
+
+    // 绘制数值标签（居中）- 使用更大字体
+    if (width > 20) {
+      this.ctx.fillStyle = textColor;
+      this.ctx.font = 'bold 12px Consolas, Monaco, monospace';
+      
+      // 截断标签以适应空间
+      const label = this.truncateLabel(value.displayStr, width - 8);
+      const textWidth = this.ctx.measureText(label).width;
+      const textX = x0 + (width - textWidth) / 2;
+      const textY = y + 4;  // 垂直居中
+      
+      this.ctx.fillText(label, textX, textY);
+    }
+
+    // 绘制跳变边沿（垂直线）- 在 segment 结束时
+    if (width > 2) {
+      this.ctx.strokeStyle = strokeColor;
+      this.ctx.lineWidth = 2;
+      this.ctx.beginPath();
+      this.ctx.moveTo(x1, rectY);
+      this.ctx.lineTo(x1, rectY + rectHeight);
+      this.ctx.stroke();
+    }
+  }
+
+  /**
+   * 绘制 X 波形：红色交叉线
+   */
+  private drawXWaveform(x0: number, x1: number, y: number, waveHeight: number): void {
+    if (!this.ctx) return;
+
+    const yLow = y + waveHeight;
+    const yHigh = y - waveHeight;
+
+    this.ctx.strokeStyle = '#ff0000';
+    this.ctx.lineWidth = 2;
+    this.ctx.setLineDash([]);
+
+    // 绘制 X 形状（两条对角线）
+    this.ctx.beginPath();
+    // 第一条对角线 \
+    this.ctx.moveTo(x0, yHigh);
+    this.ctx.lineTo(x1, yLow);
+    // 第二条对角线 /
+    this.ctx.moveTo(x0, yLow);
+    this.ctx.lineTo(x1, yHigh);
+    this.ctx.stroke();
+
+    // 绘制 X 标签
+    const width = x1 - x0;
+    if (width > 15) {
+      this.ctx.fillStyle = '#ff0000';
+      this.ctx.font = 'bold 10px Arial';
+      const textWidth = this.ctx.measureText('X').width;
+      const textX = x0 + (width - textWidth) / 2;
+      this.ctx.fillText('X', textX, y - waveHeight - 4);
+    }
+  }
+
+  /**
+   * 绘制 Z 波形：蓝色虚线（中间）
+   */
+  private drawZWaveform(x0: number, x1: number, y: number): void {
+    if (!this.ctx) return;
+
+    this.ctx.strokeStyle = '#0066ff';
+    this.ctx.lineWidth = 2;
+    this.ctx.setLineDash([2, 2]);
+
+    this.ctx.beginPath();
+    this.ctx.moveTo(x0, y);
+    this.ctx.lineTo(x1, y);
+    this.ctx.stroke();
+    this.ctx.setLineDash([]);
+
+    // 绘制 Z 标签
+    const width = x1 - x0;
+    if (width > 15) {
+      this.ctx.fillStyle = '#0066ff';
+      this.ctx.font = 'bold 10px Arial';
+      const textWidth = this.ctx.measureText('Z').width;
+      const textX = x0 + (width - textWidth) / 2;
+      this.ctx.fillText('Z', textX, y - 6);
+    }
+  }
+
+  /**
+   * 截断标签以适应空间
+   */
+  private truncateLabel(label: string, maxWidth: number): string {
+    if (!this.ctx) return label;
+
+    const textWidth = this.ctx.measureText(label).width;
+    if (textWidth <= maxWidth) {
+      return label;
+    }
+
+    // 截断：前N...后N
+    const ellipsis = '...';
+    const ellipsisWidth = this.ctx.measureText(ellipsis).width;
+    const availableWidth = maxWidth - ellipsisWidth;
+
+    if (availableWidth <= 0) {
+      return ellipsis;
+    }
+
+    // 估算每个字符宽度
+    const avgCharWidth = textWidth / label.length;
+    const charsToShow = Math.floor(availableWidth / avgCharWidth / 2);
+
+    if (charsToShow <= 0) {
+      return ellipsis;
+    }
+
+    return label.slice(0, charsToShow) + ellipsis + label.slice(-charsToShow);
+  }
+
+  /**
+   * 绘制时间标尺
+   */
   private drawTimeRuler(width: number, height: number, viewport: Viewport): void {
     if (!this.ctx) return;
 
@@ -179,7 +402,7 @@ class WaveformRenderer {
       this.ctx.stroke();
 
       // Draw time label
-      this.ctx.fillText(this.formatTime(tick), x + 2, height - 12);
+      this.ctx.fillText(Math.round(tick).toString(), x + 2, height - 12);
     }
   }
 
@@ -196,28 +419,6 @@ class WaveformRenderer {
     return 10 * magnitude;
   }
 
-  // Render from RenderChunk (GPU-ready data)
-  renderChunk(
-    _chunk: RenderChunk,
-    _viewport: Viewport,
-    canvasWidth: number,
-    canvasHeight: number
-  ): void {
-    // For now, just clear the canvas
-    if (!this.ctx || !this.canvas) return;
-    
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-  }
-
-  // Clear canvas
-  clear(): void {
-    if (!this.ctx || !this.canvas) return;
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-  }
-
-  // Resize canvas
   resize(width: number, height: number): void {
     if (this.canvas) {
       this.canvas.width = width;
@@ -225,17 +426,6 @@ class WaveformRenderer {
     }
   }
 
-  // Set signal height
-  setSignalHeight(height: number): void {
-    this.signalHeight = height;
-  }
-
-  // Set signal spacing
-  setSignalSpacing(spacing: number): void {
-    this.signalSpacing = spacing;
-  }
-
-  // Dispose resources
   dispose(): void {
     this.canvas = null;
     this.ctx = null;
@@ -244,5 +434,4 @@ class WaveformRenderer {
 
 // Singleton instance
 export const waveformRenderer = new WaveformRenderer();
-
 export { WaveformRenderer };
