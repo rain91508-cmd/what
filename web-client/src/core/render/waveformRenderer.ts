@@ -215,17 +215,17 @@ class WaveformRenderer {
     this.ctx.lineWidth = 1;
     this.ctx.strokeRect(x0, rectY, width, rectHeight);
 
-    // 绘制数值标签（居中）- 使用更大字体
+    // 绘制数值标签（居中）- 使用更大字体（不加粗）
     if (width > 20) {
       this.ctx.fillStyle = textColor;
-      this.ctx.font = 'bold 12px Consolas, Monaco, monospace';
-      
+      this.ctx.font = '13px Consolas, Monaco, monospace';
+
       // 截断标签以适应空间
       const label = this.truncateLabel(value.displayStr, width - 8);
       const textWidth = this.ctx.measureText(label).width;
       const textX = x0 + (width - textWidth) / 2;
       const textY = y + 4;  // 垂直居中
-      
+
       this.ctx.fillText(label, textX, textY);
     }
 
