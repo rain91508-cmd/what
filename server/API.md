@@ -432,13 +432,13 @@ GET /api/wave/{waveform_name}/signals/{signal_name}/info
 
 ---
 
-#### 3.5 获取波形数据
+#### 3.5 获取波形数据（旧 API，向后兼容）
 
 ```http
 GET /api/wave/{waveform_name}/signals/{signal_name}/data
 ```
 
-**描述**: 获取指定信号的波形数据，支持 LoD、压缩和 HTTP Range
+**描述**: 获取单个信号的波形数据（向后兼容，建议使用新 API）
 
 **路径参数**:
 - `waveform_name`: 波形文件名
@@ -450,10 +450,47 @@ GET /api/wave/{waveform_name}/signals/{signal_name}/data
 - `end`: 可选，结束时间（与波形文件的 `time_unit` 单位一致），默认文件结束时间
 - `compress`: 可选，压缩算法（"none", "zstd", "lz4"），默认 "none"
 
+---
+
+#### 3.6 获取波形数据（新 API，支持多信号）
+
+```http
+GET /api/wave/{waveform_name}/lod/{lod}/signals/{signal_pattern}/data
+```
+
+**描述**: 获取一个或多个信号的波形数据，LoD 在路径中，支持前缀压缩
+
+**路径参数**:
+- `waveform_name`: 波形文件名
+- `lod`: LoD (Level of Detail) 层级 0-11
+- `signal_pattern`: 信号模式（支持多信号和前缀压缩）
+
+**信号模式格式**:
+
+| 格式 | 示例 | 说明 |
+|------|------|------|
+| 单个信号 | `clk` | 获取单个信号 |
+| 多个信号 | `clk,reset,data` | 逗号分隔多个信号 |
+| 前缀压缩 | `p:cpu_/alu,reg,pc` | `p:` 前缀 + `/` 分隔，展开为 `cpu_alu,cpu_reg,cpu_pc` |
+
+**前缀压缩优势**:
+- 减少 URL 长度
+- CDN 缓存友好（每个 LoD 层级独立缓存）
+
+**URL 对比**:
+
+| 场景 | 原始 URL | 压缩 URL | 节省 |
+|------|---------|---------|------|
+| 4 个 cpu 信号 | `cpu_alu,cpu_reg,cpu_pc,cpu_mem` (31) | `p:cpu_/alu,reg,pc,mem` (22) | 29% |
+
+**查询参数**:
+- `start`: 可选，起始时间（与波形文件的 `time_unit` 单位一致），默认 0
+- `end`: 可选，结束时间（与波形文件的 `time_unit` 单位一致），默认文件结束时间
+- `compress`: 可选，压缩算法（"none", "zstd", "lz4"），默认 "none"
+
 **时间单位说明**:
 - 时间参数的单位与波形文件的 `time_unit` 一致
 - 例如：如果波形文件的 `time_unit` 为 "1ps"，则 `start=1000` 表示 1000ps
-- 客户端需要先通过 `/api/wave/{name}/info` 获取 `time_unit`，然后使用相同的单位查询数据
 
 **请求头**:
 - `Range`: 可选，支持断点续传（如 `bytes=0-1023`）
@@ -466,6 +503,7 @@ GET /api/wave/{waveform_name}/signals/{signal_name}/data
 - `Content-Length`: 数据长度
 - `Content-Range`: 数据范围（如果有 Range 请求）
 - `Accept-Ranges`: bytes
+- `Cache-Control`: `public, max-age=3600, immutable`（CDN 缓存优化）
 
 **响应数据格式（二进制）**:
 
