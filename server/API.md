@@ -432,27 +432,7 @@ GET /api/wave/{waveform_name}/signals/{signal_name}/info
 
 ---
 
-#### 3.5 获取波形数据（旧 API，向后兼容）
-
-```http
-GET /api/wave/{waveform_name}/signals/{signal_name}/data
-```
-
-**描述**: 获取单个信号的波形数据（向后兼容，建议使用新 API）
-
-**路径参数**:
-- `waveform_name`: 波形文件名
-- `signal_name`: 信号名称（URL 编码）
-
-**查询参数**:
-- `lod`: 可选，LoD (Level of Detail) 层级 0-11，默认 0
-- `start`: 可选，起始时间（与波形文件的 `time_unit` 单位一致），默认 0
-- `end`: 可选，结束时间（与波形文件的 `time_unit` 单位一致），默认文件结束时间
-- `compress`: 可选，压缩算法（"none", "zstd", "lz4"），默认 "none"
-
----
-
-#### 3.6 获取波形数据（新 API，支持多信号）
+#### 3.5 获取波形数据（支持多信号）
 
 ```http
 GET /api/wave/{waveform_name}/lod/{lod}/signals/{signal_pattern}/data

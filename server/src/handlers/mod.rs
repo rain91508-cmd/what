@@ -37,12 +37,7 @@ pub fn create_router(state: ServerState) -> Router<ServerState> {
             "/api/wave/:waveform_name/signals/:signal_name/info",
             get(get_signal_info),
         )
-        // 旧 API：单个信号（向后兼容）
-        .route(
-            "/api/wave/:waveform_name/signals/:signal_name/data",
-            get(get_wave_data),
-        )
-        // 新 API：多信号，LoD 在路径中，支持前缀压缩
+        // 波形数据 API：支持多信号，LoD 在路径中，支持前缀压缩
         // 格式：/api/wave/{waveform}/lod/{lod}/signals/{signal_pattern}/data
         // 示例：/api/wave/riscv2/lod/2/signals/clk,reset,data/data
         // 示例（有前缀）：/api/wave/riscv2/lod/2/signals/p:cpu_/alu,reg,pc/data

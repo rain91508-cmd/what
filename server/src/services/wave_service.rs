@@ -586,16 +586,25 @@ impl WaveService {
         );
 
         // 根据后端选择数据获取方式
-        let chunk_data = match self.backend {
+        let signal_data = match self.backend {
             FstBackend::FstApi => {
-                self.get_wave_data_fstapi(&wave_path, signal_name, lod_level, time_start, time_end, compression)
+                self.read_signal_data_fstapi(&wave_path, signal_name, lod_level, time_start, time_end)
                     .await?
             }
             FstBackend::WaveFst => {
-                self.get_wave_data_wavefst(&wave_path, signal_name, lod_level, time_start, time_end, compression)
+                self.read_signal_data_wavefst(&wave_path, signal_name, lod_level, time_start, time_end)
                     .await?
             }
         };
+        
+        // 序列化为 chunk
+        let chunk_data = ChunkSerializer::serialize(
+            0,
+            lod as u16,
+            &[&signal_data],
+            (time_start, time_end),
+            compression,
+        )?;
 
         // 处理 Range 请求
         let (data, content_length) = if let Some((start, end)) = range {
@@ -665,25 +674,33 @@ impl WaveService {
         );
 
         // 读取所有信号数据
-        // 读取所有信号数据并合并为单个 chunk
-        // 简化实现：直接返回第一个信号的 chunk
-        // TODO: 实现真正的多信号合并
         if signal_names.is_empty() {
             return Err(ServerError::SignalNotFound("No signals specified".to_string()));
         }
         
-        // 先读取第一个信号
-        let first_signal = &signal_names[0];
-        let chunk_data = match self.backend {
-            FstBackend::FstApi => {
-                self.get_wave_data_fstapi(&wave_path, first_signal, lod_level, time_start, time_end, compression)
-                    .await?
-            }
-            FstBackend::WaveFst => {
-                self.get_wave_data_wavefst(&wave_path, first_signal, lod_level, time_start, time_end, compression)
-                    .await?
-            }
-        };
+        // 读取所有信号并生成 LoD
+        let mut signal_data_list: Vec<SignalWaveData> = Vec::new();
+        for signal_name in signal_names {
+            let signal_data = match self.backend {
+                FstBackend::FstApi => {
+                    self.read_signal_data_fstapi(&wave_path, signal_name, lod_level, time_start, time_end).await?
+                }
+                FstBackend::WaveFst => {
+                    self.read_signal_data_wavefst(&wave_path, signal_name, lod_level, time_start, time_end).await?
+                }
+            };
+            signal_data_list.push(signal_data);
+        }
+        
+        // 序列化为多信号 chunk
+        let signal_refs: Vec<&SignalWaveData> = signal_data_list.iter().collect();
+        let chunk_data = ChunkSerializer::serialize(
+            0, // chunk_id
+            lod as u16,
+            &signal_refs,
+            (time_start, time_end),
+            compression,
+        )?;
 
         // 处理 Range 请求
         let (data, content_length) = if let Some((start, end)) = range {
@@ -791,22 +808,21 @@ impl WaveService {
         }
     }
 
-    /// 使用 fstapi 获取波形数据
-    async fn get_wave_data_fstapi(
+    /// 使用 fstapi 读取信号数据（返回 SignalWaveData）
+    async fn read_signal_data_fstapi(
         &self,
         wave_path: &PathBuf,
         signal_name: &str,
         lod: LodLevel,
         time_start: u64,
         time_end: u64,
-        compression: CompressionAlgorithm,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<SignalWaveData> {
         let path_str = wave_path.to_string_lossy().to_string();
         let signal_name = signal_name.to_string();
 
         // 使用 spawn_blocking 避免阻塞异步运行时
-        let chunk_data = tokio::task::spawn_blocking(move || {
-            info!("正在使用 fstapi 读取波形数据: {}, signal={}", path_str, signal_name);
+        let signal_data = tokio::task::spawn_blocking(move || {
+            info!("正在使用 fstapi 读取信号数据: {}, signal={}", path_str, signal_name);
 
             let mut reader = fstapi::Reader::open(&path_str)
                 .map_err(|e| {
@@ -861,50 +877,30 @@ impl WaveService {
             let config = LodConfig::default();
             let lod_data = LodPyramidGenerator::new(config).generate_level(&signal_data, lod);
 
-            // 序列化为 chunk（带压缩）
-            let chunk = ChunkSerializer::serialize(
-                0, // chunk_id
-                lod.0 as u16,
-                &[&lod_data],
-                (time_start, time_end),
-                compression,
-            )?;
+            info!("生成 LoD {} 数据: {} transitions", lod.0, lod_data.transitions.len());
 
-            info!("生成 chunk: {} bytes (compression={}), {} transitions (LoD {})", 
-                chunk.len(), compression.name(), lod_data.transitions.len(), lod.0);
-
-            Ok::<_, ServerError>(chunk)
+            Ok::<_, ServerError>(lod_data)
         })
         .await
         .map_err(|e| ServerError::Internal(format!("任务执行失败: {}", e)))??;
 
-        Ok(chunk_data)
+        Ok(signal_data)
     }
 
-    /// 使用 wavefst 获取波形数据
-    async fn get_wave_data_wavefst(
+    /// 使用 wavefst 读取信号数据（返回 SignalWaveData）
+    async fn read_signal_data_wavefst(
         &self,
         _wave_path: &PathBuf,
         _signal_name: &str,
-        lod: LodLevel,
-        time_start: u64,
-        time_end: u64,
-        compression: CompressionAlgorithm,
-    ) -> Result<Vec<u8>> {
+        _lod: LodLevel,
+        _time_start: u64,
+        _time_end: u64,
+    ) -> Result<SignalWaveData> {
         // wavefst 目前不支持读取实际波形数据
-        // 返回一个空的 chunk 作为占位符
+        // 返回一个空的 SignalWaveData 作为占位符
         info!("wavefst 后端暂不支持波形数据读取，返回空数据");
 
-        let signal_data = SignalWaveData::new(0, 1, SignalValueType::Numeric);
-        let chunk = ChunkSerializer::serialize(
-            0,
-            lod.0 as u16,
-            &[&signal_data],
-            (time_start, time_end),
-            compression,
-        )?;
-
-        Ok(chunk)
+        Ok(SignalWaveData::new(0, 1, SignalValueType::Numeric))
     }
 
     /// 获取波形文件的结束时间
