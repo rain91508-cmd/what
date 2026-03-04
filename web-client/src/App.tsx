@@ -68,6 +68,14 @@ import { initTimeConfig } from './components/TabPanel'
 // 这样时间标尺上显示的数值就是 LoD0Unit 的值
 const DEFAULT_TIME_CONFIG: TimeConfig = initTimeConfig(1, 3);
 
+// 默认列宽配置
+const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
+  name: 150,
+  value: 80,
+  type: 80,
+  group: 100,
+};
+
 function App() {
   const [initialized, setInitialized] = useState(false)
   const [connected, setConnected] = useState(false)
