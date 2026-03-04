@@ -250,10 +250,10 @@ impl WaveService {
             let time_unit = Self::read_fst_timescale(&path_str)?;
             info!("FST 文件时间单位: {}", time_unit);
 
-            // 将 FST 内部时间单位转换为飞秒 (fs)
-            let start_time = Self::fst_time_to_fs(start_time_fst, &time_unit);
-            let end_time = Self::fst_time_to_fs(end_time_fst, &time_unit);
-            info!("转换后的时间范围: {} fs - {} fs", start_time, end_time);
+            // 使用 FST 原始时间单位（不转换为 fs）
+            let start_time = start_time_fst;
+            let end_time = end_time_fst;
+            info!("时间范围: {} - {} (单位: {})", start_time, end_time, time_unit);
 
             Ok::<_, ServerError>(WaveInfo {
                 name: wave_name,
@@ -363,9 +363,9 @@ impl WaveService {
         // 解析时间单位字符串
         let time_unit = Self::exponent_to_time_unit(header.timescale_exponent);
 
-        // 将 FST 内部时间单位转换为飞秒 (fs)
-        let start_time = Self::fst_time_to_fs(header.start_time, &time_unit);
-        let end_time = Self::fst_time_to_fs(header.end_time, &time_unit);
+        // 使用 FST 原始时间单位（不转换为 fs）
+        let start_time = header.start_time;
+        let end_time = header.end_time;
 
         Ok(WaveInfo {
             name: wave_name.to_string(),
@@ -547,7 +547,7 @@ impl WaveService {
     ///
     /// 根据请求的 LoD 层级和时间范围，返回对应的 chunk 数据
     /// 
-    /// 注意：API 传入的时间参数单位是飞秒 (fs)，需要转换为 FST 内部时间单位
+    /// 注意：API 传入的时间参数单位与波形文件的 time_unit 一致
     pub async fn get_wave_data(
         &self,
         wave_name: &str,
@@ -571,23 +571,18 @@ impl WaveService {
         // 获取 FST 文件的时间单位
         let fst_time_unit = self.read_fst_timescale_str(&wave_path).await?;
         
-        // 将 API 传入的飞秒时间转换为 FST 内部时间单位
-        let api_time_start = start.max(0) as u64;
-        let api_time_end = if end > 0 {
+        // API 传入的时间已经是 time_unit 单位，直接使用
+        let time_start = start.max(0) as u64;
+        let time_end = if end > 0 {
             end as u64
         } else {
-            // 从 FST 文件获取结束时间（转换为飞秒）
-            let fst_end_time = self.get_wave_end_time(&wave_path).await.unwrap_or(1_000_000);
-            Self::fst_time_to_fs(fst_end_time, &fst_time_unit)
+            // 从 FST 文件获取结束时间
+            self.get_wave_end_time(&wave_path).await.unwrap_or(1_000_000)
         };
 
-        // 转换飞秒时间为 FST 内部时间单位（取整）
-        let time_start = Self::fs_to_fst_time(api_time_start, &fst_time_unit);
-        let time_end = Self::fs_to_fst_time(api_time_end, &fst_time_unit);
-
         info!(
-            "获取波形数据: wave={}, signal={}, lod={}, api_time={}-{} fs, fst_time={}-{} (unit={}), compression={}",
-            wave_name, signal_name, lod, api_time_start, api_time_end, time_start, time_end, fst_time_unit, compression.name()
+            "获取波形数据: wave={}, signal={}, lod={}, time={}-{} (unit={}), compression={}",
+            wave_name, signal_name, lod, time_start, time_end, fst_time_unit, compression.name()
         );
 
         // 根据后端选择数据获取方式

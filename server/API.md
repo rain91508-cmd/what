@@ -330,17 +330,17 @@ GET /api/wave/{waveform_name}/info
 - `name`: 波形名称
 - `file_size`: 文件大小（字节）
 - `signal_count`: 信号数量
-- `start_time`: 起始时间（飞秒 fs）
-- `end_time`: 结束时间（飞秒 fs）
-- `time_unit`: FST 文件原始时间单位（如 "1ps", "1ns"）
-- `time_precision`: 时间精度（与 time_unit 相同）
+- `start_time`: 起始时间（与 `time_unit` 单位一致）
+- `end_time`: 结束时间（与 `time_unit` 单位一致）
+- `time_unit`: FST 文件时间单位（如 "1ps", "1ns"）
+- `time_precision`: 时间精度（与 `time_unit` 相同）
 - `version`: 波形文件版本/生成工具
 - `date`: 生成日期
 
 **注意**: 
-- 所有时间值（`start_time`, `end_time`）都以**飞秒 (fs)** 为单位
-- `time_unit` 和 `time_precision` 显示 FST 文件的原始时间单位
-- 服务器自动将 FST 内部时间转换为飞秒
+- 所有时间值（`start_time`, `end_time`）的单位与 `time_unit` 一致
+- 例如：如果 `time_unit` 为 "1ps"，则 `start_time=1000` 表示 1000ps
+- 客户端需要根据 `time_unit` 解析时间值
 
 ---
 
@@ -446,15 +446,14 @@ GET /api/wave/{waveform_name}/signals/{signal_name}/data
 
 **查询参数**:
 - `lod`: 可选，LoD (Level of Detail) 层级 0-11，默认 0
-- `start`: 可选，起始时间（飞秒 fs），默认 0
-- `end`: 可选，结束时间（飞秒 fs），默认文件结束时间
+- `start`: 可选，起始时间（与波形文件的 `time_unit` 单位一致），默认 0
+- `end`: 可选，结束时间（与波形文件的 `time_unit` 单位一致），默认文件结束时间
 - `compress`: 可选，压缩算法（"none", "zstd", "lz4"），默认 "none"
 
 **时间单位说明**:
-- API 使用**飞秒 (fs, femtoseconds)** 作为时间单位
-- 1 fs = 10^-15 秒
-- 服务器会自动将 fs 转换为 FST 文件内部的时间单位
-- 支持的最小时间精度为 1 fs
+- 时间参数的单位与波形文件的 `time_unit` 一致
+- 例如：如果波形文件的 `time_unit` 为 "1ps"，则 `start=1000` 表示 1000ps
+- 客户端需要先通过 `/api/wave/{name}/info` 获取 `time_unit`，然后使用相同的单位查询数据
 
 **请求头**:
 - `Range`: 可选，支持断点续传（如 `bytes=0-1023`）
