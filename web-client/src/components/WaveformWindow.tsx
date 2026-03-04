@@ -32,6 +32,7 @@ interface WaveformWindowProps {
   onViewportChange?: (viewport: Viewport) => void;  // viewport 变化回调
   cursorPosition?: number;      // 外部控制的 cursor 位置（可选）
   onCursorPositionChange?: (position: number) => void;  // cursor 位置变化回调
+  useMockData?: boolean;        // 是否使用 mock 数据
 }
 
 interface CursorState {
@@ -75,6 +76,7 @@ export function WaveformWindow({
   onViewportChange,
   cursorPosition: externalCursorPosition,
   onCursorPositionChange,
+  useMockData = false,
 }: WaveformWindowProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
