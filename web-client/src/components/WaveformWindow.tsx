@@ -416,18 +416,42 @@ export function WaveformWindow({
     }
   };
 
-  // 鼠标按下：开始选择或设置 cursor
+  // 鼠标按下：立即设置 cursor 并开始选择
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
+    
+    // 立即设置 cursor 位置（在鼠标按下时刻）
+    const canvasWidth = rect.width;
+    const clickTime = viewport.timeStart + (x / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
+    
+    // 获取可见信号列表进行吸附
+    const visibleSignals = mockDataProvider.getSignalNames();
+    if (visibleSignals.length > 0 && useMockData) {
+      // 使用第一个可见信号进行吸附
+      const signalName = visibleSignals[0];
+      const { prev, next } = mockDataProvider.findTransitionsAround(signalName, clickTime);
+      const timeRange = viewport.timeEnd - viewport.timeStart;
+      const snapThreshold = Math.max(timeRange * 0.02, 10);
+      
+      let finalTime = clickTime;
+      if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
+        finalTime = prev;
+      } else if (next !== null && Math.abs(next - clickTime) <= snapThreshold) {
+        finalTime = next;
+      }
+      setCursor({ position: Math.round(finalTime), visible: true });
+    } else {
+      setCursor({ position: Math.round(clickTime), visible: true });
+    }
     
     // 开始拖动选择
     setIsSelecting(true);
     setSelectionStart(x);
     setSelectionEnd(x);
     selectionStartRef.current = x;
-  }, []);
+  }, [viewport, setCursor, useMockData]);
 
   // 鼠标移动：更新选择区域
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -457,7 +481,7 @@ export function WaveformWindow({
     // 注意：不在这里更新 cursor，只在单击时更新
   }, [viewport, isSelecting, canvasWidth]);
 
-  // 鼠标释放：结束选择并放大
+  // 鼠标释放：结束选择并放大（cursor 已在 mousedown 时设置）
   const handleCanvasMouseUp = useCallback(() => {
     if (!isSelecting || !canvasRef.current) return;
 
@@ -467,37 +491,8 @@ export function WaveformWindow({
     const startX = Math.min(selectionStart ?? 0, selectionEnd ?? 0);
     const endX = Math.max(selectionStart ?? 0, selectionEnd ?? 0);
 
-    // 如果选择区域太小（小于10像素），则不放大，只设置 cursor
-    if (endX - startX < 10) {
-      // 使用鼠标释放时的位置（endX），而不是 selectionStart
-      const clickTime = viewport.timeStart + (endX / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
-
-      // 获取可见信号列表
-      const visibleSignals = mockDataProvider.getSignalNames();
-
-      if (visibleSignals.length > 0) {
-        // 使用第一个可见信号进行吸附（简化处理）
-        const signalName = visibleSignals[0];
-        const { prev, next } = mockDataProvider.findTransitionsAround(signalName, clickTime);
-
-        // 基于时间距离进行吸附（而非像素距离）
-        // 吸附阈值：时间范围的 2% 或至少 10 个时间单位
-        const timeRange = viewport.timeEnd - viewport.timeStart;
-        const snapThreshold = Math.max(timeRange * 0.02, 10);
-
-        let finalTime = clickTime;
-
-        if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
-          finalTime = prev;
-        } else if (next !== null && Math.abs(next - clickTime) <= snapThreshold) {
-          finalTime = next;
-        }
-
-        setCursor({ position: Math.round(finalTime), visible: true });
-      } else {
-        setCursor({ position: Math.round(clickTime), visible: true });
-      }
-    } else {
+    // 如果选择区域足够大（大于等于10像素），则放大
+    if (endX - startX >= 10) {
       // 计算新的 viewport 时间范围
       const newTimeStart = viewport.timeStart + (startX / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
       const newTimeEnd = viewport.timeStart + (endX / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
@@ -508,13 +503,14 @@ export function WaveformWindow({
         timeEnd: newTimeEnd,
       }));
     }
+    // 注意：cursor 已在 mousedown 时设置，这里不再重复设置
 
     // 重置选择状态
     setIsSelecting(false);
     setSelectionStart(null);
     setSelectionEnd(null);
     selectionStartRef.current = null;
-  }, [isSelecting, selectionStart, selectionEnd, viewport, setViewport, setCursor]);
+  }, [isSelecting, selectionStart, selectionEnd, viewport, setViewport]);
 
   // Use refs for all cursor state to avoid dependency on React state in rAF loop
   const mousePosRef = useRef<number | null>(null);
