@@ -639,14 +639,14 @@ impl LodLevel {
         Self(level.min(Self::MAX_LEVEL))
     }
 
-    /// 获取 bucket 大小（2^level 个转换点）
+    /// 获取 bucket 大小（16^level 个转换点）
     ///
     /// LoD 0: 1 (原始数据)
-    /// LoD 1: 2 (每2个点合并)
-    /// LoD 2: 4 (每4个点合并)
-    /// LoD n: 2^n
+    /// LoD 1: 16 (每16个点合并)
+    /// LoD 2: 256 (每256个点合并)
+    /// LoD n: 16^n
     pub fn bucket_size(&self) -> usize {
-        1usize << self.0
+        16usize.pow(self.0)
     }
 
     /// 判断是否为有效层级
@@ -658,7 +658,7 @@ impl LodLevel {
 /// LoD 配置
 ///
 /// 注意：LoD 是基于数据点数量的降采样，与时间窗口无关。
-/// 每个 LoD 层级使用 bucket_size = 2^level 个转换点进行 min/max 降采样。
+/// 每个 LoD 层级使用 bucket_size = 16^level 个转换点进行 min/max 降采样。
 #[derive(Debug, Clone)]
 pub struct LodConfig {
     /// LoD 层级数量 (0 表示原始数据，1+ 表示降采样层级)
@@ -1308,9 +1308,9 @@ mod tests {
     #[test]
     fn test_lod_bucket_size() {
         assert_eq!(LodLevel(0).bucket_size(), 1);
-        assert_eq!(LodLevel(1).bucket_size(), 2);
-        assert_eq!(LodLevel(5).bucket_size(), 32);
-        assert_eq!(LodLevel(10).bucket_size(), 1024);
+        assert_eq!(LodLevel(1).bucket_size(), 16);
+        assert_eq!(LodLevel(2).bucket_size(), 256);
+        assert_eq!(LodLevel(3).bucket_size(), 4096);
     }
 
     #[test]
