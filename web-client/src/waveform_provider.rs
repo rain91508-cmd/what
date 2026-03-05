@@ -46,12 +46,18 @@ pub struct RenderSegment {
 }
 
 /// Value information for rendering
+/// For LoD 0: only min_value is used
+/// For LoD 1+: both min_value and max_value are used (min/max bucket)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValueInfo {
-    pub value_type: String,  // "zero", "one", "all_x", "all_z", "numeric", "mixed"
-    pub display_str: String,
+    pub value_type: String,  // "zero", "one", "all_x", "all_z", "numeric", "mixed", "min_max"
+    pub display_str: String, // Display string (for LoD 0, or when min==max)
     pub width: u32,
     pub has_xz: bool,
+    // LoD 1+ min/max support
+    pub min_value: Option<String>,  // Min value for bucket (LoD 1+)
+    pub max_value: Option<String>,  // Max value for bucket (LoD 1+)
+    pub is_min_max: bool,           // True if this is a min/max bucket segment
 }
 
 /// Transition data point
@@ -67,6 +73,65 @@ pub struct SignalWaveData {
     pub name: String,
     pub width: u32,
     pub transitions: Vec<Transition>,
+}
+
+/// LoD (Level of Detail) configuration
+/// Bucket size = 16^lod (number of transitions merged into one)
+const LOD_TABLE: [(u32, u64); 8] = [
+    (0, 1),           // LOD0: bucket size 1 (原始数据)
+    (1, 16),          // LOD1: bucket size 16 (16:1 压缩)
+    (2, 256),         // LOD2: bucket size 256 (256:1 压缩)
+    (3, 4_096),       // LOD3: bucket size 4096
+    (4, 65_536),      // LOD4: bucket size 65536
+    (5, 1_048_576),   // LOD5: bucket size ~1M
+    (6, 16_777_216),  // LOD6: bucket size ~16M
+    (7, 268_435_456), // LOD7: bucket size ~268M
+];
+
+/// Calculate appropriate LoD based on viewport and canvas width
+/// Goal: 1-2 transitions per pixel (avoid over-sampling)
+/// 
+/// Algorithm:
+/// 1. Estimate total transitions at LoD 0 (based on time_span and assumed density)
+/// 2. Target: canvas_width * 2 transitions (1-2 per pixel)
+/// 3. Select LoD where bucket_size reduces transitions to target range
+fn select_lod(viewport: &Viewport, canvas_width: f64) -> u32 {
+    if canvas_width <= 0.0 {
+        return 0;
+    }
+    
+    let time_span = viewport.time_end - viewport.time_start;
+    
+    // Estimate transition density: from test data, ~1 transition per 500k time units
+    // This is a heuristic - actual density varies by signal
+    const ESTIMATED_TRANSITION_DENSITY: f64 = 1.0 / 500_000.0;
+    
+    // Estimate total transitions at LoD 0
+    let estimated_transitions = time_span * ESTIMATED_TRANSITION_DENSITY;
+    
+    // Target: 1-2 transitions per pixel
+    let target_transitions = canvas_width * 2.0;
+    
+    // Calculate required compression ratio
+    let required_compression = estimated_transitions / target_transitions;
+    
+    console_log!("[WASM] LoD selection: time_span={}, est_transitions={:.0}, target={:.0}, required_compression={:.1}", 
+        time_span, estimated_transitions, target_transitions, required_compression);
+    
+    // Find the LoD with bucket_size >= required_compression
+    // This ensures we don't over-sample (too many transitions per pixel)
+    for (lod, bucket_size) in LOD_TABLE.iter() {
+        if (*bucket_size as f64) >= required_compression {
+            console_log!("[WASM] Selected LoD {} (bucket_size: {}, est_transitions_at_lod: {:.0})", 
+                lod, bucket_size, estimated_transitions / (*bucket_size as f64));
+            return *lod;
+        }
+    }
+    
+    // If none found, use max LoD
+    let max_lod = LOD_TABLE.last().unwrap().0;
+    console_log!("[WASM] Selected max LoD {}", max_lod);
+    max_lod
 }
 
 /// Chunk header (32 bytes)
@@ -148,6 +213,7 @@ pub struct WaveformDataProvider {
     waveform_name: String,
     signal_prefix: String,
     space_before_bracket: bool,
+    time_stamp: u64,  // Waveform modification timestamp for CDN cache
     signals: Vec<SignalInfo>,
     viewport: Viewport,
     canvas_width: f64,
@@ -165,15 +231,17 @@ impl WaveformDataProvider {
         waveform_name: String,
         signal_prefix: String,
         space_before_bracket: bool,
+        time_stamp: u64,
     ) -> Self {
-        console_log!("[WASM] WaveformDataProvider created: waveform={}, prefix='{}', space={}",
-            waveform_name, signal_prefix, space_before_bracket);
+        console_log!("[WASM] WaveformDataProvider created: waveform={}, prefix='{}', space={}, time_stamp={}",
+            waveform_name, signal_prefix, space_before_bracket, time_stamp);
 
         Self {
             server_url: server_url.clone(),
             waveform_name: waveform_name.clone(),
             signal_prefix,
             space_before_bracket,
+            time_stamp,
             signals: Vec::new(),
             viewport: Viewport { time_start: 0.0, time_end: 1000.0 },
             canvas_width: 800.0,
@@ -205,6 +273,12 @@ impl WaveformDataProvider {
     #[wasm_bindgen(getter)]
     pub fn space_before_bracket(&self) -> bool {
         self.space_before_bracket
+    }
+
+    /// Get current LoD based on viewport and canvas
+    #[wasm_bindgen(getter)]
+    pub fn current_lod(&self) -> u32 {
+        select_lod(&self.viewport, self.canvas_width)
     }
 
     /// Set signal prefix
@@ -296,7 +370,7 @@ impl WaveformDataProvider {
         server_name
     }
 
-    /// Fetch signal data from server
+    /// Fetch signal data from server with time range
     /// signal_name: local signal name (from KDB)
     pub async fn fetch_signal_data(&mut self, local_signal_name: &str) -> Result<(), JsValue> {
         // Step 1 & 2: Convert local name to server name
@@ -305,12 +379,26 @@ impl WaveformDataProvider {
         // Step 3: Base64 encode (no regex escaping needed)
         let encoded = general_purpose::STANDARD.encode(&server_name);
 
-        let url = format!("{}/api/wave/{}/lod/0/signals/b64:{}/data",
+        // Calculate appropriate LoD
+        let lod = select_lod(&self.viewport, self.canvas_width);
+
+        // Get time range from viewport
+        let time_start = self.viewport.time_start as u64;
+        let time_end = self.viewport.time_end as u64;
+
+        // Build URL with new API format: /api/wave/{name}/lod/{lod}/time/{start}/{end}/compress/{compress}/signals/{names}/data
+        // Add time_stamp query parameter for CDN cache
+        let url = format!("{}/api/wave/{}/lod/{}/time/{}/{}/compress/none/signals/b64:{}/data?time_stamp={}",
             self.server_url,
             self.waveform_name,
-            encoded);
+            lod,
+            time_start,
+            time_end,
+            encoded,
+            self.time_stamp);
 
-        console_log!("[WASM] Fetching signal '{}' (server name: '{}')", local_signal_name, server_name);
+        console_log!("[WASM] Fetching signal '{}' (server name: '{}') at LoD {}, time {}-{}, time_stamp={}", 
+            local_signal_name, server_name, lod, time_start, time_end, self.time_stamp);
         console_log!("[WASM] URL: {}", url);
 
         // Use web-sys to fetch data
@@ -346,7 +434,157 @@ impl WaveformDataProvider {
         Ok(())
     }
 
-    /// Parse chunk binary data
+    /// Fetch multiple signals data from server in batch with dynamic LoD
+    /// signal_names: array of local signal names (from KDB)
+    /// max_batch_size: maximum number of signals per request (default 256)
+    pub async fn fetch_signals_data_batch(&mut self, signal_names: Vec<String>) -> Result<(), JsValue> {
+        const MAX_BATCH_SIZE: usize = 256;
+        
+        let total_signals = signal_names.len();
+        
+        // Calculate appropriate LoD based on current viewport and canvas
+        let lod = select_lod(&self.viewport, self.canvas_width);
+
+        // Get time range from viewport
+        let time_start = self.viewport.time_start as u64;
+        let time_end = self.viewport.time_end as u64;
+
+        console_log!("[WASM] Fetching {} signals in batches (max {} per batch) at LoD {}, time {}-{}",
+            total_signals, MAX_BATCH_SIZE, lod, time_start, time_end);
+
+        // Process signals in batches
+        for (batch_idx, batch) in signal_names.chunks(MAX_BATCH_SIZE).enumerate() {
+            let batch_size = batch.len();
+            console_log!("[WASM] Processing batch {}: {} signals", batch_idx + 1, batch_size);
+
+            // Convert all signal names to server names
+            let server_names: Vec<String> = batch.iter()
+                .map(|local_name| self.build_server_signal_name(local_name))
+                .collect();
+
+            // Join server names with comma, then base64 encode the whole string
+            // This matches the API spec: "clk,reset,data" -> base64
+            let names_batch = server_names.join(",");
+            let encoded_batch = general_purpose::STANDARD.encode(&names_batch);
+
+            // Build URL for batch request with new API format
+            // Add time_stamp query parameter for CDN cache
+            let url = format!("{}/api/wave/{}/lod/{}/time/{}/{}/compress/none/signals/b64:{}/data?time_stamp={}",
+                self.server_url,
+                self.waveform_name,
+                lod,
+                time_start,
+                time_end,
+                encoded_batch,
+                self.time_stamp);
+
+            console_log!("[WASM] Batch {} URL: {} (time_stamp={})", batch_idx + 1, url, self.time_stamp);
+            
+            // Fetch batch data
+            let window = web_sys::window().ok_or(JsValue::from_str("No window"))?;
+            let resp_value: JsValue = wasm_bindgen_futures::JsFuture::from(
+                window.fetch_with_str(&url)
+            ).await?;
+            
+            let resp: web_sys::Response = resp_value.dyn_into()
+                .map_err(|_| JsValue::from_str("Invalid response"))?;
+            
+            if !resp.ok() {
+                return Err(JsValue::from_str(&format!("HTTP error: {}", resp.status())));
+            }
+            
+            // Get array buffer
+            let data: JsValue = wasm_bindgen_futures::JsFuture::from(
+                resp.array_buffer()?
+            ).await?;
+            
+            let array_buffer: js_sys::ArrayBuffer = data.dyn_into()
+                .map_err(|_| JsValue::from_str("Invalid array buffer"))?;
+            
+            let uint8_array = js_sys::Uint8Array::new(&array_buffer);
+            let mut bytes = vec![0u8; uint8_array.length() as usize];
+            uint8_array.copy_to(&mut bytes);
+            
+            console_log!("[WASM] Batch {} received {} bytes", batch_idx + 1, bytes.len());
+            
+            // Parse chunk data for all signals in batch
+            // Server returns multiple signals in one chunk
+            self.parse_chunk_data_for_batch(&batch, &bytes)?;
+        }
+        
+        console_log!("[WASM] Finished fetching {} signals in {} batches", total_signals, 
+            (total_signals + MAX_BATCH_SIZE - 1) / MAX_BATCH_SIZE);
+        
+        Ok(())
+    }
+
+    /// Parse chunk data for a batch of signals
+    /// The batch order must match the order in the chunk
+    fn parse_chunk_data_for_batch(&mut self, batch: &[String], data: &[u8]) -> Result<(), JsValue> {
+        // Parse header
+        let header = ChunkHeader::from_bytes(data)
+            .map_err(|e| JsValue::from_str(&e))?;
+
+        console_log!("[WASM] Chunk for batch: level={}, signals={}, time={}-{}",
+            header.level, header.signal_count, header.time_start, header.time_end);
+
+        if header.signal_count as usize != batch.len() {
+            console_log!("[WASM] Warning: Chunk signal count ({}) != batch size ({})",
+                header.signal_count, batch.len());
+        }
+
+        // Parse each signal block
+        let mut offset = ChunkHeader::SIZE;
+        
+        for signal_idx in 0..header.signal_count.min(batch.len() as u32) {
+            if offset + SignalBlockHeader::SIZE > data.len() {
+                console_log!("[WASM] Warning: Not enough data for signal block {}", signal_idx);
+                break;
+            }
+
+            // Parse signal block header
+            let block_header = SignalBlockHeader::from_bytes(&data[offset..])
+                .map_err(|e| JsValue::from_str(&e))?;
+
+            console_log!("[WASM] Signal block {}: handle={}, transitions={}",
+                signal_idx, block_header.signal_handle, block_header.transition_count);
+
+            // Get signal name from batch (same order as server)
+            let signal_name = &batch[signal_idx as usize];
+
+            // Parse transitions for this signal
+            let transitions = self.parse_transitions_from_block(
+                data,
+                &block_header,
+                &header,
+                signal_idx as usize
+            )?;
+
+            // Get width from signal info
+            let width = self.get_signal_width(signal_name);
+
+            // Store signal data
+            self.signal_data.insert(signal_name.clone(), SignalWaveData {
+                name: signal_name.clone(),
+                width,
+                transitions,
+            });
+
+            offset += SignalBlockHeader::SIZE;
+        }
+
+        Ok(())
+    }
+
+    /// Get signal width from signal info
+    fn get_signal_width(&self, signal_name: &str) -> u32 {
+        self.signals.iter()
+            .find(|s| s.name == signal_name)
+            .map(|s| s.width)
+            .unwrap_or(1)
+    }
+
+    /// Parse chunk binary data for single signal (legacy method)
     fn parse_chunk_data(&mut self, signal_name: &str, data: &[u8]) -> Result<(), JsValue> {
         // Parse header
         let header = ChunkHeader::from_bytes(data)
@@ -355,15 +593,95 @@ impl WaveformDataProvider {
         console_log!("[WASM] Chunk: level={}, signals={}, time={}-{}",
             header.level, header.signal_count, header.time_start, header.time_end);
 
-        // For now, just store mock data
-        // TODO: Implement full chunk parsing
-        let width = 1; // TODO: Get from signal info
+        // If chunk contains multiple signals, parse all of them
+        if header.signal_count > 1 {
+            self.parse_multi_signal_chunk(data, &header)?;
+        } else {
+            // Single signal - parse and store with the given name
+            self.parse_single_signal_chunk(signal_name, data, &header)?;
+        }
 
-        let transitions = vec![
-            Transition { time: header.time_start, value: "0".to_string() },
-            Transition { time: (header.time_start + header.time_end) / 2, value: "1".to_string() },
-            Transition { time: header.time_end, value: "0".to_string() },
-        ];
+        Ok(())
+    }
+
+    /// Parse chunk containing multiple signals
+    fn parse_multi_signal_chunk(&mut self, data: &[u8], header: &ChunkHeader) -> Result<(), JsValue> {
+        let mut offset = ChunkHeader::SIZE;
+
+        // Parse each signal block
+        for signal_idx in 0..header.signal_count {
+            if offset + SignalBlockHeader::SIZE > data.len() {
+                console_log!("[WASM] Warning: Not enough data for signal block {}", signal_idx);
+                break;
+            }
+
+            // Parse signal block header
+            let block_header = SignalBlockHeader::from_bytes(&data[offset..])
+                .map_err(|e| JsValue::from_str(&e))?;
+
+            console_log!("[WASM] Signal block {}: handle={}, transitions={}",
+                signal_idx, block_header.signal_handle, block_header.transition_count);
+
+            // Find signal name by handle (we need to map handle to name)
+            // For now, use the signal at the same index in our signals list
+            let signal_name = if (signal_idx as usize) < self.signals.len() {
+                self.signals[signal_idx as usize].name.clone()
+            } else {
+                format!("signal_{}", block_header.signal_handle)
+            };
+
+            // Parse transitions for this signal
+            let transitions = self.parse_transitions_from_block(
+                data,
+                &block_header,
+                header,
+                signal_idx as usize
+            )?;
+
+            // Get width from signal info
+            let width = if (signal_idx as usize) < self.signals.len() {
+                self.signals[signal_idx as usize].width
+            } else {
+                1
+            };
+
+            // Store signal data
+            self.signal_data.insert(signal_name.clone(), SignalWaveData {
+                name: signal_name,
+                width,
+                transitions,
+            });
+
+            offset += SignalBlockHeader::SIZE;
+        }
+
+        Ok(())
+    }
+
+    /// Parse single signal chunk
+    fn parse_single_signal_chunk(&mut self, signal_name: &str, data: &[u8], header: &ChunkHeader) -> Result<(), JsValue> {
+        if data.len() < ChunkHeader::SIZE + SignalBlockHeader::SIZE {
+            console_log!("[WASM] Error: Not enough data for single signal chunk, got {} bytes", data.len());
+            return Err(JsValue::from_str("Not enough data for single signal chunk"));
+        }
+
+        // Parse signal block header
+        let block_header = SignalBlockHeader::from_bytes(&data[ChunkHeader::SIZE..])
+            .map_err(|e| JsValue::from_str(&e))?;
+
+        console_log!("[WASM] Single signal block: handle={}, transitions={}",
+            block_header.signal_handle, block_header.transition_count);
+
+        // Parse transitions
+        let transitions = self.parse_transitions_from_block(
+            data,
+            &block_header,
+            header,
+            0
+        )?;
+
+        // Get width from signal info if available
+        let width = self.get_signal_width(signal_name);
 
         self.signal_data.insert(signal_name.to_string(), SignalWaveData {
             name: signal_name.to_string(),
@@ -372,6 +690,114 @@ impl WaveformDataProvider {
         });
 
         Ok(())
+    }
+
+    /// Parse transitions from a signal block
+    /// Data format from server:
+    /// - Time array: [time0(u64), time1(u64), ...] (compressed)
+    /// - Value array: [type(u8), len(u16), value_bytes...] × transition_count
+    fn parse_transitions_from_block(
+        &self,
+        data: &[u8],
+        block_header: &SignalBlockHeader,
+        chunk_header: &ChunkHeader,
+        signal_index: usize,
+    ) -> Result<Vec<Transition>, JsValue> {
+        let mut transitions = Vec::new();
+
+        // Calculate offsets based on SignalBlockHeader
+        // Note: time_array_offset and value_array_offset are ABSOLUTE from start of chunk
+        // NOT relative to data_area_start
+        let time_array_start = block_header.time_array_offset as usize;
+        let value_array_start = block_header.value_array_offset as usize;
+
+        console_log!("[WASM] Parsing transitions for signal {}: time_start={}, value_start={}, transitions={}",
+            signal_index, time_array_start, value_array_start, block_header.transition_count);
+
+        // Parse each transition
+        let mut value_idx = value_array_start;
+        for i in 0..block_header.transition_count {
+            let time_idx = time_array_start + (i as usize * 8);
+
+            // Check bounds for time
+            if time_idx + 8 > data.len() {
+                console_log!("[WASM] Warning: Time data out of bounds at index {}", i);
+                break;
+            }
+
+            // Parse time (u64, little-endian)
+            let time = u64::from_le_bytes([
+                data[time_idx], data[time_idx + 1], data[time_idx + 2], data[time_idx + 3],
+                data[time_idx + 4], data[time_idx + 5], data[time_idx + 6], data[time_idx + 7],
+            ]);
+
+            // Parse value according to FST-like format
+            // Format: [type(u8), length(u16), value_bytes...]
+            if value_idx + 3 > data.len() {
+                console_log!("[WASM] Warning: Value header out of bounds at index {}", i);
+                break;
+            }
+
+            let value_type = data[value_idx];
+            let value_len = u16::from_le_bytes([data[value_idx + 1], data[value_idx + 2]]) as usize;
+            value_idx += 3;
+
+            if value_idx + value_len > data.len() {
+                console_log!("[WASM] Warning: Value data out of bounds at index {} (len={})", i, value_len);
+                break;
+            }
+
+            // Parse value based on type
+            let value = match value_type {
+                0 => {
+                    // Numeric/String type - read as UTF-8 string
+                    String::from_utf8_lossy(&data[value_idx..value_idx + value_len]).to_string()
+                }
+                1 => {
+                    // Real type (f64)
+                    if value_len == 8 {
+                        let bytes = &data[value_idx..value_idx + 8];
+                        let f = f64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3],
+                                                    bytes[4], bytes[5], bytes[6], bytes[7]]);
+                        format!("{:.6}", f)
+                    } else {
+                        format!("Real({}bytes)", value_len)
+                    }
+                }
+                2 => {
+                    // Binary compressed - show as hex
+                    let hex: String = data[value_idx..value_idx + value_len.min(8)]
+                        .iter()
+                        .map(|b| format!("{:02X}", b))
+                        .collect();
+                    if value_len > 8 {
+                        format!("{}...({}bytes)", hex, value_len)
+                    } else {
+                        hex
+                    }
+                }
+                _ => {
+                    // Unknown type - show as hex
+                    let hex: String = data[value_idx..value_idx + value_len.min(8)]
+                        .iter()
+                        .map(|b| format!("{:02X}", b))
+                        .collect();
+                    format!("Type{}:{}", value_type, hex)
+                }
+            };
+
+            value_idx += value_len;
+            transitions.push(Transition { time, value });
+        }
+
+        if transitions.is_empty() {
+            // Fallback: create at least one transition
+            console_log!("[WASM] Warning: No transitions parsed, using fallback");
+            transitions.push(Transition { time: chunk_header.time_start, value: "0".to_string() });
+        }
+
+        console_log!("[WASM] Parsed {} transitions at LoD {}", transitions.len(), chunk_header.level);
+        Ok(transitions)
     }
 
     /// Get render segments for current viewport
@@ -390,62 +816,25 @@ impl WaveformDataProvider {
             console_log!("[WASM] Processing signal[{}]: name='{}', y={}", row, signal.name, y);
 
             if let Some(data) = self.signal_data.get(&signal.name) {
-                // Count transitions in viewport
                 let total_transitions = data.transitions.len();
-                let viewport_transitions = data.transitions.iter()
-                    .filter(|t| {
-                        let t_end = t.time as f64;
-                        let t_start = if let Some(idx) = data.transitions.iter().position(|x| x.time == t.time) {
-                            if idx > 0 { data.transitions[idx - 1].time as f64 } else { 0.0 }
-                        } else { 0.0 };
-                        !(t_end < self.viewport.time_start || t_start > self.viewport.time_end)
-                    })
-                    .count();
-                console_log!("[WASM]   Total transitions: {}, In viewport: {}", total_transitions, viewport_transitions);
-                // Generate segments from transitions
-                for i in 0..data.transitions.len() {
-                    let t0 = data.transitions[i].time as f64;
-                    let t1 = if i + 1 < data.transitions.len() {
-                        data.transitions[i + 1].time as f64
-                    } else {
-                        self.viewport.time_end
-                    };
+                console_log!("[WASM]   Total transitions: {}", total_transitions);
 
-                    // Skip if outside viewport
-                    if t1 < self.viewport.time_start || t0 > self.viewport.time_end {
-                        continue;
-                    }
+                // Check if this is LoD 1+ data (min/max format)
+                // LoD 1+ has transitions with same timestamp in pairs (min, max)
+                let is_lod_min_max = self.detect_min_max_format(&data.transitions);
 
-                    // Clamp to viewport
-                    let t0_clamped = t0.max(self.viewport.time_start);
-                    let t1_clamped = t1.min(self.viewport.time_end);
-
-                    // Convert to pixels
-                    let x0 = ((t0_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
-                    let x1 = ((t1_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
-
-                    let value_str = &data.transitions[i].value;
-                    let (value_type, has_xz) = Self::classify_value(value_str, data.width);
-
-                    // Debug first few segments
-                    if segments.len() < 3 {
-                        console_log!("[WASM]     Segment[{}]: x0={:.2}, x1={:.2}, value='{}'", segments.len(), x0, x1, value_str);
-                    }
-
-                    segments.push(RenderSegment {
-                        x0,
-                        x1,
-                        y,
-                        value: ValueInfo {
-                            value_type,
-                            display_str: value_str.clone(),
-                            width: data.width,
-                            has_xz,
-                        },
-                        signal_name: signal.name.clone(),
-                    });
+                if is_lod_min_max {
+                    // Process LoD 1+ min/max format
+                    self.generate_min_max_segments(&data.transitions, data.width, y, &signal.name, 
+                        time_range, &mut segments);
+                } else {
+                    // Process LoD 0 format (original)
+                    self.generate_normal_segments(&data.transitions, data.width, y, &signal.name,
+                        time_range, &mut segments);
                 }
-                console_log!("[WASM]   Generated {} segments for signal '{}'", segments.len(), signal.name);
+
+                console_log!("[WASM]   Generated {} segments for signal '{}'", 
+                    segments.len(), signal.name);
             } else {
                 console_log!("[WASM]   No data found for signal '{}'", signal.name);
             }
@@ -455,6 +844,156 @@ impl WaveformDataProvider {
 
         serde_wasm_bindgen::to_value(&segments)
             .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)))
+    }
+
+    /// Detect if transitions are in min/max format (LoD 1+)
+    /// Returns true if consecutive transitions have the same timestamp
+    fn detect_min_max_format(&self, transitions: &[Transition]) -> bool {
+        if transitions.len() < 2 {
+            return false;
+        }
+        // Check first few transitions for same timestamp pattern
+        for i in 0..transitions.len().min(4).saturating_sub(1) {
+            if transitions[i].time == transitions[i + 1].time {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Generate segments for LoD 0 (normal format)
+    fn generate_normal_segments(&self, transitions: &[Transition], width: u32, y: f64, 
+        signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>) {
+        
+        for i in 0..transitions.len() {
+            let t0 = transitions[i].time as f64;
+            let t1 = if i + 1 < transitions.len() {
+                transitions[i + 1].time as f64
+            } else {
+                self.viewport.time_end
+            };
+
+            // Skip if outside viewport
+            if t1 < self.viewport.time_start || t0 > self.viewport.time_end {
+                continue;
+            }
+
+            // Clamp to viewport
+            let t0_clamped = t0.max(self.viewport.time_start);
+            let t1_clamped = t1.min(self.viewport.time_end);
+
+            // Convert to pixels
+            let x0 = ((t0_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
+            let x1 = ((t1_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
+
+            let value_str = &transitions[i].value;
+            let (value_type, has_xz) = Self::classify_value(value_str, width);
+
+            segments.push(RenderSegment {
+                x0,
+                x1,
+                y,
+                value: ValueInfo {
+                    value_type,
+                    display_str: value_str.clone(),
+                    width,
+                    has_xz,
+                    min_value: None,
+                    max_value: None,
+                    is_min_max: false,
+                },
+                signal_name: signal_name.to_string(),
+            });
+        }
+    }
+
+    /// Generate segments for LoD 1+ (min/max format)
+    /// Groups transitions by timestamp and creates min/max segments
+    fn generate_min_max_segments(&self, transitions: &[Transition], width: u32, y: f64,
+        signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>) {
+        
+        // Group transitions by timestamp
+        let mut i = 0;
+        while i < transitions.len() {
+            let time = transitions[i].time;
+            let mut values = vec![&transitions[i].value];
+            
+            // Collect all values with the same timestamp
+            let mut j = i + 1;
+            while j < transitions.len() && transitions[j].time == time {
+                values.push(&transitions[j].value);
+                j += 1;
+            }
+            
+            // Determine next time (end of this bucket)
+            let next_time = if j < transitions.len() {
+                transitions[j].time as f64
+            } else {
+                self.viewport.time_end
+            };
+            
+            let time_f = time as f64;
+            
+            // Skip if outside viewport
+            if next_time < self.viewport.time_start || time_f > self.viewport.time_end {
+                i = j;
+                continue;
+            }
+            
+            // Clamp to viewport
+            let t0_clamped = time_f.max(self.viewport.time_start);
+            let t1_clamped = next_time.min(self.viewport.time_end);
+            
+            // Convert to pixels
+            let x0 = ((t0_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
+            let x1 = ((t1_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
+            
+            // Extract min and max values
+            let (min_val, max_val) = if values.len() >= 2 {
+                (values[0].clone(), values[1].clone())
+            } else {
+                (values[0].clone(), values[0].clone())
+            };
+            
+            // Check if min != max and neither is X/Z
+            let min_upper = min_val.to_uppercase();
+            let max_upper = max_val.to_uppercase();
+            let has_xz = min_upper.contains('X') || min_upper.contains('Z') ||
+                        max_upper.contains('X') || max_upper.contains('Z');
+            let is_changing = min_val != max_val && !has_xz;
+            
+            let (value_type, display_str) = if is_changing {
+                if width == 1 {
+                    // Single bit: draw vertical line
+                    ("min_max".to_string(), format!("{}/{}", min_val, max_val))
+                } else {
+                    // Multi-bit: grid pattern
+                    ("min_max".to_string(), format!("{}..{}", min_val, max_val))
+                }
+            } else {
+                // min == max or has X/Z, treat as normal value
+                let (vt, _) = Self::classify_value(&min_val, width);
+                (vt, min_val.clone())
+            };
+            
+            segments.push(RenderSegment {
+                x0,
+                x1,
+                y,
+                value: ValueInfo {
+                    value_type,
+                    display_str,
+                    width,
+                    has_xz,
+                    min_value: Some(min_val),
+                    max_value: Some(max_val),
+                    is_min_max: is_changing,
+                },
+                signal_name: signal_name.to_string(),
+            });
+            
+            i = j;
+        }
     }
 
     /// Classify value for rendering
@@ -477,6 +1016,73 @@ impl WaveformDataProvider {
     pub fn get_signal_names(&self) -> JsValue {
         let names: Vec<&str> = self.signals.iter().map(|s| s.name.as_str()).collect();
         serde_wasm_bindgen::to_value(&names).unwrap_or(JsValue::NULL)
+    }
+
+    /// Find transitions around a specific time for cursor snapping
+    /// Returns [prev_time, next_time] where null means no transition found
+    pub fn find_transitions_around(&self, signal_name: &str, time: f64) -> JsValue {
+        if let Some(data) = self.signal_data.get(signal_name) {
+            let mut prev: Option<u64> = None;
+            let mut next: Option<u64> = None;
+
+            for transition in &data.transitions {
+                let t = transition.time as f64;
+                if t < time {
+                    prev = Some(transition.time);
+                } else if t > time && next.is_none() {
+                    next = Some(transition.time);
+                    break; // Found next, no need to continue
+                }
+            }
+
+            let result = vec![prev, next];
+            serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+        } else {
+            JsValue::NULL
+        }
+    }
+
+    /// Get signal value at a specific time
+    /// Returns the value of the signal at the given time (from cached data)
+    /// If data is not cached, returns null
+    pub fn get_signal_value_at_time(&self, signal_name: &str, time: f64) -> JsValue {
+        if let Some(data) = self.signal_data.get(signal_name) {
+            let time_u64 = time as u64;
+            
+            // Find the transition that covers this time
+            // The value is valid from transition.time until the next transition
+            let mut current_value = None;
+            
+            for (i, transition) in data.transitions.iter().enumerate() {
+                if transition.time <= time_u64 {
+                    current_value = Some(&transition.value);
+                } else {
+                    break; // transition.time > time_u64, stop searching
+                }
+            }
+            
+            // Return the value info
+            if let Some(value_str) = current_value {
+                let (value_type, has_xz) = Self::classify_value(value_str, data.width);
+                let value_info = ValueInfo {
+                    value_type,
+                    display_str: value_str.clone(),
+                    width: data.width,
+                    has_xz,
+                    min_value: None,
+                    max_value: None,
+                    is_min_max: false,
+                };
+                serde_wasm_bindgen::to_value(&value_info).unwrap_or(JsValue::NULL)
+            } else {
+                // No transition found before this time
+                JsValue::NULL
+            }
+        } else {
+            // Signal data not cached
+            console_log!("[WASM] get_signal_value_at_time: No cached data for signal '{}'", signal_name);
+            JsValue::NULL
+        }
     }
 
     /// Test signal name conversion (for debugging)

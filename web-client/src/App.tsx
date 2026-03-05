@@ -67,7 +67,7 @@ import { SESSION_VERSION } from './types/session'
 // Types
 import type { Signal } from './types/kdb'
 import type { WaveformInfo, ColumnWidths, TimeConfig, Tab, NavigationHistoryEntry } from './components/TabPanel'
-import { initTimeConfig } from './components/TabPanel'
+import { initTimeConfig, parseTimeUnitStr } from './components/TabPanel'
 
 // 默认时间配置
 // DisplayUnitPerLoD0Unit = 1 表示 1 DisplayUnit = 1 LoD0Unit
@@ -100,6 +100,9 @@ function App() {
   const [currentWaveChecksum, setCurrentWaveChecksum] = useState<string | null>(null)
   const [currentWaveSignalPrefix, setCurrentWaveSignalPrefix] = useState<string>('')  // Global signal prefix for current waveform
   const [currentWaveSignalSpaceBeforeBracket, setCurrentWaveSignalSpaceBeforeBracket] = useState<boolean>(false)  // Whether to add space before [msb:lsb]
+  const [currentWaveTimeUnit, setCurrentWaveTimeUnit] = useState<number>(2)  // Waveform time unit enum (0=fs, 1=ps, 2=ns, etc.)
+  const [currentWaveEndTime, setCurrentWaveEndTime] = useState<number>(1000000)  // Waveform end time in LoD0 units (fs)
+  const [currentWaveDisplayUnitPerLoD0, setCurrentWaveDisplayUnitPerLoD0] = useState<number>(1)  // DisplayUnit per LoD0Unit
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(false)
   const autoCheckIntervalRef = useRef<NodeJS.Timeout | null>(null)
   
@@ -904,17 +907,51 @@ function App() {
     waveManager.setCurrentWaveform(waveName)
     setCurrentWaveform(waveName)
     addMessage(`Selected waveform: ${waveName}`)
-    
-    // Get checksum from list API
+
+    // Get checksum and modified_time from list API
     const listResponse = await apiService.getWaveformList()
     let waveChecksum: string | null = null
+    let waveTimeStamp = 0; // Default timestamp for CDN cache
     if (listResponse.status === 'success' && listResponse.data?.waves) {
       const serverWave = listResponse.data.waves.find(w => w.name === waveName)
       if (serverWave) {
         waveChecksum = serverWave.checksum
+        waveTimeStamp = serverWave.modified_time || 0
+        console.log(`[App] From list API: checksum=${waveChecksum}, modified_time=${waveTimeStamp}`)
       }
     }
-    
+
+    // Get waveform detailed info (time_unit, start_time, end_time)
+    let waveTimeUnit = 2; // Default to ns
+    let waveEndTime = 1000000; // Default max time
+    let displayUnitPerLoD0Unit = 1; // Default
+
+    try {
+      const infoResponse = await apiService.getWaveformInfo(waveName)
+      if (infoResponse.status === 'success' && infoResponse.data?.wave_info) {
+        const waveInfo = infoResponse.data.wave_info
+        console.log('[App] Waveform info:', waveInfo)
+
+        // Parse time_unit to get unit enum
+        const parsed = parseTimeUnitStr(waveInfo.time_unit)
+        waveTimeUnit = parsed.unitEnum
+        console.log(`[App] Time unit: ${waveInfo.time_unit} -> enum ${waveTimeUnit}`)
+
+        // Calculate end time in LoD0 units
+        // waveInfo.end_time is in time_unit units, convert to fs then to LoD0
+        const endTimeFs = waveInfo.end_time * parsed.fsMultiplier
+        waveEndTime = endTimeFs // LoD0 unit is 1 fs
+        console.log(`[App] End time: ${waveInfo.end_time} ${parsed.unit} = ${waveEndTime} fs (LoD0)`)
+
+        // Set DisplayUnitPerLoD0Unit based on time unit
+        // For example, if time_unit is 1ps, then 1 DisplayUnit = 1000 LoD0Unit (1 ps = 1000 fs)
+        displayUnitPerLoD0Unit = parsed.fsMultiplier
+        console.log(`[App] DisplayUnitPerLoD0Unit: ${displayUnitPerLoD0Unit}`)
+      }
+    } catch (error) {
+      console.error('[App] Failed to get waveform info:', error)
+    }
+
     // Close all waveform tabs before loading new waveform
     setTabs(prev => prev.filter(tab => tab.type !== 'waveform'))
     if (tabs.some(tab => tab.type === 'waveform')) {
@@ -925,13 +962,14 @@ function App() {
     setCurrentWaveChecksum(waveChecksum)
     setCurrentWaveSignalPrefix('')  // Clear previous prefix
     setCurrentWaveSignalSpaceBeforeBracket(false)  // Clear previous space setting
+    setCurrentWaveTimeUnit(waveTimeUnit)  // Set time unit from waveform
+    setCurrentWaveEndTime(waveEndTime)  // Set end time from waveform
+    setCurrentWaveDisplayUnitPerLoD0(displayUnitPerLoD0Unit)  // Set display unit ratio
 
-    // Create WASM provider for the new waveform
-    // Use default prefix 'work@' and spaceBeforeBracket=true
-    // These will be updated when the first signal is searched
+    // Create WASM provider for the new waveform with initial viewport and time stamp
     try {
-      createProvider(serverUrl, waveName, 'work@', true)
-      console.log('[App] Created WASM provider for waveform:', waveName)
+      createProvider(serverUrl, waveName, 'work@', true, waveTimeStamp)
+      console.log('[App] Created WASM provider for waveform:', waveName, 'timeStamp:', waveTimeStamp)
     } catch (error) {
       console.error('[App] Failed to create WASM provider:', error)
     }
@@ -941,6 +979,15 @@ function App() {
       setUseMockData(false)
       addMessage('Switched from mock data to real waveform data')
     }
+
+    // Store waveform metadata for future use
+    // This will be used when creating new waveform tabs
+    console.log('[App] Storing waveform metadata:', {
+      waveName,
+      waveTimeUnit,
+      waveEndTime,
+      displayUnitPerLoD0Unit
+    })
   }
 
   const handleDisconnect = async () => {
@@ -1649,18 +1696,30 @@ function App() {
   // Tab management functions
   const handleAddTab = (type: 'source' | 'waveform') => {
     const newId = `${type}-${tabCounter.current++}`
+    
+    // For waveform tabs, use current waveform's time settings
+    const isWaveform = type === 'waveform'
+    const timeConfig = isWaveform 
+      ? initTimeConfig(currentWaveDisplayUnitPerLoD0)
+      : undefined
+    
+    // Set viewport end time to waveform's end time
+    const viewport = isWaveform 
+      ? { timeStart: 0, timeEnd: currentWaveEndTime }
+      : undefined
+    
     const newTab: Tab = {
       id: newId,
       label: type === 'source' ? `Source ${tabCounter.current - 1}` : `Waveform ${tabCounter.current - 1}`,
       type,
       moduleIndex: type === 'source' ? null : undefined,
-      signals: type === 'waveform' ? [] : undefined,
-      groups: type === 'waveform' ? createDefaultGroups() : undefined,
-      selectedGroup: type === 'waveform' ? 'group_1' : undefined,
-      timeConfig: type === 'waveform' ? { ...DEFAULT_TIME_CONFIG } : undefined,
-      // Initialize viewport with default range (0 to 100 LoD0Units for 800px width with shift=3)
-      viewport: type === 'waveform' ? { timeStart: 0, timeEnd: 100 } : undefined,
-      cursorPosition: type === 'waveform' ? 50 : undefined, // Default cursor at middle
+      signals: isWaveform ? [] : undefined,
+      groups: isWaveform ? createDefaultGroups() : undefined,
+      selectedGroup: isWaveform ? 'group_1' : undefined,
+      timeConfig,
+      viewport,
+      cursorPosition: isWaveform ? Math.floor(currentWaveEndTime / 2) : undefined, // Default cursor at middle
+      waveformTimeUnit: isWaveform ? currentWaveTimeUnit : undefined,
     }
     setTabs(prev => [...prev, newTab])
     setActiveTab(newId)
@@ -1736,8 +1795,9 @@ function App() {
   const handleZoomFull = () => {
     const currentTab = tabs.find(t => t.id === activeTab)
     if (currentTab?.type === 'waveform' && currentTab.viewport) {
-      const maxLod0Units = 1000000  // Max waveform time in LoD0Units
-      
+      // Use current waveform's actual end time
+      const maxLod0Units = currentWaveEndTime
+
       setTabs(prev => prev.map(tab =>
         tab.id === activeTab ? {
           ...tab,
@@ -1748,7 +1808,7 @@ function App() {
           },
         } : tab
       ))
-      addMessage('Zoom full: 0 to 1000000 LoD0Units')
+      addMessage(`Zoom full: 0 to ${maxLod0Units} LoD0Units`)
     }
   }
 
@@ -2109,9 +2169,8 @@ function App() {
         canNavigateNext={canNavigateNext()}
         timeConfig={activeTabData?.timeConfig}
         onTimeConfigChange={(config) => handleTimeConfigChange(activeTab, config)}
-        waveformTimeUnit={activeTabData?.waveformTimeUnit ?? 2} // Default to ns (2) = 1000 ps/LoD0Unit
-        waveformTimeUnitStr={activeTabData?.waveformTimeUnitStr} // 如 "1ps", "3ns"
-        maxWaveformTimeLod0={1000000}
+        waveformTimeUnit={activeTabData?.waveformTimeUnit ?? currentWaveTimeUnit} // Use tab's or current waveform's time unit
+        maxWaveformTimeLod0={currentWaveEndTime}
         onConnect={() => setShowConnectionDialog(true)}
         onOpenKdb={() => setShowKdbSelectionDialog(true)}
         onOpenWaveform={() => setShowWaveSelectionDialog(true)}

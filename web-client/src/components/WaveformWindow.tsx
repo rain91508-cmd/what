@@ -332,7 +332,7 @@ export function WaveformWindow({
       renderWaveform().catch(console.error);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewport, groups, selectedSignal, displaySignals, expandedSignals]);
+  }, [viewport, groups, selectedSignal, displaySignals, expandedSignals, timeConfig]);
 
   // Cleanup mouse timeout on unmount
   useEffect(() => {
@@ -446,13 +446,21 @@ export function WaveformWindow({
       wasmProvider.set_viewport(viewport.timeStart, viewport.timeEnd);
       wasmProvider.set_canvas_dimensions(width, height, 25);
 
-      // Fetch data for each signal sequentially (avoid concurrent WASM access)
-      for (const signal of signalList) {
-        try {
-          console.log(`[WaveformWindow] Fetching data for signal: ${signal.name}`);
-          await wasmProvider.fetch_signal_data(signal.name);
-        } catch (error) {
-          console.error(`[WaveformWindow] Failed to fetch data for ${signal.name}:`, error);
+      // Fetch data for all signals in batch (max 256 per request)
+      const signalNames = signalList.map(s => s.name);
+      try {
+        console.log(`[WaveformWindow] Fetching ${signalNames.length} signals in batch`);
+        await wasmProvider.fetch_signals_data_batch(signalNames);
+      } catch (error) {
+        console.error(`[WaveformWindow] Failed to fetch signals in batch:`, error);
+        // Fallback to individual fetch
+        for (const signal of signalList) {
+          try {
+            console.log(`[WaveformWindow] Fallback: fetching data for signal: ${signal.name}`);
+            await wasmProvider.fetch_signal_data(signal.name);
+          } catch (error) {
+            console.error(`[WaveformWindow] Failed to fetch data for ${signal.name}:`, error);
+          }
         }
       }
 
@@ -475,8 +483,8 @@ export function WaveformWindow({
       segments = mockDataProvider.getSegments();
     }
 
-    // Render
-    waveformRenderer.render(segments, viewport, width, height, 20);
+    // Render with timeConfig for proper ruler display
+    waveformRenderer.render(segments, viewport, width, height, 20, timeConfig);
 
     // 绘制选择区域高亮（只在水平拖动时显示）
     if (isSelecting && selectionStartX !== null && selectionEndX !== null && selectionStartY !== null && selectionEndY !== null) {
@@ -510,30 +518,52 @@ export function WaveformWindow({
     if (!canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    
+
     // 立即设置 cursor 位置（在鼠标按下时刻）
     const canvasWidth = rect.width;
     const clickTime = viewport.timeStart + (x / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
-    
-    // 获取可见信号列表进行吸附（无论是否使用 mock 数据都启用吸附）
-    const visibleSignals = mockDataProvider.getSignalNames();
-    if (visibleSignals.length > 0) {
-      // 使用第一个可见信号进行吸附
-      const signalName = visibleSignals[0];
-      const { prev, next } = mockDataProvider.findTransitionsAround(signalName, clickTime);
-      const timeRange = viewport.timeEnd - viewport.timeStart;
-      const snapThreshold = Math.max(timeRange * 0.02, 10);
-      
-      let finalTime = clickTime;
-      if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
-        finalTime = prev;
-      } else if (next !== null && Math.abs(next - clickTime) <= snapThreshold) {
-        finalTime = next;
+
+    // 获取可见信号列表进行吸附
+    let finalTime = clickTime;
+    const timeRange = viewport.timeEnd - viewport.timeStart;
+    const snapThreshold = Math.max(timeRange * 0.02, 10);
+
+    if (useMockData) {
+      // Mock 数据模式：使用 mockDataProvider
+      const visibleSignals = mockDataProvider.getSignalNames();
+      if (visibleSignals.length > 0) {
+        const signalName = visibleSignals[0];
+        const { prev, next } = mockDataProvider.findTransitionsAround(signalName, clickTime);
+
+        if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
+          finalTime = prev;
+        } else if (next !== null && Math.abs(next - clickTime) <= snapThreshold) {
+          finalTime = next;
+        }
       }
-      setCursor({ position: Math.round(finalTime), visible: true });
-    } else {
-      setCursor({ position: Math.round(clickTime), visible: true });
+    } else if (wasmProviderRef.current && displaySignals.length > 0) {
+      // WASM 模式：从已获取数据的信号中找 transition
+      const wasmProvider = wasmProviderRef.current;
+      const signalName = displaySignals[0].fullName || displaySignals[0].name;
+
+      try {
+        const transitions = wasmProvider.find_transitions_around(signalName, clickTime);
+        if (transitions && Array.isArray(transitions) && transitions.length >= 2) {
+          const prev = transitions[0] as number | null;
+          const next = transitions[1] as number | null;
+
+          if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
+            finalTime = prev;
+          } else if (next !== null && Math.abs(next - clickTime) <= snapThreshold) {
+            finalTime = next;
+          }
+        }
+      } catch (error) {
+        console.error('[WaveformWindow] Failed to find transitions:', error);
+      }
     }
+
+    setCursor({ position: Math.round(finalTime), visible: true });
     
     // 开始拖动选择
     const y = e.clientY - rect.top;

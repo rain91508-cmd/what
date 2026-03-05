@@ -42,7 +42,6 @@ interface ToolBarProps {
   onTimeConfigChange?: (config: TimeConfig) => void;
   // Waveform info for time unit conversion
   waveformTimeUnit?: number; // WaveformInfo.timeUnit (0=fs, 1=ps, 2=ns, 3=us, 4=ms, 5=s)
-  waveformTimeUnitStr?: string; // WaveformInfo.timeUnitStr 如 "1ps", "3ns"
   // Maximum waveform time in LoD0Unit (for validation)
   maxWaveformTimeLod0?: number;
   // Connection and file actions
@@ -72,7 +71,6 @@ export function ToolBar({
   timeConfig,
   onTimeConfigChange,
   waveformTimeUnit = 2, // Default to ns (2)
-  waveformTimeUnitStr, // 如 "1ps", "3ns"
   maxWaveformTimeLod0 = 1000000, // Default 1,000,000 LoD0Units
   onConnect,
   onOpenKdb,
@@ -90,28 +88,20 @@ export function ToolBar({
   const [isEditing, setIsEditing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // 获取 fs 乘数（根据 waveformTimeUnitStr 或 waveformTimeUnit）
+  // 获取 fs 乘数（根据 waveformTimeUnit）
   const getFsPerLod0Unit = (): number => {
-    if (waveformTimeUnitStr) {
-      // 使用服务器返回的原始字符串（如 "3ns"）
-      const parsed = parseTimeUnitStr(waveformTimeUnitStr);
-      return parsed.fsMultiplier;
-    }
     // 使用数字枚举（如 2 = ns）
     return TIME_UNIT_MULTIPLIERS[TIME_UNIT_ENUM_TO_STR[waveformTimeUnit] ?? 'ns'];
   };
 
-  // 根据 waveformTimeUnitStr 更新选中单位（如果提供了）
+  // 根据 waveformTimeUnit 更新选中单位
   useEffect(() => {
-    if (waveformTimeUnitStr) {
-      const parsed = parseTimeUnitStr(waveformTimeUnitStr);
-      const unit = parsed.unit as TimeUnit;
-      // 只更新为有效的单位选项
-      if (TIME_UNIT_MULTIPLIERS[unit]) {
-        setSelectedUnit(unit);
-      }
+    const unit = TIME_UNIT_ENUM_TO_STR[waveformTimeUnit] ?? 'ns';
+    // 只更新为有效的单位选项
+    if (TIME_UNIT_MULTIPLIERS[unit]) {
+      setSelectedUnit(unit as TimeUnit);
     }
-  }, [waveformTimeUnitStr]);
+  }, [waveformTimeUnit]);
 
   // Update input value when timeConfig changes (from external sources like zoom buttons)
   // 将 DisplayUnitPerLoD0Unit 转换为当前单位的显示值
@@ -128,7 +118,7 @@ export function ToolBar({
       const displayValue = fsPerDisplayUnit / TIME_UNIT_MULTIPLIERS[selectedUnit];
       setInputValue(displayValue.toString());
     }
-  }, [timeConfig, isEditing, waveformTimeUnit, waveformTimeUnitStr, selectedUnit]);
+  }, [timeConfig, isEditing, waveformTimeUnit, selectedUnit]);
 
   // Initialize input value
   useEffect(() => {
@@ -139,7 +129,7 @@ export function ToolBar({
       const displayValue = fsPerDisplayUnit / TIME_UNIT_MULTIPLIERS[selectedUnit];
       setInputValue(displayValue.toString());
     }
-  }, [timeConfig, waveformTimeUnit, waveformTimeUnitStr, selectedUnit]);
+  }, [timeConfig, waveformTimeUnit, selectedUnit]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInputValue(e.target.value);

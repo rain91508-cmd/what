@@ -34,16 +34,28 @@ export interface SignalInfo {
  */
 export interface FormattedValue {
   /** 值类型 */
-  type: 'zero' | 'one' | 'all_x' | 'all_z' | 'numeric' | 'mixed';
+  type: 'zero' | 'one' | 'all_x' | 'all_z' | 'numeric' | 'mixed' | 'min_max';
   
-  /** 显示字符串（已格式化） */
-  displayStr: string;
+  /** 显示字符串（已格式化）- 注意：WASM 返回的是 display_str */
+  displayStr?: string;
+  display_str?: string;
   
   /** 位宽 */
   width: number;
   
   /** 是否有 X/Z */
   hasXZ: boolean;
+  
+  // LoD 1+ min/max support
+  /** Min value for bucket (LoD 1+) */
+  minValue?: string;
+  min_value?: string;
+  /** Max value for bucket (LoD 1+) */
+  maxValue?: string;
+  max_value?: string;
+  /** True if this is a min/max bucket segment */
+  isMinMax?: boolean;
+  is_min_max?: boolean;
 }
 
 /**
