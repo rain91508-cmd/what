@@ -244,12 +244,18 @@ class KdbManager {
     if (localIndex < 0 || localIndex >= signalDefs.length) return null;
     
     const def = signalDefs[localIndex];
-    
+
+    // Build fullName with bit width if msb != lsb (multi-bit signal)
+    const baseFullName = this.calculateSignalFullName(inst.parentModuleId, def.name);
+    const fullNameWithBitWidth = (inst.msb !== inst.lsb)
+      ? `${baseFullName}[${inst.msb}:${inst.lsb}]`
+      : baseFullName;
+
     return {
       globalId,
       localIndex,
       name: def.name,
-      fullName: this.calculateSignalFullName(inst.parentModuleId, def.name),
+      fullName: fullNameWithBitWidth,
       signalType: def.type,
       direction: def.direction,
       msb: inst.msb,
