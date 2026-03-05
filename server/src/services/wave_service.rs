@@ -245,10 +245,16 @@ impl WaveService {
             info!("FST 文件元数据: vars={}, start={}, end={}, version={}",
                 var_count, start_time_fst, end_time_fst, version);
 
-            // 从 FST 文件 header 读取时间单位 (offset 73, 1-byte signed integer)
-            // 0=1s, -3=1ms, -6=1us, -9=1ns, -12=1ps, -15=1fs
-            let time_unit = Self::read_fst_timescale(&path_str)?;
-            info!("FST 文件时间单位: {}", time_unit);
+            // 使用 fstapi 的 timescale_str() 获取时间单位
+            let time_unit = reader.timescale_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| {
+                    // 如果 timescale_str 返回 None，使用 exponent 转换
+                    let exp = reader.timescale();
+                    warn!("fstapi 返回未知 timescale (exponent: {})，使用默认值 1ps", exp);
+                    "1ps".to_string()
+                });
+            info!("FST 文件时间单位 (from fstapi): {}", time_unit);
 
             // 使用 FST 原始时间单位（不转换为 fs）
             let start_time = start_time_fst;
@@ -857,21 +863,40 @@ impl WaveService {
             // 设置 mask 只读取目标信号
             reader.set_mask(handle);
 
-            // 设置时间范围
-            reader.set_time_range_limit(time_start, time_end);
+            // 首先读取完整数据以获取边界值（用于 LoD 0 或空数据情况）
+            let mut full_signal_data = SignalWaveData::new(handle.into(), signal_width, SignalValueType::Numeric);
+            reader.for_each_block(|time, h, value, _var_len| {
+                if h == handle {
+                    let transition = Transition::from_fst(time, value, SignalValueType::Numeric);
+                    full_signal_data.add_transition(transition);
+                }
+            }).map_err(|e| ServerError::Internal(format!("读取完整波形数据失败: {:?}", e)))?;
 
-            // 使用 fstapi 读取实际波形数据
+            info!("读取到 {} 个完整转换点", full_signal_data.transitions.len());
+
+            // 然后读取时间范围内的数据
+            reader.set_time_range_limit(time_start, time_end);
             let mut transition_count = 0u64;
             reader.for_each_block(|time, h, value, _var_len| {
                 if h == handle {
-                    // 解析值（仿 FST 格式，支持四态 X/Z）
                     let transition = Transition::from_fst(time, value, SignalValueType::Numeric);
                     signal_data.add_transition(transition);
                     transition_count += 1;
                 }
             }).map_err(|e| ServerError::Internal(format!("读取波形数据失败: {:?}", e)))?;
 
-            info!("读取到 {} 个转换点", transition_count);
+            info!("读取到 {} 个时间范围内转换点", transition_count);
+
+            // 如果时间范围内没有数据，使用完整数据的边界值
+            if signal_data.transitions.is_empty() {
+                if let Some(boundary_trans) = full_signal_data.value_at(time_start) {
+                    signal_data.add_transition(Transition {
+                        time: time_start,
+                        value: boundary_trans.value.clone(),
+                    });
+                    info!("添加边界值: time={}, value={:?}", time_start, boundary_trans.value);
+                }
+            }
 
             // 生成 LoD 数据
             let config = LodConfig::default();

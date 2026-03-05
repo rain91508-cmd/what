@@ -37,6 +37,7 @@ use crate::error::{Result, ServerError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
+use tracing::info;
 
 /// 四态逻辑值（Verilog 四态逻辑）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1084,14 +1085,30 @@ impl ChunkSerializer {
                 .cloned()
                 .collect();
 
-            // 如果没有转换点，添加起始边界值（使用特殊时间戳标记）
-            if filtered.is_empty() {
-                if let Some(boundary_value) = signal.value_at(time_start) {
-                    filtered.push(Transition {
-                        time: Self::BOUNDARY_TIME_START,
-                        value: boundary_value.value.clone(),
-                    });
-                }
+            // 总是添加起始边界值（使用特殊时间戳标记）
+            // 这样客户端可以知道请求范围起始处的信号值
+            info!(
+                "Signal {} in range {}-{}: adding boundary value at start time {}",
+                signal.handle, time_start, time_end, time_start
+            );
+            if let Some(boundary_value) = signal.value_at(time_start) {
+                info!(
+                    "Found boundary value for signal {} at time {}: {:?}",
+                    signal.handle, time_start, boundary_value.value
+                );
+                // 插入到最前面，使用特殊时间戳标记
+                filtered.insert(0, Transition {
+                    time: Self::BOUNDARY_TIME_START,
+                    value: boundary_value.value.clone(),
+                });
+            } else {
+                info!(
+                    "No boundary value found for signal {} at time {} (signal has {} transitions, last at time {})",
+                    signal.handle,
+                    time_start,
+                    signal.transitions.len(),
+                    signal.transitions.last().map(|t| t.time).unwrap_or(0)
+                );
             }
 
             let transition_count = filtered.len() as u32;
