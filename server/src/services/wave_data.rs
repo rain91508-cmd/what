@@ -748,10 +748,10 @@ impl LodPyramidGenerator {
                 let min_str = bucket_min.to_string();
                 let max_str = bucket_max.to_string();
 
-                if SignalValue::Numeric(min_str.clone()) != last_value {
-                    result.add_transition(Transition::from_numeric(bucket_start_time, &min_str));
-                }
-                if max_str != min_str && SignalValue::Numeric(max_str.clone()) != last_value {
+                // 始终输出 min（修复：移除了 != last_value 的错误去重）
+                result.add_transition(Transition::from_numeric(bucket_start_time, &min_str));
+                // 输出 max（如果与 min 不同）
+                if max_str != min_str {
                     result.add_transition(Transition::from_numeric(bucket_start_time, &max_str));
                 }
 
@@ -774,9 +774,9 @@ impl LodPyramidGenerator {
             let min_str = bucket_min.to_string();
             let max_str = bucket_max.to_string();
 
-            if SignalValue::Numeric(min_str.clone()) != last_value {
-                result.add_transition(Transition::from_numeric(bucket_start_time, &min_str));
-            }
+            // 始终输出 min（修复：移除了 != last_value 的错误去重）
+            result.add_transition(Transition::from_numeric(bucket_start_time, &min_str));
+            // 输出 max（如果与 min 不同）
             if max_str != min_str {
                 result.add_transition(Transition::from_numeric(bucket_start_time, &max_str));
             }
