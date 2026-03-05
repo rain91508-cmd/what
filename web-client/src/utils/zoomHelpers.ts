@@ -6,18 +6,17 @@
 import type { Viewport } from '../types';
 import { sanitizeTimeRange } from './viewport';
 
-// 最大时间范围（LoD0Units）
-export const MAX_LOD0_UNITS = 1000000;
-
 /**
  * Zoom In: 以 cursor 为中心放大视图
  * @param viewport 当前视口
  * @param cursorPosition cursor 位置（可选，默认为视口中心）
+ * @param waveformRange 波形总范围（可选，用于边界限制）
  * @returns 新的视口，如果无法放大则返回 null
  */
 export function zoomIn(
   viewport: Viewport,
-  cursorPosition?: number | null
+  cursorPosition?: number | null,
+  waveformRange?: { start: number; end: number }
 ): Viewport | null {
   const { timeStart, timeEnd } = viewport;
   const cursorPos = cursorPosition ?? ((timeStart + timeEnd) / 2);
@@ -35,7 +34,7 @@ export function zoomIn(
   const rawEnd = canZoomEnd ? (cursorPos + timeEnd) / 2 : timeEnd;
 
   // Validate and sanitize time range
-  const sanitized = sanitizeTimeRange(rawStart, rawEnd);
+  const sanitized = sanitizeTimeRange(rawStart, rawEnd, waveformRange);
 
   return {
     ...viewport,
@@ -48,14 +47,20 @@ export function zoomIn(
  * Zoom Out: 以 cursor 为中心缩小视图
  * @param viewport 当前视口
  * @param cursorPosition cursor 位置（可选，默认为视口中心）
+ * @param waveformRange 波形总范围（可选，用于边界限制）
  * @returns 新的视口，如果无法缩小则返回 null
  */
 export function zoomOut(
   viewport: Viewport,
-  cursorPosition?: number | null
+  cursorPosition?: number | null,
+  waveformRange?: { start: number; end: number }
 ): Viewport | null {
   const { timeStart, timeEnd } = viewport;
   const cursorPos = cursorPosition ?? ((timeStart + timeEnd) / 2);
+
+  // 获取实际的范围限制
+  const rangeStart = waveformRange?.start ?? 0;
+  const rangeEnd = waveformRange?.end ?? Number.MAX_SAFE_INTEGER;
 
   // 计算新的边界：以 cursor 为中心，两侧远离 cursor
   const distStart = cursorPos - timeStart;
@@ -63,9 +68,9 @@ export function zoomOut(
   let newStart = cursorPos - (distStart * 2);
   let newEnd = cursorPos + (distEnd * 2);
 
-  // 限制在有效范围内 [0, MAX_LOD0_UNITS]
-  const clampedStart = Math.max(0, newStart);
-  const clampedEnd = Math.min(MAX_LOD0_UNITS, newEnd);
+  // 限制在实际波形范围内
+  const clampedStart = Math.max(rangeStart, newStart);
+  const clampedEnd = Math.min(rangeEnd, newEnd);
 
   // 边界保护：检查是否还能继续缩小
   const canZoomOutStart = newStart < timeStart && clampedStart !== timeStart;
@@ -79,7 +84,7 @@ export function zoomOut(
   const finalEnd = canZoomOutEnd ? clampedEnd : timeEnd;
 
   // Validate and sanitize time range
-  const sanitized = sanitizeTimeRange(finalStart, finalEnd, { maxTime: MAX_LOD0_UNITS });
+  const sanitized = sanitizeTimeRange(finalStart, finalEnd, waveformRange);
 
   return {
     ...viewport,
@@ -100,17 +105,25 @@ export function canZoomIn(viewport: Viewport, cursorPosition?: number | null): b
 /**
  * 检查是否可以 Zoom Out
  */
-export function canZoomOut(viewport: Viewport, cursorPosition?: number | null): boolean {
+export function canZoomOut(
+  viewport: Viewport,
+  cursorPosition?: number | null,
+  waveformRange?: { start: number; end: number }
+): boolean {
   const { timeStart, timeEnd } = viewport;
   const cursorPos = cursorPosition ?? ((timeStart + timeEnd) / 2);
+
+  // 获取实际的范围限制
+  const rangeStart = waveformRange?.start ?? 0;
+  const rangeEnd = waveformRange?.end ?? Number.MAX_SAFE_INTEGER;
 
   const distStart = cursorPos - timeStart;
   const distEnd = timeEnd - cursorPos;
   const newStart = cursorPos - (distStart * 2);
   const newEnd = cursorPos + (distEnd * 2);
 
-  const clampedStart = Math.max(0, newStart);
-  const clampedEnd = Math.min(MAX_LOD0_UNITS, newEnd);
+  const clampedStart = Math.max(rangeStart, newStart);
+  const clampedEnd = Math.min(rangeEnd, newEnd);
 
   return (newStart < timeStart && clampedStart !== timeStart) ||
          (newEnd > timeEnd && clampedEnd !== timeEnd);
