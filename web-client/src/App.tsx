@@ -1751,9 +1751,9 @@ function App() {
       console.log(`[Zoom In] After: start=${newViewport.timeStart}, end=${newViewport.timeEnd}`)
       
       // Clamp cursor to new viewport range to ensure it stays visible
-      const cursorPos = currentTab.cursorPosition ?? ((currentTab.viewport.timeStart + currentTab.viewport.timeEnd) >> 1)
+      const cursorPos = currentTab.cursorPosition ?? Math.floor((currentTab.viewport.timeStart + currentTab.viewport.timeEnd) / 2)
       const newCursorPos = Math.max(newViewport.timeStart, Math.min(newViewport.timeEnd, cursorPos))
-      
+
       setTabs(prev => prev.map(tab =>
         tab.id === activeTab ? {
           ...tab,
@@ -1770,17 +1770,17 @@ function App() {
     const currentTab = tabs.find(t => t.id === activeTab)
     if (currentTab?.type === 'waveform' && currentTab.viewport) {
       const newViewport = zoomOut(currentTab.viewport, currentTab.cursorPosition)
-      
+
       if (!newViewport) {
         console.log('[Zoom Out] Already at minimum zoom')
         addMessage('Already at minimum zoom (max time range reached)')
         return
       }
-      
+
       console.log(`[Zoom Out] After: start=${newViewport.timeStart}, end=${newViewport.timeEnd}`)
-      
+
       // Clamp cursor to new viewport range to ensure it stays visible
-      const cursorPos = currentTab.cursorPosition ?? ((currentTab.viewport.timeStart + currentTab.viewport.timeEnd) >> 1)
+      const cursorPos = currentTab.cursorPosition ?? Math.floor((currentTab.viewport.timeStart + currentTab.viewport.timeEnd) / 2)
       const newCursorPos = Math.max(newViewport.timeStart, Math.min(newViewport.timeEnd, cursorPos))
       
       setTabs(prev => prev.map(tab =>
