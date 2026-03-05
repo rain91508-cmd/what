@@ -8,6 +8,7 @@ import type { SignalInfo, DisplayFormat } from '../types/dataProvider';
 import { FilterInput } from './FilterInput';
 import { wildcardMatch } from '../utils/wildcardMatch';
 import { zoomIn, zoomOut } from '../utils/zoomHelpers';
+import { getProvider, WaveformDataProvider } from '../wasm/waveformProvider';
 
 interface SignalGroup {
   id: string;
@@ -34,6 +35,11 @@ interface WaveformWindowProps {
   cursorPosition?: number;      // 外部控制的 cursor 位置（可选）
   onCursorPositionChange?: (position: number) => void;  // cursor 位置变化回调
   useMockData?: boolean;        // 是否使用 mock 数据
+  // WASM Provider 配置（当 useMockData=false 时使用）
+  serverUrl?: string;           // 服务器 URL
+  waveformName?: string;        // 波形名称
+  signalPrefix?: string;        // 信号前缀
+  spaceBeforeBracket?: boolean; // 是否在 [ 前加空格
 }
 
 interface CursorState {
@@ -78,11 +84,35 @@ export function WaveformWindow({
   cursorPosition: externalCursorPosition,
   onCursorPositionChange,
   useMockData = false,
+  serverUrl = 'http://localhost:8080',
+  waveformName = '',
+  signalPrefix = '',
+  spaceBeforeBracket = false,
 }: WaveformWindowProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const signalPanelRef = useRef<HTMLDivElement>(null);
   const [canvasWidth, setCanvasWidth] = useState(0);
+
+  // WASM Provider reference
+  const wasmProviderRef = useRef<WaveformDataProvider | null>(null);
+
+  // Initialize WASM provider when not using mock data
+  useEffect(() => {
+    console.log(`[WaveformWindow] Provider init check: useMockData=${useMockData}, waveformName='${waveformName}'`);
+    if (!useMockData && waveformName) {
+      const provider = getProvider();
+      console.log(`[WaveformWindow] getProvider returned: ${provider ? 'provider' : 'null'}`);
+      if (provider) {
+        wasmProviderRef.current = provider;
+        console.log('[WaveformWindow] Using WASM provider');
+      } else {
+        console.warn('[WaveformWindow] WASM provider not available');
+      }
+    } else {
+      console.log(`[WaveformWindow] Skipping provider init: useMockData=${useMockData}, waveformName='${waveformName}'`);
+    }
+  }, [useMockData, waveformName]);
   
   // 根据 canvas 宽度和时间配置计算 viewport
   // 所有时间值使用 LoD0Unit（整数）
@@ -250,7 +280,7 @@ export function WaveformWindow({
     const initRenderers = async () => {
       if (canvasRef.current) {
         await waveformRenderer.initialize(canvasRef.current);
-        renderWaveform();
+        await renderWaveform();
       }
     };
 
@@ -271,7 +301,7 @@ export function WaveformWindow({
         canvasRef.current.height = height;
         waveformRenderer.resize(width, height);
         // 只更新 canvas 尺寸，不重置 viewport
-        renderWaveform();
+        renderWaveform().catch(console.error);
       }
     };
 
@@ -301,7 +331,7 @@ export function WaveformWindow({
   // 监听 viewport 变化，重新渲染波形
   useEffect(() => {
     if (canvasWidth > 0) {
-      renderWaveform();
+      renderWaveform().catch(console.error);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewport, groups, selectedSignal, displaySignals, expandedSignals]);
@@ -324,12 +354,14 @@ export function WaveformWindow({
     setSignalValues(values);
   }, [cursor.position, cursor.visible, displaySignals, expandedSignals]);
 
-  const renderWaveform = () => {
+  const renderWaveform = async () => {
     if (!canvasRef.current) return;
 
     const { width, height } = canvasRef.current;
     
-    console.log(`[WaveformWindow] renderWaveform: width=${width}, height=${height}, viewport=${viewport.timeStart}-${viewport.timeEnd}`);
+    console.log(`[WaveformWindow] renderWaveform: width=${width}, height=${height}`);
+    console.log(`[WaveformWindow] Viewport: timeStart=${viewport.timeStart}, timeEnd=${viewport.timeEnd}, signalStart=${viewport.signalStart}, signalEnd=${viewport.signalEnd}`);
+    console.log(`[WaveformWindow] Pixels: pixelsPerTime=${viewport.pixelsPerTime}, pixelsPerSignal=${viewport.pixelsPerSignal}`);
 
     // Build visible signal list from treeNodes
     // UI 决定哪些信号可见，以及它们的 row 顺序
@@ -383,19 +415,67 @@ export function WaveformWindow({
       }
     });
 
-    // Initialize DataProvider with visible signals
-    // rowHeight = 25 (24px + 1px border)
-    mockDataProvider.initialize(
-      signalList,
-      viewport,
-      'hex' as DisplayFormat,  // TODO: make this configurable
-      width,
-      25,  // rowHeight (24px height + 1px border)
-      20   // rulerHeight
-    );
+    let segments;
 
-    // Get segments from DataProvider (already formatted and coordinate-converted)
-    const segments = mockDataProvider.getSegments();
+    console.log(`[WaveformWindow] renderWaveform: useMockData=${useMockData}, wasmProviderRef.current=${wasmProviderRef.current ? 'exists' : 'null'}`);
+
+    if (useMockData) {
+      // Use mock data provider
+      console.log('[WaveformWindow] Using mock data provider');
+      mockDataProvider.initialize(
+        signalList,
+        viewport,
+        'hex' as DisplayFormat,
+        width,
+        25,  // rowHeight
+        20   // rulerHeight
+      );
+      segments = mockDataProvider.getSegments();
+    } else if (wasmProviderRef.current) {
+      // Use WASM provider
+      console.log('[WaveformWindow] Using WASM provider');
+      const wasmProvider = wasmProviderRef.current;
+
+      // Set signals in WASM provider
+      const wasmSignals = signalList.map((s, idx) => ({
+        name: s.name,
+        row: idx,
+        width: s.width || 1,
+      }));
+      wasmProvider.set_signals(wasmSignals);
+
+      // Set viewport and canvas dimensions
+      wasmProvider.set_viewport(viewport.timeStart, viewport.timeEnd);
+      wasmProvider.set_canvas_dimensions(width, height, 25);
+
+      // Fetch data for each signal sequentially (avoid concurrent WASM access)
+      for (const signal of signalList) {
+        try {
+          console.log(`[WaveformWindow] Fetching data for signal: ${signal.name}`);
+          await wasmProvider.fetch_signal_data(signal.name);
+        } catch (error) {
+          console.error(`[WaveformWindow] Failed to fetch data for ${signal.name}:`, error);
+        }
+      }
+
+      // Get segments from WASM provider
+      const segmentsJs = wasmProvider.get_segments();
+      segments = segmentsJs;
+
+      console.log(`[WaveformWindow] Got ${segments.length} segments from WASM provider`);
+    } else {
+      // Fallback to mock data if WASM not available
+      console.warn('[WaveformWindow] WASM provider not available, falling back to mock data');
+      mockDataProvider.initialize(
+        signalList,
+        viewport,
+        'hex' as DisplayFormat,
+        width,
+        25,
+        20
+      );
+      segments = mockDataProvider.getSegments();
+    }
 
     // Render
     waveformRenderer.render(segments, viewport, width, height, 20);

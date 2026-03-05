@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["console"] }
+web-sys = { version = "0.3", features = ["console", "Window", "Response", "Headers"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde-wasm-bindgen = "0.6"
@@ -21,6 +21,9 @@ ruzstd = "0.7"
 # Protobuf support
 prost = { version = "0.12", default-features = false, features = ["prost-derive"] }
 bytes = { version = "1.5", default-features = false }
+
+# Base64 encoding
+base64 = "0.22"
 
 [profile.release]
 opt-level = 3

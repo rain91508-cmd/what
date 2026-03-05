@@ -9,6 +9,10 @@ use prost::Message;
 mod kdb_proto;
 use kdb_proto::*;
 
+// Waveform data provider
+mod waveform_provider;
+pub use waveform_provider::WaveformDataProvider;
+
 // CWDK magic number: "CWDK" in little-endian
 const CWDK_MAGIC: u32 = 0x4B445743;
 
