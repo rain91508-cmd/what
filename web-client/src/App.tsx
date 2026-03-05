@@ -1761,7 +1761,8 @@ function App() {
   const handleZoomIn = () => {
     const currentTab = tabs.find(t => t.id === activeTab)
     if (currentTab?.type === 'waveform' && currentTab.viewport) {
-      const newViewport = zoomIn(currentTab.viewport, currentTab.cursorPosition)
+      // Use the tab's saved waveformRange for zoom in
+      const newViewport = zoomIn(currentTab.viewport, currentTab.cursorPosition, currentTab.waveformRange)
       
       if (!newViewport) {
         console.log('[Zoom In] Already at maximum zoom')
@@ -1790,7 +1791,8 @@ function App() {
   const handleZoomOut = () => {
     const currentTab = tabs.find(t => t.id === activeTab)
     if (currentTab?.type === 'waveform' && currentTab.viewport) {
-      const newViewport = zoomOut(currentTab.viewport, currentTab.cursorPosition)
+      // Use the tab's saved waveformRange for zoom out
+      const newViewport = zoomOut(currentTab.viewport, currentTab.cursorPosition, currentTab.waveformRange)
 
       if (!newViewport) {
         console.log('[Zoom Out] Already at minimum zoom')
