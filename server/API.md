@@ -130,6 +130,9 @@ GET /api/kdb
 
 **描述**: 获取所有可用的知识库文件列表，包含缓存验证元数据
 
+**查询参数**:
+- `checksum`: 可选，用于 CDN 缓存刷新（服务器不处理，建议从 KDB info 的 `checksum` 字段获取）
+
 **响应示例**:
 ```json
 {
@@ -435,14 +438,17 @@ GET /api/wave/{waveform_name}/signals/{signal_name}/info
 #### 3.5 获取波形数据（支持多信号）
 
 ```http
-GET /api/wave/{waveform_name}/lod/{lod}/signals/{signal_names}/data
+GET /api/wave/{waveform_name}/lod/{lod}/time/{start}/{end}/compress/{compress}/signals/{signal_names}/data
 ```
 
-**描述**: 获取一个或多个信号的波形数据，LoD 在路径中
+**描述**: 获取一个或多个信号的波形数据，LoD、时间范围、压缩算法均在路径中
 
 **路径参数**:
 - `waveform_name`: 波形文件名
 - `lod`: LoD (Level of Detail) 层级 0-12
+- `start`: 起始时间（与波形文件的 `time_unit` 单位一致），`-` 表示从 0 开始
+- `end`: 结束时间（与波形文件的 `time_unit` 单位一致），`-` 表示到文件结束
+- `compress`: 压缩算法（`none`, `zstd`, `lz4`）
 - `signal_names`: 信号名称，逗号分隔多个信号
 
 **信号名编码（必须 Base64）**:
@@ -450,10 +456,13 @@ GET /api/wave/{waveform_name}/lod/{lod}/signals/{signal_names}/data
 - 编码对象: 整个逗号分隔的信号列表
 - 示例: `clk,reset,data` → `b64:Y2xrLHJlc2V0LGRhdGE=`
 
+**查询参数**:
+- `time_stamp`: 可选，用于 CDN 缓存刷新（服务器不处理，建议从波形 info 的 `date` 字段获取）
+
 **示例**:
-- 单个信号: `/api/wave/riscv2/lod/0/signals/b64:Y2xr/data` (clk)
-- 多个信号: `/api/wave/riscv2/lod/0/signals/b64:Y2xrLHJlc2V0LGRhdGE=/data` (clk,reset,data)
-- 复杂信号: `/api/wave/riscv2/lod/0/signals/b64:dGJfdG9wLnVfZHV0LmNsa2EscmVzZXQsZGF0YQ==/data`
+- 单个信号: `/api/wave/riscv2/lod/0/time/0/1000000/compress/none/signals/b64:Y2xr/data`
+- 多个信号: `/api/wave/riscv2/lod/0/time/0/-/compress/zstd/signals/b64:Y2xrLHJlc2V0LGRhdGE=/data`
+- 带时间戳: `/api/wave/riscv2/lod/0/time/0/1000000/compress/none/signals/b64:xxx/data?time_stamp=1772690121`
 
 ---
 
@@ -492,9 +501,7 @@ URL: /api/wave/riscv2/lod/0/signals/trie:base64encodedstring/data
 | 10 个信号（有公共前缀） | ~200 chars | ~268 chars | ~80 chars | ~70% |
 
 **查询参数**:
-- `start`: 可选，起始时间（与波形文件的 `time_unit` 单位一致），默认 0
-- `end`: 可选，结束时间（与波形文件的 `time_unit` 单位一致），默认文件结束时间
-- `compress`: 可选，压缩算法（"none", "zstd", "lz4"），默认 "none"
+- `time_stamp`: 可选，用于 CDN 缓存刷新（服务器不处理，建议从波形 info 的 `date` 字段获取）
 
 **时间单位说明**:
 - 时间参数的单位与波形文件的 `time_unit` 一致
@@ -599,14 +606,17 @@ LoD 降采样时遵循四态逻辑规则：
 
 **示例**:
 ```bash
-# 获取完整波形数据
-curl "http://localhost:8080/api/wave/riscv2/signals/clk/data"
+# 获取完整波形数据（end="-" 表示到文件结束）
+curl "http://localhost:8080/api/wave/riscv2/lod/0/time/0/-/compress/none/signals/b64:Y2xr/data"
 
-# 获取指定时间范围的波形数据（LoD 2）
-curl "http://localhost:8080/api/wave/riscv2/signals/clk/data?lod=2&start=0&end=1000000"
+# 获取指定时间范围的波形数据（LoD 2，zstd 压缩）
+curl "http://localhost:8080/api/wave/riscv2/lod/2/time/0/1000000/compress/zstd/signals/b64:Y2xr/data" -o clk.zst
 
-# 获取压缩的波形数据
-curl "http://localhost:8080/api/wave/riscv2/signals/clk/data?compress=zstd" -o clk.zst
+# 获取带时间戳的波形数据（用于 CDN 缓存刷新）
+curl "http://localhost:8080/api/wave/riscv2/lod/0/time/0/1000000/compress/none/signals/b64:Y2xr/data?time_stamp=1772690121"
+
+# 获取 KDB 列表（带 checksum 用于 CDN 缓存）
+curl "http://localhost:8080/api/kdb?checksum=abc123"
 ```
 
 **客户端解析示例（JavaScript）**:
@@ -764,12 +774,20 @@ const waves = await fetch('/api/wave/list').then(r => r.json());
 // 2. 选择波形并获取信号列表
 const signals = await fetch('/api/wave/riscv2/signals').then(r => r.json());
 
-// 3. 获取特定信号的波形数据（LoD 2，压缩）
+// 3. 获取波形 info（用于获取 time_stamp）
+const waveInfo = await fetch('/api/wave/riscv2/info').then(r => r.json());
+const timeStamp = Date.parse(waveInfo.data.wave_info.date); // 从 date 字段获取时间戳
+
+// 4. 编码信号名（Base64）
+const signalName = 'clk';
+const encodedSignal = 'b64:' + btoa(signalName);
+
+// 5. 获取特定信号的波形数据（LoD 2，zstd 压缩，带 time_stamp 用于 CDN 缓存）
 const waveData = await fetch(
-  '/api/wave/riscv2/signals/clk/data?lod=2&compress=zstd'
+  `/api/wave/riscv2/lod/2/time/0/1000000/compress/zstd/signals/${encodedSignal}/data?time_stamp=${timeStamp}`
 ).then(r => r.arrayBuffer());
 
-// 4. 解压数据（如果是压缩的）
+// 6. 解压数据（如果是压缩的）
 const decompressed = await decompress(waveData, 'zstd');
 ```
 

@@ -50,17 +50,20 @@ pub struct SignalListQuery {
 /// 波形数据查询参数
 #[derive(Debug, Deserialize)]
 pub struct WaveDataQuery {
-    /// LoD 层级 (0-12)
+    /// LoD 层级 (0-12) - 已移至路径参数，保留用于兼容
     lod: Option<u32>,
-    /// 起始时间 (time_unit 单位，与波形文件的 time_unit 一致)
+    /// 起始时间 (time_unit 单位) - 已移至路径参数
     #[serde(default)]
     start: i64,
-    /// 结束时间 (time_unit 单位，与波形文件的 time_unit 一致)
+    /// 结束时间 (time_unit 单位) - 已移至路径参数
     #[serde(default)]
     end: i64,
-    /// 压缩算法 (none, zstd, lz4)
+    /// 压缩算法 - 已移至路径参数
     #[serde(default)]
     compress: Option<String>,
+    /// 时间戳，用于 CDN 缓存刷新（服务器不处理，从波形 info 的 date 字段获取）
+    #[serde(default)]
+    time_stamp: Option<String>,
 }
 
 /// 获取所有可用的波形文件列表
@@ -319,23 +322,44 @@ fn parse_range_header(
     }
 }
 
-/// 获取多个信号的波形数据（新 API，LoD 在路径中，支持前缀压缩）
+/// 获取多个信号的波形数据（LoD、时间范围、压缩算法在路径中）
 /// 
 /// # 路径格式
-/// - 无前缀: `/api/wave/{waveform}/lod/{lod}/signals/{names}/data`
-/// - 有前缀: `/api/wave/{waveform}/lod/{lod}/signals/p:{prefix}/{names}/data`
+/// `/api/wave/{waveform}/lod/{lod}/time/{start}/{end}/compress/{compress}/signals/{names}/data`
+/// 
+/// # 查询参数
+/// - `time_stamp`: 可选，用于 CDN 缓存刷新（服务器不处理）
+/// 
+/// # 示例
+/// - `/api/wave/riscv2/lod/2/time/0/1000000/compress/zstd/signals/b64:xxx/data`
+/// - `/api/wave/riscv2/lod/2/time/0/-/compress/none/signals/b64:xxx/data?time_stamp=123456`
 pub async fn get_wave_data_multi(
     State(state): State<ServerState>,
-    Path((waveform_name, lod, signal_names)): Path<(String, u32, String)>,
+    Path((waveform_name, lod, start_str, end_str, compress_str, signal_names)): Path<(String, u32, String, String, String, String)>,
     Query(query): Query<WaveDataQuery>,
     headers: HeaderMap,
 ) -> Result<Response<Body>> {
     state.stats.record_request(crate::state::RequestType::Wave).await;
 
     // 验证 LoD 层级
-    if lod > 11 {
+    if lod > 12 {
         return Err(ServerError::InvalidLod(lod));
     }
+
+    // 解析时间范围
+    let start_time = if start_str == "-" {
+        0
+    } else {
+        start_str.parse::<i64>()
+            .map_err(|_| ServerError::InvalidParameter(format!("Invalid start time: {}", start_str)))?
+    };
+    
+    let end_time = if end_str == "-" {
+        -1 // 表示到文件结束
+    } else {
+        end_str.parse::<i64>()
+            .map_err(|_| ServerError::InvalidParameter(format!("Invalid end time: {}", end_str)))?
+    };
 
     // URL 解码信号名
     let signal_names = urlencoding::decode(&signal_names)
@@ -345,20 +369,27 @@ pub async fn get_wave_data_multi(
     // 解析信号名列表（支持 Base64 编码整个列表）
     let full_signal_names = crate::handlers::decode_signal_names(&signal_names)?;
 
+    // time_stamp 查询参数仅用于 CDN 缓存刷新，服务器不处理
+    // 客户端应从波形 info 的 date 字段获取
+    let _time_stamp = query.time_stamp.as_deref().unwrap_or("");
+
     info!(
-        "获取多信号波形数据: {}.{} (LoD {}, {} 个信号)",
+        "获取多信号波形数据: {}.{} (LoD {}, time {}-{}, compress {}, {} 个信号)",
         waveform_name,
         full_signal_names.join(","),
         lod,
+        start_time,
+        end_time,
+        compress_str,
         full_signal_names.len()
     );
 
     let wave_service = create_wave_service(&state);
 
-    // 解析压缩算法
-    let compression = match query.compress.as_deref() {
-        Some("zstd") => crate::services::CompressionAlgorithm::Zstd,
-        Some("lz4") => crate::services::CompressionAlgorithm::Lz4,
+    // 解析压缩算法（从路径参数）
+    let compression = match compress_str.as_str() {
+        "zstd" => crate::services::CompressionAlgorithm::Zstd,
+        "lz4" => crate::services::CompressionAlgorithm::Lz4,
         _ => crate::services::CompressionAlgorithm::None,
     };
 
@@ -371,8 +402,8 @@ pub async fn get_wave_data_multi(
             &waveform_name,
             &full_signal_names,
             lod,
-            query.start,
-            query.end,
+            start_time,
+            end_time,
             range,
             compression,
         )
@@ -419,8 +450,8 @@ pub async fn get_wave_data_multi(
     }
 
     info!(
-        "返回多信号波形数据：{} (LoD {}, {} 个信号)",
-        waveform_name, lod, full_signal_names.len()
+        "返回多信号波形数据：{} (LoD {}, time {}-{}, compress {}, {} 个信号)",
+        waveform_name, lod, start_time, end_time, compress_str, full_signal_names.len()
     );
     Ok(response)
 }
