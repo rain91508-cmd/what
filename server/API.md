@@ -604,6 +604,42 @@ LoD 降采样时遵循四态逻辑规则：
 - 任何值 vs X: 结果=X
 - 任何值 vs Z: 结果=Z
 
+---
+
+**不同 LoD 的数据组织关系**:
+
+| LoD | 数据组织 | 说明 |
+|-----|---------|------|
+| **LoD 0** | 原始转换点序列 | `[t0,v0], [t1,v1], [t2,v2], ...` |
+| **LoD 1+** | Min/Max 降采样 | `[t0,min], [t0,max], [t1,min], [t1,max], ...` |
+
+**LoD 1+ 数据特点**:
+- **相同时间戳**: 同一个 bucket 的 min 和 max 有相同的时间戳
+- **顺序存储**: 先存 min，再存 max（如果 min ≠ max）
+- **扁平结构**: min 和 max 是独立的转换点，没有层级关系
+
+**示例对比**:
+
+```
+原始数据 (LoD 0):
+时间:  0    100   200   300   400   500   600   700
+值:    0     1     0     1     1     0     1     0
+
+LoD 1 (bucket_size=16):
+时间:  0     0     700   700
+值:    0(min) 1(max) 0(min) 1(max)
+       └─ bucket 0 ─┘└─ bucket 1 ─┘
+
+LoD 2 (bucket_size=256):
+时间:  0     0
+值:    0(min) 1(max)
+       └─ bucket 0 ─┘
+```
+
+**客户端处理建议**:
+- LoD 0: 直接绘制每个转换点
+- LoD 1+: 按时间戳分组，相同时间戳的取 min 和 max 绘制为垂直线段
+
 **示例**:
 ```bash
 # 获取完整波形数据（end="-" 表示到文件结束）
@@ -629,7 +665,7 @@ function parseWaveChunk(buffer) {
   const header = {
     magic: view.getUint32(0, true),
     version: view.getUint16(4, true),
-    level: view.getUint16(6, true),
+    level: view.getUint16(6, true),  // LoD 层级
     chunk_id: view.getUint32(8, true),
     time_start: view.getBigUint64(12, true),
     time_end: view.getBigUint64(20, true),
@@ -651,6 +687,41 @@ function parseWaveChunk(buffer) {
   }
   
   return { header, signals };
+}
+
+// 处理 LoD 1+ 的 min/max 数据（按时间戳分组）
+function groupTransitionsByTime(transitions) {
+  const groups = new Map();
+  
+  for (const trans of transitions) {
+    if (!groups.has(trans.time)) {
+      groups.set(trans.time, []);
+    }
+    groups.get(trans.time).push(trans.value);
+  }
+  
+  // 返回 [{time, min, max}, ...]
+  return Array.from(groups.entries()).map(([time, values]) => ({
+    time,
+    min: values.length > 0 ? values[0] : null,
+    max: values.length > 1 ? values[1] : values[0]
+  }));
+}
+
+// 绘制波形（考虑 LoD）
+function drawWaveform(canvas, header, transitions) {
+  if (header.level === 0) {
+    // LoD 0: 直接绘制每个转换点
+    for (let i = 0; i < transitions.length - 1; i++) {
+      drawSegment(canvas, transitions[i], transitions[i + 1]);
+    }
+  } else {
+    // LoD 1+: 按时间戳分组，绘制 min/max
+    const groups = groupTransitionsByTime(transitions);
+    for (const group of groups) {
+      drawMinMaxSegment(canvas, group.time, group.min, group.max);
+    }
+  }
 }
 ```
 
