@@ -34,6 +34,7 @@ import { waveManager } from './modules/wSignal'
 
 // Utils
 import { zoomIn, zoomOut } from './utils/zoomHelpers'
+import { sanitizeTimeRange } from './utils/viewport'
 
 // WASM
 import { initWasm, createProvider, updateProviderSettings } from './wasm/waveformProvider'
@@ -1703,10 +1704,12 @@ function App() {
       ? initTimeConfig(currentWaveDisplayUnitPerLoD0)
       : undefined
     
-    // Set viewport end time to waveform's end time
-    const viewport = isWaveform 
-      ? { timeStart: 0, timeEnd: currentWaveEndTime }
-      : undefined
+    // Set viewport end time to waveform's end time (with validation)
+    let viewport = undefined
+    if (isWaveform) {
+      const sanitized = sanitizeTimeRange(0, currentWaveEndTime, { maxTime: currentWaveEndTime })
+      viewport = { timeStart: sanitized.timeStart, timeEnd: sanitized.timeEnd }
+    }
     
     const newTab: Tab = {
       id: newId,
@@ -1795,20 +1798,21 @@ function App() {
   const handleZoomFull = () => {
     const currentTab = tabs.find(t => t.id === activeTab)
     if (currentTab?.type === 'waveform' && currentTab.viewport) {
-      // Use current waveform's actual end time
+      // Use current waveform's actual end time (with validation)
       const maxLod0Units = currentWaveEndTime
+      const sanitized = sanitizeTimeRange(0, maxLod0Units, { maxTime: maxLod0Units })
 
       setTabs(prev => prev.map(tab =>
         tab.id === activeTab ? {
           ...tab,
           viewport: {
             ...tab.viewport!,
-            timeStart: 0,
-            timeEnd: maxLod0Units,
+            timeStart: sanitized.timeStart,
+            timeEnd: sanitized.timeEnd,
           },
         } : tab
       ))
-      addMessage(`Zoom full: 0 to ${maxLod0Units} LoD0Units`)
+      addMessage(`Zoom full: ${sanitized.timeStart} to ${sanitized.timeEnd} LoD0Units`)
     }
   }
 
@@ -2253,8 +2257,19 @@ function App() {
                 timeConfig={activeTabData.timeConfig}
                 viewport={activeTabData.viewport}
                 onViewportChange={(viewport) => {
+                  // Validate viewport time range before updating
+                  const sanitized = sanitizeTimeRange(
+                    viewport.timeStart,
+                    viewport.timeEnd,
+                    { maxTime: currentWaveEndTime }
+                  )
+                  const validatedViewport = {
+                    ...viewport,
+                    timeStart: sanitized.timeStart,
+                    timeEnd: sanitized.timeEnd,
+                  }
                   setTabs(prev => prev.map(tab =>
-                    tab.id === activeTabData.id ? { ...tab, viewport } : tab
+                    tab.id === activeTabData.id ? { ...tab, viewport: validatedViewport } : tab
                   ))
                 }}
                 cursorPosition={activeTabData.cursorPosition}

@@ -4,6 +4,7 @@
  */
 
 import type { Viewport } from '../types';
+import { sanitizeTimeRange } from './viewport';
 
 // 最大时间范围（LoD0Units）
 export const MAX_LOD0_UNITS = 1000000;
@@ -30,13 +31,16 @@ export function zoomIn(
   }
 
   // 以 cursor 为中心放大，两侧向 cursor 靠拢
-  const newStart = canZoomStart ? (cursorPos + timeStart) >> 1 : timeStart;
-  const newEnd = canZoomEnd ? (cursorPos + timeEnd) >> 1 : timeEnd;
+  const rawStart = canZoomStart ? (cursorPos + timeStart) >> 1 : timeStart;
+  const rawEnd = canZoomEnd ? (cursorPos + timeEnd) >> 1 : timeEnd;
+
+  // Validate and sanitize time range
+  const sanitized = sanitizeTimeRange(rawStart, rawEnd);
 
   return {
     ...viewport,
-    timeStart: newStart,
-    timeEnd: newEnd,
+    timeStart: sanitized.timeStart,
+    timeEnd: sanitized.timeEnd,
   };
 }
 
@@ -74,10 +78,13 @@ export function zoomOut(
   const finalStart = canZoomOutStart ? clampedStart : timeStart;
   const finalEnd = canZoomOutEnd ? clampedEnd : timeEnd;
 
+  // Validate and sanitize time range
+  const sanitized = sanitizeTimeRange(finalStart, finalEnd, { maxTime: MAX_LOD0_UNITS });
+
   return {
     ...viewport,
-    timeStart: finalStart,
-    timeEnd: finalEnd,
+    timeStart: sanitized.timeStart,
+    timeEnd: sanitized.timeEnd,
   };
 }
 
