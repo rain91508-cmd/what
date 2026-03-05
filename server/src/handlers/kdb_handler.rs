@@ -16,6 +16,9 @@ use tracing::info;
 pub struct KdbQuery {
     /// 知识库名称 (可选，用于特定知识库查询)
     name: Option<String>,
+    /// 校验和，用于 CDN 缓存刷新（服务器不处理）
+    #[serde(default)]
+    checksum: Option<String>,
 }
 
 /// 获取所有可用的知识库列表

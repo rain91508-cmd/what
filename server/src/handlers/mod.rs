@@ -63,12 +63,12 @@ pub fn create_router(state: ServerState) -> Router<ServerState> {
             "/api/wave/:waveform_name/signals/:signal_name/info",
             get(get_signal_info),
         )
-        // 波形数据 API：支持多信号，LoD 在路径中，支持 Trie 压缩
-        // 格式：/api/wave/{waveform}/lod/{lod}/signals/{signal_names}/data
-        // 示例：/api/wave/riscv2/lod/2/signals/b64:xxx/data
-        // 示例（Trie 压缩）：/api/wave/riscv2/lod/2/signals/trie:xxx/data
+        // 波形数据 API：支持多信号，LoD、时间范围、压缩算法在路径中
+        // 格式：/api/wave/{waveform}/lod/{lod}/time/{start}/{end}/compress/{compress}/signals/{signal_names}/data
+        // 示例：/api/wave/riscv2/lod/2/time/0/1000000/compress/zstd/signals/b64:xxx/data
+        // 示例（完整波形）：/api/wave/riscv2/lod/2/time/0/-/compress/none/signals/b64:xxx/data
         .route(
-            "/api/wave/:waveform_name/lod/:lod/signals/:signal_names/data",
+            "/api/wave/:waveform_name/lod/:lod/time/:start/:end/compress/:compress/signals/:signal_names/data",
             get(get_wave_data_multi),
         );
 
