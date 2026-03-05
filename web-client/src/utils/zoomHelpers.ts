@@ -20,7 +20,7 @@ export function zoomIn(
   cursorPosition?: number | null
 ): Viewport | null {
   const { timeStart, timeEnd } = viewport;
-  const cursorPos = cursorPosition ?? ((timeStart + timeEnd) >> 1);
+  const cursorPos = cursorPosition ?? Math.floor((timeStart + timeEnd) / 2);
 
   // 边界保护：检查是否还能继续放大
   const canZoomStart = Math.abs(cursorPos - timeStart) > 1;
@@ -31,8 +31,8 @@ export function zoomIn(
   }
 
   // 以 cursor 为中心放大，两侧向 cursor 靠拢
-  const rawStart = canZoomStart ? (cursorPos + timeStart) >> 1 : timeStart;
-  const rawEnd = canZoomEnd ? (cursorPos + timeEnd) >> 1 : timeEnd;
+  const rawStart = canZoomStart ? Math.floor((cursorPos + timeStart) / 2) : timeStart;
+  const rawEnd = canZoomEnd ? Math.floor((cursorPos + timeEnd) / 2) : timeEnd;
 
   // Validate and sanitize time range
   const sanitized = sanitizeTimeRange(rawStart, rawEnd);
@@ -55,13 +55,13 @@ export function zoomOut(
   cursorPosition?: number | null
 ): Viewport | null {
   const { timeStart, timeEnd } = viewport;
-  const cursorPos = cursorPosition ?? ((timeStart + timeEnd) >> 1);
+  const cursorPos = cursorPosition ?? Math.floor((timeStart + timeEnd) / 2);
 
   // 计算新的边界：以 cursor 为中心，两侧远离 cursor
   const distStart = cursorPos - timeStart;
   const distEnd = timeEnd - cursorPos;
-  let newStart = cursorPos - (distStart << 1);
-  let newEnd = cursorPos + (distEnd << 1);
+  let newStart = cursorPos - (distStart * 2);
+  let newEnd = cursorPos + (distEnd * 2);
 
   // 限制在有效范围内 [0, MAX_LOD0_UNITS]
   const clampedStart = Math.max(0, newStart);
@@ -93,7 +93,7 @@ export function zoomOut(
  */
 export function canZoomIn(viewport: Viewport, cursorPosition?: number | null): boolean {
   const { timeStart, timeEnd } = viewport;
-  const cursorPos = cursorPosition ?? ((timeStart + timeEnd) >> 1);
+  const cursorPos = cursorPosition ?? Math.floor((timeStart + timeEnd) / 2);
   return Math.abs(cursorPos - timeStart) > 1 || Math.abs(cursorPos - timeEnd) > 1;
 }
 
@@ -102,12 +102,12 @@ export function canZoomIn(viewport: Viewport, cursorPosition?: number | null): b
  */
 export function canZoomOut(viewport: Viewport, cursorPosition?: number | null): boolean {
   const { timeStart, timeEnd } = viewport;
-  const cursorPos = cursorPosition ?? ((timeStart + timeEnd) >> 1);
+  const cursorPos = cursorPosition ?? Math.floor((timeStart + timeEnd) / 2);
 
   const distStart = cursorPos - timeStart;
   const distEnd = timeEnd - cursorPos;
-  const newStart = cursorPos - (distStart << 1);
-  const newEnd = cursorPos + (distEnd << 1);
+  const newStart = cursorPos - (distStart * 2);
+  const newEnd = cursorPos + (distEnd * 2);
 
   const clampedStart = Math.max(0, newStart);
   const clampedEnd = Math.min(MAX_LOD0_UNITS, newEnd);
