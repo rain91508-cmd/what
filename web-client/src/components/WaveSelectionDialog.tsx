@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { waveManager } from '../modules/wSignal';
+import { apiService } from '../services/api';
 
 interface ServerWaveformInfo {
   name: string;
@@ -19,11 +20,11 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   
-  // Time range settings
+  // Time range settings (in LoD0 units - fs)
   const [useCustomRange, setUseCustomRange] = useState(false);
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
-  const [timeUnit, setTimeUnit] = useState('fs'); // fs, ps, ns, us, ms
+  const [isLoadingWaveInfo, setIsLoadingWaveInfo] = useState(false);
 
   useEffect(() => {
     loadWaveList();
@@ -33,7 +34,7 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
     try {
       setLoading(true);
       setError(null);
-      setWaves([]); // Clear previous list
+      setWaves([]);
       setSelectedWave('');
       
       console.log('[WaveSelectionDialog] Loading waveform list...');
@@ -51,6 +52,8 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
       setWaves(validWaves);
       if (validWaves.length > 0) {
         setSelectedWave(validWaves[0].name);
+        // Auto-load first wave info
+        loadWaveInfo(validWaves[0].name);
       }
     } catch (err) {
       console.error('[WaveSelectionDialog] Error loading waveform list:', err);
@@ -85,28 +88,57 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
     return wildcardMatch(filter, wave.name);
   });
 
-  // Convert time with unit to fs (LoD0 unit)
-  const convertToFs = (value: string, unit: string): number => {
-    const num = parseFloat(value);
-    if (isNaN(num)) return 0;
-    
-    switch (unit) {
-      case 'fs': return num;
-      case 'ps': return num * 1000;
-      case 'ns': return num * 1000000;
-      case 'us': return num * 1000000000;
-      case 'ms': return num * 1000000000000;
-      default: return num;
+  // Load waveform info from server and pre-fill time range
+  const loadWaveInfo = async (waveName: string) => {
+    setIsLoadingWaveInfo(true);
+    try {
+      const infoResponse = await apiService.getWaveformInfo(waveName);
+      if (infoResponse.status === 'success' && infoResponse.data?.wave_info) {
+        const waveInfo = infoResponse.data.wave_info;
+        console.log('[WaveSelectionDialog] Wave info:', waveInfo);
+        
+        // Parse time_unit to get multiplier
+        const timeUnit = waveInfo.time_unit || '1fs';
+        const match = timeUnit.match(/(\d+)([a-z]+)/i);
+        let multiplier = 1;
+        if (match) {
+          const unit = match[2].toLowerCase();
+          switch (unit) {
+            case 'fs': multiplier = 1; break;
+            case 'ps': multiplier = 1000; break;
+            case 'ns': multiplier = 1000000; break;
+            case 'us': multiplier = 1000000000; break;
+            case 'ms': multiplier = 1000000000000; break;
+          }
+        }
+        
+        // Convert to LoD0 units (fs)
+        const startFs = (waveInfo.start_time || 0) * multiplier;
+        const endFs = (waveInfo.end_time || 0) * multiplier;
+        
+        setStartTime(startFs.toString());
+        setEndTime(endFs.toString());
+        console.log(`[WaveSelectionDialog] Pre-filled range: ${startFs} - ${endFs} fs`);
+      }
+    } catch (err) {
+      console.error('[WaveSelectionDialog] Error loading wave info:', err);
+    } finally {
+      setIsLoadingWaveInfo(false);
     }
+  };
+
+  const handleWaveClick = (waveName: string) => {
+    setSelectedWave(waveName);
+    loadWaveInfo(waveName);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedWave) {
       if (useCustomRange && startTime && endTime) {
-        const startFs = convertToFs(startTime, timeUnit);
-        const endFs = convertToFs(endTime, timeUnit);
-        onSelect(selectedWave, { start: startFs, end: endFs });
+        const start = parseFloat(startTime);
+        const end = parseFloat(endTime);
+        onSelect(selectedWave, { start, end });
       } else {
         onSelect(selectedWave);
       }
@@ -115,9 +147,9 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
 
   const handleDoubleClick = (waveName: string) => {
     if (useCustomRange && startTime && endTime) {
-      const startFs = convertToFs(startTime, timeUnit);
-      const endFs = convertToFs(endTime, timeUnit);
-      onSelect(waveName, { start: startFs, end: endFs });
+      const start = parseFloat(startTime);
+      const end = parseFloat(endTime);
+      onSelect(waveName, { start, end });
     } else {
       onSelect(waveName);
     }
@@ -186,10 +218,10 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
         </div>
         <form onSubmit={handleSubmit}>
           <div className="dialog-body">
-            <div style={{ marginBottom: '10px', color: '#666', fontSize: '12px' }}>
+            <div style={{ marginBottom: '8px', color: '#666', fontSize: '12px' }}>
               Select a waveform file to view:
             </div>
-            <div style={{ marginBottom: '10px' }}>
+            <div style={{ marginBottom: '8px' }}>
               <input
                 type="text"
                 placeholder="Filter (* wildcard)..."
@@ -197,7 +229,7 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
                 onChange={(e) => setFilter(e.target.value)}
                 style={{
                   width: '100%',
-                  padding: '6px 8px',
+                  padding: '5px 8px',
                   border: '1px solid #c0c0c0',
                   borderRadius: '3px',
                   fontSize: '12px',
@@ -205,9 +237,9 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
                 }}
               />
             </div>
-            <div className="wave-list" style={{ maxHeight: '150px', overflowY: 'auto', marginBottom: '15px' }}>
+            <div className="wave-list" style={{ maxHeight: '150px', overflowY: 'auto', marginBottom: '12px' }}>
               {filteredWaves.length === 0 ? (
-                <div style={{ padding: '10px', color: '#999', textAlign: 'center' }}>
+                <div style={{ padding: '8px', color: '#999', textAlign: 'center', fontSize: '12px' }}>
                   No matching waveform files
                 </div>
               ) : (
@@ -215,51 +247,59 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
                   <div
                     key={wave.name}
                     className={`wave-item ${selectedWave === wave.name ? 'selected' : ''}`}
-                    onClick={() => setSelectedWave(wave.name)}
+                    onClick={() => handleWaveClick(wave.name)}
                     onDoubleClick={() => handleDoubleClick(wave.name)}
                     style={{
-                      padding: '10px',
+                      padding: '6px 10px',
                       border: '1px solid #e0e0e0',
-                      borderRadius: '4px',
-                      marginBottom: '8px',
+                      borderRadius: '3px',
+                      marginBottom: '4px',
                       cursor: 'pointer',
                       backgroundColor: selectedWave === wave.name ? '#e3f2fd' : '#fff',
                       borderColor: selectedWave === wave.name ? '#2196f3' : '#e0e0e0',
+                      fontSize: '12px',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      lineHeight: '1.4',
                     }}
                   >
-                    <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
-                      {wave.name}
-                    </div>
-                    <div style={{ fontSize: '11px', color: '#666' }}>
-                      Size: {formatBytes(wave.file_size)}
-                    </div>
+                    <span style={{ fontWeight: 500 }}>{wave.name}</span>
+                    <span style={{ color: '#888', fontSize: '11px', marginLeft: '10px' }}>
+                      {formatBytes(wave.file_size)}
+                    </span>
                   </div>
                 ))
               )}
             </div>
 
             {/* Time Range Settings */}
-            <div style={{ borderTop: '1px solid #e0e0e0', paddingTop: '15px' }}>
-              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', marginBottom: '10px' }}>
+            <div style={{ borderTop: '1px solid #e0e0e0', paddingTop: '12px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', marginBottom: '8px' }}>
                 <input
                   type="checkbox"
                   checked={useCustomRange}
                   onChange={(e) => setUseCustomRange(e.target.checked)}
-                  style={{ marginRight: '8px' }}
+                  style={{ marginRight: '6px' }}
                 />
-                <span style={{ fontSize: '13px', fontWeight: 'bold' }}>Custom Time Range</span>
+                <span style={{ fontSize: '12px', fontWeight: 500 }}>Custom Time Range</span>
+                {isLoadingWaveInfo && (
+                  <span style={{ marginLeft: '10px', fontSize: '11px', color: '#666' }}>
+                    Loading...
+                  </span>
+                )}
               </label>
               
               {useCustomRange && (
-                <div style={{ paddingLeft: '20px' }}>
-                  <div style={{ marginBottom: '10px', fontSize: '11px', color: '#666' }}>
-                    Leave empty to use full waveform range
+                <div style={{ paddingLeft: '18px' }}>
+                  <div style={{ marginBottom: '8px', fontSize: '11px', color: '#666' }}>
+                    Time range in LoD0 units (fs). Leave empty to use full range.
                   </div>
                   
-                  <div style={{ display: 'flex', gap: '10px', marginBottom: '10px', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end' }}>
                     <div style={{ flex: 1 }}>
-                      <label style={{ display: 'block', fontSize: '11px', color: '#666', marginBottom: '3px' }}>
-                        Start Time
+                      <label style={{ display: 'block', fontSize: '11px', color: '#666', marginBottom: '2px' }}>
+                        Start
                       </label>
                       <input
                         type="number"
@@ -268,7 +308,7 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
                         onChange={(e) => setStartTime(e.target.value)}
                         style={{
                           width: '100%',
-                          padding: '5px 8px',
+                          padding: '4px 6px',
                           border: '1px solid #c0c0c0',
                           borderRadius: '3px',
                           fontSize: '12px',
@@ -277,8 +317,8 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
                       />
                     </div>
                     <div style={{ flex: 1 }}>
-                      <label style={{ display: 'block', fontSize: '11px', color: '#666', marginBottom: '3px' }}>
-                        End Time
+                      <label style={{ display: 'block', fontSize: '11px', color: '#666', marginBottom: '2px' }}>
+                        End
                       </label>
                       <input
                         type="number"
@@ -287,36 +327,13 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
                         onChange={(e) => setEndTime(e.target.value)}
                         style={{
                           width: '100%',
-                          padding: '5px 8px',
+                          padding: '4px 6px',
                           border: '1px solid #c0c0c0',
                           borderRadius: '3px',
                           fontSize: '12px',
                           boxSizing: 'border-box',
                         }}
                       />
-                    </div>
-                    <div style={{ width: '80px' }}>
-                      <label style={{ display: 'block', fontSize: '11px', color: '#666', marginBottom: '3px' }}>
-                        Unit
-                      </label>
-                      <select
-                        value={timeUnit}
-                        onChange={(e) => setTimeUnit(e.target.value)}
-                        style={{
-                          width: '100%',
-                          padding: '5px 8px',
-                          border: '1px solid #c0c0c0',
-                          borderRadius: '3px',
-                          fontSize: '12px',
-                          boxSizing: 'border-box',
-                        }}
-                      >
-                        <option value="fs">fs</option>
-                        <option value="ps">ps</option>
-                        <option value="ns">ns</option>
-                        <option value="us">us</option>
-                        <option value="ms">ms</option>
-                      </select>
                     </div>
                   </div>
                 </div>
