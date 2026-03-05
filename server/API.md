@@ -636,6 +636,44 @@ LoD 2 (bucket_size=256):
        └─ bucket 0 ─┘
 ```
 
+**客户端解析规则（重要）**:
+
+LoD 1+ 的 min/max 通过以下规则区分：
+1. **按时间戳分组**：相同时间戳的 transition 属于同一个 bucket
+2. **顺序规则**：每个时间戳的第一个值为 min，第二个值为 max（如果存在）
+3. **数量判断**：
+   - 1 个值：min = max（bucket 内值无变化）
+   - 2 个值：第一个是 min，第二个是 max（bucket 内值有变化）
+
+```javascript
+// LoD 1+ 解析示例
+function parseLodTransitions(transitions) {
+  const result = [];
+  let i = 0;
+  
+  while (i < transitions.length) {
+    const time = transitions[i].time;
+    const values = [];
+    
+    // 收集相同时间戳的所有值
+    while (i < transitions.length && transitions[i].time === time) {
+      values.push(transitions[i].value);
+      i++;
+    }
+    
+    // 解析 min/max
+    if (values.length === 1) {
+      result.push({ time, min: values[0], max: values[0] });
+    } else {
+      // 依赖顺序：第一个是 min，第二个是 max
+      result.push({ time, min: values[0], max: values[1] });
+    }
+  }
+  
+  return result;
+}
+```
+
 **客户端处理建议**:
 - LoD 0: 直接绘制每个转换点
 - LoD 1+: 按时间戳分组，相同时间戳的取 min 和 max 绘制为垂直线段
