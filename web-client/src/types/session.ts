@@ -29,6 +29,12 @@ export interface Session {
     useMockData: boolean;
   };
 
+  // Waveform display settings
+  waveformSettings?: {
+    signalPrefix: string;
+    spaceBeforeBracket: boolean;
+  };
+
   // Source Tabs
   sourceTabs: Array<{
     id: string;
