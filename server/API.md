@@ -442,7 +442,7 @@ GET /api/wave/{waveform_name}/lod/{lod}/signals/{signal_names}/data
 
 **路径参数**:
 - `waveform_name`: 波形文件名
-- `lod`: LoD (Level of Detail) 层级 0-11
+- `lod`: LoD (Level of Detail) 层级 0-12
 - `signal_names`: 信号名称，逗号分隔多个信号
 
 **信号名编码（必须 Base64）**:
@@ -676,7 +676,7 @@ function parseWaveChunk(buffer) {
 | KDB file not found | 知识库文件不存在 |
 | Wave file not found | 波形文件不存在 |
 | Signal not found | 信号不存在 |
-| Invalid LoD level | LoD 层级无效（必须在 0-11 范围内） |
+| Invalid LoD level | LoD 层级无效（必须在 0-12 范围内） |
 | Invalid time range | 时间范围无效 |
 | Invalid parameter | 请求参数无效 |
 
@@ -721,7 +721,10 @@ LoD 是基于**数据点数量**的降采样，与时间窗口无关：
 | 2 | 256 | 256:1 | 每 256 个转换点合并为 min/max |
 | n | 16^n | 16^n:1 | 每 16^n 个转换点合并为 min/max |
 | 3 | 4096 | 4096:1 | 每 4096 个转换点合并为 min/max |
-| 4 | 65536 | 65536:1 | 最大压缩层级 |
+| 4 | 65536 | 65536:1 | 每 65536 个转换点合并为 min/max |
+| 5 | 1,048,576 | ~100万:1 | 超高级压缩 |
+| 6 | 16,777,216 | ~1600万:1 | 极高级压缩 |
+| 12 | 2^48 | 最大压缩层级 | 理论最大层级 |
 
 **重要说明：**
 - **LoD 0** 使用 FST 文件的**原始数据**，不做任何降采样
@@ -731,8 +734,9 @@ LoD 是基于**数据点数量**的降采样，与时间窗口无关：
 
 **使用建议：**
 - `lod=0`: 需要完整精度时使用（如放大查看细节）
-- `lod=2-5`: 适合正常查看波形（平衡精度和性能）
-- `lod=8-11`: 适合远距离查看波形趋势（最大压缩）
+- `lod=2-4`: 适合正常查看波形（平衡精度和性能）
+- `lod=6-8`: 适合远距离查看波形趋势（高级压缩）
+- `lod=10-12`: 适合超大规模数据的概览（极高级压缩）
 
 ### 2. 压缩
 

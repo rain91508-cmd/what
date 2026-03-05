@@ -50,7 +50,7 @@ pub struct SignalListQuery {
 /// 波形数据查询参数
 #[derive(Debug, Deserialize)]
 pub struct WaveDataQuery {
-    /// LoD 层级 (0-11)
+    /// LoD 层级 (0-12)
     lod: Option<u32>,
     /// 起始时间 (time_unit 单位，与波形文件的 time_unit 一致)
     #[serde(default)]

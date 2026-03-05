@@ -632,7 +632,7 @@ pub struct LodLevel(pub u32);
 
 impl LodLevel {
     /// 最大 LoD 层级
-    pub const MAX_LEVEL: u32 = 11;
+    pub const MAX_LEVEL: u32 = 12;
 
     /// 创建 LoD 层级（自动限制在有效范围内）
     pub fn new(level: u32) -> Self {

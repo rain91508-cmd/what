@@ -74,7 +74,7 @@ impl IntoResponse for ServerError {
             ServerError::InvalidLod(lod) => (
                 StatusCode::BAD_REQUEST,
                 "INVALID_LOD",
-                format!("LoD 层级 {} 超出范围 (0-11)", lod),
+                format!("LoD 层级 {} 超出范围 (0-12)", lod),
             ),
             ServerError::InvalidTimeRange(msg) => {
                 (StatusCode::BAD_REQUEST, "INVALID_TIME_RANGE", msg.clone())
