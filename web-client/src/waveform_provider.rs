@@ -88,6 +88,10 @@ const LOD_TABLE: [(u32, u64); 8] = [
     (7, 268_435_456), // LOD7: bucket size ~268M
 ];
 
+/// Special timestamp for boundary value (start of time range)
+/// When no transitions exist in the requested range, server returns this boundary value
+const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
+
 /// Calculate appropriate LoD based on viewport and canvas width
 /// Goal: 1-2 transitions per pixel (avoid over-sampling)
 /// 
@@ -548,9 +552,24 @@ impl WaveformDataProvider {
 
             console_log!("[WASM] Signal block {}: handle={}, transitions={}",
                 signal_idx, block_header.signal_handle, block_header.transition_count);
+            console_log!("[WASM]   time_array_offset={}, value_array_offset={}",
+                block_header.time_array_offset, block_header.value_array_offset);
 
             // Get signal name from batch (same order as server)
             let signal_name = &batch[signal_idx as usize];
+
+            // Debug: print first 32 bytes of data area
+            let data_area_start = ChunkHeader::SIZE + (header.signal_count as usize * SignalBlockHeader::SIZE);
+            if data.len() > data_area_start {
+                let debug_len = std::cmp::min(32, data.len() - data_area_start);
+                let debug_bytes: Vec<String> = data[data_area_start..data_area_start + debug_len]
+                    .iter()
+                    .map(|b| format!("{:02X}", b))
+                    .collect();
+                console_log!("[WASM]   Data area (first {} bytes): {}", debug_len, debug_bytes.join(" "));
+            } else {
+                console_log!("[WASM]   Warning: No data area (data_len={} <= data_area_start={})", data.len(), data_area_start);
+            }
 
             // Parse transitions for this signal
             let transitions = self.parse_transitions_from_block(
@@ -862,13 +881,85 @@ impl WaveformDataProvider {
     }
 
     /// Generate segments for LoD 0 (normal format)
-    fn generate_normal_segments(&self, transitions: &[Transition], width: u32, y: f64, 
+    /// Handles boundary value (0xFFFFFFFFFFFFFFFF) for start-of-range value
+    fn generate_normal_segments(&self, transitions: &[Transition], width: u32, y: f64,
         signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>) {
-        
-        for i in 0..transitions.len() {
-            let t0 = transitions[i].time as f64;
-            let t1 = if i + 1 < transitions.len() {
-                transitions[i + 1].time as f64
+
+        // Check for boundary value (special timestamp indicating start-of-range value)
+        let boundary_value = transitions.iter()
+            .find(|t| t.time == BOUNDARY_TIME_START)
+            .map(|t| t.value.clone());
+
+        // Filter out boundary values for normal processing
+        let normal_transitions: Vec<_> = transitions.iter()
+            .filter(|t| t.time != BOUNDARY_TIME_START)
+            .cloned()
+            .collect();
+
+        // If no normal transitions, use boundary value to draw horizontal line
+        if normal_transitions.is_empty() {
+            if let Some(boundary_val) = boundary_value {
+                console_log!("[WASM] No transitions in range, using boundary value: {}", boundary_val);
+                let (value_type, has_xz) = Self::classify_value(&boundary_val, width);
+
+                segments.push(RenderSegment {
+                    x0: 0.0,
+                    x1: self.canvas_width,
+                    y,
+                    value: ValueInfo {
+                        value_type,
+                        display_str: boundary_val.clone(),
+                        width,
+                        has_xz,
+                        min_value: None,
+                        max_value: None,
+                        is_min_max: false,
+                    },
+                    signal_name: signal_name.to_string(),
+                });
+            }
+            return;
+        }
+
+        // If we have boundary value, draw segment from viewport start to first transition
+        if let Some(ref boundary_val) = boundary_value {
+            if let Some(first_trans) = normal_transitions.first() {
+                let t0 = self.viewport.time_start;
+                let t1 = first_trans.time as f64;
+
+                // Only draw if within viewport
+                if t1 >= self.viewport.time_start && t0 <= self.viewport.time_end {
+                    let t1_clamped = t1.min(self.viewport.time_end);
+                    let x0 = 0.0; // viewport start
+                    let x1 = ((t1_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
+
+                    if x1 > x0 {
+                        let (value_type, has_xz) = Self::classify_value(boundary_val, width);
+                        segments.push(RenderSegment {
+                            x0,
+                            x1,
+                            y,
+                            value: ValueInfo {
+                                value_type,
+                                display_str: boundary_val.clone(),
+                                width,
+                                has_xz,
+                                min_value: None,
+                                max_value: None,
+                                is_min_max: false,
+                            },
+                            signal_name: signal_name.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Process normal transitions
+        for i in 0..normal_transitions.len() {
+            let t0 = normal_transitions[i].time as f64;
+            let t1 = if i + 1 < normal_transitions.len() {
+                normal_transitions[i + 1].time as f64
             } else {
                 self.viewport.time_end
             };
@@ -886,7 +977,7 @@ impl WaveformDataProvider {
             let x0 = ((t0_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
             let x1 = ((t1_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
 
-            let value_str = &transitions[i].value;
+            let value_str = &normal_transitions[i].value;
             let (value_type, has_xz) = Self::classify_value(value_str, width);
 
             segments.push(RenderSegment {
@@ -909,59 +1000,130 @@ impl WaveformDataProvider {
 
     /// Generate segments for LoD 1+ (min/max format)
     /// Groups transitions by timestamp and creates min/max segments
+    /// Handles boundary value (0xFFFFFFFFFFFFFFFF) for start-of-range value
     fn generate_min_max_segments(&self, transitions: &[Transition], width: u32, y: f64,
         signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>) {
-        
+
+        // Check for boundary value (special timestamp indicating start-of-range value)
+        let boundary_value = transitions.iter()
+            .find(|t| t.time == BOUNDARY_TIME_START)
+            .map(|t| t.value.clone());
+
+        // Filter out boundary values for normal processing
+        let normal_transitions: Vec<_> = transitions.iter()
+            .filter(|t| t.time != BOUNDARY_TIME_START)
+            .cloned()
+            .collect();
+
+        // If no normal transitions, use boundary value to draw horizontal line
+        if normal_transitions.is_empty() {
+            if let Some(boundary_val) = boundary_value {
+                console_log!("[WASM] No transitions in range (LoD 1+), using boundary value: {}", boundary_val);
+                let (value_type, has_xz) = Self::classify_value(&boundary_val, width);
+
+                segments.push(RenderSegment {
+                    x0: 0.0,
+                    x1: self.canvas_width,
+                    y,
+                    value: ValueInfo {
+                        value_type,
+                        display_str: boundary_val.clone(),
+                        width,
+                        has_xz,
+                        min_value: Some(boundary_val.clone()),
+                        max_value: Some(boundary_val),
+                        is_min_max: false,
+                    },
+                    signal_name: signal_name.to_string(),
+                });
+            }
+            return;
+        }
+
+        // If we have boundary value, draw segment from viewport start to first transition
+        if let Some(ref boundary_val) = boundary_value {
+            if let Some(first_trans) = normal_transitions.first() {
+                let t0 = self.viewport.time_start;
+                let t1 = first_trans.time as f64;
+
+                // Only draw if within viewport
+                if t1 >= self.viewport.time_start && t0 <= self.viewport.time_end {
+                    let t1_clamped = t1.min(self.viewport.time_end);
+                    let x0 = 0.0; // viewport start
+                    let x1 = ((t1_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
+
+                    if x1 > x0 {
+                        let (value_type, has_xz) = Self::classify_value(boundary_val, width);
+                        segments.push(RenderSegment {
+                            x0,
+                            x1,
+                            y,
+                            value: ValueInfo {
+                                value_type,
+                                display_str: boundary_val.clone(),
+                                width,
+                                has_xz,
+                                min_value: Some(boundary_val.clone()),
+                                max_value: Some(boundary_val.clone()),
+                                is_min_max: false,
+                            },
+                            signal_name: signal_name.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
         // Group transitions by timestamp
         let mut i = 0;
-        while i < transitions.len() {
-            let time = transitions[i].time;
-            let mut values = vec![&transitions[i].value];
-            
+        while i < normal_transitions.len() {
+            let time = normal_transitions[i].time;
+            let mut values = vec![&normal_transitions[i].value];
+
             // Collect all values with the same timestamp
             let mut j = i + 1;
-            while j < transitions.len() && transitions[j].time == time {
-                values.push(&transitions[j].value);
+            while j < normal_transitions.len() && normal_transitions[j].time == time {
+                values.push(&normal_transitions[j].value);
                 j += 1;
             }
-            
+
             // Determine next time (end of this bucket)
-            let next_time = if j < transitions.len() {
-                transitions[j].time as f64
+            let next_time = if j < normal_transitions.len() {
+                normal_transitions[j].time as f64
             } else {
                 self.viewport.time_end
             };
-            
+
             let time_f = time as f64;
-            
+
             // Skip if outside viewport
             if next_time < self.viewport.time_start || time_f > self.viewport.time_end {
                 i = j;
                 continue;
             }
-            
+
             // Clamp to viewport
             let t0_clamped = time_f.max(self.viewport.time_start);
             let t1_clamped = next_time.min(self.viewport.time_end);
-            
+
             // Convert to pixels
             let x0 = ((t0_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
             let x1 = ((t1_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
-            
+
             // Extract min and max values
             let (min_val, max_val) = if values.len() >= 2 {
                 (values[0].clone(), values[1].clone())
             } else {
                 (values[0].clone(), values[0].clone())
             };
-            
+
             // Check if min != max and neither is X/Z
             let min_upper = min_val.to_uppercase();
             let max_upper = max_val.to_uppercase();
             let has_xz = min_upper.contains('X') || min_upper.contains('Z') ||
                         max_upper.contains('X') || max_upper.contains('Z');
             let is_changing = min_val != max_val && !has_xz;
-            
+
             let (value_type, display_str) = if is_changing {
                 if width == 1 {
                     // Single bit: draw vertical line
@@ -975,7 +1137,7 @@ impl WaveformDataProvider {
                 let (vt, _) = Self::classify_value(&min_val, width);
                 (vt, min_val.clone())
             };
-            
+
             segments.push(RenderSegment {
                 x0,
                 x1,
@@ -991,7 +1153,7 @@ impl WaveformDataProvider {
                 },
                 signal_name: signal_name.to_string(),
             });
-            
+
             i = j;
         }
     }
@@ -1045,24 +1207,32 @@ impl WaveformDataProvider {
     /// Get signal value at a specific time
     /// Returns the value of the signal at the given time (from cached data)
     /// If data is not cached, returns null
+    /// Handles BOUNDARY_TIME_START (0xFFFFFFFFFFFFFFFF) as the start-of-range value
     pub fn get_signal_value_at_time(&self, signal_name: &str, time: f64) -> JsValue {
         if let Some(data) = self.signal_data.get(signal_name) {
             let time_u64 = time as u64;
-            
+
             // Find the transition that covers this time
             // The value is valid from transition.time until the next transition
             let mut current_value = None;
-            
-            for (i, transition) in data.transitions.iter().enumerate() {
-                if transition.time <= time_u64 {
+            let mut boundary_value = None; // Store boundary value separately
+
+            for transition in &data.transitions {
+                if transition.time == BOUNDARY_TIME_START {
+                    // Boundary value represents the value at range start
+                    boundary_value = Some(&transition.value);
+                } else if transition.time <= time_u64 {
                     current_value = Some(&transition.value);
                 } else {
                     break; // transition.time > time_u64, stop searching
                 }
             }
-            
+
+            // Use boundary value if no normal transition found before this time
+            let value_to_return = current_value.or(boundary_value);
+
             // Return the value info
-            if let Some(value_str) = current_value {
+            if let Some(value_str) = value_to_return {
                 let (value_type, has_xz) = Self::classify_value(value_str, data.width);
                 let value_info = ValueInfo {
                     value_type,
@@ -1075,7 +1245,7 @@ impl WaveformDataProvider {
                 };
                 serde_wasm_bindgen::to_value(&value_info).unwrap_or(JsValue::NULL)
             } else {
-                // No transition found before this time
+                // No transition found before this time (and no boundary value)
                 JsValue::NULL
             }
         } else {
