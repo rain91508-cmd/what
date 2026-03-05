@@ -1047,6 +1047,9 @@ impl ChunkSerializer {
     /// * `level` - LoD 层级
     /// * `signals` - 信号波形数据列表
     /// * `time_range` - 时间范围 (start, end)
+    /// 特殊时间戳：标记起始边界值
+    pub const BOUNDARY_TIME_START: u64 = u64::MAX;
+
     /// * `compression` - 压缩算法（默认不压缩）
     pub fn serialize(
         chunk_id: u32,
@@ -1074,12 +1077,22 @@ impl ChunkSerializer {
 
         for signal in signals {
             // 过滤时间范围内的转换点
-            let filtered: Vec<_> = signal
+            let mut filtered: Vec<_> = signal
                 .transitions
                 .iter()
                 .filter(|t| t.time >= time_start && t.time <= time_end)
                 .cloned()
                 .collect();
+
+            // 如果没有转换点，添加起始边界值（使用特殊时间戳标记）
+            if filtered.is_empty() {
+                if let Some(boundary_value) = signal.value_at(time_start) {
+                    filtered.push(Transition {
+                        time: Self::BOUNDARY_TIME_START,
+                        value: boundary_value.value.clone(),
+                    });
+                }
+            }
 
             let transition_count = filtered.len() as u32;
 

@@ -645,14 +645,32 @@ LoD 1+ 的 min/max 通过以下规则区分：
    - 1 个值：min = max（bucket 内值无变化）
    - 2 个值：第一个是 min，第二个是 max（bucket 内值有变化）
 
+**边界值处理（重要）**:
+
+当请求的时间范围内没有 transition 时，服务器会返回一个**起始边界值**，使用特殊时间戳标记：
+- **特殊时间戳**：`0xFFFFFFFFFFFFFFFF` (u64::MAX)
+- **含义**：该值表示请求时间范围起始点的信号值
+- **用途**：客户端可以用这个值绘制水平线
+
 ```javascript
-// LoD 1+ 解析示例
+const BOUNDARY_TIME_START = 0xFFFFFFFFFFFFFFFFn;
+
+// LoD 1+ 解析示例（包含边界值处理）
 function parseLodTransitions(transitions) {
   const result = [];
+  let boundaryValue = null;
   let i = 0;
   
   while (i < transitions.length) {
     const time = transitions[i].time;
+    
+    // 检查是否是边界值
+    if (time === BOUNDARY_TIME_START) {
+      boundaryValue = transitions[i].value;
+      i++;
+      continue;
+    }
+    
     const values = [];
     
     // 收集相同时间戳的所有值
@@ -670,7 +688,23 @@ function parseLodTransitions(transitions) {
     }
   }
   
-  return result;
+  return { transitions: result, boundaryValue };
+}
+
+// 绘制波形（考虑边界值）
+function drawWaveform(canvas, parsedData, timeRange) {
+  const { transitions, boundaryValue } = parsedData;
+  const [startTime, endTime] = timeRange;
+  
+  if (transitions.length === 0 && boundaryValue !== null) {
+    // 没有 transition，使用边界值绘制水平线
+    drawHorizontalLine(canvas, startTime, endTime, boundaryValue);
+  } else {
+    // 正常绘制 transitions
+    for (const trans of transitions) {
+      drawTransition(canvas, trans);
+    }
+  }
 }
 ```
 
