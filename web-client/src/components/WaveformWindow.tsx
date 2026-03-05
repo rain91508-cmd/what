@@ -116,18 +116,16 @@ export function WaveformWindow({
   
   // 根据 canvas 宽度和时间配置计算 viewport
   // 所有时间值使用 LoD0Unit（整数）
-  const calculateViewport = useCallback((width: number): Viewport => {
-    // viewport 能显示的 LoD0Unit 数量 = 宽度 >> pixels2LoD0UnitShift
-    const lod0UnitCount = width >> timeConfig.pixels2LoD0UnitShift;
+  const calculateViewport = useCallback((): Viewport => {
     return {
-      timeStart: 0,           // LoD0Unit
-      timeEnd: lod0UnitCount, // LoD0Unit
+      timeStart: 0,     // LoD0Unit
+      timeEnd: 100,     // LoD0Unit - 默认显示 100 个单位
       signalStart: 0,
       signalEnd: 10,
       pixelsPerTime: 1,
       pixelsPerSignal: 24,
     };
-  }, [timeConfig]);
+  }, []);
   
   // 使用外部 viewport 或内部 state
   const [internalViewport, setInternalViewport] = useState<Viewport>(() => calculateViewport(800));

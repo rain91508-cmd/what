@@ -72,7 +72,7 @@ import { initTimeConfig } from './components/TabPanel'
 // 默认时间配置
 // DisplayUnitPerLoD0Unit = 1 表示 1 DisplayUnit = 1 LoD0Unit
 // 这样时间标尺上显示的数值就是 LoD0Unit 的值
-const DEFAULT_TIME_CONFIG: TimeConfig = initTimeConfig(1, 3);
+const DEFAULT_TIME_CONFIG: TimeConfig = initTimeConfig(1);
 
 // 默认列宽配置
 const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
