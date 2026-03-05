@@ -347,11 +347,43 @@ export function WaveformWindow({
   // 监听 cursor 变化，更新信号值
   useEffect(() => {
     if (!cursor.visible) return;
-    
-    // 从 DataProvider 获取当前可见信号在 cursor 位置的值
-    const values = mockDataProvider.getValuesAtTime(cursor.position);
-    setSignalValues(values);
-  }, [cursor.position, cursor.visible, displaySignals, expandedSignals]);
+
+    // 根据模式选择正确的 provider
+    if (!useMockData && wasmProviderRef.current) {
+      // WASM 模式：从 WASM provider 获取信号值
+      const wasmProvider = wasmProviderRef.current;
+      const values = new Map<string, string>();
+
+      for (const signal of displaySignals) {
+        try {
+          const valueInfo = wasmProvider.get_signal_value_at_time(signal.fullName || signal.name, cursor.position);
+          if (valueInfo && typeof valueInfo === 'object') {
+            // ValueInfo object has display_str field
+            const displayStr = (valueInfo as any).display_str || '0x0';
+            values.set(signal.fullName || signal.name, displayStr);
+
+            // For expanded multi-bit signals, also get individual bit values
+            if (signal.msb !== signal.lsb && expandedSignals.has(signal.unique_id)) {
+              // For multi-bit signals, the display_str usually contains the full value
+              // Individual bits would need to be extracted from the full value
+              // This is handled by the display logic in the render
+            }
+          } else {
+            values.set(signal.fullName || signal.name, '0x0');
+          }
+        } catch (error) {
+          console.error(`[WaveformWindow] Error getting value for signal ${signal.name}:`, error);
+          values.set(signal.fullName || signal.name, '0x0');
+        }
+      }
+
+      setSignalValues(values);
+    } else {
+      // Mock 模式：从 mock provider 获取信号值
+      const values = mockDataProvider.getValuesAtTime(cursor.position);
+      setSignalValues(values);
+    }
+  }, [cursor.position, cursor.visible, displaySignals, expandedSignals, useMockData]);
 
   const renderWaveform = async () => {
     if (!canvasRef.current) return;
