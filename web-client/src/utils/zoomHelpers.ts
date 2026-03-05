@@ -3,7 +3,7 @@
  * 提供统一的 zoom in/out 逻辑，供 toolbar 按钮和鼠标拖动使用
  */
 
-import type { Viewport } from '../types/window';
+import type { Viewport } from '../types';
 
 // 最大时间范围（LoD0Units）
 export const MAX_LOD0_UNITS = 1000000;

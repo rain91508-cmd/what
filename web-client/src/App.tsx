@@ -35,6 +35,9 @@ import { waveManager } from './modules/wSignal'
 // Utils
 import { zoomIn, zoomOut } from './utils/zoomHelpers'
 
+// WASM
+import { initWasm, createProvider, updateProviderSettings } from './wasm/waveformProvider'
+
 // Components
 import { MenuBar } from './components/MenuBar'
 import { ToolBar } from './components/ToolBar'
@@ -109,6 +112,9 @@ function App() {
 
   // Mock data state for waveform when no real wave file is loaded
   const [useMockData, setUseMockData] = useState(false)
+
+  // Server URL for WASM provider
+  const serverUrl = apiService.getBaseUrl()
   const [showMockDataDialog, setShowMockDataDialog] = useState(false)
   const [pendingMockSignal, setPendingMockSignal] = useState<Signal | null>(null)
 
@@ -178,6 +184,10 @@ function App() {
   useEffect(() => {
     const init = async () => {
       try {
+        // Initialize WASM module
+        await initWasm()
+        console.log('[App] WASM initialized')
+
         // Initialize storage layers
         await indexedDBManager.initialize()
         if (opfsManager.isSupported()) {
@@ -188,10 +198,10 @@ function App() {
         // Server starts in disconnected state - user must manually connect
         setConnected(false)
         addMessage('Application initialized - please connect to server')
-        
+
         // Don't restore previous connection automatically
         // User can manually connect via Connect button
-        
+
         setInitialized(true)
       } catch (error) {
         console.error('Initialization error:', error)
@@ -905,9 +915,27 @@ function App() {
       }
     }
     
+    // Close all waveform tabs before loading new waveform
+    setTabs(prev => prev.filter(tab => tab.type !== 'waveform'))
+    if (tabs.some(tab => tab.type === 'waveform')) {
+      addMessage('Closed all waveform tabs for new waveform')
+    }
+
     setCurrentWaveName(waveName)
     setCurrentWaveChecksum(waveChecksum)
-    
+    setCurrentWaveSignalPrefix('')  // Clear previous prefix
+    setCurrentWaveSignalSpaceBeforeBracket(false)  // Clear previous space setting
+
+    // Create WASM provider for the new waveform
+    // Use default prefix 'work@' and spaceBeforeBracket=true
+    // These will be updated when the first signal is searched
+    try {
+      createProvider(serverUrl, waveName, 'work@', true)
+      console.log('[App] Created WASM provider for waveform:', waveName)
+    } catch (error) {
+      console.error('[App] Failed to create WASM provider:', error)
+    }
+
     // Reset mock data flag when loading real waveform
     if (useMockData) {
       setUseMockData(false)
@@ -1518,6 +1546,9 @@ function App() {
             // Save prefix and space setting globally for this waveform
             setCurrentWaveSignalPrefix(result.prefix!)
             setCurrentWaveSignalSpaceBeforeBracket(result.spaceBeforeBracket ?? false)
+
+            // Update WASM provider settings
+            updateProviderSettings(result.prefix!, result.spaceBeforeBracket ?? false)
           }
 
           // Add signal to waveform (still using mock data for now)
@@ -2179,6 +2210,10 @@ function App() {
                 onSignalsProcessed={(processedIds) => handleSignalsProcessed(activeTabData.id, processedIds)}
                 onColumnWidthsChange={(widths) => handleColumnWidthsChange(activeTabData.id, widths)}
                 useMockData={useMockData}
+                serverUrl={serverUrl}
+                waveformName={currentWaveName || ''}
+                signalPrefix={currentWaveSignalPrefix}
+                spaceBeforeBracket={currentWaveSignalSpaceBeforeBracket}
               />
             ) : null}
           </TabPanel>

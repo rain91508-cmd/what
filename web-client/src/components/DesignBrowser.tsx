@@ -56,20 +56,16 @@ export function DesignBrowser({
   }, [kdbLoaded]);
 
   const loadTopLevelModules = async () => {
-    console.log('[DesignBrowser] loadTopLevelModules called, kdbLoaded:', kdbLoaded);
     try {
       setLoading(true);
       setError(null);
 
       if (!kdbManager.isLoaded()) {
-        console.log('[DesignBrowser] kdbManager not loaded, skipping');
         setLoading(false);
         return;
       }
 
-      console.log('[DesignBrowser] Fetching top-level modules...');
       const topModules = await kdbManager.getTopLevelModules();
-      console.log('[DesignBrowser] Got top-level modules:', topModules.length, topModules);
       
       const nodesMap = new Map<number, TreeNodeState>();
       const rootIds: number[] = [];
@@ -83,14 +79,12 @@ export function DesignBrowser({
         rootIds.push(module.id);
       }
 
-      console.log('[DesignBrowser] Setting treeNodes:', nodesMap.size, 'rootNodes:', rootIds.length);
       setTreeNodes(nodesMap);
       setRootNodes(rootIds);
       setLoading(false);
 
       // Auto-expand first root node if exists
       if (rootIds.length > 0) {
-        console.log('[DesignBrowser] Auto-expanding first root node:', rootIds[0]);
         setExpandedNodes(new Set([rootIds[0]]));
         // Load children for first node
         await loadChildren(rootIds[0], nodesMap);
@@ -187,7 +181,6 @@ export function DesignBrowser({
   };
 
   const handleNodeDoubleClick = async (nodeId: number) => {
-    console.log('[DesignBrowser] handleNodeDoubleClick called, nodeId:', nodeId, 'onModuleDoubleClick:', !!onModuleDoubleClick);
     if (!onModuleDoubleClick) return;
     onModuleDoubleClick(nodeId);
   };
@@ -213,11 +206,9 @@ export function DesignBrowser({
   const getChildIds = (parentId: number): number[] => {
     const parent = treeNodes.get(parentId);
     if (!parent) {
-      console.log(`[DesignBrowser] getChildIds: parent ${parentId} not found in treeNodes`);
       return [];
     }
     const childIds = parent.childModuleIds || [];
-    console.log(`[DesignBrowser] getChildIds for ${parentId}:`, childIds, 'parent:', parent);
     return childIds;
   };
 

@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Driver Test</title>
+  <style>
+    body {
+      font-family: monospace;
+      padding: 20px;
+      background: #1e1e1e;
+      color: #d4d4d4;
+    }
+    h1 { color: #4ec9b0; }
+    h2 { color: #9cdcfe; }
+    .log {
+      white-space: pre-wrap;
+      margin: 10px 0;
+      padding: 10px;
+      background: #252526;
+      border-radius: 4px;
+    }
+    .error { color: #f48771; }
+    .success { color: #4ec9b0; }
+    .info { color: #9cdcfe; }
+    button {
+      padding: 10px 20px;
+      margin: 5px;
+      cursor: pointer;
+      background: #0e639c;
+      color: white;
+      border: none;
+      border-radius: 4px;
+    }
+    button:hover { background: #1177bb; }
+  </style>
+</head>
+<body>
+  <h1>Driver Information Test</h1>
+  <div>
+    <button onclick="loadKdb()">Load simple.kdb</button>
+    <button onclick="analyzeDrivers()">Analyze Drivers</button>
+    <button onclick="clearLog()">Clear Log</button>
+  </div>
+  <div id="log" class="log"></div>
+
+  <script type="module">
+    import init, { download_and_parse_kdb } from './pkg/hwda_wasm.js';
+
+    const DB_NAME = 'HWDA_KDB';
+    const DB_VERSION = 1;
+    let db = null;
+    let currentKdbId = null;
+
+    // Initialize WASM
+    async function initWasm() {
+      log('Initializing WASM...', 'info');
+      await init();
+      log('WASM initialized', 'success');
+    }
+
+    // Open IndexedDB
+    async function openDB() {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => resolve(request.result);
+        request.onupgradeneeded = (event) => {
+          const db = event.target.result;
+          if (!db.objectStoreNames.contains('signal-insts')) {
+            const store = db.createObjectStore('signal-insts', { keyPath: 'index' });
+            store.createIndex('by-kdb', 'kdbId', { unique: false });
+          }
+          if (!db.objectStoreNames.contains('modules')) {
+            const store = db.createObjectStore('modules', { keyPath: 'index' });
+            store.createIndex('by-kdb', 'kdbId', { unique: false });
+          }
+          if (!db.objectStoreNames.contains('signal-defs')) {
+            const store = db.createObjectStore('signal-defs', { keyPath: 'index' });
+            store.createIndex('by-kdb', 'kdbId', { unique: false });
+          }
+        };
+      });
+    }
+
+    // Log function
+    function log(message, type = 'info') {
+      const logDiv = document.getElementById('log');
+      const entry = document.createElement('div');
+      entry.className = type;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      logDiv.appendChild(entry);
+      console.log(`[${type}] ${message}`);
+    }
+
+    // Load KDB
+    window.loadKdb = async function() {
+      try {
+        log('Loading simple.kdb...', 'info');
+
+        // Download KDB from server
+        const response = await fetch('http://localhost:8080/api/kdb/simple.kdb');
+        const arrayBuffer = await response.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+
+        log(`Downloaded ${bytes.length} bytes`, 'info');
+
+        // Parse with WASM
+        const result = await download_and_parse_kdb('simple.kdb', bytes);
+        log(`Parsed KDB: ${result}`, 'success');
+
+        currentKdbId = 'simple.kdb';
+        log('KDB loaded successfully', 'success');
+
+        // Open DB and show stats
+        db = await openDB();
+        await showStats();
+      } catch (error) {
+        log(`Error: ${error.message}`, 'error');
+        console.error(error);
+      }
+    };
+
+    // Show database stats
+    async function showStats() {
+      if (!db || !currentKdbId) {
+        log('No KDB loaded', 'error');
+        return;
+      }
+
+      const tx = db.transaction(['signal-insts', 'modules', 'signal-defs'], 'readonly');
+
+      // Count signal instances
+      const signalStore = tx.objectStore('signal-insts');
+      const signalIndex = signalStore.index('by-kdb');
+      const signalCount = await signalIndex.count(currentKdbId);
+
+      // Count modules
+      const moduleStore = tx.objectStore('modules');
+      const moduleIndex = moduleStore.index('by-kdb');
+      const moduleCount = await moduleIndex.count(currentKdbId);
+
+      // Count signal defs
+      const defStore = tx.objectStore('signal-defs');
+      const defIndex = defStore.index('by-kdb');
+      const defCount = await defIndex.count(currentKdbId);
+
+      log(`Database stats:`, 'info');
+      log(`  Signal instances: ${signalCount}`, 'info');
+      log(`  Modules: ${moduleCount}`, 'info');
+      log(`  Signal definitions: ${defCount}`, 'info');
+    }
+
+    // Analyze drivers
+    window.analyzeDrivers = async function() {
+      try {
+        if (!db || !currentKdbId) {
+          log('Please load KDB first', 'error');
+          return;
+        }
+
+        log('\n========================================', 'info');
+        log('Analyzing signals with drivers...', 'info');
+        log('========================================\n', 'info');
+
+        const tx = db.transaction(['signal-insts', 'modules', 'signal-defs'], 'readonly');
+        const signalStore = tx.objectStore('signal-insts');
+        const signalIndex = signalStore.index('by-kdb');
+
+        // Get all signal instances for this KDB
+        const request = signalIndex.getAll(currentKdbId);
+        const signalInsts = await new Promise((resolve, reject) => {
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+
+        // Get all modules
+        const moduleStore = tx.objectStore('modules');
+        const moduleIndex = moduleStore.index('by-kdb');
+        const moduleRequest = moduleIndex.getAll(currentKdbId);
+        const modules = await new Promise((resolve, reject) => {
+          moduleRequest.onsuccess = () => resolve(moduleRequest.result);
+          moduleRequest.onerror = () => reject(moduleRequest.error);
+        });
+
+        // Get all signal defs
+        const defStore = tx.objectStore('signal-defs');
+        const defIndex = defStore.index('by-kdb');
+        const defRequest = defIndex.getAll(currentKdbId);
+        const signalDefs = await new Promise((resolve, reject) => {
+          defRequest.onsuccess = () => resolve(defRequest.result);
+          defRequest.onerror = () => reject(defRequest.error);
+        });
+
+        let signalsWithDrivers = 0;
+        let totalDrivers = 0;
+
+        for (const inst of signalInsts) {
+          const hasDrivers = inst.driverLocations && inst.driverLocations.length > 0;
+
+          if (hasDrivers) {
+            signalsWithDrivers++;
+            totalDrivers += inst.driverLocations.length;
+
+            // Get signal definition
+            const parentModule = modules.find(m => m.index === inst.parentModuleId);
+            let signalDef = null;
+
+            if (parentModule && parentModule.signalDefs) {
+              const localIdx = inst.index - parentModule.signalInstsStartId;
+              if (localIdx >= 0 && localIdx < parentModule.signalDefs.length) {
+                const signalDefId = parentModule.signalDefs[localIdx];
+                signalDef = signalDefs.find(d => d.index === signalDefId);
+              }
+            }
+
+            log(`\n--- Signal Global ID: ${inst.index} ---`, 'info');
+            log(`  Signal Name: ${signalDef ? signalDef.name : 'Unknown'}`, 'info');
+            log(`  Parent Module ID: ${inst.parentModuleId}`, 'info');
+            log(`  MSB: ${inst.msb}, LSB: ${inst.lsb}`, 'info');
+            log(`  Number of Drivers: ${inst.driverLocations.length}`, 'info');
+
+            log(`  Drivers:`, 'info');
+            for (let i = 0; i < inst.driverLocations.length; i++) {
+              const driver = inst.driverLocations[i];
+
+              // Get driver signal info
+              const driverInst = signalInsts.find(s => s.index === driver.driverSignalGlobalId);
+              let driverSignalDef = null;
+
+              if (driverInst) {
+                const driverParentModule = modules.find(m => m.index === driverInst.parentModuleId);
+                if (driverParentModule && driverParentModule.signalDefs) {
+                  const driverLocalIdx = driverInst.index - driverParentModule.signalInstsStartId;
+                  if (driverLocalIdx >= 0 && driverLocalIdx < driverParentModule.signalDefs.length) {
+                    const driverSignalDefId = driverParentModule.signalDefs[driverLocalIdx];
+                    driverSignalDef = signalDefs.find(d => d.index === driverSignalDefId);
+                  }
+                }
+              }
+
+              log(`    [${i + 1}] Driver Signal Global ID: ${driver.driverSignalGlobalId}`, 'info');
+              log(`        Driver Signal Name: ${driverSignalDef ? driverSignalDef.name : 'Unknown'}`, 'info');
+              log(`        Line: ${driver.line}`, driver.line > 0 ? 'success' : 'error');
+            }
+          }
+        }
+
+        log('\n========================================', 'info');
+        log('Summary:', 'info');
+        log(`  Total Signals: ${signalInsts.length}`, 'info');
+        log(`  Signals with Drivers: ${signalsWithDrivers}`, 'info');
+        log(`  Total Driver Entries: ${totalDrivers}`, 'info');
+        log('========================================\n', 'info');
+      } catch (error) {
+        log(`Error: ${error.message}`, 'error');
+        console.error(error);
+      }
+    };
+
+    // Clear log
+    window.clearLog = function() {
+      document.getElementById('log').innerHTML = '';
+    };
+
+    // Initialize on load
+    initWasm();
+  </script>
+</body>
+</html>
