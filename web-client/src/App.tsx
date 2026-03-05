@@ -1751,14 +1751,14 @@ function App() {
       console.log(`[Zoom In] After: start=${newViewport.timeStart}, end=${newViewport.timeEnd}`)
       
       // Clamp cursor to new viewport range to ensure it stays visible
-      const cursorPos = currentTab.cursorPosition ?? Math.floor((currentTab.viewport.timeStart + currentTab.viewport.timeEnd) / 2)
+      const cursorPos = currentTab.cursorPosition ?? ((currentTab.viewport.timeStart + currentTab.viewport.timeEnd) / 2)
       const newCursorPos = Math.max(newViewport.timeStart, Math.min(newViewport.timeEnd, cursorPos))
 
       setTabs(prev => prev.map(tab =>
         tab.id === activeTab ? {
           ...tab,
           viewport: newViewport,
-          cursorPosition: newCursorPos,
+          cursorPosition: Math.floor(newCursorPos),
         } : tab
       ))
       addMessage(`Zoom in: ${newViewport.timeStart} to ${newViewport.timeEnd} LoD0Units`)
@@ -1780,7 +1780,7 @@ function App() {
       console.log(`[Zoom Out] After: start=${newViewport.timeStart}, end=${newViewport.timeEnd}`)
 
       // Clamp cursor to new viewport range to ensure it stays visible
-      const cursorPos = currentTab.cursorPosition ?? Math.floor((currentTab.viewport.timeStart + currentTab.viewport.timeEnd) / 2)
+      const cursorPos = currentTab.cursorPosition ?? ((currentTab.viewport.timeStart + currentTab.viewport.timeEnd) / 2)
       const newCursorPos = Math.max(newViewport.timeStart, Math.min(newViewport.timeEnd, cursorPos))
       
       setTabs(prev => prev.map(tab =>
