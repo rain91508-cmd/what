@@ -104,6 +104,7 @@ function App() {
   const [currentWaveTimeUnit, setCurrentWaveTimeUnit] = useState<number>(2)  // Waveform time unit enum (0=fs, 1=ps, 2=ns, etc.)
   const [currentWaveEndTime, setCurrentWaveEndTime] = useState<number>(1000000)  // Waveform end time in LoD0 units (fs)
   const [currentWaveDisplayUnitPerLoD0, setCurrentWaveDisplayUnitPerLoD0] = useState<number>(1)  // DisplayUnit per LoD0Unit
+  const [currentWaveCustomRange, setCurrentWaveCustomRange] = useState<{ start: number; end: number } | undefined>(undefined)  // User custom time range
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(false)
   const autoCheckIntervalRef = useRef<NodeJS.Timeout | null>(null)
   
@@ -903,11 +904,17 @@ function App() {
   }
 
   // Handle waveform selection
-  const handleWaveSelect = async (waveName: string) => {
+  // Supports optional custom time range from user
+  const handleWaveSelect = async (waveName: string, customRange?: { start: number; end: number }) => {
     setShowWaveSelectionDialog(false)
     waveManager.setCurrentWaveform(waveName)
     setCurrentWaveform(waveName)
-    addMessage(`Selected waveform: ${waveName}`)
+    
+    if (customRange) {
+      addMessage(`Selected waveform: ${waveName} (custom range: ${customRange.start}-${customRange.end} fs)`)
+    } else {
+      addMessage(`Selected waveform: ${waveName}`)
+    }
 
     // Get checksum and modified_time from list API
     const listResponse = await apiService.getWaveformList()
@@ -966,6 +973,7 @@ function App() {
     setCurrentWaveTimeUnit(waveTimeUnit)  // Set time unit from waveform
     setCurrentWaveEndTime(waveEndTime)  // Set end time from waveform
     setCurrentWaveDisplayUnitPerLoD0(displayUnitPerLoD0Unit)  // Set display unit ratio
+    setCurrentWaveCustomRange(customRange)  // Save user custom range (if any)
 
     // Create WASM provider for the new waveform with initial viewport and time stamp
     try {
@@ -1707,10 +1715,11 @@ function App() {
 
     // Determine waveform total range:
     // - If user provides customRange, use that
+    // - Otherwise use saved custom range from waveform selection
     // - Otherwise use server returned range (currentWaveEndTime)
     // This range will be saved for viewport sanity checks
     const waveformRange = isWaveform
-      ? (customRange ?? { start: 0, end: currentWaveEndTime })
+      ? (customRange ?? currentWaveCustomRange ?? { start: 0, end: currentWaveEndTime })
       : undefined
 
     // Set viewport end time to waveform's range (with validation)

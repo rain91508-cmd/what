@@ -8,7 +8,7 @@ interface ServerWaveformInfo {
 }
 
 interface WaveSelectionDialogProps {
-  onSelect: (waveName: string) => void;
+  onSelect: (waveName: string, customRange?: { start: number; end: number }) => void;
   onCancel: () => void;
 }
 
@@ -18,6 +18,12 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
+  
+  // Time range settings
+  const [useCustomRange, setUseCustomRange] = useState(false);
+  const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
+  const [timeUnit, setTimeUnit] = useState('fs'); // fs, ps, ns, us, ms
 
   useEffect(() => {
     loadWaveList();
@@ -79,15 +85,42 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
     return wildcardMatch(filter, wave.name);
   });
 
+  // Convert time with unit to fs (LoD0 unit)
+  const convertToFs = (value: string, unit: string): number => {
+    const num = parseFloat(value);
+    if (isNaN(num)) return 0;
+    
+    switch (unit) {
+      case 'fs': return num;
+      case 'ps': return num * 1000;
+      case 'ns': return num * 1000000;
+      case 'us': return num * 1000000000;
+      case 'ms': return num * 1000000000000;
+      default: return num;
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedWave) {
-      onSelect(selectedWave);
+      if (useCustomRange && startTime && endTime) {
+        const startFs = convertToFs(startTime, timeUnit);
+        const endFs = convertToFs(endTime, timeUnit);
+        onSelect(selectedWave, { start: startFs, end: endFs });
+      } else {
+        onSelect(selectedWave);
+      }
     }
   };
 
   const handleDoubleClick = (waveName: string) => {
-    onSelect(waveName);
+    if (useCustomRange && startTime && endTime) {
+      const startFs = convertToFs(startTime, timeUnit);
+      const endFs = convertToFs(endTime, timeUnit);
+      onSelect(waveName, { start: startFs, end: endFs });
+    } else {
+      onSelect(waveName);
+    }
   };
 
   if (loading) {
@@ -146,7 +179,7 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
 
   return (
     <div className="dialog-overlay" onClick={onCancel}>
-      <div className="dialog" onClick={e => e.stopPropagation()}>
+      <div className="dialog" onClick={e => e.stopPropagation()} style={{ maxWidth: '500px' }}>
         <div className="dialog-header">
           <span className="dialog-title">Select Waveform</span>
           <button className="dialog-close" onClick={onCancel}>×</button>
@@ -172,7 +205,7 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
                 }}
               />
             </div>
-            <div className="wave-list" style={{ maxHeight: '200px', overflowY: 'auto' }}>
+            <div className="wave-list" style={{ maxHeight: '150px', overflowY: 'auto', marginBottom: '15px' }}>
               {filteredWaves.length === 0 ? (
                 <div style={{ padding: '10px', color: '#999', textAlign: 'center' }}>
                   No matching waveform files
@@ -202,6 +235,91 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
                     </div>
                   </div>
                 ))
+              )}
+            </div>
+
+            {/* Time Range Settings */}
+            <div style={{ borderTop: '1px solid #e0e0e0', paddingTop: '15px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', marginBottom: '10px' }}>
+                <input
+                  type="checkbox"
+                  checked={useCustomRange}
+                  onChange={(e) => setUseCustomRange(e.target.checked)}
+                  style={{ marginRight: '8px' }}
+                />
+                <span style={{ fontSize: '13px', fontWeight: 'bold' }}>Custom Time Range</span>
+              </label>
+              
+              {useCustomRange && (
+                <div style={{ paddingLeft: '20px' }}>
+                  <div style={{ marginBottom: '10px', fontSize: '11px', color: '#666' }}>
+                    Leave empty to use full waveform range
+                  </div>
+                  
+                  <div style={{ display: 'flex', gap: '10px', marginBottom: '10px', alignItems: 'center' }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ display: 'block', fontSize: '11px', color: '#666', marginBottom: '3px' }}>
+                        Start Time
+                      </label>
+                      <input
+                        type="number"
+                        placeholder="0"
+                        value={startTime}
+                        onChange={(e) => setStartTime(e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '5px 8px',
+                          border: '1px solid #c0c0c0',
+                          borderRadius: '3px',
+                          fontSize: '12px',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ display: 'block', fontSize: '11px', color: '#666', marginBottom: '3px' }}>
+                        End Time
+                      </label>
+                      <input
+                        type="number"
+                        placeholder="End"
+                        value={endTime}
+                        onChange={(e) => setEndTime(e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '5px 8px',
+                          border: '1px solid #c0c0c0',
+                          borderRadius: '3px',
+                          fontSize: '12px',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                    </div>
+                    <div style={{ width: '80px' }}>
+                      <label style={{ display: 'block', fontSize: '11px', color: '#666', marginBottom: '3px' }}>
+                        Unit
+                      </label>
+                      <select
+                        value={timeUnit}
+                        onChange={(e) => setTimeUnit(e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '5px 8px',
+                          border: '1px solid #c0c0c0',
+                          borderRadius: '3px',
+                          fontSize: '12px',
+                          boxSizing: 'border-box',
+                        }}
+                      >
+                        <option value="fs">fs</option>
+                        <option value="ps">ps</option>
+                        <option value="ns">ns</option>
+                        <option value="us">us</option>
+                        <option value="ms">ms</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
               )}
             </div>
           </div>
