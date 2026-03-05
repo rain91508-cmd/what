@@ -282,6 +282,12 @@ export interface Tab {
     timeEnd: number;    // LoD0Unit
   };
   cursorPosition?: number;  // LoD0Unit, cursor position for zoom operations
+  // Waveform total range (for sanity check and boundary validation)
+  // If user sets custom range, use that; otherwise use server returned range
+  waveformRange?: {
+    start: number;  // LoD0Unit - total start time of waveform
+    end: number;    // LoD0Unit - total end time of waveform
+  };
 }
 
 interface TabPanelProps {

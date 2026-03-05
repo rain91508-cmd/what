@@ -1695,22 +1695,31 @@ function App() {
   }
 
   // Tab management functions
-  const handleAddTab = (type: 'source' | 'waveform') => {
+  // For waveform tabs, optional customRange can be provided by user
+  const handleAddTab = (type: 'source' | 'waveform', customRange?: { start: number; end: number }) => {
     const newId = `${type}-${tabCounter.current++}`
-    
+
     // For waveform tabs, use current waveform's time settings
     const isWaveform = type === 'waveform'
-    const timeConfig = isWaveform 
+    const timeConfig = isWaveform
       ? initTimeConfig(currentWaveDisplayUnitPerLoD0)
       : undefined
-    
-    // Set viewport end time to waveform's end time (with validation)
+
+    // Determine waveform total range:
+    // - If user provides customRange, use that
+    // - Otherwise use server returned range (currentWaveEndTime)
+    // This range will be saved for viewport sanity checks
+    const waveformRange = isWaveform
+      ? (customRange ?? { start: 0, end: currentWaveEndTime })
+      : undefined
+
+    // Set viewport end time to waveform's range (with validation)
     let viewport = undefined
-    if (isWaveform) {
-      const sanitized = sanitizeTimeRange(0, currentWaveEndTime, { maxTime: currentWaveEndTime })
+    if (isWaveform && waveformRange) {
+      const sanitized = sanitizeTimeRange(waveformRange.start, waveformRange.end, waveformRange)
       viewport = { timeStart: sanitized.timeStart, timeEnd: sanitized.timeEnd }
     }
-    
+
     const newTab: Tab = {
       id: newId,
       label: type === 'source' ? `Source ${tabCounter.current - 1}` : `Waveform ${tabCounter.current - 1}`,
@@ -1721,12 +1730,15 @@ function App() {
       selectedGroup: isWaveform ? 'group_1' : undefined,
       timeConfig,
       viewport,
-      cursorPosition: isWaveform ? Math.floor(currentWaveEndTime / 2) : undefined, // Default cursor at middle
+      cursorPosition: isWaveform && waveformRange
+        ? Math.floor((waveformRange.start + waveformRange.end) / 2)
+        : undefined, // Default cursor at middle of range
       waveformTimeUnit: isWaveform ? currentWaveTimeUnit : undefined,
+      waveformRange, // Save the total range for sanity checks
     }
     setTabs(prev => [...prev, newTab])
     setActiveTab(newId)
-    addMessage(`Added new ${type} tab`)
+    addMessage(`Added new ${type} tab` + (customRange ? ` (custom range: ${customRange.start}-${customRange.end})` : ''))
   }
 
   // Update time configuration for a specific tab
@@ -1794,13 +1806,16 @@ function App() {
     }
   }
 
-  // Zoom full - set viewport to show entire waveform (0 to max time)
+  // Zoom full - set viewport to show entire waveform range
   const handleZoomFull = () => {
     const currentTab = tabs.find(t => t.id === activeTab)
     if (currentTab?.type === 'waveform' && currentTab.viewport) {
-      // Use current waveform's actual end time (with validation)
-      const maxLod0Units = currentWaveEndTime
-      const sanitized = sanitizeTimeRange(0, maxLod0Units, { maxTime: maxLod0Units })
+      // Use the tab's saved waveformRange for zoom full
+      const sanitized = sanitizeTimeRange(
+        currentTab.waveformRange?.start ?? 0,
+        currentTab.waveformRange?.end ?? currentWaveEndTime,
+        currentTab.waveformRange
+      )
 
       setTabs(prev => prev.map(tab =>
         tab.id === activeTab ? {
@@ -2258,10 +2273,11 @@ function App() {
                 viewport={activeTabData.viewport}
                 onViewportChange={(viewport) => {
                   // Validate viewport time range before updating
+                  // Use the tab's saved waveformRange for validation
                   const sanitized = sanitizeTimeRange(
                     viewport.timeStart,
                     viewport.timeEnd,
-                    { maxTime: currentWaveEndTime }
+                    activeTabData.waveformRange
                   )
                   const validatedViewport = {
                     ...viewport,

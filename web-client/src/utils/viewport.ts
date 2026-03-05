@@ -9,22 +9,28 @@ import type { Viewport } from '../types';
 /**
  * Validate and sanitize time range values
  * Ensures timeStart and timeEnd are integers (u64 compatible)
+ * Clamps values to waveform range if provided
  * 
  * @param timeStart - Start time (will be floored to integer)
  * @param timeEnd - End time (will be floored to integer)
+ * @param waveformRange - Optional waveform total range for clamping (if not provided, uses options.maxTime)
  * @param options - Optional constraints
  * @returns Sanitized time range and whether changes were made
  */
 export function sanitizeTimeRange(
   timeStart: number,
   timeEnd: number,
+  waveformRange?: { start: number; end: number },
   options?: {
-    maxTime?: number;      // Maximum allowed time (e.g., waveform end time)
     minRange?: number;     // Minimum time range
     allowNegative?: boolean; // Allow negative start time (default: false)
   }
 ): { timeStart: number; timeEnd: number; changed: boolean } {
   let changed = false;
+  
+  // Determine effective range limits
+  const rangeStart = waveformRange?.start ?? 0;
+  const rangeEnd = waveformRange?.end ?? Number.MAX_SAFE_INTEGER;
   
   // Step 1: Ensure integers by truncating decimals
   let start = Math.floor(timeStart);
@@ -34,15 +40,32 @@ export function sanitizeTimeRange(
     changed = true;
   }
   
-  // Step 2: Ensure start < end
-  if (start >= end) {
-    console.warn(`[Viewport] Invalid time range: ${start} >= ${end}, adjusting`);
-    end = start + 1;
+  // Step 2: Clamp to waveform range
+  if (start < rangeStart) {
+    console.warn(`[Viewport] Start time ${start} below range ${rangeStart}, clamping`);
+    start = rangeStart;
+    changed = true;
+  }
+  if (end > rangeEnd) {
+    console.warn(`[Viewport] End time ${end} exceeds range ${rangeEnd}, clamping`);
+    end = rangeEnd;
     changed = true;
   }
   
-  // Step 3: Handle negative start time
-  if (!options?.allowNegative && start < 0) {
+  // Step 3: Ensure start < end
+  if (start >= end) {
+    console.warn(`[Viewport] Invalid time range: ${start} >= ${end}, adjusting`);
+    end = start + 1;
+    // Re-check range end constraint
+    if (end > rangeEnd) {
+      end = rangeEnd;
+      start = Math.max(rangeStart, end - 1);
+    }
+    changed = true;
+  }
+  
+  // Step 4: Handle negative start time (only if not allowing negative and rangeStart >= 0)
+  if (!options?.allowNegative && start < 0 && rangeStart >= 0) {
     console.warn(`[Viewport] Negative start time: ${start}, clamping to 0`);
     start = 0;
     if (end <= start) {
@@ -51,29 +74,15 @@ export function sanitizeTimeRange(
     changed = true;
   }
   
-  // Step 4: Apply maximum time constraint
-  if (options?.maxTime !== undefined) {
-    if (end > options.maxTime) {
-      console.warn(`[Viewport] End time ${end} exceeds max ${options.maxTime}, clamping`);
-      end = options.maxTime;
-      changed = true;
-    }
-    // Re-validate start < end after clamping end
-    if (start >= end) {
-      start = Math.max(0, end - 1);
-      changed = true;
-    }
-  }
-  
   // Step 5: Apply minimum range constraint
   if (options?.minRange !== undefined) {
     const range = end - start;
     if (range < options.minRange) {
       end = start + options.minRange;
-      // Re-check maxTime constraint
-      if (options?.maxTime !== undefined && end > options.maxTime) {
-        end = options.maxTime;
-        start = Math.max(0, end - options.minRange);
+      // Re-check range end constraint
+      if (end > rangeEnd) {
+        end = rangeEnd;
+        start = Math.max(rangeStart, end - options.minRange);
       }
       changed = true;
     }
@@ -85,17 +94,26 @@ export function sanitizeTimeRange(
 /**
  * Create a new Viewport with sanitized time range
  * This is the ONLY allowed way to create a Viewport with time values
+ * 
+ * @param timeStart - Start time
+ * @param timeEnd - End time
+ * @param waveformRange - Optional waveform total range for clamping
+ * @param signalStart - Start signal index
+ * @param signalEnd - End signal index
+ * @param pixelsPerTime - Pixels per time unit
+ * @param pixelsPerSignal - Pixels per signal
  */
 export function createViewport(
   timeStart: number,
   timeEnd: number,
+  waveformRange?: { start: number; end: number },
   signalStart: number = 0,
   signalEnd: number = 10,
   pixelsPerTime: number = 0,
   pixelsPerSignal: number = 0
 ): Viewport {
-  const { timeStart: start, timeEnd: end } = sanitizeTimeRange(timeStart, timeEnd);
-  
+  const { timeStart: start, timeEnd: end } = sanitizeTimeRange(timeStart, timeEnd, waveformRange);
+
   return {
     timeStart: start,
     timeEnd: end,
@@ -109,14 +127,20 @@ export function createViewport(
 /**
  * Set time range on an existing viewport
  * This is the ONLY allowed way to modify timeStart/timeEnd
+ * 
+ * @param viewport - Current viewport
+ * @param timeStart - New start time
+ * @param timeEnd - New end time
+ * @param waveformRange - Optional waveform total range for clamping
  */
 export function setViewTimeRange(
   viewport: Viewport,
   timeStart: number,
-  timeEnd: number
+  timeEnd: number,
+  waveformRange?: { start: number; end: number }
 ): Viewport {
-  const { timeStart: start, timeEnd: end } = sanitizeTimeRange(timeStart, timeEnd);
-  
+  const { timeStart: start, timeEnd: end } = sanitizeTimeRange(timeStart, timeEnd, waveformRange);
+
   return {
     ...viewport,
     timeStart: start,
