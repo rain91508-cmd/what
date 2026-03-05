@@ -95,6 +95,8 @@ function App() {
   const [currentKdbChecksum, setCurrentKdbChecksum] = useState<string | null>(null)
   const [currentWaveName, setCurrentWaveName] = useState<string | null>(null)
   const [currentWaveChecksum, setCurrentWaveChecksum] = useState<string | null>(null)
+  const [currentWaveSignalPrefix, setCurrentWaveSignalPrefix] = useState<string>('')  // Global signal prefix for current waveform
+  const [currentWaveSignalSpaceBeforeBracket, setCurrentWaveSignalSpaceBeforeBracket] = useState<boolean>(false)  // Whether to add space before [msb:lsb]
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(false)
   const autoCheckIntervalRef = useRef<NodeJS.Timeout | null>(null)
   
@@ -109,6 +111,16 @@ function App() {
   const [useMockData, setUseMockData] = useState(false)
   const [showMockDataDialog, setShowMockDataDialog] = useState(false)
   const [pendingMockSignal, setPendingMockSignal] = useState<Signal | null>(null)
+
+  // Signal not found dialog state
+  const [showSignalNotFoundDialog, setShowSignalNotFoundDialog] = useState(false)
+  const [signalNotFoundInfo, setSignalNotFoundInfo] = useState<{
+    attempted: string;
+    matched: string;
+    prefix: string;
+    firstAvailable: string;
+    success: boolean;
+  } | null>(null)
 
   // Session dialog state
   const [showSessionDialog, setShowSessionDialog] = useState(false)
@@ -949,6 +961,8 @@ function App() {
     setCurrentWaveform(null)
     setCurrentWaveName(null)
     setCurrentWaveChecksum(null)
+    setCurrentWaveSignalPrefix('')  // Clear signal prefix when closing waveform
+    setCurrentWaveSignalSpaceBeforeBracket(false)  // Clear space flag when closing waveform
     setWaveforms([])
     
     // Close all waveform tabs
@@ -1279,16 +1293,266 @@ function App() {
     console.log('[App] Word not found as instance or signal:', word);
   }
 
-  const handleSignalAddToWaveform = (signal: Signal) => {
+  // Helper function to escape regex special characters
+  const escapeRegex = (str: string): string => {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  }
+
+  // Helper function to build server signal name from local signal info
+  // Uses saved prefix and space settings
+  // Inputs:
+  //   - fullName: local full name (e.g., "work@tb_top.u_dut.mem_arid[7:0]")
+  //   - prefix: prefix to remove (e.g., "work@")
+  //   - spaceBeforeBracket: whether to add space before [msb:lsb]
+  // Returns: server signal name (not escaped, for display or API use)
+  const buildServerSignalName = (
+    fullName: string,
+    prefix: string,
+    spaceBeforeBracket: boolean
+  ): string => {
+    // Remove prefix if present
+    let serverName = prefix && fullName.startsWith(prefix)
+      ? fullName.substring(prefix.length)
+      : fullName
+
+    // Handle space before bracket
+    if (spaceBeforeBracket) {
+      const bracketIndex = serverName.indexOf('[')
+      if (bracketIndex !== -1 && bracketIndex > 0 && serverName[bracketIndex - 1] !== ' ') {
+        serverName = serverName.substring(0, bracketIndex) + ' ' + serverName.substring(bracketIndex)
+      }
+    }
+
+    return serverName
+  }
+
+  // Helper function to search signal on server with prefix removal and bit width handling
+  // Inputs:
+  //   - fullName: full hierarchical name (e.g., "work@tb_top.u_dut.mem_arid[7:0]")
+  //   - prefix: prefix to remove (e.g., "work@")
+  // Returns: { found, matchedName?, prefix?, spaceBeforeBracket? }
+  const searchSignalOnServer = async (
+    waveName: string,
+    fullName: string,
+    prefix: string = ''
+  ): Promise<{ found: boolean; matchedName?: string; prefix?: string; spaceBeforeBracket?: boolean }> => {
+    // Remove prefix if provided
+    let searchName = prefix && fullName.startsWith(prefix)
+      ? fullName.substring(prefix.length)
+      : fullName
+
+    console.log(`[Signal Search] Original: "${fullName}", Prefix: "${prefix}", Search name: "${searchName}"`)
+
+    // Try with bit width first (no space)
+    let escapedName = escapeRegex(searchName)
+    console.log(`[Signal Search] Trying with bit width: "${searchName}" -> regex: ^${escapedName}$`)
+
+    let response = await apiService.getWaveformSignals(waveName, {
+      nameRegex: `^${escapedName}$`,
+      limit: 1
+    })
+
+    console.log(`[Signal Search] Response: status=${response.status}, signal_count=${(response.data as any)?.signal_count ?? 0}`)
+
+    if (response.status === 'success' && (response.data as any)?.signal_count > 0) {
+      console.log(`[Signal Search] Found with bit width!`)
+      return { found: true, matchedName: searchName, prefix, spaceBeforeBracket: false }
+    }
+
+    // Try without bit width
+    const bracketIndex = searchName.indexOf('[')
+    if (bracketIndex !== -1) {
+      const nameWithoutBitWidth = searchName.substring(0, bracketIndex)
+      escapedName = escapeRegex(nameWithoutBitWidth)
+      console.log(`[Signal Search] Trying without bit width: "${nameWithoutBitWidth}" -> regex: ^${escapedName}$`)
+
+      response = await apiService.getWaveformSignals(waveName, {
+        nameRegex: `^${escapedName}$`,
+        limit: 1
+      })
+
+      console.log(`[Signal Search] Response: status=${response.status}, signal_count=${(response.data as any)?.signal_count ?? 0}`)
+
+      if (response.status === 'success' && (response.data as any)?.signal_count > 0) {
+        console.log(`[Signal Search] Found without bit width!`)
+        return { found: true, matchedName: nameWithoutBitWidth, prefix, spaceBeforeBracket: false }
+      }
+
+      // Try with space before bracket (e.g., "mem_arid [7:0]")
+      const nameWithSpace = searchName.substring(0, bracketIndex) + ' ' + searchName.substring(bracketIndex)
+      escapedName = escapeRegex(nameWithSpace)
+      console.log(`[Signal Search] Trying with space before bracket: "${nameWithSpace}" -> regex: ^${escapedName}$`)
+
+      response = await apiService.getWaveformSignals(waveName, {
+        nameRegex: `^${escapedName}$`,
+        limit: 1
+      })
+
+      console.log(`[Signal Search] Response: status=${response.status}, signal_count=${(response.data as any)?.signal_count ?? 0}`)
+
+      if (response.status === 'success' && (response.data as any)?.signal_count > 0) {
+        console.log(`[Signal Search] Found with space before bracket!`)
+        return { found: true, matchedName: nameWithSpace, prefix, spaceBeforeBracket: true }
+      }
+    }
+
+    return { found: false }
+  }
+
+  // Helper function to try finding signal with prefix removal
+  const tryFindSignalWithPrefixRemoval = async (
+    waveName: string,
+    signalName: string
+  ): Promise<{ found: boolean; matchedName?: string; prefix?: string; spaceBeforeBracket?: boolean }> => {
+    console.log(`[Signal Search] Starting prefix removal for: ${signalName}`)
+
+    // First, try removing work@ prefix if present (most common case)
+    const atIndex = signalName.indexOf('@')
+    if (atIndex !== -1) {
+      const prefix = signalName.substring(0, atIndex + 1)
+      console.log(`[Signal Search] Trying to remove work@ prefix: "${prefix}"`)
+      const result = await searchSignalOnServer(waveName, signalName, prefix)
+      if (result.found) {
+        console.log(`[Signal Search] Found after removing work@ prefix!`)
+        return {
+          found: true,
+          matchedName: result.matchedName,
+          prefix: prefix,
+          spaceBeforeBracket: result.spaceBeforeBracket
+        }
+      }
+    }
+
+    // If not found with work@ removal, try hierarchical prefix removal
+    // But only remove from the part after @ (if @ exists)
+    const searchStartIndex = atIndex !== -1 ? atIndex + 1 : 0
+    const basePrefix = atIndex !== -1 ? signalName.substring(0, searchStartIndex) : ''
+    let currentName = signalName.substring(searchStartIndex)
+    let removedHierarchicalPrefix = ''
+
+    console.log(`[Signal Search] Trying hierarchical removal from: "${currentName}"`)
+
+    while (currentName.length > 0) {
+      const fullPrefix = basePrefix + removedHierarchicalPrefix
+      console.log(`[Signal Search] Trying with prefix: "${fullPrefix}"`)
+
+      const result = await searchSignalOnServer(waveName, signalName, fullPrefix)
+      if (result.found) {
+        console.log(`[Signal Search] Found with hierarchical prefix removal!`)
+        return {
+          found: true,
+          matchedName: result.matchedName,
+          prefix: fullPrefix,
+          spaceBeforeBracket: result.spaceBeforeBracket
+        }
+      }
+
+      // Remove next hierarchical level (find first dot)
+      const dotIndex = currentName.indexOf('.')
+      if (dotIndex === -1) break
+
+      removedHierarchicalPrefix = removedHierarchicalPrefix + currentName.substring(0, dotIndex + 1)
+      currentName = currentName.substring(dotIndex + 1)
+
+      console.log(`[Signal Search] Removed hierarchical prefix: "${removedHierarchicalPrefix}", remaining: "${currentName}"`)
+    }
+
+    console.log(`[Signal Search] Signal not found after all prefix removals`)
+    return { found: false }
+  }
+
+  const handleSignalAddToWaveform = async (signal: Signal) => {
     // If no waveform loaded and not already using mock data, ask user
     if (!currentWaveName && !useMockData) {
       setPendingMockSignal(signal)
       setShowMockDataDialog(true)
       return
     }
-    
-    // Add signal to waveform
-    addSignalToWaveform(signal)
+
+    // If waveform is loaded from server, verify signal exists
+    if (currentWaveName && apiService.isConnected()) {
+      try {
+        // If we already have a signal prefix for this waveform, use it directly
+        if (currentWaveSignalPrefix) {
+          console.log(`[Signal Search] Using existing prefix "${currentWaveSignalPrefix}"`)
+
+          const result = await searchSignalOnServer(currentWaveName, signal.fullName, currentWaveSignalPrefix)
+
+          if (result.found) {
+            console.log(`[Signal Search] Found with existing prefix!`)
+            // Signal found with existing prefix, add directly
+            addSignalToWaveform(signal)
+            return
+          }
+          console.log(`[Signal Search] Not found with existing prefix, trying prefix removal...`)
+          // If not found with existing prefix, fall through to try finding new prefix
+        }
+
+        // Try to find signal with prefix removal
+        const result = await tryFindSignalWithPrefixRemoval(currentWaveName, signal.fullName)
+
+        if (result.found) {
+          // Signal found (possibly with prefix removed)
+          const needsPrefixAdjustment = result.prefix && result.prefix.length > 0
+
+          if (needsPrefixAdjustment) {
+            // Show success dialog with prefix info
+            const firstSignalResponse = await apiService.getWaveformSignals(currentWaveName, {
+              limit: 1
+            })
+            const firstSignalName = firstSignalResponse.status === 'success' &&
+              firstSignalResponse.data &&
+              firstSignalResponse.data.signals.length > 0
+              ? firstSignalResponse.data.signals[0].name
+              : 'N/A'
+
+            setSignalNotFoundInfo({
+              attempted: signal.fullName,
+              matched: result.matchedName!,
+              prefix: result.prefix!,
+              firstAvailable: firstSignalName,
+              success: true
+            })
+            setShowSignalNotFoundDialog(true)
+
+            // Save prefix and space setting globally for this waveform
+            setCurrentWaveSignalPrefix(result.prefix!)
+            setCurrentWaveSignalSpaceBeforeBracket(result.spaceBeforeBracket ?? false)
+          }
+
+          // Add signal to waveform (still using mock data for now)
+          addSignalToWaveform(signal)
+        } else {
+          // Signal not found even after prefix removal
+          const firstSignalResponse = await apiService.getWaveformSignals(currentWaveName, {
+            limit: 1
+          })
+
+          const firstSignalName = firstSignalResponse.status === 'success' &&
+            firstSignalResponse.data &&
+            firstSignalResponse.data.signals.length > 0
+            ? firstSignalResponse.data.signals[0].name
+            : 'N/A'
+
+          // Show dialog with info
+          setSignalNotFoundInfo({
+            attempted: signal.fullName,
+            matched: '',
+            prefix: '',
+            firstAvailable: firstSignalName,
+            success: false
+          })
+          setShowSignalNotFoundDialog(true)
+        }
+      } catch (error) {
+        console.error('Error checking signal on server:', error)
+        // If API call fails, still add the signal (fallback behavior)
+        addSignalToWaveform(signal)
+      }
+    } else {
+      // No server connection or no waveform loaded, add directly
+      addSignalToWaveform(signal)
+    }
   }
   
   const addSignalToWaveform = (signal: Signal) => {
@@ -1569,6 +1833,10 @@ function App() {
               useMockData,
             }
           : undefined,
+        waveformSettings: {
+          signalPrefix: currentWaveSignalPrefix,
+          spaceBeforeBracket: currentWaveSignalSpaceBeforeBracket,
+        },
         sourceTabs: sourceTabsData,
         activeSourceTabId: activeTab,
         waveformTabs: waveformTabsData,
@@ -1644,6 +1912,12 @@ function App() {
             // Continue without waveform, user can load manually
           }
         }
+      }
+
+      // Step 4.5: Restore waveform settings
+      if (session.waveformSettings) {
+        setCurrentWaveSignalPrefix(session.waveformSettings.signalPrefix)
+        setCurrentWaveSignalSpaceBeforeBracket(session.waveformSettings.spaceBeforeBracket)
       }
 
       // Step 5: Restore source tabs
@@ -1966,6 +2240,56 @@ function App() {
           onConfirm={handleMockDataConfirm}
           onCancel={handleMockDataCancel}
         />
+      )}
+
+      {/* Signal Not Found Dialog */}
+      {showSignalNotFoundDialog && signalNotFoundInfo && (
+        <div className="dialog-overlay" onClick={() => setShowSignalNotFoundDialog(false)}>
+          <div className="dialog" onClick={e => e.stopPropagation()}>
+            <div className="dialog-header">
+              <span className="dialog-title">
+                {signalNotFoundInfo.success ? 'Signal Found with Prefix Adjustment' : 'Signal Not Found'}
+              </span>
+              <button className="dialog-close" onClick={() => setShowSignalNotFoundDialog(false)}>×</button>
+            </div>
+            <div className="dialog-body">
+              {signalNotFoundInfo.success ? (
+                <>
+                  <p>The signal was found after removing the prefix:</p>
+                  <div className="form-group">
+                    <label className="form-label">Original Signal</label>
+                    <input type="text" className="form-input" value={signalNotFoundInfo.attempted} readOnly />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Matched Signal</label>
+                    <input type="text" className="form-input" value={signalNotFoundInfo.matched} readOnly />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Removed Prefix (saved for future use)</label>
+                    <input type="text" className="form-input" value={signalNotFoundInfo.prefix} readOnly />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p>The signal does not exist on the server:</p>
+                  <div className="form-group">
+                    <label className="form-label">Attempted Signal</label>
+                    <input type="text" className="form-input" value={signalNotFoundInfo.attempted} readOnly />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">First Available Signal on Server</label>
+                    <input type="text" className="form-input" value={signalNotFoundInfo.firstAvailable} readOnly />
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="dialog-footer">
+              <button className="btn btn-primary" onClick={() => setShowSignalNotFoundDialog(false)}>
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Session Dialog */}
