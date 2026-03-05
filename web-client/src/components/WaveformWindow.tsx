@@ -8,6 +8,7 @@ import type { SignalInfo, DisplayFormat } from '../types/dataProvider';
 import { FilterInput } from './FilterInput';
 import { wildcardMatch } from '../utils/wildcardMatch';
 import { zoomIn, zoomOut } from '../utils/zoomHelpers';
+import { sanitizeTimeRange } from '../utils/viewport';
 import { getProvider, WaveformDataProvider } from '../wasm/waveformProvider';
 
 interface SignalGroup {
@@ -627,13 +628,16 @@ export function WaveformWindow({
 
       // 如果选择区域足够大（大于等于10像素），则放大
       if (endX - startX >= 10) {
-        const newTimeStart = viewport.timeStart + (startX / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
-        const newTimeEnd = viewport.timeStart + (endX / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
+        const rawTimeStart = viewport.timeStart + (startX / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
+        const rawTimeEnd = viewport.timeStart + (endX / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
+        
+        // Validate time range
+        const sanitized = sanitizeTimeRange(rawTimeStart, rawTimeEnd);
 
         setViewport(prev => ({
           ...prev,
-          timeStart: newTimeStart,
-          timeEnd: newTimeEnd,
+          timeStart: sanitized.timeStart,
+          timeEnd: sanitized.timeEnd,
         }));
       }
     } else {
@@ -644,13 +648,25 @@ export function WaveformWindow({
         // 向上拖动超过20像素：放大（Zoom In）
         const newViewport = zoomIn(viewport, cursor.position);
         if (newViewport) {
-          setViewport(newViewport);
+          // Validate the zoom result
+          const sanitized = sanitizeTimeRange(newViewport.timeStart, newViewport.timeEnd);
+          setViewport({
+            ...newViewport,
+            timeStart: sanitized.timeStart,
+            timeEnd: sanitized.timeEnd,
+          });
         }
       } else if (dragY > 20) {
         // 向下拖动超过20像素：缩小（Zoom Out）
         const newViewport = zoomOut(viewport, cursor.position);
         if (newViewport) {
-          setViewport(newViewport);
+          // Validate the zoom result
+          const sanitized = sanitizeTimeRange(newViewport.timeStart, newViewport.timeEnd);
+          setViewport({
+            ...newViewport,
+            timeStart: sanitized.timeStart,
+            timeEnd: sanitized.timeEnd,
+          });
         }
       }
       // 如果垂直拖动距离小于20像素，视为单击，不执行缩放
