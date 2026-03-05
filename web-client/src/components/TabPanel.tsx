@@ -105,7 +105,6 @@ export function timeUnitToPsMultiplier(timeUnit: number): number {
 export interface TimeConfig {
   DisplayUnitPerLoD0Unit: number;  // 每个 DisplayUnit 对应多少个 LoD0Unit
                                    // 默认 1，表示 1 DisplayUnit = 1 LoD0Unit
-  pixels2LoD0UnitShift: number;    // LoD0 单位对应的像素位移（默认 3，即 8 像素/单位）
   // 内部预计算的倒数，用于快速乘法转换
   _displayPerLod0?: number;        // 1 / DisplayUnitPerLoD0Unit
 }
@@ -114,23 +113,12 @@ export interface TimeConfig {
  * 初始化 TimeConfig，预计算倒数
  */
 export function initTimeConfig(
-  displayUnitPerLoD0Unit: number,
-  pixels2LoD0UnitShift: number = 3
+  displayUnitPerLoD0Unit: number
 ): TimeConfig {
   return {
     DisplayUnitPerLoD0Unit: displayUnitPerLoD0Unit,
-    pixels2LoD0UnitShift,
     _displayPerLod0: 1 / displayUnitPerLoD0Unit,
   };
-}
-
-/**
- * 获取 LoD0 单位对应的像素数
- * pixelsPerUnit = 1 << pixels2LoD0UnitShift
- * 例如: shift=3 → 8 像素/单位
- */
-export function getPixelsPerUnit(timeConfig: TimeConfig): number {
-  return 1 << timeConfig.pixels2LoD0UnitShift;
 }
 
 /**
