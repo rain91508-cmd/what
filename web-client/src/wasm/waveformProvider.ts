@@ -23,12 +23,14 @@ export async function initWasm(): Promise<void> {
 
 /**
  * Create a new waveform data provider
+ * @param timeStamp Waveform modification timestamp for CDN cache (from wave_info.modified_time)
  */
 export function createProvider(
   serverUrl: string,
   waveformName: string,
   signalPrefix: string,
-  spaceBeforeBracket: boolean
+  spaceBeforeBracket: boolean,
+  timeStamp: number = 0
 ): WaveformDataProvider {
   if (!wasmInitialized) {
     throw new Error('WASM not initialized. Call initWasm() first.');
@@ -38,7 +40,8 @@ export function createProvider(
     serverUrl,
     waveformName,
     signalPrefix,
-    spaceBeforeBracket
+    spaceBeforeBracket,
+    BigInt(timeStamp)
   );
   
   return provider;
@@ -64,9 +67,9 @@ export function updateProviderSettings(
     return;
   }
   
-  // Update settings using setters
-  (provider as any).signal_prefix = signalPrefix;
-  (provider as any).space_before_bracket = spaceBeforeBracket;
+  // Update settings using setters (call the wasm-bindgen generated methods)
+  provider.set_signal_prefix(signalPrefix);
+  provider.set_space_before_bracket(spaceBeforeBracket);
   
   console.log(`[WASM] Updated provider settings: prefix='${signalPrefix}', spaceBeforeBracket=${spaceBeforeBracket}`);
 }

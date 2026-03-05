@@ -25,6 +25,9 @@ bytes = { version = "1.5", default-features = false }
 # Base64 encoding
 base64 = "0.22"
 
+# URL encoding
+urlencoding = "2.1"
+
 [profile.release]
 opt-level = 3
 lto = true

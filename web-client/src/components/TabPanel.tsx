@@ -276,7 +276,6 @@ export interface Tab {
   columnWidths?: ColumnWidths;  // For waveform tabs - 列宽配置
   timeConfig?: TimeConfig;      // For waveform tabs - 时间配置
   waveformTimeUnit?: number;    // For waveform tabs - WaveformInfo.timeUnit (0=fs, 1=ps, 2=ns, 3=us, 4=ms, 5=s), default 2 (ns)
-  waveformTimeUnitStr?: string; // For waveform tabs - WaveformInfo.timeUnitStr 如 "1ps", "3ns"
   // Viewport state for waveform tabs (time in LoD0Unit)
   viewport?: {
     timeStart: number;  // LoD0Unit

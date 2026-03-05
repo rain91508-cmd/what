@@ -225,6 +225,23 @@ class ApiService {
     return this.request(`/api/wave/${waveformName}/info/${signalName}`);
   }
 
+  // Get waveform file metadata
+  async getWaveformInfo(waveformName: string): Promise<ApiResponse<{
+    wave_info: {
+      name: string;
+      file_size: number;
+      signal_count: number;
+      start_time: number;
+      end_time: number;
+      time_unit: string;
+      time_precision: string;
+      version: string;
+      date: string;
+    }
+  }>> {
+    return this.request(`/api/wave/${waveformName}/info`);
+  }
+
   async downloadWaveformChunk(
     waveformName: string,
     signalName: string,
