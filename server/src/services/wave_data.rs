@@ -673,8 +673,8 @@ pub struct LodConfig {
 impl Default for LodConfig {
     fn default() -> Self {
         Self {
-            levels: 6,
-            max_transitions_per_chunk: 10_000,
+            levels: 12,
+            max_transitions_per_chunk: usize::MAX, // 无限制
             enable_compression: true,
         }
     }
