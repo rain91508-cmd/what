@@ -964,17 +964,8 @@ impl WaveformDataProvider {
             let mut tile_misses = 0u32;
             
             for signal_name in &signals_to_fetch {
-                // Check if signal has data in memory cache
-                if let Some(signal_data) = self.signal_data.get(signal_name) {
-                    // Signal exists in memory, check if it has data for this tile
-                    // For now, assume if signal exists, it has all tile data
-                    // TODO: More granular check per tile
-                    tile_hits += 1;
-                    continue;
-                }
-                
-                // Signal not in memory, need to check OPFS cache
-                // Get draw_sig_id for this signal
+                // Always check OPFS cache for per-tile data
+                // Signal may exist in memory but only have data for some tiles
                 if let Some(draw_sig_id) = self.get_draw_sig_id(signal_name) {
                     let group_id = OpfsCacheManager::get_group_id(draw_sig_id);
                     let block = crate::opfs_cache::DataBlock {
