@@ -290,110 +290,18 @@ export function WaveformWindow({
     };
   }, []);
 
-  // 监听窗口大小变化，更新 canvas 尺寸
-  useEffect(() => {
-    const handleResize = () => {
-      if (containerRef.current && canvasRef.current) {
-        const { width, height } = containerRef.current.getBoundingClientRect();
-        setCanvasWidth(width);
-        canvasRef.current.width = width;
-        canvasRef.current.height = height;
-        waveformRenderer.resize(width, height);
-        // 只更新 canvas 尺寸，不重置 viewport
-        renderWaveform().catch(console.error);
-      }
-    };
+  // 使用 ref 存储上一次的 canvas 尺寸，避免循环依赖
+  const lastCanvasSizeRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
 
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-    // 注意：不依赖 groups/selectedSignal/displaySignals，避免加入信号时重置 view
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // 监听时间配置变化，更新 viewport（保留当前时间范围）
-  useEffect(() => {
-    if (canvasWidth > 0 && externalViewport === undefined) {
-      // 保留当前的 timeStart/timeEnd，只更新其他属性
-      setViewport(prev => ({
-        ...prev,
-        signalStart: 0,
-        signalEnd: 10,
-        pixelsPerTime: 1,
-        pixelsPerSignal: 24,
-      }));
-    }
-    // 注意：不监听 timeConfig，避免重置时间范围
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canvasWidth, externalViewport, setViewport]);
-
-  // 监听 viewport 变化，重新渲染波形
-  useEffect(() => {
-    if (canvasWidth > 0) {
-      renderWaveform().catch(console.error);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewport, groups, selectedSignal, displaySignals, expandedSignals, timeConfig]);
-
-  // Cleanup mouse timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (mouseTimeoutRef.current) {
-        clearTimeout(mouseTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  // 监听 cursor 变化，更新信号值
-  useEffect(() => {
-    if (!cursor.visible) return;
-
-    // 根据模式选择正确的 provider
-    if (!useMockData && wasmProviderRef.current) {
-      // WASM 模式：从 WASM provider 获取信号值
-      const wasmProvider = wasmProviderRef.current;
-      const values = new Map<string, string>();
-
-      for (const signal of displaySignals) {
-        try {
-          const signalName = signal.fullName || signal.name;
-          console.log(`[WaveformWindow] Getting value for signal: ${signalName} at time ${cursor.position}`);
-          const valueInfo = wasmProvider.get_signal_value_at_time(signalName, cursor.position);
-          console.log(`[WaveformWindow] Value info for ${signalName}:`, valueInfo);
-          if (valueInfo && typeof valueInfo === 'object') {
-            // ValueInfo object has displayStr field (camelCase from WASM serde)
-            const displayStr = (valueInfo as any).displayStr || (valueInfo as any).display_str || '0x0';
-            console.log(`[WaveformWindow] Got value for ${signalName}: ${displayStr}`);
-            values.set(signalName, displayStr);
-
-            // For expanded multi-bit signals, also get individual bit values
-            if (signal.msb !== signal.lsb && expandedSignals.has(signal.unique_id)) {
-              // For multi-bit signals, the display_str usually contains the full value
-              // Individual bits would need to be extracted from the full value
-              // This is handled by the display logic in the render
-            }
-          } else {
-            values.set(signal.fullName || signal.name, '0x0');
-          }
-        } catch (error) {
-          console.error(`[WaveformWindow] Error getting value for signal ${signal.name}:`, error);
-          values.set(signal.fullName || signal.name, '0x0');
-        }
-      }
-
-      setSignalValues(values);
-    } else {
-      // Mock 模式：从 mock provider 获取信号值
-      const values = mockDataProvider.getValuesAtTime(cursor.position);
-      setSignalValues(values);
-    }
-  }, [cursor.position, cursor.visible, displaySignals, expandedSignals, useMockData]);
-
+  // renderWaveform 定义在 handleResize useEffect 之前，避免暂时性死区错误
+  // 使用 ref 来存储函数，避免 useCallback 导致的依赖循环
+  const renderWaveformRef = useRef<() => Promise<void>>();
+  
   const renderWaveform = async () => {
     if (!canvasRef.current) return;
 
     const { width, height } = canvasRef.current;
-    
+
     console.log(`[WaveformWindow] renderWaveform: width=${width}, height=${height}`);
     console.log(`[WaveformWindow] Viewport: timeStart=${viewport.timeStart}, timeEnd=${viewport.timeEnd}, signalStart=${viewport.signalStart}, signalEnd=${viewport.signalEnd}`);
     console.log(`[WaveformWindow] Pixels: pixelsPerTime=${viewport.pixelsPerTime}, pixelsPerSignal=${viewport.pixelsPerSignal}`);
@@ -402,18 +310,18 @@ export function WaveformWindow({
     // UI 决定哪些信号可见，以及它们的 row 顺序
     const signalList: SignalInfo[] = [];
     let currentRow = 0;
-    
+
     treeNodes.forEach((node) => {
       if (node.type === 'group') {
         // Group row - no waveform, just increment row counter
         currentRow++;
       } else if (node.type === 'signal' && node.signal) {
         const signal = node.signal as Signal & { unique_id: number };
-        
+
         // 检查信号是否展开（多bit信号）
         const isExpanded = expandedSignals.has(signal.unique_id);
         const isBus = signal.msb !== signal.lsb;
-        
+
         if (isBus && isExpanded) {
           // 展开状态：先绘制原始多bit信号（第一行），再绘制各个bit
           signalList.push({
@@ -423,7 +331,7 @@ export function WaveformWindow({
             width: signal.msb - signal.lsb + 1,  // 提供位宽
           });
           currentRow++;
-          
+
           // 为每个bit创建单独的信号项
           const bitCount = Math.min(signal.msb - signal.lsb + 1, 32);
           for (let i = 0; i < bitCount; i++) {
@@ -553,6 +461,134 @@ export function WaveformWindow({
       }
     }
   };
+
+  // 更新 ref
+  renderWaveformRef.current = renderWaveform;
+
+  // 监听窗口大小变化，更新 canvas 尺寸
+  useEffect(() => {
+    const handleResize = () => {
+      if (containerRef.current && canvasRef.current) {
+        const { width, height } = containerRef.current.getBoundingClientRect();
+        
+        // 检查 width 或 height 是否真的改变了
+        if (width === lastCanvasSizeRef.current.width && height === lastCanvasSizeRef.current.height) {
+          return; // 尺寸没变，不需要处理
+        }
+        lastCanvasSizeRef.current = { width, height };
+        
+        setCanvasWidth(width);
+        canvasRef.current.width = width;
+        canvasRef.current.height = height;
+        waveformRenderer.resize(width, height);
+
+        // Update WASM canvas dimensions and get new viewport (time_end may change)
+        if (!useMockData && wasmProviderRef.current) {
+          const wasmProvider = wasmProviderRef.current;
+          const oldTimeEnd = wasmProvider.viewport_time_end;
+          wasmProvider.set_canvas_dimensions(width, height, 24);
+          // Get updated viewport from WASM (time_end may have changed)
+          const newTimeEnd = wasmProvider.viewport_time_end;
+          if (newTimeEnd !== oldTimeEnd) {
+            console.log(`[WaveformWindow] Canvas resize: updating timeEnd from ${oldTimeEnd} to ${newTimeEnd}`);
+            setViewport(prev => ({
+              ...prev,
+              timeEnd: newTimeEnd,
+            }));
+            // Note: renderWaveform will be triggered by viewport change
+            return;
+          }
+        }
+
+        // 只更新 canvas 尺寸，不重置 viewport
+        renderWaveform().catch(console.error);
+      }
+    };
+
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+    // 不依赖 renderWaveform，使用 ref 避免循环
+  }, [useMockData]);
+
+  // 监听时间配置变化，更新 viewport（保留当前时间范围）
+  useEffect(() => {
+    if (canvasWidth > 0 && externalViewport === undefined) {
+      // 保留当前的 timeStart/timeEnd，只更新其他属性
+      setViewport(prev => ({
+        ...prev,
+        signalStart: 0,
+        signalEnd: 10,
+        pixelsPerTime: 1,
+        pixelsPerSignal: 24,
+      }));
+    }
+    // 注意：不监听 timeConfig，避免重置时间范围
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvasWidth, externalViewport, setViewport]);
+
+  // 监听 viewport 变化，重新渲染波形
+  useEffect(() => {
+    if (canvasWidth > 0 && renderWaveformRef.current) {
+      renderWaveformRef.current().catch(console.error);
+    }
+    // 不依赖 renderWaveform，使用 ref 避免循环
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewport.timeStart, viewport.timeEnd, canvasWidth]);
+
+  // Cleanup mouse timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (mouseTimeoutRef.current) {
+        clearTimeout(mouseTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // 监听 cursor 变化，更新信号值
+  useEffect(() => {
+    if (!cursor.visible) return;
+
+    // 根据模式选择正确的 provider
+    if (!useMockData && wasmProviderRef.current) {
+      // WASM 模式：从 WASM provider 获取信号值
+      const wasmProvider = wasmProviderRef.current;
+      const values = new Map<string, string>();
+
+      for (const signal of displaySignals) {
+        try {
+          const signalName = signal.fullName || signal.name;
+          console.log(`[WaveformWindow] Getting value for signal: ${signalName} at time ${cursor.position}`);
+          const valueInfo = wasmProvider.get_signal_value_at_time(signalName, cursor.position);
+          console.log(`[WaveformWindow] Value info for ${signalName}:`, valueInfo);
+          if (valueInfo && typeof valueInfo === 'object') {
+            // ValueInfo object has displayStr field (camelCase from WASM serde)
+            const displayStr = (valueInfo as any).displayStr || (valueInfo as any).display_str || '0x0';
+            console.log(`[WaveformWindow] Got value for ${signalName}: ${displayStr}`);
+            values.set(signalName, displayStr);
+
+            // For expanded multi-bit signals, also get individual bit values
+            if (signal.msb !== signal.lsb && expandedSignals.has(signal.unique_id)) {
+              // For multi-bit signals, the display_str usually contains the full value
+              // Individual bits would need to be extracted from the full value
+              // This is handled by the display logic in the render
+            }
+          } else {
+            values.set(signal.fullName || signal.name, '0x0');
+          }
+        } catch (error) {
+          console.error(`[WaveformWindow] Error getting value for signal ${signal.name}:`, error);
+          values.set(signal.fullName || signal.name, '0x0');
+        }
+      }
+
+      setSignalValues(values);
+    } else {
+      // Mock 模式：从 mock provider 获取信号值
+      const values = mockDataProvider.getValuesAtTime(cursor.position);
+      setSignalValues(values);
+    }
+  }, [cursor.position, cursor.visible, displaySignals, expandedSignals, useMockData]);
 
   // 鼠标按下：立即设置 cursor 并开始选择
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -769,13 +805,13 @@ export function WaveformWindow({
       let newWidths: ColumnWidths | null = null;
 
       if (column === 'hierarchy') {
-        const newWidth = Math.max(40, Math.min(150, startWidths.hierarchy + delta));
+        const newWidth = Math.max(20, startWidths.hierarchy + delta);  // 移除最大限制，只保留最小限制
         newWidths = { ...widths, hierarchy: newWidth };
       } else if (column === 'name') {
-        const newWidth = Math.max(80, Math.min(250, startWidths.name + delta));
+        const newWidth = Math.max(40, startWidths.name + delta);  // 移除最大限制，只保留最小限制
         newWidths = { ...widths, name: newWidth };
       } else if (column === 'value') {
-        const newWidth = Math.max(50, Math.min(200, startWidths.value + delta));
+        const newWidth = Math.max(30, startWidths.value + delta);  // 移除最大限制，只保留最小限制
         newWidths = { ...widths, value: newWidth };
       }
 

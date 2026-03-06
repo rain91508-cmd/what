@@ -339,9 +339,40 @@ impl WaveformDataProvider {
         self.viewport = Viewport { time_start, time_end };
     }
 
+    /// Get viewport time_start
+    #[wasm_bindgen(getter)]
+    pub fn viewport_time_start(&self) -> f64 {
+        self.viewport.time_start
+    }
+
+    /// Get viewport time_end
+    #[wasm_bindgen(getter)]
+    pub fn viewport_time_end(&self) -> f64 {
+        self.viewport.time_end
+    }
+
     /// Set canvas dimensions
+    /// When width changes, adjust time_end to maintain the same time-to-pixel ratio
+    /// time_start remains fixed
     pub fn set_canvas_dimensions(&mut self, width: f64, height: f64, row_height: f64) {
         console_log!("[WASM] Set canvas dimensions: width={}, height={}, row_height={}", width, height, row_height);
+        
+        // If canvas width changes, adjust time_end to maintain time-to-pixel ratio
+        if self.canvas_width > 0.0 && width != self.canvas_width {
+            let old_width = self.canvas_width;
+            let time_range = self.viewport.time_end - self.viewport.time_start;
+            let time_per_pixel = time_range / old_width;
+            
+            // Calculate new time_end based on new width
+            let new_time_range = time_per_pixel * width;
+            let new_time_end = self.viewport.time_start + new_time_range;
+            
+            console_log!("[WASM] Adjusting viewport: time_start={}, old_time_end={}, new_time_end={}", 
+                self.viewport.time_start, self.viewport.time_end, new_time_end);
+            
+            self.viewport.time_end = new_time_end;
+        }
+        
         self.canvas_width = width;
         self.canvas_height = height;
         self.row_height = row_height;
@@ -788,13 +819,24 @@ impl WaveformDataProvider {
             }
 
             // Parse value based on type
+            // Type mapping (must match server SignalValueType):
+            // 0 = Numeric (wire/reg/logic/integer) - ASCII string like "0", "1", "b1010", "bX1Z0"
+            // 1 = String - null-terminated ASCII
+            // 2 = Real - IEEE 754 f64
+            // 3 = BinaryCompressed - compact binary bytes
             let value = match value_type {
                 0 => {
-                    // Numeric/String type - read as UTF-8 string
-                    String::from_utf8_lossy(&data[value_idx..value_idx + value_len]).to_string()
+                    // Numeric type - read as UTF-8 string
+                    // Format: ASCII string like "0", "1", "b1010", "bX1Z0"
+                    String::from_utf8_lossy(&data[value_idx..value_idx + value_len]).trim().to_string()
                 }
                 1 => {
-                    // Real type (f64)
+                    // String type - null-terminated ASCII
+                    let s = String::from_utf8_lossy(&data[value_idx..value_idx + value_len]);
+                    s.trim_end_matches('\0').to_string()
+                }
+                2 => {
+                    // Real type (f64) - IEEE 754 format
                     if value_len == 8 {
                         let bytes = &data[value_idx..value_idx + 8];
                         let f = f64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3],
@@ -804,17 +846,14 @@ impl WaveformDataProvider {
                         format!("Real({}bytes)", value_len)
                     }
                 }
-                2 => {
-                    // Binary compressed - show as hex
-                    let hex: String = data[value_idx..value_idx + value_len.min(8)]
+                3 => {
+                    // Binary compressed - compact binary bytes, MSB first
+                    // Convert to hex string for display
+                    let hex: String = data[value_idx..value_idx + value_len]
                         .iter()
                         .map(|b| format!("{:02X}", b))
                         .collect();
-                    if value_len > 8 {
-                        format!("{}...({}bytes)", hex, value_len)
-                    } else {
-                        hex
-                    }
+                    hex
                 }
                 _ => {
                     // Unknown type - show as hex
@@ -1241,19 +1280,55 @@ impl WaveformDataProvider {
             return value.to_uppercase();
         }
 
-        // Remove any existing prefix
-        let clean_value = value
-            .trim_start_matches("0x")
-            .trim_start_matches("0X")
-            .trim_start_matches("0b")
-            .trim_start_matches("0B")
-            .trim_start_matches("0o")
-            .trim_start_matches("0O");
-
-        // Try to parse as u64
-        let num = match u64::from_str_radix(clean_value, 16) {
-            Ok(n) => n,
-            Err(_) => return value.to_uppercase(),
+        // Detect input format and parse accordingly
+        let (num, _input_radix) = if value.starts_with("0b") || value.starts_with("0B") {
+            // Binary input
+            let clean = value.trim_start_matches("0b").trim_start_matches("0B");
+            match u64::from_str_radix(clean, 2) {
+                Ok(n) => (n, 2),
+                Err(_) => return value.to_uppercase(),
+            }
+        } else if value.starts_with("0x") || value.starts_with("0X") {
+            // Hex input
+            let clean = value.trim_start_matches("0x").trim_start_matches("0X");
+            match u64::from_str_radix(clean, 16) {
+                Ok(n) => (n, 16),
+                Err(_) => return value.to_uppercase(),
+            }
+        } else if value.starts_with("0o") || value.starts_with("0O") {
+            // Octal input
+            let clean = value.trim_start_matches("0o").trim_start_matches("0O");
+            match u64::from_str_radix(clean, 8) {
+                Ok(n) => (n, 8),
+                Err(_) => return value.to_uppercase(),
+            }
+        } else {
+            // No prefix - try to detect based on content
+            // If contains only 0-9, treat as decimal
+            // If contains a-f, treat as hex
+            // Otherwise try hex first (more common in waveform data)
+            let clean = value.trim();
+            if clean.chars().all(|c| c.is_ascii_digit()) {
+                // All digits - could be decimal or binary
+                // If only 0 and 1, and length > 1, likely binary
+                if clean.len() > 1 && clean.chars().all(|c| c == '0' || c == '1') {
+                    match u64::from_str_radix(clean, 2) {
+                        Ok(n) => (n, 2),
+                        Err(_) => return value.to_uppercase(),
+                    }
+                } else {
+                    match u64::from_str_radix(clean, 10) {
+                        Ok(n) => (n, 10),
+                        Err(_) => return value.to_uppercase(),
+                    }
+                }
+            } else {
+                // Contains hex digits
+                match u64::from_str_radix(clean, 16) {
+                    Ok(n) => (n, 16),
+                    Err(_) => return value.to_uppercase(),
+                }
+            }
         };
 
         // Format based on display_format
