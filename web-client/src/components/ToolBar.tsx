@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import type { TimeConfig } from './TabPanel';
-import { displayToLod0, parseTimeUnitStr } from './TabPanel';
+import { displayToLod0, parseTimeUnitStr, lod0ToDisplay } from './TabPanel';
 
 // 时间单位类型（用户可选择）
 type TimeUnit = 'fs' | 'ps' | 'ns' | 'us' | 'ms' | 's';
@@ -55,6 +55,12 @@ interface ToolBarProps {
   autoCheckEnabled?: boolean;
   // Bookmark
   onAddBookmark?: () => void;
+  // Viewport and cursor for time display
+  viewportStart?: number;  // viewport timeStart in LoD0 units
+  viewportEnd?: number;    // viewport timeEnd in LoD0 units
+  cursorPosition?: number; // cursor position in LoD0 units
+  onViewportStartChange?: (newStart: number) => void; // callback when user changes start time
+  onCursorPositionChange?: (newPosition: number) => void; // callback when user changes cursor position
 }
 
 export function ToolBar({ 
@@ -80,13 +86,28 @@ export function ToolBar({
   onToggleAutoCheck,
   autoCheckEnabled = false,
   onAddBookmark,
+  // Viewport and cursor
+  viewportStart,
+  viewportEnd,
+  cursorPosition,
+  onViewportStartChange,
+  onCursorPositionChange,
 }: ToolBarProps) {
-  // Local state for input value (only committed on Enter)
-  // 用户输入的是绝对时间数值，单位由 selectedUnit 决定
+  // Local state for display unit input value (only committed on Enter)
   const [inputValue, setInputValue] = useState<string>('');
   const [selectedUnit, setSelectedUnit] = useState<TimeUnit>('ns');
   const [isEditing, setIsEditing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Local state for start time input
+  const [startInputValue, setStartInputValue] = useState<string>('');
+  const [isStartEditing, setIsStartEditing] = useState(false);
+  const startInputRef = useRef<HTMLInputElement>(null);
+
+  // Local state for cursor position input
+  const [cursorInputValue, setCursorInputValue] = useState<string>('');
+  const [isCursorEditing, setIsCursorEditing] = useState(false);
+  const cursorInputRef = useRef<HTMLInputElement>(null);
 
   // 获取 fs 乘数（根据 waveformTimeUnit）
   const getFsPerLod0Unit = (): number => {
@@ -103,16 +124,9 @@ export function ToolBar({
     }
   }, [waveformTimeUnit]);
 
-  // Update input value when timeConfig changes (from external sources like zoom buttons)
-  // 将 DisplayUnitPerLoD0Unit 转换为当前单位的显示值
+  // Update display unit input value when timeConfig changes
   useEffect(() => {
     if (!isEditing && timeConfig) {
-      // DisplayUnitPerLoD0Unit 表示每个 DisplayUnit 对应多少个 LoD0Unit
-      // LoD0Unit = time_unit (服务器的时间单位)
-      // 我们需要将其转换为绝对时间的显示值
-      // 1 LoD0Unit = getFsPerLod0Unit() fs (通过 time_unit 转换)
-      // DisplayUnit 的绝对时间 = DisplayUnitPerLoD0Unit * getFsPerLod0Unit() fs
-      // 然后转换为 selectedUnit 单位的数值
       const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;
       const fsPerLod0Unit = getFsPerLod0Unit();
       const fsPerDisplayUnit = lod0PerDisplayUnit * fsPerLod0Unit;
@@ -121,7 +135,23 @@ export function ToolBar({
     }
   }, [timeConfig, isEditing, waveformTimeUnit, selectedUnit]);
 
-  // Initialize input value
+  // Update start time input when viewport changes
+  useEffect(() => {
+    if (!isStartEditing && viewportStart !== undefined && timeConfig) {
+      const displayValue = lod0ToDisplay(viewportStart, timeConfig);
+      setStartInputValue(displayValue.toString());
+    }
+  }, [viewportStart, timeConfig, isStartEditing]);
+
+  // Update cursor position input when cursor changes
+  useEffect(() => {
+    if (!isCursorEditing && cursorPosition !== undefined && timeConfig) {
+      const displayValue = lod0ToDisplay(cursorPosition, timeConfig);
+      setCursorInputValue(displayValue.toFixed(1)); // Show 1 decimal place
+    }
+  }, [cursorPosition, timeConfig, isCursorEditing]);
+
+  // Initialize input values
   useEffect(() => {
     if (timeConfig && inputValue === '') {
       const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;
@@ -132,6 +162,7 @@ export function ToolBar({
     }
   }, [timeConfig, waveformTimeUnit, selectedUnit]);
 
+  // ==================== Display Unit Handlers ====================
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInputValue(e.target.value);
     setIsEditing(true);
@@ -225,6 +256,131 @@ export function ToolBar({
     setIsEditing(false);
   };
 
+  // ==================== Start Time Handlers ====================
+  const handleStartInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setStartInputValue(e.target.value);
+    setIsStartEditing(true);
+  };
+
+  const handleStartInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      commitStartValue();
+    } else if (e.key === 'Escape') {
+      // Restore original value
+      if (viewportStart !== undefined && timeConfig) {
+        const displayValue = lod0ToDisplay(viewportStart, timeConfig);
+        setStartInputValue(displayValue.toString());
+      }
+      setIsStartEditing(false);
+      startInputRef.current?.blur();
+    }
+  };
+
+  const handleStartInputBlur = () => {
+    // Restore original value on blur (cancel edit)
+    if (viewportStart !== undefined && timeConfig) {
+      const displayValue = lod0ToDisplay(viewportStart, timeConfig);
+      setStartInputValue(displayValue.toString());
+    }
+    setIsStartEditing(false);
+  };
+
+  const commitStartValue = () => {
+    if (!timeConfig || !onViewportStartChange || viewportStart === undefined || viewportEnd === undefined) {
+      setIsStartEditing(false);
+      return;
+    }
+
+    const numValue = parseFloat(startInputValue);
+    if (isNaN(numValue) || numValue < 0) {
+      // Invalid input, restore original value
+      const displayValue = lod0ToDisplay(viewportStart, timeConfig);
+      setStartInputValue(displayValue.toString());
+      setIsStartEditing(false);
+      return;
+    }
+
+    // Convert display unit value to LoD0 units
+    const newStartLod0 = displayToLod0(numValue, timeConfig);
+
+    // Sanity check: ensure start is within valid range
+    const timeSpan = viewportEnd - viewportStart;
+    const maxStart = maxWaveformTimeLod0 - timeSpan;
+    
+    if (newStartLod0 < 0 || newStartLod0 > maxStart) {
+      // Invalid range, restore original value
+      const displayValue = lod0ToDisplay(viewportStart, timeConfig);
+      setStartInputValue(displayValue.toString());
+      setIsStartEditing(false);
+      return;
+    }
+
+    // Commit the change - keep the same time span, just move the window
+    onViewportStartChange(newStartLod0);
+    setIsStartEditing(false);
+  };
+
+  // ==================== Cursor Position Handlers ====================
+  const handleCursorInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setCursorInputValue(e.target.value);
+    setIsCursorEditing(true);
+  };
+
+  const handleCursorInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      commitCursorValue();
+    } else if (e.key === 'Escape') {
+      // Restore original value
+      if (cursorPosition !== undefined && timeConfig) {
+        const displayValue = lod0ToDisplay(cursorPosition, timeConfig);
+        setCursorInputValue(displayValue.toString());
+      }
+      setIsCursorEditing(false);
+      cursorInputRef.current?.blur();
+    }
+  };
+
+  const handleCursorInputBlur = () => {
+    // Restore original value on blur (cancel edit)
+    if (cursorPosition !== undefined && timeConfig) {
+      const displayValue = lod0ToDisplay(cursorPosition, timeConfig);
+      setCursorInputValue(displayValue.toString());
+    }
+    setIsCursorEditing(false);
+  };
+
+  const commitCursorValue = () => {
+    if (!timeConfig || !onCursorPositionChange || cursorPosition === undefined) {
+      setIsCursorEditing(false);
+      return;
+    }
+
+    const numValue = parseFloat(cursorInputValue);
+    if (isNaN(numValue) || numValue < 0) {
+      // Invalid input, restore original value
+      const displayValue = lod0ToDisplay(cursorPosition, timeConfig);
+      setCursorInputValue(displayValue.toString());
+      setIsCursorEditing(false);
+      return;
+    }
+
+    // Convert display unit value to LoD0 units
+    const newCursorLod0 = displayToLod0(numValue, timeConfig);
+
+    // Sanity check: ensure cursor is within valid range
+    if (newCursorLod0 < 0 || newCursorLod0 > maxWaveformTimeLod0) {
+      // Invalid range, restore original value
+      const displayValue = lod0ToDisplay(cursorPosition, timeConfig);
+      setCursorInputValue(displayValue.toString());
+      setIsCursorEditing(false);
+      return;
+    }
+
+    // Commit the change
+    onCursorPositionChange(newCursorLod0);
+    setIsCursorEditing(false);
+  };
+
   // Calculate step size based on current unit
   const getStepSize = (): string => {
     switch (selectedUnit) {
@@ -276,12 +432,15 @@ export function ToolBar({
       
       {/* Time configuration - always visible */}
       <div className="tool-bar-separator"></div>
+      
+      {/* Display Unit Input */}
       <div style={{ 
         display: 'flex', 
         alignItems: 'center', 
         gap: '4px',
         padding: '0 4px',
       }}>
+        <span style={{ fontSize: '11px', color: '#666' }}>Grid:</span>
         <input
           ref={inputRef}
           type="number"
@@ -291,10 +450,11 @@ export function ToolBar({
           onBlur={handleInputBlur}
           style={{
             width: '60px',
-            padding: '2px 4px',
-            fontSize: '11px',
+            padding: '4px 6px',
+            fontSize: '12px',
             border: '1px solid #c0c0c0',
-            borderRadius: '2px',
+            borderRadius: '3px',
+            height: '24px',
           }}
           min="0.000001"
           step={getStepSize()}
@@ -304,11 +464,12 @@ export function ToolBar({
           value={selectedUnit}
           onChange={(e) => handleUnitChange(e.target.value as TimeUnit)}
           style={{
-            padding: '2px 4px',
-            fontSize: '11px',
+            padding: '4px 6px',
+            fontSize: '12px',
             border: '1px solid #c0c0c0',
-            borderRadius: '2px',
+            borderRadius: '3px',
             width: '50px',
+            height: '24px',
           }}
           title="Time unit"
         >
@@ -320,6 +481,68 @@ export function ToolBar({
           <option value="s">s</option>
         </select>
       </div>
+
+      {/* Start Time Input */}
+      {viewportStart !== undefined && (
+        <div style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: '4px',
+          padding: '0 4px',
+        }}>
+          <span style={{ fontSize: '11px', color: '#666' }}>Start:</span>
+          <input
+            ref={startInputRef}
+            type="number"
+            value={startInputValue}
+            onChange={handleStartInputChange}
+            onKeyDown={handleStartInputKeyDown}
+            onBlur={handleStartInputBlur}
+            style={{
+              width: '70px',
+              padding: '4px 6px',
+              fontSize: '12px',
+              border: '1px solid #c0c0c0',
+              borderRadius: '3px',
+              height: '24px',
+            }}
+            min="0"
+            step={getStepSize()}
+            title={`Viewport start time (${selectedUnit}, press Enter to confirm)`}
+          />
+        </div>
+      )}
+
+      {/* Cursor Position Input */}
+      {cursorPosition !== undefined && (
+        <div style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: '4px',
+          padding: '0 4px',
+        }}>
+          <span style={{ fontSize: '11px', color: '#666' }}>Cursor:</span>
+          <input
+            ref={cursorInputRef}
+            type="number"
+            value={cursorInputValue}
+            onChange={handleCursorInputChange}
+            onKeyDown={handleCursorInputKeyDown}
+            onBlur={handleCursorInputBlur}
+            style={{
+              width: '70px',
+              padding: '4px 6px',
+              fontSize: '12px',
+              border: '1px solid #c0c0c0',
+              borderRadius: '3px',
+              height: '24px',
+            }}
+            min="0"
+            step={getStepSize()}
+            title={`Cursor position (${selectedUnit}, press Enter to confirm)`}
+          />
+        </div>
+      )}
       
       <div className="tool-bar-separator"></div>
       <button className="tool-bar-button" title="Search" onClick={onSearch}>

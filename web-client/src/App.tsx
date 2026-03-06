@@ -1757,6 +1757,46 @@ function App() {
     ))
   }
 
+  // Handle viewport start time change from toolbar
+  const handleViewportStartChange = (newStart: number) => {
+    const currentTab = tabs.find(t => t.id === activeTab)
+    if (currentTab?.type === 'waveform' && currentTab.viewport) {
+      const timeSpan = currentTab.viewport.timeEnd - currentTab.viewport.timeStart
+      const newEnd = newStart + timeSpan
+      
+      // Sanity check
+      if (newStart < 0 || newEnd > currentWaveEndTime) {
+        console.log('[App] Invalid viewport range:', newStart, newEnd)
+        return
+      }
+      
+      setTabs(prev => prev.map(tab =>
+        tab.id === activeTab ? {
+          ...tab,
+          viewport: { timeStart: newStart, timeEnd: newEnd }
+        } : tab
+      ))
+      console.log(`[App] Viewport start changed to ${newStart}, end ${newEnd}`)
+    }
+  }
+
+  // Handle cursor position change from toolbar
+  const handleCursorPositionChange = (newPosition: number) => {
+    const currentTab = tabs.find(t => t.id === activeTab)
+    if (currentTab?.type === 'waveform') {
+      // Clamp to valid range
+      const clampedPosition = Math.max(0, Math.min(currentWaveEndTime, newPosition))
+      
+      setTabs(prev => prev.map(tab =>
+        tab.id === activeTab ? {
+          ...tab,
+          cursorPosition: clampedPosition
+        } : tab
+      ))
+      console.log(`[App] Cursor position changed to ${clampedPosition}`)
+    }
+  }
+
   // Zoom in: move timeStart and timeEnd towards cursor (half distance)
   const handleZoomIn = () => {
     const currentTab = tabs.find(t => t.id === activeTab)
@@ -2260,6 +2300,11 @@ function App() {
         onToggleAutoCheck={handleToggleAutoCheck}
         autoCheckEnabled={autoCheckEnabled}
         onAddBookmark={handleAddBookmark}
+        viewportStart={activeTabData?.viewport?.timeStart}
+        viewportEnd={activeTabData?.viewport?.timeEnd}
+        cursorPosition={activeTabData?.cursorPosition}
+        onViewportStartChange={handleViewportStartChange}
+        onCursorPositionChange={handleCursorPositionChange}
       />
 
       {/* Main Content */}
