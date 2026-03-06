@@ -467,12 +467,18 @@ export function WaveformWindow({
 
   // 监听窗口大小变化，更新 canvas 尺寸
   useEffect(() => {
+    console.log('[WaveformWindow] Resize useEffect running, useMockData=', useMockData);
+    
     const handleResize = () => {
+      console.log('[WaveformWindow] handleResize called, lastCanvasSizeRef.current=', lastCanvasSizeRef.current);
+      
       if (containerRef.current && canvasRef.current) {
         const { width, height } = containerRef.current.getBoundingClientRect();
+        console.log('[WaveformWindow] New size: width=', width, 'height=', height);
         
         // 检查 width 或 height 是否真的改变了
         if (width === lastCanvasSizeRef.current.width && height === lastCanvasSizeRef.current.height) {
+          console.log('[WaveformWindow] Size unchanged, skipping');
           return; // 尺寸没变，不需要处理
         }
         lastCanvasSizeRef.current = { width, height };
@@ -501,7 +507,12 @@ export function WaveformWindow({
         }
 
         // 只更新 canvas 尺寸，不重置 viewport
-        renderWaveform().catch(console.error);
+        console.log('[WaveformWindow] Calling renderWaveform via ref');
+        if (renderWaveformRef.current) {
+          renderWaveformRef.current().catch(console.error);
+        } else {
+          console.error('[WaveformWindow] renderWaveformRef.current is null!');
+        }
       }
     };
 
@@ -509,6 +520,64 @@ export function WaveformWindow({
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
     // 不依赖 renderWaveform，使用 ref 避免循环
+  }, [useMockData]);
+
+  // 使用 ResizeObserver 监听 waveform 容器尺寸变化（包括 panel resize）
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    console.log('[WaveformWindow] Setting up ResizeObserver');
+    
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        console.log('[WaveformWindow] ResizeObserver: width=', width, 'height=', height);
+        
+        // 检查尺寸是否真的改变了
+        if (width === lastCanvasSizeRef.current.width && height === lastCanvasSizeRef.current.height) {
+          console.log('[WaveformWindow] ResizeObserver: size unchanged, skipping');
+          continue;
+        }
+        
+        lastCanvasSizeRef.current = { width, height };
+        
+        setCanvasWidth(width);
+        if (canvasRef.current) {
+          canvasRef.current.width = width;
+          canvasRef.current.height = height;
+        }
+        waveformRenderer.resize(width, height);
+
+        // Update WASM canvas dimensions and get new viewport (time_end may change)
+        if (!useMockData && wasmProviderRef.current) {
+          const wasmProvider = wasmProviderRef.current;
+          const oldTimeEnd = wasmProvider.viewport_time_end;
+          wasmProvider.set_canvas_dimensions(width, height, 24);
+          const newTimeEnd = wasmProvider.viewport_time_end;
+          if (newTimeEnd !== oldTimeEnd) {
+            console.log(`[WaveformWindow] ResizeObserver: updating timeEnd from ${oldTimeEnd} to ${newTimeEnd}`);
+            setViewport(prev => ({
+              ...prev,
+              timeEnd: newTimeEnd,
+            }));
+            continue;
+          }
+        }
+
+        // 触发重绘
+        console.log('[WaveformWindow] ResizeObserver: calling renderWaveform');
+        if (renderWaveformRef.current) {
+          renderWaveformRef.current().catch(console.error);
+        }
+      }
+    });
+
+    resizeObserver.observe(containerRef.current);
+
+    return () => {
+      console.log('[WaveformWindow] Cleaning up ResizeObserver');
+      resizeObserver.disconnect();
+    };
   }, [useMockData]);
 
   // 监听时间配置变化，更新 viewport（保留当前时间范围）
