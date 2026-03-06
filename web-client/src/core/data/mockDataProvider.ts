@@ -11,7 +11,7 @@ import type {
   RenderSegment,
   DisplayFormat,
 } from '../../types/dataProvider';
-import type { Viewport } from '../../types';
+import type { TimeRangeOnly } from '../../utils/viewport';
 
 /**
  * Mock 信号数据
@@ -29,7 +29,7 @@ interface MockSignalData {
  */
 export class MockDataProvider implements DataProvider {
   private signals: SignalInfo[] = [];
-  private viewport: Viewport = { timeStart: 0, timeEnd: 100, signalStart: 0, signalEnd: 10 };
+  private viewport: TimeRangeOnly = { timeStart: 0, timeEnd: 100 };
   private format: DisplayFormat = 'hex';
   private canvasWidth = 800;
   private rowHeight = 24;  // Must match CSS .waveform-signal-item height
@@ -43,7 +43,7 @@ export class MockDataProvider implements DataProvider {
    */
   initialize(
     signals: SignalInfo[],
-    viewport: Viewport,
+    viewport: TimeRangeOnly,
     format: DisplayFormat,
     canvasWidth: number,
     rowHeight: number,
@@ -85,7 +85,7 @@ export class MockDataProvider implements DataProvider {
   /**
    * 更新视口
    */
-  setViewport(viewport: Viewport): void {
+  setViewport(viewport: TimeRangeOnly): void {
     this.viewport = viewport;
   }
 
@@ -211,7 +211,7 @@ export class MockDataProvider implements DataProvider {
 
       const rawValue = this.getValueAtTime(signalData, time);
       const formattedValue = this.formatValue(rawValue, width);
-      values.set(signal.name, formattedValue.displayStr);
+      values.set(signal.name, formattedValue.displayStr ?? '');
     }
 
     return values;
@@ -259,7 +259,7 @@ export class MockDataProvider implements DataProvider {
    * @param signalName 信号名
    * @param width 位宽（由 UI 提供或推断）
    */
-  private generateMockData(signalName: string, width: number): MockSignalData {
+  private generateMockData(_signalName: string, width: number): MockSignalData {
     // 生成随机跳变
     const transitions: Array<{ time: number; value: string }> = [];
     const step = 100;

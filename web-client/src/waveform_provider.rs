@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use base64::{Engine as _, engine::general_purpose};
 
+use crate::opfs_cache::{
+    OpfsCacheManager, SignalWithId, DataBlock, MissingBlock, 
+    PrepareDataResult, CacheStats
+};
+
 // Console logging
 #[wasm_bindgen]
 extern "C" {
@@ -234,6 +239,10 @@ pub struct WaveformDataProvider {
     canvas_height: f64,
     row_height: f64,
     signal_data: HashMap<String, SignalWaveData>,
+    // OPFS cache
+    opfs_cache: OpfsCacheManager,
+    signals_with_id: Vec<SignalWithId>,  // Signals with draw_sig_id
+    enable_opfs: bool,  // OPFS cache enabled flag
 }
 
 #[wasm_bindgen]
@@ -261,9 +270,342 @@ impl WaveformDataProvider {
             viewport: Viewport { time_start: 0.0, time_end: 1000.0 },
             canvas_width: 800.0,
             canvas_height: 400.0,
-            row_height: 24.0,  // Must match CSS .waveform-signal-item height
+            row_height: 24.0,  // Must match CSS .waveform-signal-signal-item height
             signal_data: HashMap::new(),
+            opfs_cache: OpfsCacheManager::new(),
+            signals_with_id: Vec::new(),
+            enable_opfs: false,  // Disabled by default
         }
+    }
+
+    /// Initialize with OPFS callbacks
+    /// 
+    /// # Arguments
+    /// * `opfs_read` - JS callback: (path: string) -> Promise<Uint8Array | null>
+    /// * `opfs_write` - JS callback: (path: string, data: Uint8Array) -> Promise<()>
+    /// * `opfs_exists` - JS callback: (path: string) -> Promise<bool>
+    /// * `enable_opfs` - Whether to enable OPFS cache
+    #[wasm_bindgen]
+    pub fn init_with_opfs(
+        &mut self,
+        opfs_read: js_sys::Function,
+        opfs_write: js_sys::Function,
+        opfs_exists: js_sys::Function,
+        enable_opfs: bool,
+    ) {
+        self.enable_opfs = enable_opfs;
+        self.opfs_cache.init(opfs_read, opfs_write, opfs_exists, enable_opfs);
+        self.opfs_cache.set_waveform(self.waveform_name.clone());
+        console_log!("[WASM] init_with_opfs: enabled={}", enable_opfs);
+    }
+
+    /// Set signals with draw_sig_id (new API)
+    /// 
+    /// # Arguments
+    /// * `signals_js` - Array of { global_id, name, row, width, draw_sig_id }
+    #[wasm_bindgen]
+    pub fn set_draw_list(&mut self, signals_js: JsValue) -> Result<(), JsValue> {
+        let signals: Vec<SignalWithId> = serde_wasm_bindgen::from_value(signals_js)
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse signals: {}", e)))?;
+
+        console_log!("[WASM] Set draw list: {} signals", signals.len());
+        for (i, s) in signals.iter().enumerate() {
+            console_log!("[WASM]   Signal[{}]: global_id={}, name='{}', draw_sig_id={}", 
+                i, s.global_id, s.name, s.draw_sig_id);
+        }
+
+        self.signals_with_id = signals;
+        Ok(())
+    }
+
+    /// Prepare data (check cache and return missing blocks)
+    /// 
+    /// This is the main entry point for data loading.
+    /// WASM checks Memory LRU -> OPFS LRU -> returns missing blocks for server fetch.
+    /// 
+    /// # Returns
+    /// * Object with missing_blocks and cache_stats
+    #[wasm_bindgen]
+    pub async fn prepare_data(&mut self) -> Result<JsValue, JsValue> {
+        if self.signals_with_id.is_empty() {
+            console_log!("[WASM] prepare_data: no signals");
+            return serde_wasm_bindgen::to_value(&PrepareDataResult {
+                missing_blocks: vec![],
+                cache_stats: CacheStats { memory_hits: 0, opfs_hits: 0, misses: 0 },
+            }).map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)));
+        }
+
+        let lod = self.current_lod();
+        let time_start = self.viewport.time_start as u64;
+        let time_end = self.viewport.time_end as u64;
+
+        console_log!("[WASM] prepare_data: {} signals, LoD={}, time={}-{}",
+            self.signals_with_id.len(), lod, time_start, time_end);
+
+        // Calculate required blocks
+        let blocks = crate::opfs_cache::compute_required_blocks(
+            &self.signals_with_id,
+            time_start,
+            time_end,
+            lod
+        );
+
+        console_log!("[WASM] Required blocks: {}", blocks.len());
+
+        // Check each block in cache
+        let mut missing_blocks: Vec<MissingBlock> = Vec::new();
+        let mut memory_hits = 0u32;
+        let mut opfs_hits = 0u32;
+
+        for block in blocks {
+            match self.opfs_cache.read(&block).await? {
+                Some(_data) => {
+                    // Data found in cache
+                    if self.opfs_cache.enabled {
+                        opfs_hits += 1;
+                    } else {
+                        memory_hits += 1;
+                    }
+                }
+                None => {
+                    // Data not found, add to missing list
+                    let draw_sig_ids: Vec<u32> = self.signals_with_id.iter()
+                        .filter(|s| OpfsCacheManager::get_group_id(s.draw_sig_id) == block.group)
+                        .map(|s| s.draw_sig_id)
+                        .collect();
+
+                    missing_blocks.push(MissingBlock {
+                        lod: block.lod,
+                        tile: block.tile,
+                        group: block.group,
+                        draw_sig_ids,
+                    });
+                }
+            }
+        }
+
+        let misses = missing_blocks.len() as u32;
+        console_log!("[WASM] Cache check complete: memory_hits={}, opfs_hits={}, misses={}",
+            memory_hits, opfs_hits, misses);
+
+        let result = PrepareDataResult {
+            missing_blocks,
+            cache_stats: CacheStats { memory_hits, opfs_hits, misses },
+        };
+
+        serde_wasm_bindgen::to_value(&result)
+            .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)))
+    }
+
+    /// Supplement data from server response
+    /// 
+    /// WASM 直接处理服务器返回的原始 chunk 数据：
+    /// 1. 解析服务器 chunk 数据
+    /// 2. 按 (lod, tile, group) 重组为 Group Bin 格式
+    /// 3. 写入 OPFS（通过 JS 回调）
+    /// 4. 存入 Memory LRU
+    /// 
+    /// # Arguments
+    /// * `server_data_js` - Server response data (ArrayBuffer)
+    #[wasm_bindgen]
+    pub async fn supplement_data(&mut self, server_data_js: JsValue) -> Result<(), JsValue> {
+        console_log!("[WASM] supplement_data: processing server response");
+
+        // Convert JsValue to Vec<u8>
+        let array_buffer: js_sys::ArrayBuffer = server_data_js.dyn_into()
+            .map_err(|_| JsValue::from_str("Invalid array buffer"))?;
+        let uint8_array = js_sys::Uint8Array::new(&array_buffer);
+        let mut bytes = vec![0u8; uint8_array.length() as usize];
+        uint8_array.copy_to(&mut bytes);
+
+        console_log!("[WASM] supplement_data: received {} bytes", bytes.len());
+
+        // Parse chunk and store in cache
+        self.process_server_chunk(&bytes).await?;
+
+        Ok(())
+    }
+
+    /// Process server chunk data and store in cache
+    async fn process_server_chunk(&mut self, data: &[u8]) -> Result<(), JsValue> {
+        // Parse chunk header
+        let header = ChunkHeader::from_bytes(data)
+            .map_err(|e| JsValue::from_str(&e))?;
+
+        console_log!("[WASM] Processing chunk: level={}, signals={}, time={}-{}",
+            header.level, header.signal_count, header.time_start, header.time_end);
+
+        // Calculate tile information
+        let lod = header.level as u32;
+        let tile_span = OpfsCacheManager::get_tile_span(lod);
+        let tile_id = header.time_start / tile_span;
+
+        // Group signals by their group_id
+        let mut signals_by_group: std::collections::HashMap<u32, Vec<crate::opfs_cache::SignalData>> = 
+            std::collections::HashMap::new();
+
+        // Parse each signal block
+        let mut offset = ChunkHeader::SIZE;
+        
+        for signal_idx in 0..header.signal_count {
+            if offset + SignalBlockHeader::SIZE > data.len() {
+                console_log!("[WASM] Warning: Not enough data for signal block {}", signal_idx);
+                break;
+            }
+
+            // Parse signal block header
+            let block_header = SignalBlockHeader::from_bytes(&data[offset..])
+                .map_err(|e| JsValue::from_str(&e))?;
+
+            // Parse transitions for this signal
+            let transitions = self.parse_transitions_for_cache(
+                data,
+                &block_header,
+                signal_idx as usize
+            )?;
+
+            // Get draw_sig_id from signal index (for now, use signal_idx as draw_sig_id)
+            // In real implementation, we need to map signal handle to draw_sig_id
+            let draw_sig_id = signal_idx as u32;
+            let group_id = OpfsCacheManager::get_group_id(draw_sig_id);
+
+            // Convert transitions to opfs_cache format
+            let opfs_transitions: Vec<crate::opfs_cache::Transition> = transitions
+                .into_iter()
+                .map(|t| {
+                    // Convert string value to bytes
+                    let value_bytes = if t.value.starts_with("0x") || t.value.starts_with("0X") {
+                        // Hex value - parse and convert to bytes
+                        match u64::from_str_radix(&t.value[2..], 16) {
+                            Ok(v) => v.to_le_bytes().to_vec(),
+                            Err(_) => t.value.into_bytes(),
+                        }
+                    } else if t.value.chars().all(|c| c == '0' || c == '1') && t.value.len() <= 64 {
+                        // Binary value
+                        match u64::from_str_radix(&t.value, 2) {
+                            Ok(v) => v.to_le_bytes().to_vec(),
+                            Err(_) => t.value.into_bytes(),
+                        }
+                    } else {
+                        // String value
+                        t.value.into_bytes()
+                    };
+                    crate::opfs_cache::Transition {
+                        time: t.time,
+                        value: value_bytes,
+                    }
+                })
+                .collect();
+
+            // Add to group
+            let signal_data = crate::opfs_cache::SignalData {
+                draw_sig_id,
+                transitions: opfs_transitions,
+            };
+
+            signals_by_group.entry(group_id)
+                .or_insert_with(Vec::new)
+                .push(signal_data);
+
+            offset += SignalBlockHeader::SIZE;
+        }
+
+        // Write each group to cache
+        let group_count = signals_by_group.len();
+        for (group_id, signals) in &signals_by_group {
+            let block = crate::opfs_cache::DataBlock {
+                lod,
+                tile: tile_id,
+                group: *group_id,
+            };
+
+            let group_data = crate::opfs_cache::GroupData { signals: signals.clone() };
+            let bin_data = crate::opfs_cache::serialize_group_data(&group_data);
+
+            console_log!("[WASM] Writing block: lod={}, tile={}, group={}, size={} bytes",
+                lod, tile_id, group_id, bin_data.len());
+
+            // Write to cache (OPFS + Memory)
+            self.opfs_cache.write(&block, bin_data).await?;
+        }
+
+        console_log!("[WASM] Chunk processed: {} groups written", group_count);
+
+        Ok(())
+    }
+
+    /// Parse transitions from a signal block for cache storage
+    fn parse_transitions_for_cache(
+        &self,
+        data: &[u8],
+        block_header: &SignalBlockHeader,
+        _signal_index: usize,
+    ) -> Result<Vec<Transition>, JsValue> {
+        let mut transitions = Vec::new();
+
+        let time_array_start = block_header.time_array_offset as usize;
+        let value_array_start = block_header.value_array_offset as usize;
+
+        let mut value_idx = value_array_start;
+        for i in 0..block_header.transition_count {
+            let time_idx = time_array_start + (i as usize * 8);
+
+            if time_idx + 8 > data.len() {
+                break;
+            }
+
+            let time = u64::from_le_bytes([
+                data[time_idx], data[time_idx + 1], data[time_idx + 2], data[time_idx + 3],
+                data[time_idx + 4], data[time_idx + 5], data[time_idx + 6], data[time_idx + 7],
+            ]);
+
+            if value_idx + 3 > data.len() {
+                break;
+            }
+
+            let value_type = data[value_idx];
+            let value_len = u16::from_le_bytes([data[value_idx + 1], data[value_idx + 2]]) as usize;
+            value_idx += 3;
+
+            if value_idx + value_len > data.len() {
+                break;
+            }
+
+            let value = match value_type {
+                0 => String::from_utf8_lossy(&data[value_idx..value_idx + value_len]).trim().to_string(),
+                1 => String::from_utf8_lossy(&data[value_idx..value_idx + value_len])
+                    .trim_end_matches('\0').to_string(),
+                2 => {
+                    if value_len == 8 {
+                        let bytes = &data[value_idx..value_idx + 8];
+                        let f = f64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3],
+                                                    bytes[4], bytes[5], bytes[6], bytes[7]]);
+                        format!("{:.6}", f)
+                    } else {
+                        format!("Real({}bytes)", value_len)
+                    }
+                }
+                3 => {
+                    data[value_idx..value_idx + value_len]
+                        .iter()
+                        .map(|b| format!("{:02X}", b))
+                        .collect()
+                }
+                _ => format!("Type{}:{:?}", value_type, &data[value_idx..value_idx + value_len.min(8)]),
+            };
+
+            value_idx += value_len;
+            transitions.push(Transition { time, value });
+        }
+
+        Ok(transitions)
+    }
+
+    /// Clear all cache data
+    #[wasm_bindgen]
+    pub fn clear_cache(&mut self) {
+        self.opfs_cache.clear_memory();
+        console_log!("[WASM] Cache cleared");
     }
 
     /// Get server URL

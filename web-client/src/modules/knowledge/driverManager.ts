@@ -50,7 +50,6 @@ class DriverManager {
       drivers: info.drivers.map(d => ({
         driverSignalGlobalId: d.driverSignalGlobalId,
         line: d.line,
-        driverDeclarationLine: d.driverDeclarationLine,
       })),
       isExpanded: true,
       createdAt: Date.now(),

@@ -3,21 +3,20 @@
  * 提供统一的 zoom in/out 逻辑，供 toolbar 按钮和鼠标拖动使用
  */
 
-import type { Viewport } from '../types';
-import { sanitizeTimeRange } from './viewport';
+import { sanitizeTimeRange, type TimeRangeOnly } from './viewport';
 
 /**
  * Zoom In: 以 cursor 为中心放大视图
- * @param viewport 当前视口
+ * @param viewport 当前视口（TimeRangeOnly 兼容 Tab.viewport）
  * @param cursorPosition cursor 位置（可选，默认为视口中心）
  * @param waveformRange 波形总范围（可选，用于边界限制）
- * @returns 新的视口，如果无法放大则返回 null
+ * @returns 新的 time range，如果无法放大则返回 null
  */
 export function zoomIn(
-  viewport: Viewport,
+  viewport: TimeRangeOnly,
   cursorPosition?: number | null,
   waveformRange?: { start: number; end: number }
-): Viewport | null {
+): TimeRangeOnly | null {
   const { timeStart, timeEnd } = viewport;
   const cursorPos = cursorPosition ?? ((timeStart + timeEnd) / 2);
 
@@ -37,7 +36,6 @@ export function zoomIn(
   const sanitized = sanitizeTimeRange(rawStart, rawEnd, waveformRange);
 
   return {
-    ...viewport,
     timeStart: sanitized.timeStart,
     timeEnd: sanitized.timeEnd,
   };
@@ -45,16 +43,16 @@ export function zoomIn(
 
 /**
  * Zoom Out: 以 cursor 为中心缩小视图
- * @param viewport 当前视口
+ * @param viewport 当前视口（TimeRangeOnly 兼容 Tab.viewport）
  * @param cursorPosition cursor 位置（可选，默认为视口中心）
  * @param waveformRange 波形总范围（可选，用于边界限制）
- * @returns 新的视口，如果无法缩小则返回 null
+ * @returns 新的 time range，如果无法缩小则返回 null
  */
 export function zoomOut(
-  viewport: Viewport,
+  viewport: TimeRangeOnly,
   cursorPosition?: number | null,
   waveformRange?: { start: number; end: number }
-): Viewport | null {
+): TimeRangeOnly | null {
   const { timeStart, timeEnd } = viewport;
   const cursorPos = cursorPosition ?? ((timeStart + timeEnd) / 2);
 
@@ -87,7 +85,6 @@ export function zoomOut(
   const sanitized = sanitizeTimeRange(finalStart, finalEnd, waveformRange);
 
   return {
-    ...viewport,
     timeStart: sanitized.timeStart,
     timeEnd: sanitized.timeEnd,
   };
@@ -96,7 +93,7 @@ export function zoomOut(
 /**
  * 检查是否可以 Zoom In
  */
-export function canZoomIn(viewport: Viewport, cursorPosition?: number | null): boolean {
+export function canZoomIn(viewport: TimeRangeOnly, cursorPosition?: number | null): boolean {
   const { timeStart, timeEnd } = viewport;
   const cursorPos = cursorPosition ?? ((timeStart + timeEnd) / 2);
   return Math.abs(cursorPos - timeStart) > 1 || Math.abs(cursorPos - timeEnd) > 1;
@@ -106,7 +103,7 @@ export function canZoomIn(viewport: Viewport, cursorPosition?: number | null): b
  * 检查是否可以 Zoom Out
  */
 export function canZoomOut(
-  viewport: Viewport,
+  viewport: TimeRangeOnly,
   cursorPosition?: number | null,
   waveformRange?: { start: number; end: number }
 ): boolean {

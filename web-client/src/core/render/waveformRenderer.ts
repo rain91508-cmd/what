@@ -9,7 +9,7 @@
 // - 多bit：矩形块 + 中间数值
 
 import type { RenderSegment, FormattedValue } from '../../types/dataProvider';
-import type { Viewport } from '../../types';
+import type { TimeRangeOnly } from '../../utils/viewport';
 import type { TimeConfig } from '../../components/TabPanel';
 
 class WaveformRenderer {
@@ -43,7 +43,7 @@ class WaveformRenderer {
    */
   render(
     segments: RenderSegment[],
-    viewport: Viewport,
+    viewport: TimeRangeOnly,
     canvasWidth: number,
     canvasHeight: number,
     rulerHeight: number = 20,
@@ -73,7 +73,7 @@ class WaveformRenderer {
     }
 
     // Draw segments for each row, sorted by x0
-    for (const [rowKey, rowSegments] of segmentsByRow) {
+    for (const [_rowKey, rowSegments] of segmentsByRow) {
       // Sort by x0
       rowSegments.sort((a, b) => a.x0 - b.x0);
 
@@ -163,7 +163,7 @@ class WaveformRenderer {
     x1: number,
     y: number,
     value: FormattedValue,
-    width: number
+    _width: number
   ): void {
     if (!this.ctx) return;
 
@@ -475,7 +475,7 @@ class WaveformRenderer {
    * 绘制时间标尺
    * @param timeConfig 时间配置，用于转换显示单位
    */
-  private drawTimeRuler(width: number, height: number, viewport: Viewport, timeConfig?: TimeConfig): void {
+  private drawTimeRuler(width: number, height: number, viewport: TimeRangeOnly, timeConfig?: TimeConfig): void {
     if (!this.ctx) return;
 
     // Draw ruler background

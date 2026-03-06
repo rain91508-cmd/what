@@ -14,6 +14,8 @@ interface MenuBarProps {
   onOpenDebugTool?: () => void;  // Open KDB debug tool
   onSaveSession?: () => void;    // Save session
   onRestoreSession?: () => void; // Restore session
+  opfsEnabled?: boolean;         // OPFS cache enabled state
+  onToggleOpfs?: () => void;     // Toggle OPFS cache
 }
 
 interface MenuItem {
@@ -28,7 +30,7 @@ interface Menu {
   items: MenuItem[];
 }
 
-export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onOpenWaveList, onCloseKdb, onCloseWave, hasKdbLoaded, hasWaveLoaded, infoText, onOpenDebugTool, onSaveSession, onRestoreSession }: MenuBarProps) {
+export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onOpenWaveList, onCloseKdb, onCloseWave, hasKdbLoaded, hasWaveLoaded, infoText, onOpenDebugTool, onSaveSession, onRestoreSession, opfsEnabled, onToggleOpfs }: MenuBarProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const menuBarRef = useRef<HTMLDivElement>(null);
 
@@ -85,6 +87,11 @@ export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onO
       items: [
         { label: 'Add Signal' },
         { label: 'Remove Signal' },
+        { separator: true, label: '' },
+        { 
+          label: opfsEnabled ? '✓ OPFS Cache' : '  OPFS Cache', 
+          onClick: onToggleOpfs,
+        },
       ],
     },
     {

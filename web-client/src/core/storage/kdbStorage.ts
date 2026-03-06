@@ -106,7 +106,7 @@ async function store_signal_inst(globalIndex: number, data: any, kdbId: string):
   
   // Process driverLocations (new format only)
   const driverLocations = getValue('driverLocations');
-  let driverLocationsArray = [];
+  let driverLocationsArray: Array<{ driverSignalGlobalId: number; line: number }> = [];
   
   if (driverLocations && Array.isArray(driverLocations)) {
     // driverLocations is an array of {driverSignalGlobalId, line}

@@ -1,7 +1,7 @@
 import { ReactNode, useState, useRef, useEffect } from 'react';
 import type { Signal } from '../types';
 
-interface SignalGroup {
+export interface SignalGroup {
   id: string;
   name: string;
   parentId: string | null;
