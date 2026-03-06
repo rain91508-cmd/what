@@ -984,8 +984,8 @@ impl WaveformDataProvider {
                     encoded_batch,
                     self.time_stamp);
 
-                console_log!("[WASM]   Tile {} Batch {} URL: time={}-{} (tile_span={})", 
-                    tile_id, batch_idx + 1, tile_time_start, tile_time_end, tile_span);
+                console_log!("[WASM]   Tile {} Batch {} URL: {}", 
+                    tile_id, batch_idx + 1, url);
                 
                 // Fetch batch data
                 let window = web_sys::window().ok_or(JsValue::from_str("No window"))?;
@@ -1031,6 +1031,14 @@ impl WaveformDataProvider {
                 
                 console_log!("[WASM]   Tile {} Batch {} received {} bytes", 
                     tile_id, batch_idx + 1, bytes.len());
+                
+                // Debug: Show first 64 bytes of received data
+                let preview_len = bytes.len().min(64);
+                let preview: Vec<String> = bytes[..preview_len].iter()
+                    .map(|b| format!("{:02X}", b))
+                    .collect();
+                console_log!("[WASM]   Data preview (first {} bytes): {}", 
+                    preview_len, preview.join(" "));
                 
                 // Step 3: Store fetched data in cache using supplement_data
                 console_log!("[WASM]   Step 3: Storing data in OPFS cache...");
