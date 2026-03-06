@@ -1129,12 +1129,21 @@ impl WaveformDataProvider {
             // Get width from signal info
             let width = self.get_signal_width(signal_name);
 
-            // Store signal data
-            self.signal_data.insert(signal_name.clone(), SignalWaveData {
-                name: signal_name.clone(),
-                width,
-                transitions,
-            });
+            // Store signal data - merge with existing data if present
+            if let Some(existing_data) = self.signal_data.get_mut(signal_name) {
+                // Append new transitions to existing ones
+                console_log!("[WASM]   Merging transitions: existing={}, new={}", 
+                    existing_data.transitions.len(), transitions.len());
+                existing_data.transitions.extend(transitions);
+                console_log!("[WASM]   Total transitions after merge: {}", existing_data.transitions.len());
+            } else {
+                // Insert new signal data
+                self.signal_data.insert(signal_name.clone(), SignalWaveData {
+                    name: signal_name.clone(),
+                    width,
+                    transitions,
+                });
+            }
 
             offset += SignalBlockHeader::SIZE;
         }
