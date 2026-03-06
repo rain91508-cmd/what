@@ -761,23 +761,32 @@ impl WaveformDataProvider {
     }
 
     /// Build server signal name from local name
+    /// 
+    /// NOTE: 根据搜索时确定的prefix和space_before_bracket来构建服务器信号名
     fn build_server_signal_name(&self, local_name: &str) -> String {
-        // Remove prefix if present
+        console_log!("[WASM] build_server_signal_name: local='{}', prefix='{}', space={}", 
+            local_name, self.signal_prefix, self.space_before_bracket);
+        
+        // 移除 prefix（如 work@）
         let mut server_name = if self.signal_prefix.is_empty() || !local_name.starts_with(&self.signal_prefix) {
             local_name.to_string()
         } else {
             local_name[self.signal_prefix.len()..].to_string()
         };
-
-        // Add space before bracket if needed
+        
+        console_log!("[WASM]   After removing prefix '{}': '{}'", self.signal_prefix, server_name);
+        
+        // 根据 space_before_bracket 设置，在方括号前添加空格
         if self.space_before_bracket {
             if let Some(bracket_idx) = server_name.find('[') {
                 if bracket_idx > 0 && !server_name[..bracket_idx].ends_with(' ') {
                     server_name.insert(bracket_idx, ' ');
+                    console_log!("[WASM]   Added space before bracket: '{}'", server_name);
                 }
             }
         }
 
+        console_log!("[WASM]   Final server name: '{}'", server_name);
         server_name
     }
 
