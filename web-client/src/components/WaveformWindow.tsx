@@ -9,7 +9,7 @@ import { FilterInput } from './FilterInput';
 import { wildcardMatch } from '../utils/wildcardMatch';
 import { zoomIn, zoomOut } from '../utils/zoomHelpers';
 import { sanitizeTimeRange, type TimeRangeOnly } from '../utils/viewport';
-import { getProvider, WaveformDataProvider } from '../wasm/waveformProvider';
+import { getProvider, WaveformDataProvider, buildWasmSignals } from '../wasm/waveformProvider';
 
 interface SignalGroup {
   id: string;
@@ -342,6 +342,7 @@ export function WaveformWindow({
         if (isBus && isExpanded) {
           // 展开状态：先绘制原始多bit信号（第一行），再绘制各个bit
           signalList.push({
+            globalId: signal.globalId,
             name: signal.fullName || signal.name,
             row: currentRow,
             displayName: signal.name,
@@ -358,6 +359,7 @@ export function WaveformWindow({
             const bitIndex = signal.msb - i;
             const baseName = signal.fullName || signal.name;
             signalList.push({
+              globalId: signal.globalId,  // bit信号使用相同的globalId
               name: `${baseName}@[${bitIndex}]`,  // 特殊格式，WASM 从父信号提取 bit
               row: currentRow,
               displayName: `${signal.name}[${bitIndex}]`,
@@ -369,6 +371,7 @@ export function WaveformWindow({
           // 折叠状态或单bit信号：作为一个整体
           const width = signal.msb !== signal.lsb ? signal.msb - signal.lsb + 1 : 1;
           signalList.push({
+            globalId: signal.globalId,
             name: signal.fullName || signal.name,
             row: currentRow,
             displayName: signal.name,
@@ -398,36 +401,44 @@ export function WaveformWindow({
       // Use WASM provider
       const wasmProvider = wasmProviderRef.current;
 
-      // Set signals in WASM provider
-      // Use s.row which accounts for group headers, not idx
-      const wasmSignals = signalList.map((s) => ({
+      // Build WASM signals with draw_sig_id using SignalIdManager
+      const uiSignals = signalList.map((s) => ({
+        global_id: s.globalId,
         name: s.name,
-        row: s.row,  // Use pre-calculated row that accounts for group headers
+        row: s.row,
         width: s.width || 1,
       }));
-      wasmProvider.set_signals(wasmSignals);
-
-      // Set display format (TODO: get from UI state when format selector is implemented)
-      wasmProvider.display_format = 'hex';
-
-      // Set viewport and canvas dimensions
-      wasmProvider.set_viewport(viewport.timeStart, viewport.timeEnd);
-      wasmProvider.set_canvas_dimensions(width, height, 24);  // rowHeight - must match CSS .waveform-signal-item height
-
-      // Fetch data for all signals in batch (max 256 per request)
-      const signalNames = signalList.map(s => s.name);
+      
       try {
+        // Build signals with draw_sig_id
+        const wasmSignalsWithId = await buildWasmSignals(uiSignals, _waveformName || 'unknown');
+        console.log(`[WaveformWindow] Built ${wasmSignalsWithId.length} WASM signals with draw_sig_id`);
+        
+        // Set signals with draw_sig_id in WASM provider
+        wasmProvider.set_draw_list(wasmSignalsWithId);
+        
+        // Set display format (TODO: get from UI state when format selector is implemented)
+        wasmProvider.display_format = 'hex';
+
+        // Set viewport and canvas dimensions
+        wasmProvider.set_viewport(viewport.timeStart, viewport.timeEnd);
+        wasmProvider.set_canvas_dimensions(width, height, 24);  // rowHeight - must match CSS .waveform-signal-item height
+
+        // Fetch data for all signals in batch (max 256 per request)
+        const signalNames = signalList.map(s => s.name);
         console.log(`[WaveformWindow] Fetching ${signalNames.length} signals in batch`);
         await wasmProvider.fetch_signals_data_batch(signalNames);
+        
+        // Get segments from WASM provider
+        const segmentsJs = wasmProvider.get_segments();
+        segments = segmentsJs;
+
+        console.log(`[WaveformWindow] Got ${segments.length} segments from WASM provider`);
       } catch (error) {
-        console.error(`[WaveformWindow] Failed to fetch signals in batch:`, error);
+        console.error(`[WaveformWindow] Failed to process signals:`, error);
+        // Fallback to empty segments
+        segments = [];
       }
-
-      // Get segments from WASM provider
-      const segmentsJs = wasmProvider.get_segments();
-      segments = segmentsJs;
-
-      console.log(`[WaveformWindow] Got ${segments.length} segments from WASM provider`);
     } else {
       // Fallback to mock data if WASM not available
       console.warn('[WaveformWindow] WASM provider not available, falling back to mock data');
