@@ -405,9 +405,8 @@ export function WaveformWindow({
       const wasmProvider = wasmProviderRef.current;
 
       // Build WASM signals with draw_sig_id using SignalIdManager
-      // Use uniqueId for draw_sig_id to ensure per-tab isolation
+      // Use global_id for draw_sig_id (per waveform, as per spec)
       const uiSignals = signalList.map((s) => ({
-        unique_id: s.uniqueId,
         global_id: s.globalId,
         name: s.name,
         row: s.row,
