@@ -443,13 +443,16 @@ impl WaveformDataProvider {
         }
 
         // Parse chunk and store in cache
-        self.process_server_chunk(&bytes).await?;
+        // TODO: Pass signal names to process_server_chunk for proper draw_sig_id mapping
+        self.process_server_chunk(&bytes, &[]).await?;
 
         Ok(())
     }
 
     /// Process server chunk data and store in cache
-    async fn process_server_chunk(&mut self, data: &[u8]) -> Result<(), JsValue> {
+    /// signal_names: optional list of signal names in the same order as server response
+    /// Used to map signal_handle to draw_sig_id
+    async fn process_server_chunk(&mut self, data: &[u8], signal_names: &[String]) -> Result<(), JsValue> {
         // Parse chunk header
         let header = ChunkHeader::from_bytes(data)
             .map_err(|e| JsValue::from_str(&e))?;
@@ -492,9 +495,21 @@ impl WaveformDataProvider {
                 signal_idx as usize
             )?;
 
-            // Get draw_sig_id from signal index (for now, use signal_idx as draw_sig_id)
-            // In real implementation, we need to map signal handle to draw_sig_id
-            let draw_sig_id = signal_idx as u32;
+            // Get draw_sig_id from signal name mapping
+            // signal_names should be provided in the same order as server response
+            let draw_sig_id = if (signal_idx as usize) < signal_names.len() {
+                let signal_name = &signal_names[signal_idx as usize];
+                match self.get_draw_sig_id(signal_name) {
+                    Some(id) => id,
+                    None => {
+                        console_log!("[WASM]     Warning: Could not find draw_sig_id for signal '{}'", signal_name);
+                        signal_idx as u32 // Fallback to signal index
+                    }
+                }
+            } else {
+                console_log!("[WASM]     Warning: No signal name provided for index {}, using index as draw_sig_id", signal_idx);
+                signal_idx as u32 // Fallback to signal index
+            };
             let group_id = OpfsCacheManager::get_group_id(draw_sig_id);
             
             console_log!("[WASM]     Signal {}: draw_sig_id={} -> group_id={}",
@@ -1143,11 +1158,8 @@ impl WaveformDataProvider {
                 console_log!("[WASM]   Chunk data parsed and stored in signal_data");
                 
                 // Then, store in OPFS cache for future use
-                // Create ArrayBuffer from bytes and pass to supplement_data
-                let array_buffer = js_sys::ArrayBuffer::new(bytes.len() as u32);
-                let uint8_array = js_sys::Uint8Array::new(&array_buffer);
-                uint8_array.copy_from(&bytes[..]);
-                self.supplement_data(array_buffer.into()).await?;
+                // Pass signal names to ensure correct draw_sig_id mapping
+                self.process_server_chunk(&bytes, &tile_signal_names).await?;
                 console_log!("[WASM]   Data stored in cache successfully");
             }
         }
