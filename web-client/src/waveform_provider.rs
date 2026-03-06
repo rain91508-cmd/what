@@ -1046,8 +1046,15 @@ impl WaveformDataProvider {
                 console_log!("[WASM]   Data preview (first {} bytes): {}", 
                     preview_len, preview.join(" "));
                 
-                // Step 3: Store fetched data in cache using supplement_data
-                console_log!("[WASM]   Step 3: Storing data in OPFS cache...");
+                // Step 3: Store fetched data in cache and parse for rendering
+                console_log!("[WASM]   Step 3: Storing data in OPFS cache and parsing for rendering...");
+                
+                // First, parse chunk data and store in signal_data for rendering
+                console_log!("[WASM]   Parsing chunk data for {} signals...", tile_signal_names.len());
+                self.parse_chunk_data_for_batch(&tile_signal_names, &bytes)?;
+                console_log!("[WASM]   Chunk data parsed and stored in signal_data");
+                
+                // Then, store in OPFS cache for future use
                 // Create ArrayBuffer from bytes and pass to supplement_data
                 let array_buffer = js_sys::ArrayBuffer::new(bytes.len() as u32);
                 let uint8_array = js_sys::Uint8Array::new(&array_buffer);
