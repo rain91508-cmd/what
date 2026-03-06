@@ -601,9 +601,22 @@ export function WaveformWindow({
 
             // For expanded multi-bit signals, also get individual bit values
             if (signal.msb !== signal.lsb && expandedSignals.has(signal.unique_id)) {
-              // For multi-bit signals, the display_str usually contains the full value
-              // Individual bits would need to be extracted from the full value
-              // This is handled by the display logic in the render
+              const bitCount = Math.min(signal.msb - signal.lsb + 1, 32);
+              for (let i = 0; i < bitCount; i++) {
+                const bitIndex = signal.msb - i;
+                const bitSignalName = `${signal.fullName}@[${bitIndex}]`;
+                try {
+                  const bitValueInfo = wasmProvider.get_signal_value_at_time(bitSignalName, cursor.position);
+                  if (bitValueInfo && typeof bitValueInfo === 'object') {
+                    const bitDisplayStr = (bitValueInfo as any).displayStr || (bitValueInfo as any).display_str || '0';
+                    values.set(bitSignalName, bitDisplayStr);
+                  } else {
+                    values.set(bitSignalName, '0');
+                  }
+                } catch (error) {
+                  values.set(bitSignalName, '0');
+                }
+              }
             }
           } else {
             values.set(signal.fullName || signal.name, '0x0');
@@ -1559,7 +1572,7 @@ export function WaveformWindow({
                             
                             {/* Value column */}
                             <span className="waveform-signal-value" style={{ flex: 1 }}>
-                              {signalValues.get(`${signal.fullName}[${bitIndex}]`) || '0'}
+                              {signalValues.get(`${signal.fullName}@[${bitIndex}]`) || '0'}
                             </span>
                           </div>
                         );
