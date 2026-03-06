@@ -48,6 +48,29 @@ export function isOpfsEnabled(): boolean {
 }
 
 /**
+ * Enable/disable Memory LRU cache
+ * When disabled, memory cache will be cleared and not used
+ */
+export function setMemoryCacheEnabled(enabled: boolean): void {
+  if (provider) {
+    provider.set_memory_cache_enabled(enabled);
+    console.log(`[WaveformProvider] Memory cache ${enabled ? 'enabled' : 'disabled'}`);
+  } else {
+    console.warn('[WaveformProvider] Cannot set memory cache: provider not created');
+  }
+}
+
+/**
+ * Check if Memory LRU cache is enabled
+ */
+export function isMemoryCacheEnabled(): boolean {
+  if (provider) {
+    return provider.memory_cache_enabled;
+  }
+  return true; // Default to enabled
+}
+
+/**
  * Create a new waveform data provider
  * @param timeStamp Waveform modification timestamp for CDN cache (from wave_info.modified_time)
  * @param enableOpfs Whether to enable OPFS cache (defaults to current global setting)

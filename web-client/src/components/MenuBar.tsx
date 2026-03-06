@@ -16,6 +16,8 @@ interface MenuBarProps {
   onRestoreSession?: () => void; // Restore session
   opfsEnabled?: boolean;         // OPFS cache enabled state
   onToggleOpfs?: () => void;     // Toggle OPFS cache
+  memoryCacheEnabled?: boolean;  // Memory LRU cache enabled state
+  onToggleMemoryCache?: () => void; // Toggle Memory LRU cache
 }
 
 interface MenuItem {
@@ -30,7 +32,7 @@ interface Menu {
   items: MenuItem[];
 }
 
-export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onOpenWaveList, onCloseKdb, onCloseWave, hasKdbLoaded, hasWaveLoaded, infoText, onOpenDebugTool, onSaveSession, onRestoreSession, opfsEnabled, onToggleOpfs }: MenuBarProps) {
+export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onOpenWaveList, onCloseKdb, onCloseWave, hasKdbLoaded, hasWaveLoaded, infoText, onOpenDebugTool, onSaveSession, onRestoreSession, opfsEnabled, onToggleOpfs, memoryCacheEnabled, onToggleMemoryCache }: MenuBarProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const menuBarRef = useRef<HTMLDivElement>(null);
 
@@ -91,6 +93,10 @@ export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onO
         { 
           label: opfsEnabled ? '✓ OPFS Cache' : '  OPFS Cache', 
           onClick: onToggleOpfs,
+        },
+        { 
+          label: memoryCacheEnabled ? '✓ Memory Cache' : '  Memory Cache', 
+          onClick: onToggleMemoryCache,
         },
       ],
     },

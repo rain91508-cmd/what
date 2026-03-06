@@ -607,6 +607,8 @@ impl MemoryLruCache {
 pub struct OpfsCacheManager {
     /// Whether OPFS cache is enabled
     pub enabled: bool,
+    /// Whether Memory LRU cache is enabled
+    pub memory_cache_enabled: bool,
     /// Memory LRU cache
     memory_cache: MemoryLruCache,
     /// Current waveform name
@@ -621,6 +623,7 @@ impl OpfsCacheManager {
     pub fn new() -> Self {
         Self {
             enabled: false,
+            memory_cache_enabled: true,  // Memory cache enabled by default
             memory_cache: MemoryLruCache::new(MEMORY_CACHE_MAX),
             waveform_name: String::new(),
             opfs_read: None,
@@ -642,7 +645,19 @@ impl OpfsCacheManager {
         self.opfs_exists = Some(opfs_exists);
         self.enabled = enabled;
 
-        console_log!("[OpfsCache] Initialized, enabled: {}", enabled);
+        console_log!("[OpfsCache] Initialized, OPFS enabled: {}, Memory cache enabled: {}", enabled, self.memory_cache_enabled);
+    }
+
+    /// Set memory cache enabled
+    pub fn set_memory_cache_enabled(&mut self, enabled: bool) {
+        self.memory_cache_enabled = enabled;
+        console_log!("[OpfsCache] Memory cache enabled: {}", enabled);
+        
+        // If disabling, clear the memory cache
+        if !enabled {
+            self.memory_cache.clear();
+            console_log!("[OpfsCache] Memory cache cleared");
+        }
     }
 
     /// Set waveform name
@@ -673,10 +688,12 @@ impl OpfsCacheManager {
     pub async fn read(&mut self, block: &DataBlock) -> Result<Option<Vec<u8>>, JsValue> {
         let path = format!("{}/{}", self.waveform_name, block.to_path());
 
-        // 1. Check memory cache
-        if let Some(data) = self.memory_cache.get(&path) {
-            console_log!("[OpfsCache] Memory hit: {}", path);
-            return Ok(Some(data.clone()));
+        // 1. Check memory cache (if enabled)
+        if self.memory_cache_enabled {
+            if let Some(data) = self.memory_cache.get(&path) {
+                console_log!("[OpfsCache] Memory hit: {}", path);
+                return Ok(Some(data.clone()));
+            }
         }
 
         // 2. Check OPFS (if enabled)
@@ -719,8 +736,10 @@ impl OpfsCacheManager {
     pub async fn write(&mut self, block: &DataBlock, data: Vec<u8>) -> Result<(), JsValue> {
         let path = format!("{}/{}", self.waveform_name, block.to_path());
 
-        // Store in memory cache
-        self.memory_cache.set(path.clone(), data.clone());
+        // Store in memory cache (if enabled)
+        if self.memory_cache_enabled {
+            self.memory_cache.set(path.clone(), data.clone());
+        }
 
         // Write to OPFS (if enabled)
         if self.enabled {
