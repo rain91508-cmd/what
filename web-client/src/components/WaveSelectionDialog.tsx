@@ -20,7 +20,7 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   
-  // Time range settings (in LoD0 units - fs)
+  // Time range settings (in LoD0 units - time_unit)
   const [useCustomRange, setUseCustomRange] = useState(false);
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
@@ -112,13 +112,14 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
           }
         }
         
-        // Convert to LoD0 units (fs)
-        const startFs = (waveInfo.start_time || 0) * multiplier;
-        const endFs = (waveInfo.end_time || 0) * multiplier;
+        // waveInfo times are already in LoD0 units (time_unit)
+        // No conversion needed
+        const startLod0 = waveInfo.start_time || 0;
+        const endLod0 = waveInfo.end_time || 0;
         
-        setStartTime(startFs.toString());
-        setEndTime(endFs.toString());
-        console.log(`[WaveSelectionDialog] Pre-filled range: ${startFs} - ${endFs} fs`);
+        setStartTime(startLod0.toString());
+        setEndTime(endLod0.toString());
+        console.log(`[WaveSelectionDialog] Pre-filled range: ${startLod0} - ${endLod0} LoD0 units`);
       }
     } catch (err) {
       console.error('[WaveSelectionDialog] Error loading wave info:', err);
@@ -293,7 +294,7 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
               {useCustomRange && (
                 <div style={{ paddingLeft: '18px' }}>
                   <div style={{ marginBottom: '8px', fontSize: '11px', color: '#666' }}>
-                    Time range in LoD0 units (fs). Leave empty to use full range.
+                    Time range in LoD0 units (time_unit). Leave empty to use full range.
                   </div>
                   
                   <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end' }}>

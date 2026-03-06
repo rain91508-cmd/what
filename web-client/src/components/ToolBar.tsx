@@ -108,8 +108,9 @@ export function ToolBar({
   useEffect(() => {
     if (!isEditing && timeConfig) {
       // DisplayUnitPerLoD0Unit 表示每个 DisplayUnit 对应多少个 LoD0Unit
+      // LoD0Unit = time_unit (服务器的时间单位)
       // 我们需要将其转换为绝对时间的显示值
-      // 1 LoD0Unit = getFsPerLod0Unit() fs
+      // 1 LoD0Unit = getFsPerLod0Unit() fs (通过 time_unit 转换)
       // DisplayUnit 的绝对时间 = DisplayUnitPerLoD0Unit * getFsPerLod0Unit() fs
       // 然后转换为 selectedUnit 单位的数值
       const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;
@@ -193,10 +194,12 @@ export function ToolBar({
     }
 
     // 用户输入的是绝对时间数值（带单位）
+    // LoD0Unit = time_unit (服务器的时间单位)
     // 1. 转换为 fs: inputValue * TIME_UNIT_MULTIPLIERS[selectedUnit]
     const inputFs = numValue * TIME_UNIT_MULTIPLIERS[selectedUnit];
 
     // 2. 转换为 LoD0Unit: fs / fsPerLod0Unit
+    // fsPerLod0Unit 是通过 time_unit 计算得到的
     const fsPerLod0Unit = getFsPerLod0Unit();
     const lod0Units = Math.floor(inputFs / fsPerLod0Unit);
 

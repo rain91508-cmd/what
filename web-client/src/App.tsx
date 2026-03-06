@@ -102,7 +102,7 @@ function App() {
   const [currentWaveSignalPrefix, setCurrentWaveSignalPrefix] = useState<string>('')  // Global signal prefix for current waveform
   const [currentWaveSignalSpaceBeforeBracket, setCurrentWaveSignalSpaceBeforeBracket] = useState<boolean>(false)  // Whether to add space before [msb:lsb]
   const [currentWaveTimeUnit, setCurrentWaveTimeUnit] = useState<number>(2)  // Waveform time unit enum (0=fs, 1=ps, 2=ns, etc.)
-  const [currentWaveEndTime, setCurrentWaveEndTime] = useState<number>(1000000)  // Waveform end time in LoD0 units (fs)
+  const [currentWaveEndTime, setCurrentWaveEndTime] = useState<number>(1000000)  // Waveform end time in LoD0 units (time_unit)
   const [currentWaveDisplayUnitPerLoD0, setCurrentWaveDisplayUnitPerLoD0] = useState<number>(1)  // DisplayUnit per LoD0Unit
   const [currentWaveCustomRange, setCurrentWaveCustomRange] = useState<{ start: number; end: number } | undefined>(undefined)  // User custom time range
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(false)
@@ -945,15 +945,15 @@ function App() {
         waveTimeUnit = parsed.unitEnum
         console.log(`[App] Time unit: ${waveInfo.time_unit} -> enum ${waveTimeUnit}`)
 
-        // Calculate end time in LoD0 units
-        // waveInfo.end_time is in time_unit units, convert to fs then to LoD0
-        const endTimeFs = waveInfo.end_time * parsed.fsMultiplier
-        waveEndTime = endTimeFs // LoD0 unit is 1 fs
-        console.log(`[App] End time: ${waveInfo.end_time} ${parsed.unit} = ${waveEndTime} fs (LoD0)`)
+        // LoD0Unit = time_unit ( server's time unit )
+        // waveInfo.end_time is already in time_unit units (LoD0 units)
+        // No conversion needed - internal time is always in LoD0 units
+        waveEndTime = waveInfo.end_time
+        console.log(`[App] End time: ${waveEndTime} ${parsed.unit} (LoD0 units)`)
 
-        // Set DisplayUnitPerLoD0Unit based on time unit
-        // For example, if time_unit is 1ps, then 1 DisplayUnit = 1000 LoD0Unit (1 ps = 1000 fs)
-        displayUnitPerLoD0Unit = parsed.fsMultiplier
+        // Set DisplayUnitPerLoD0Unit to 1
+        // 1 DisplayUnit = 1 LoD0Unit = time_unit
+        displayUnitPerLoD0Unit = 1
         console.log(`[App] DisplayUnitPerLoD0Unit: ${displayUnitPerLoD0Unit}`)
       }
     } catch (error) {
