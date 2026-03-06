@@ -92,15 +92,20 @@ pub struct SignalWaveData {
 /// LoD (Level of Detail) configuration
 /// resolution = time units per bucket (each transition represents this many time units)
 /// Based on: resolution = 16^lod
-const LOD_TABLE: [(u32, u64); 8] = [
-    (0, 1),           // LOD0: resolution 1 (原始数据，1时间单位/转换点)
-    (1, 16),          // LOD1: resolution 16 (16时间单位/转换点)
-    (2, 256),         // LOD2: resolution 256 (256时间单位/转换点)
-    (3, 4_096),       // LOD3: resolution 4096
-    (4, 65_536),      // LOD4: resolution 65536
-    (5, 1_048_576),   // LOD5: resolution ~1M
-    (6, 16_777_216),  // LOD6: resolution ~16M
-    (7, 268_435_456), // LOD7: resolution ~268M
+const LOD_TABLE: [(u32, u64); 13] = [
+    (0, 1),                // LOD0: resolution 1 (原始数据，1时间单位/转换点)
+    (1, 16),               // LOD1: resolution 16 (16时间单位/转换点)
+    (2, 256),              // LOD2: resolution 256 (256时间单位/转换点)
+    (3, 4_096),            // LOD3: resolution 4096
+    (4, 65_536),           // LOD4: resolution 65536
+    (5, 1_048_576),        // LOD5: resolution ~1M
+    (6, 16_777_216),       // LOD6: resolution ~16M
+    (7, 268_435_456),      // LOD7: resolution ~268M
+    (8, 4_294_967_296),    // LOD8: resolution ~4.3G
+    (9, 68_719_476_736),   // LOD9: resolution ~68.7G
+    (10, 1_099_511_627_776), // LOD10: resolution ~1.1T
+    (11, 17_592_186_044_416), // LOD11: resolution ~17.6T
+    (12, 281_474_976_710_656), // LOD12: resolution ~281T
 ];
 
 /// Special timestamp for boundary value (start of time range)
