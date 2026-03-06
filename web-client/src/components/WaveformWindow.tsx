@@ -293,18 +293,29 @@ export function WaveformWindow({
   // 使用 ref 存储上一次的 canvas 尺寸，避免循环依赖
   const lastCanvasSizeRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
 
+  // 使用 ref 防止并发渲染
+  const isRenderingRef = useRef(false);
+
   // renderWaveform 定义在 handleResize useEffect 之前，避免暂时性死区错误
   // 使用 ref 来存储函数，避免 useCallback 导致的依赖循环
   const renderWaveformRef = useRef<() => Promise<void>>();
   
   const renderWaveform = async () => {
-    if (!canvasRef.current) return;
+    // 防止并发调用
+    if (isRenderingRef.current) {
+      return;
+    }
+    isRenderingRef.current = true;
+    
+    try {
+      if (!canvasRef.current || !containerRef.current) return;
 
-    const { width, height } = canvasRef.current;
-
-    console.log(`[WaveformWindow] renderWaveform: width=${width}, height=${height}`);
-    console.log(`[WaveformWindow] Viewport: timeStart=${viewport.timeStart}, timeEnd=${viewport.timeEnd}, signalStart=${viewport.signalStart}, signalEnd=${viewport.signalEnd}`);
-    console.log(`[WaveformWindow] Pixels: pixelsPerTime=${viewport.pixelsPerTime}, pixelsPerSignal=${viewport.pixelsPerSignal}`);
+      // Update canvas dimensions from container
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const width = containerRect.width;
+    const height = containerRect.height - 30; // Subtract ruler height
+    canvasRef.current.width = width;
+    canvasRef.current.height = height;
 
     // Build visible signal list from treeNodes
     // UI 决定哪些信号可见，以及它们的 row 顺序
@@ -360,11 +371,10 @@ export function WaveformWindow({
 
     let segments;
 
-    console.log(`[WaveformWindow] renderWaveform: useMockData=${useMockData}, wasmProviderRef.current=${wasmProviderRef.current ? 'exists' : 'null'}`);
+
 
     if (useMockData) {
       // Use mock data provider
-      console.log('[WaveformWindow] Using mock data provider');
       mockDataProvider.initialize(
         signalList,
         viewport,
@@ -376,7 +386,6 @@ export function WaveformWindow({
       segments = mockDataProvider.getSegments();
     } else if (wasmProviderRef.current) {
       // Use WASM provider
-      console.log('[WaveformWindow] Using WASM provider');
       const wasmProvider = wasmProviderRef.current;
 
       // Set signals in WASM provider
@@ -460,122 +469,72 @@ export function WaveformWindow({
         }
       }
     }
+  } finally {
+    isRenderingRef.current = false;
+  }
   };
 
   // 更新 ref
   renderWaveformRef.current = renderWaveform;
 
-  // 监听窗口大小变化，更新 canvas 尺寸
-  useEffect(() => {
-    console.log('[WaveformWindow] Resize useEffect running, useMockData=', useMockData);
-    
-    const handleResize = () => {
-      console.log('[WaveformWindow] handleResize called, lastCanvasSizeRef.current=', lastCanvasSizeRef.current);
-      
-      if (containerRef.current && canvasRef.current) {
-        const { width, height } = containerRef.current.getBoundingClientRect();
-        console.log('[WaveformWindow] New size: width=', width, 'height=', height);
-        
-        // 检查 width 或 height 是否真的改变了
-        if (width === lastCanvasSizeRef.current.width && height === lastCanvasSizeRef.current.height) {
-          console.log('[WaveformWindow] Size unchanged, skipping');
-          return; // 尺寸没变，不需要处理
-        }
-        lastCanvasSizeRef.current = { width, height };
-        
-        setCanvasWidth(width);
-        canvasRef.current.width = width;
-        canvasRef.current.height = height;
-        waveformRenderer.resize(width, height);
-
-        // Update WASM canvas dimensions and get new viewport (time_end may change)
-        if (!useMockData && wasmProviderRef.current) {
-          const wasmProvider = wasmProviderRef.current;
-          const oldTimeEnd = wasmProvider.viewport_time_end;
-          wasmProvider.set_canvas_dimensions(width, height, 24);
-          // Get updated viewport from WASM (time_end may have changed)
-          const newTimeEnd = wasmProvider.viewport_time_end;
-          if (newTimeEnd !== oldTimeEnd) {
-            console.log(`[WaveformWindow] Canvas resize: updating timeEnd from ${oldTimeEnd} to ${newTimeEnd}`);
-            setViewport(prev => ({
-              ...prev,
-              timeEnd: newTimeEnd,
-            }));
-            // Note: renderWaveform will be triggered by viewport change
-            return;
-          }
-        }
-
-        // 只更新 canvas 尺寸，不重置 viewport
-        console.log('[WaveformWindow] Calling renderWaveform via ref');
-        if (renderWaveformRef.current) {
-          renderWaveformRef.current().catch(console.error);
-        } else {
-          console.error('[WaveformWindow] renderWaveformRef.current is null!');
-        }
-      }
-    };
-
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-    // 不依赖 renderWaveform，使用 ref 避免循环
-  }, [useMockData]);
-
-  // 使用 ResizeObserver 监听 waveform 容器尺寸变化（包括 panel resize）
+  // 使用 ResizeObserver 监听容器尺寸变化，触发重绘并调整 viewport
   useEffect(() => {
     if (!containerRef.current) return;
 
-    console.log('[WaveformWindow] Setting up ResizeObserver');
-    
-    const resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect;
-        console.log('[WaveformWindow] ResizeObserver: width=', width, 'height=', height);
-        
-        // 检查尺寸是否真的改变了
-        if (width === lastCanvasSizeRef.current.width && height === lastCanvasSizeRef.current.height) {
-          console.log('[WaveformWindow] ResizeObserver: size unchanged, skipping');
-          continue;
-        }
-        
-        lastCanvasSizeRef.current = { width, height };
-        
-        setCanvasWidth(width);
-        if (canvasRef.current) {
-          canvasRef.current.width = width;
-          canvasRef.current.height = height;
-        }
-        waveformRenderer.resize(width, height);
+    let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
+    let lastWidth = 0;
+    let isFirstCall = true;
 
-        // Update WASM canvas dimensions and get new viewport (time_end may change)
-        if (!useMockData && wasmProviderRef.current) {
-          const wasmProvider = wasmProviderRef.current;
-          const oldTimeEnd = wasmProvider.viewport_time_end;
-          wasmProvider.set_canvas_dimensions(width, height, 24);
-          const newTimeEnd = wasmProvider.viewport_time_end;
-          if (newTimeEnd !== oldTimeEnd) {
-            console.log(`[WaveformWindow] ResizeObserver: updating timeEnd from ${oldTimeEnd} to ${newTimeEnd}`);
+    const resizeObserver = new ResizeObserver((entries) => {
+      // 清除之前的定时器，重新开始计时
+      if (resizeTimeout) {
+        clearTimeout(resizeTimeout);
+      }
+      
+      resizeTimeout = setTimeout(() => {
+        for (const entry of entries) {
+          const newWidth = entry.contentRect.width;
+          const newHeight = entry.contentRect.height;
+           
+          // 初始化 lastWidth
+          if (isFirstCall) {
+            lastWidth = newWidth;
+            isFirstCall = false;
+          }
+           
+          // 如果宽度变化了，更新 viewport 的 timeEnd 保持 pixelsPerTime 不变
+          if (newWidth !== lastWidth && !useMockData && wasmProviderRef.current) {
+            const wasmProvider = wasmProviderRef.current;
+            const oldTimeStart = wasmProvider.viewport_time_start;
+            const oldTimeEnd = wasmProvider.viewport_time_end;
+            const oldTimeSpan = oldTimeEnd - oldTimeStart;
+            const newTimeEnd = oldTimeStart + (oldTimeSpan * newWidth / lastWidth);
+            
+            wasmProvider.set_viewport(oldTimeStart, newTimeEnd);
+            wasmProvider.set_canvas_dimensions(newWidth, newHeight, 24);
+            
+            // 同步更新 React viewport state
             setViewport(prev => ({
               ...prev,
+              timeStart: oldTimeStart,
               timeEnd: newTimeEnd,
             }));
-            continue;
           }
+          
+          lastWidth = newWidth;
         }
-
-        // 触发重绘
-        console.log('[WaveformWindow] ResizeObserver: calling renderWaveform');
+        
         if (renderWaveformRef.current) {
           renderWaveformRef.current().catch(console.error);
         }
-      }
+        resizeTimeout = null;
+      }, 50);
     });
 
     resizeObserver.observe(containerRef.current);
 
     return () => {
-      console.log('[WaveformWindow] Cleaning up ResizeObserver');
+      if (resizeTimeout) clearTimeout(resizeTimeout);
       resizeObserver.disconnect();
     };
   }, [useMockData]);
@@ -603,7 +562,7 @@ export function WaveformWindow({
     }
     // 不依赖 renderWaveform，使用 ref 避免循环
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewport.timeStart, viewport.timeEnd, canvasWidth]);
+  }, [viewport.timeStart, viewport.timeEnd, canvasWidth, groups]);
 
   // Cleanup mouse timeout on unmount
   useEffect(() => {

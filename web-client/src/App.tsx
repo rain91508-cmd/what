@@ -2138,13 +2138,64 @@ function App() {
   const hierarchyStartWidthRef = useRef(hierarchyWidth)
   const signalStartWidthRef = useRef(signalWidth)
   const messageStartHeightRef = useRef(messageHeight)
+  const isMessageDraggingRef = useRef(false)
+  const isSignalPanelDraggingRef = useRef(false)
+  const isHierarchyDraggingRef = useRef(false)
+
+  // Keep refs in sync with state only when NOT dragging
+  useEffect(() => {
+    if (!isMessageDraggingRef.current) {
+      messageStartHeightRef.current = messageHeight
+    }
+  }, [messageHeight])
+
+  useEffect(() => {
+    if (!isSignalPanelDraggingRef.current) {
+      signalStartWidthRef.current = signalWidth
+    }
+  }, [signalWidth])
+
+  useEffect(() => {
+    if (!isHierarchyDraggingRef.current) {
+      hierarchyStartWidthRef.current = hierarchyWidth
+    }
+  }, [hierarchyWidth])
+
+  const handleMessageResizeStart = () => {
+    isMessageDraggingRef.current = true
+    messageStartHeightRef.current = messageHeight
+  }
+
+  const handleMessageResizeEnd = () => {
+    isMessageDraggingRef.current = false
+  }
+
+  const handleSignalPanelResizeStart = () => {
+    isSignalPanelDraggingRef.current = true
+    signalStartWidthRef.current = signalWidth
+  }
+
+  const handleSignalPanelResizeEnd = () => {
+    isSignalPanelDraggingRef.current = false
+  }
+
+  const handleHierarchyResizeStart = () => {
+    isHierarchyDraggingRef.current = true
+    hierarchyStartWidthRef.current = hierarchyWidth
+  }
+
+  const handleHierarchyResizeEnd = () => {
+    isHierarchyDraggingRef.current = false
+  }
 
   const handleHierarchyResize = (delta: number) => {
-    setHierarchyWidth(Math.max(180, Math.min(300, hierarchyStartWidthRef.current + delta)))
+    // 移除最大宽度限制，只保留最小宽度
+    setHierarchyWidth(Math.max(100, hierarchyStartWidthRef.current + delta))
   }
 
   const handleSignalPanelResize = (delta: number) => {
-    setSignalWidth(Math.max(160, Math.min(280, signalStartWidthRef.current + delta)))
+    // 移除最大宽度限制，只保留最小宽度
+    setSignalWidth(Math.max(100, signalStartWidthRef.current + delta))
   }
 
   const handleMessageResize = (delta: number) => {
@@ -2216,7 +2267,7 @@ function App() {
         {/* Left Panel - Design Browser (Hierarchy) */}
         <div 
           className="left-panel hierarchy-panel"
-          style={{ width: hierarchyWidth, minWidth: 180, maxWidth: 300 }}
+          style={{ width: hierarchyWidth, minWidth: 100 }}
         >
           <DesignBrowser
             key={kdbLoaded ? 'kdb-loaded' : 'no-kdb'}
@@ -2229,12 +2280,12 @@ function App() {
         </div>
 
         {/* Splitter between hierarchy and signal panel */}
-        <Splitter direction="horizontal" onDrag={handleHierarchyResize} />
+        <Splitter direction="horizontal" onDrag={handleHierarchyResize} onDragStart={handleHierarchyResizeStart} onDragEnd={handleHierarchyResizeEnd} />
 
         {/* Middle Panel - Signal Panel */}
         <div 
           className="signal-panel"
-          style={{ width: signalWidth, minWidth: 160, maxWidth: 280 }}
+          style={{ width: signalWidth, minWidth: 100 }}
         >
           <SignalPanel
             selectedModuleIndex={selectedModuleIndex}
@@ -2246,7 +2297,7 @@ function App() {
         </div>
 
         {/* Splitter between signal panel and main panel */}
-        <Splitter direction="horizontal" onDrag={handleSignalPanelResize} />
+        <Splitter direction="horizontal" onDrag={handleSignalPanelResize} onDragStart={handleSignalPanelResizeStart} onDragEnd={handleSignalPanelResizeEnd} />
 
         {/* Right Panel - Tab Panel (Source/Waveform) */}
         <div className="right-panel">
@@ -2322,7 +2373,7 @@ function App() {
       </div>
 
       {/* Splitter between main content and messages */}
-      <Splitter direction="vertical" onDrag={handleMessageResize} />
+      <Splitter direction="vertical" onDrag={handleMessageResize} onDragStart={handleMessageResizeStart} onDragEnd={handleMessageResizeEnd} />
 
       {/* Bottom Panel - Messages */}
       <div 
