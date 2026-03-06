@@ -90,16 +90,17 @@ pub struct SignalWaveData {
 }
 
 /// LoD (Level of Detail) configuration
-/// Bucket size = 16^lod (number of transitions merged into one)
+/// resolution = time units per bucket (each transition represents this many time units)
+/// Based on: resolution = 16^lod
 const LOD_TABLE: [(u32, u64); 8] = [
-    (0, 1),           // LOD0: bucket size 1 (原始数据)
-    (1, 16),          // LOD1: bucket size 16 (16:1 压缩)
-    (2, 256),         // LOD2: bucket size 256 (256:1 压缩)
-    (3, 4_096),       // LOD3: bucket size 4096
-    (4, 65_536),      // LOD4: bucket size 65536
-    (5, 1_048_576),   // LOD5: bucket size ~1M
-    (6, 16_777_216),  // LOD6: bucket size ~16M
-    (7, 268_435_456), // LOD7: bucket size ~268M
+    (0, 1),           // LOD0: resolution 1 (原始数据，1时间单位/转换点)
+    (1, 16),          // LOD1: resolution 16 (16时间单位/转换点)
+    (2, 256),         // LOD2: resolution 256 (256时间单位/转换点)
+    (3, 4_096),       // LOD3: resolution 4096
+    (4, 65_536),      // LOD4: resolution 65536
+    (5, 1_048_576),   // LOD5: resolution ~1M
+    (6, 16_777_216),  // LOD6: resolution ~16M
+    (7, 268_435_456), // LOD7: resolution ~268M
 ];
 
 /// Special timestamp for boundary value (start of time range)
@@ -107,48 +108,37 @@ const LOD_TABLE: [(u32, u64); 8] = [
 const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
 
 /// Calculate appropriate LoD based on viewport and canvas width
-/// Goal: 1-2 transitions per pixel (avoid over-sampling)
 /// 
 /// Algorithm:
-/// 1. Estimate total transitions at LoD 0 (based on time_span and assumed density)
-/// 2. Target: canvas_width * 2 transitions (1-2 per pixel)
-/// 3. Select LoD where bucket_size reduces transitions to target range
+/// 1. Calculate timePerPixel = time_span / canvas_width
+/// 2. Select the finest LoD where lod.resolution >= timePerPixel
+///    This ensures each pixel shows at most one transition point
+/// 3. If no LoD satisfies, use max LoD
 fn select_lod(viewport: &Viewport, canvas_width: f64) -> u32 {
     if canvas_width <= 0.0 {
         return 0;
     }
     
     let time_span = viewport.time_end - viewport.time_start;
+    let time_per_pixel = time_span as f64 / canvas_width;
     
-    // Estimate transition density: from test data, ~1 transition per 500k time units
-    // This is a heuristic - actual density varies by signal
-    const ESTIMATED_TRANSITION_DENSITY: f64 = 1.0 / 500_000.0;
+    console_log!("[WASM] LoD selection: time_span={}, canvas_width={:.0}, time_per_pixel={:.1}", 
+        time_span, canvas_width, time_per_pixel);
     
-    // Estimate total transitions at LoD 0
-    let estimated_transitions = time_span * ESTIMATED_TRANSITION_DENSITY;
-    
-    // Target: 1-2 transitions per pixel
-    let target_transitions = canvas_width * 2.0;
-    
-    // Calculate required compression ratio
-    let required_compression = estimated_transitions / target_transitions;
-    
-    console_log!("[WASM] LoD selection: time_span={}, est_transitions={:.0}, target={:.0}, required_compression={:.1}", 
-        time_span, estimated_transitions, target_transitions, required_compression);
-    
-    // Find the LoD with bucket_size >= required_compression
-    // This ensures we don't over-sample (too many transitions per pixel)
-    for (lod, bucket_size) in LOD_TABLE.iter() {
-        if (*bucket_size as f64) >= required_compression {
-            console_log!("[WASM] Selected LoD {} (bucket_size: {}, est_transitions_at_lod: {:.0})", 
-                lod, bucket_size, estimated_transitions / (*bucket_size as f64));
+    // Find the finest LoD where resolution >= time_per_pixel
+    // This ensures we don't over-sample (multiple transitions per pixel)
+    for (lod, resolution) in LOD_TABLE.iter() {
+        if (*resolution as f64) >= time_per_pixel {
+            console_log!("[WASM] Selected LoD {} (resolution: {} time_units/pixel)", 
+                lod, resolution);
             return *lod;
         }
     }
     
     // If none found, use max LoD
     let max_lod = LOD_TABLE.last().unwrap().0;
-    console_log!("[WASM] Selected max LoD {}", max_lod);
+    let max_resolution = LOD_TABLE.last().unwrap().1;
+    console_log!("[WASM] Selected max LoD {} (resolution: {})", max_lod, max_resolution);
     max_lod
 }
 
