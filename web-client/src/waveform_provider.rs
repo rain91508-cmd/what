@@ -437,6 +437,12 @@ impl WaveformDataProvider {
 
         console_log!("[WASM] supplement_data: received {} bytes", bytes.len());
 
+        // Check minimum size for valid chunk
+        if bytes.len() < ChunkHeader::SIZE {
+            console_log!("[WASM] Error: Data too small for chunk header ({} < {})", bytes.len(), ChunkHeader::SIZE);
+            return Err(JsValue::from_str(&format!("Data too small: {} bytes", bytes.len())));
+        }
+
         // Parse chunk and store in cache
         self.process_server_chunk(&bytes).await?;
 
@@ -982,17 +988,34 @@ impl WaveformDataProvider {
                 let resp: web_sys::Response = resp_value.dyn_into()
                     .map_err(|_| JsValue::from_str("Invalid response"))?;
                 
+                let status = resp.status();
+                let content_type = resp.headers().get("content-type").ok().flatten().unwrap_or_else(|| "unknown".to_string());
+                console_log!("[WASM]   Response status: {}, content-type: {}", status, content_type);
+                
                 if !resp.ok() {
-                    return Err(JsValue::from_str(&format!("HTTP error: {}", resp.status())));
+                    return Err(JsValue::from_str(&format!("HTTP error: {}", status)));
                 }
                 
                 // Get array buffer
-                let data: JsValue = wasm_bindgen_futures::JsFuture::from(
+                let data_result = wasm_bindgen_futures::JsFuture::from(
                     resp.array_buffer()?
-                ).await?;
+                ).await;
                 
-                let array_buffer: js_sys::ArrayBuffer = data.dyn_into()
-                    .map_err(|_| JsValue::from_str("Invalid array buffer"))?;
+                let data: JsValue = match data_result {
+                    Ok(d) => d,
+                    Err(e) => {
+                        console_log!("[WASM]   Error getting array buffer: {:?}", e);
+                        return Err(JsValue::from_str("Failed to get array buffer"));
+                    }
+                };
+                
+                let array_buffer: js_sys::ArrayBuffer = match data.dyn_into() {
+                    Ok(ab) => ab,
+                    Err(_) => {
+                        console_log!("[WASM]   Error: Response is not an ArrayBuffer");
+                        return Err(JsValue::from_str("Invalid array buffer"));
+                    }
+                };
                 
                 let uint8_array = js_sys::Uint8Array::new(&array_buffer);
                 let mut bytes = vec![0u8; uint8_array.length() as usize];
@@ -1321,6 +1344,13 @@ impl WaveformDataProvider {
 
     /// Get render segments for current viewport
     pub fn get_segments(&self) -> Result<JsValue, JsValue> {
+        // Optimization: if no signals to draw, return empty segments early
+        if self.signals.is_empty() {
+            console_log!("[WASM] get_segments: no signals to draw, returning empty segments");
+            return serde_wasm_bindgen::to_value(&Vec::<RenderSegment>::new())
+                .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)));
+        }
+
         let mut segments = Vec::new();
         let time_range = self.viewport.time_end - self.viewport.time_start;
 
