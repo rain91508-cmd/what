@@ -1032,13 +1032,17 @@ impl WaveformDataProvider {
         console_log!("[WASM] extract_bits_from_transitions: msb={}, lsb={}, bit_count={}, mask={:#x}", msb, lsb, bit_count, mask);
         
         transitions.iter().filter_map(|t| {
-            // Parse value string to u64, skip if invalid
-            let value_u64 = u64::from_str_radix(t.value.trim_start_matches("0x").trim_start_matches("0X"), 16).ok()?;
+            // Parse value string to u64, handling both decimal and hex formats
+            let value_u64 = if t.value.starts_with("0x") || t.value.starts_with("0X") {
+                u64::from_str_radix(t.value.trim_start_matches("0x").trim_start_matches("0X"), 16).ok()?
+            } else {
+                t.value.parse::<u64>().ok()?
+            };
             let extracted_value = (value_u64 & mask) >> lsb;
-            console_log!("[WASM]   original={}, extracted={:#x}", t.value, extracted_value);
+            console_log!("[WASM]   original={}, parsed={:#x}, extracted={:#x}", t.value, value_u64, extracted_value);
             Some(Transition {
                 time: t.time,
-                value: format!("{:#x}", extracted_value),
+                value: format!("{}", extracted_value),  // Use decimal format for single bit
             })
         }).collect()
     }
@@ -1503,6 +1507,69 @@ impl WaveformDataProvider {
     /// If data is not cached, returns null
     /// Handles BOUNDARY_TIME_START (0xFFFFFFFFFFFFFFFF) as the start-of-range value
     pub fn get_signal_value_at_time(&self, signal_name: &str, time: f64) -> JsValue {
+        // Check if this is a bit extraction signal
+        if let Some((parent_name, (msb, lsb))) = Self::parse_bit_extract(signal_name) {
+            console_log!("[WASM] get_signal_value_at_time: bit extraction '{}' -> parent '{}' [{}:{}]", 
+                signal_name, parent_name, msb, lsb);
+            
+            // Get parent signal data
+            if let Some(parent_data) = self.signal_data.get(&parent_name) {
+                let time_u64 = time as u64;
+                
+                // Find the transition that covers this time
+                let mut current_value = None;
+                let mut boundary_value = None;
+                
+                for transition in &parent_data.transitions {
+                    if transition.time == BOUNDARY_TIME_START {
+                        boundary_value = Some(&transition.value);
+                    } else if transition.time <= time_u64 {
+                        current_value = Some(&transition.value);
+                    } else {
+                        break;
+                    }
+                }
+                
+                if let Some(value_str) = current_value.or(boundary_value) {
+                    // Parse and extract bits
+                    let value_u64 = if value_str.starts_with("0x") || value_str.starts_with("0X") {
+                        u64::from_str_radix(value_str.trim_start_matches("0x").trim_start_matches("0X"), 16).unwrap_or(0)
+                    } else {
+                        value_str.parse::<u64>().unwrap_or(0)
+                    };
+                    
+                    let bit_count = msb - lsb + 1;
+                    let mask = if bit_count >= 64 {
+                        u64::MAX
+                    } else {
+                        ((1u64 << bit_count) - 1) << lsb
+                    };
+                    let extracted_value = (value_u64 & mask) >> lsb;
+                    
+                    let display_str = if bit_count == 1 {
+                        format!("{}", extracted_value)
+                    } else {
+                        format!("0x{:X}", extracted_value)
+                    };
+                    
+                    let (value_type, has_xz) = Self::classify_value(&display_str, bit_count as u32);
+                    
+                    let value_info = ValueInfo {
+                        value_type,
+                        display_str,
+                        width: bit_count as u32,
+                        has_xz,
+                        min_value: None,
+                        max_value: None,
+                        is_min_max: false,
+                    };
+                    return serde_wasm_bindgen::to_value(&value_info).unwrap_or(JsValue::NULL);
+                }
+            }
+            return JsValue::NULL;
+        }
+        
+        // Normal signal lookup
         if let Some(data) = self.signal_data.get(signal_name) {
             let time_u64 = time as u64;
 
