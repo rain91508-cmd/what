@@ -26,6 +26,9 @@ pub struct SignalInfo {
     pub name: String,
     pub row: usize,
     pub width: u32,
+    /// For bit extraction signals (format: parent_name@[bit_index] or parent_name@[msb:lsb])
+    /// Stores (parent_name, bit_range) if this signal should extract bits from parent
+    pub bit_extract: Option<(String, (u32, u32))>,  // (parent_name, (msb, lsb))
 }
 
 /// Viewport configuration
@@ -320,10 +323,47 @@ impl WaveformDataProvider {
         self.display_format = format;
     }
 
+    /// Parse @[...] format for bit extraction
+    /// Format: parent_name@[bit_index] or parent_name@[msb:lsb]
+    /// Examples:
+    ///   - "sig@[0]" -> extract bit 0 from "sig"
+    ///   - "sig@[7:0]" -> extract bits [7:0] from "sig"
+    fn parse_bit_extract(name: &str) -> Option<(String, (u32, u32))> {
+        let at_idx = name.find("@[")?;
+        let parent_name = &name[..at_idx];
+        // Find the closing bracket after "@["
+        let bracket_end = name[at_idx..].find(']')?;
+        let range_str = &name[at_idx + 2..at_idx + bracket_end];
+
+        // Parse the range (either "bit_index" or "msb:lsb")
+        let (msb, lsb) = if range_str.contains(':') {
+            let parts: Vec<&str> = range_str.split(':').collect();
+            if parts.len() != 2 {
+                return None;
+            }
+            (parts[0].parse().ok()?, parts[1].parse().ok()?)
+        } else {
+            let idx: u32 = range_str.parse().ok()?;
+            (idx, idx)
+        };
+
+        Some((parent_name.to_string(), (msb, lsb)))
+    }
+
     /// Set signals to render
     pub fn set_signals(&mut self, signals_js: JsValue) -> Result<(), JsValue> {
         let signals: Vec<SignalInfo> = serde_wasm_bindgen::from_value(signals_js)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse signals: {}", e)))?;
+
+        // Parse bit extraction info for each signal
+        let signals: Vec<SignalInfo> = signals.into_iter().map(|mut s| {
+            s.bit_extract = Self::parse_bit_extract(&s.name);
+            if let Some((ref parent, (msb, lsb))) = s.bit_extract {
+                console_log!("[WASM]   Signal '{}': extract bits [{}:{}] from parent '{}'", 
+                    s.name, msb, lsb, parent);
+            }
+            s
+        }).collect();
 
         console_log!("[WASM] Set {} signals", signals.len());
         for (i, s) in signals.iter().enumerate() {
@@ -508,8 +548,17 @@ impl WaveformDataProvider {
         console_log!("[WASM] Fetching {} signals in batches (max {} per batch) at LoD {}, time {}-{}",
             total_signals, MAX_BATCH_SIZE, lod, time_start, time_end);
 
+        // Filter out bit extraction signals - they don't need server data
+        let signals_to_fetch: Vec<String> = signal_names.iter()
+            .filter(|name| !name.contains("@["))
+            .cloned()
+            .collect();
+
+        console_log!("[WASM] Total signals: {}, fetching {} (excluding {} bit-extract signals)",
+            signal_names.len(), signals_to_fetch.len(), signal_names.len() - signals_to_fetch.len());
+
         // Process signals in batches
-        for (batch_idx, batch) in signal_names.chunks(MAX_BATCH_SIZE).enumerate() {
+        for (batch_idx, batch) in signals_to_fetch.chunks(MAX_BATCH_SIZE).enumerate() {
             let batch_size = batch.len();
             console_log!("[WASM] Processing batch {}: {} signals", batch_idx + 1, batch_size);
 
@@ -895,6 +944,34 @@ impl WaveformDataProvider {
 
             console_log!("[WASM] Processing signal[row={}]: name='{}', y={}", signal.row, signal.name, y);
 
+            // Check if this is a bit extraction signal
+            if let Some((ref parent_name, (msb, lsb))) = signal.bit_extract {
+                console_log!("[WASM]   Bit extraction: extract [{}:{}] from parent '{}'", msb, lsb, parent_name);
+                
+                // Get parent signal data
+                if let Some(parent_data) = self.signal_data.get(parent_name) {
+                    // Extract bits from parent signal
+                    let extracted_transitions = self.extract_bits_from_transitions(
+                        &parent_data.transitions, parent_data.width, msb, lsb);
+                    
+                    let width = if msb == lsb { 1 } else { msb - lsb + 1 };
+                    console_log!("[WASM]   Extracted {} transitions, width={}", extracted_transitions.len(), width);
+                    
+                    // Generate segments from extracted data
+                    let is_lod_min_max = self.detect_min_max_format(&extracted_transitions);
+                    if is_lod_min_max {
+                        self.generate_min_max_segments(&extracted_transitions, width, y, &signal.name,
+                            time_range, &mut segments);
+                    } else {
+                        self.generate_normal_segments(&extracted_transitions, width, y, &signal.name,
+                            time_range, &mut segments);
+                    }
+                } else {
+                    console_log!("[WASM]   No parent data found for '{}'", parent_name);
+                }
+                continue;
+            }
+
             if let Some(data) = self.signal_data.get(&signal.name) {
                 let total_transitions = data.transitions.len();
                 console_log!("[WASM]   Total transitions: {}", total_transitions);
@@ -939,6 +1016,31 @@ impl WaveformDataProvider {
             }
         }
         false
+    }
+
+    /// Extract specific bits from transitions
+    /// For example, extract bits [3:0] from a 8-bit signal
+    fn extract_bits_from_transitions(&self, transitions: &[Transition], _parent_width: u32, msb: u32, lsb: u32) -> Vec<Transition> {
+        // Handle edge case: if range is 64 bits, mask would overflow
+        let bit_count = msb - lsb + 1;
+        let mask = if bit_count >= 64 {
+            u64::MAX
+        } else {
+            ((1u64 << bit_count) - 1) << lsb
+        };
+        
+        console_log!("[WASM] extract_bits_from_transitions: msb={}, lsb={}, bit_count={}, mask={:#x}", msb, lsb, bit_count, mask);
+        
+        transitions.iter().filter_map(|t| {
+            // Parse value string to u64, skip if invalid
+            let value_u64 = u64::from_str_radix(t.value.trim_start_matches("0x").trim_start_matches("0X"), 16).ok()?;
+            let extracted_value = (value_u64 & mask) >> lsb;
+            console_log!("[WASM]   original={}, extracted={:#x}", t.value, extracted_value);
+            Some(Transition {
+                time: t.time,
+                value: format!("{:#x}", extracted_value),
+            })
+        }).collect()
     }
 
     /// Generate segments for LoD 0 (normal format)
