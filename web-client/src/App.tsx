@@ -1783,17 +1783,46 @@ function App() {
   // Handle cursor position change from toolbar
   const handleCursorPositionChange = (newPosition: number) => {
     const currentTab = tabs.find(t => t.id === activeTab)
-    if (currentTab?.type === 'waveform') {
+    if (currentTab?.type === 'waveform' && currentTab.viewport) {
       // Clamp to valid range
       const clampedPosition = Math.max(0, Math.min(currentWaveEndTime, newPosition))
       
-      setTabs(prev => prev.map(tab =>
-        tab.id === activeTab ? {
-          ...tab,
-          cursorPosition: clampedPosition
-        } : tab
-      ))
-      console.log(`[App] Cursor position changed to ${clampedPosition}`)
+      // Center the new cursor position in the viewport (keep time span constant)
+      const timeSpan = currentTab.viewport.timeEnd - currentTab.viewport.timeStart
+      const halfSpan = timeSpan / 2
+      let newStart = clampedPosition - halfSpan
+      let newEnd = clampedPosition + halfSpan
+      
+      // Use sanitizeTimeRange to validate the new viewport
+      const sanitized = sanitizeTimeRange(
+        newStart,
+        newEnd,
+        currentTab.waveformRange,
+        { minRange: 1 }
+      )
+      
+      // If sanitization changed the range significantly, don't center (keep original viewport)
+      const sanitizedSpan = sanitized.timeEnd - sanitized.timeStart
+      if (Math.abs(sanitizedSpan - timeSpan) > 1) {
+        // Range was adjusted significantly, only update cursor position
+        setTabs(prev => prev.map(tab =>
+          tab.id === activeTab ? {
+            ...tab,
+            cursorPosition: clampedPosition
+          } : tab
+        ))
+        console.log(`[App] Cursor position changed to ${clampedPosition} (viewport unchanged due to boundary constraints)`)
+      } else {
+        // Use sanitized viewport
+        setTabs(prev => prev.map(tab =>
+          tab.id === activeTab ? {
+            ...tab,
+            cursorPosition: clampedPosition,
+            viewport: { timeStart: sanitized.timeStart, timeEnd: sanitized.timeEnd }
+          } : tab
+        ))
+        console.log(`[App] Cursor position changed to ${clampedPosition}, viewport centered: ${sanitized.timeStart} - ${sanitized.timeEnd}`)
+      }
     }
   }
 
