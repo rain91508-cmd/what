@@ -458,7 +458,7 @@ export function WaveformWindow({
         viewport,
         'hex' as DisplayFormat,
         width,
-        25,  // rowHeight
+        24,  // rowHeight - must match CSS .waveform-signal-item height
         20   // rulerHeight
       );
       segments = mockDataProvider.getSegments();
@@ -468,16 +468,17 @@ export function WaveformWindow({
       const wasmProvider = wasmProviderRef.current;
 
       // Set signals in WASM provider
-      const wasmSignals = signalList.map((s, idx) => ({
+      // Use s.row which accounts for group headers, not idx
+      const wasmSignals = signalList.map((s) => ({
         name: s.name,
-        row: idx,
+        row: s.row,  // Use pre-calculated row that accounts for group headers
         width: s.width || 1,
       }));
       wasmProvider.set_signals(wasmSignals);
 
       // Set viewport and canvas dimensions
       wasmProvider.set_viewport(viewport.timeStart, viewport.timeEnd);
-      wasmProvider.set_canvas_dimensions(width, height, 25);
+      wasmProvider.set_canvas_dimensions(width, height, 24);  // rowHeight - must match CSS .waveform-signal-item height
 
       // Fetch data for all signals in batch (max 256 per request)
       const signalNames = signalList.map(s => s.name);
@@ -510,7 +511,7 @@ export function WaveformWindow({
         viewport,
         'hex' as DisplayFormat,
         width,
-        25,
+        24,  // rowHeight - must match CSS .waveform-signal-item height
         20
       );
       segments = mockDataProvider.getSegments();
@@ -606,7 +607,7 @@ export function WaveformWindow({
     setSelectionEndX(x);
     setSelectionEndY(y);
     selectionStartRef.current = x;
-  }, [viewport, setCursor]);
+  }, [viewport, setCursor, useMockData, displaySignals, wasmProviderRef]);
 
   // 鼠标移动：更新选择区域
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
