@@ -480,6 +480,9 @@ export function WaveformWindow({
       }));
       wasmProvider.set_signals(wasmSignals);
 
+      // Set display format (TODO: get from UI state when format selector is implemented)
+      wasmProvider.display_format = 'hex';
+
       // Set viewport and canvas dimensions
       wasmProvider.set_viewport(viewport.timeStart, viewport.timeEnd);
       wasmProvider.set_canvas_dimensions(width, height, 24);  // rowHeight - must match CSS .waveform-signal-item height

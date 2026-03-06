@@ -224,6 +224,7 @@ pub struct WaveformDataProvider {
     signal_prefix: String,
     space_before_bracket: bool,
     time_stamp: u64,  // Waveform modification timestamp for CDN cache
+    display_format: String,  // "hex", "bin", "oct", "dec"
     signals: Vec<SignalInfo>,
     viewport: Viewport,
     canvas_width: f64,
@@ -252,6 +253,7 @@ impl WaveformDataProvider {
             signal_prefix,
             space_before_bracket,
             time_stamp,
+            display_format: "hex".to_string(),  // Default to hex
             signals: Vec::new(),
             viewport: Viewport { time_start: 0.0, time_end: 1000.0 },
             canvas_width: 800.0,
@@ -303,6 +305,19 @@ impl WaveformDataProvider {
     pub fn set_space_before_bracket(&mut self, space: bool) {
         console_log!("[WASM] Updated space_before_bracket: {} -> {}", self.space_before_bracket, space);
         self.space_before_bracket = space;
+    }
+
+    /// Get display format
+    #[wasm_bindgen(getter)]
+    pub fn display_format(&self) -> String {
+        self.display_format.clone()
+    }
+
+    /// Set display format (hex, bin, oct, dec)
+    #[wasm_bindgen(setter)]
+    pub fn set_display_format(&mut self, format: String) {
+        console_log!("[WASM] Updated display_format: '{}' -> '{}'", self.display_format, format);
+        self.display_format = format;
     }
 
     /// Set signals to render
@@ -911,7 +926,7 @@ impl WaveformDataProvider {
 
                 // Format display string with prefix for multi-bit values
                 let display_str = if width > 1 {
-                    Self::format_multi_bit_value(&boundary_val, width)
+                    self.format_multi_bit_value(&boundary_val, width)
                 } else {
                     boundary_val.clone()
                 };
@@ -952,7 +967,7 @@ impl WaveformDataProvider {
 
                         // Format display string with prefix for multi-bit values
                         let display_str = if width > 1 {
-                            Self::format_multi_bit_value(boundary_val, width)
+                            self.format_multi_bit_value(boundary_val, width)
                         } else {
                             boundary_val.clone()
                         };
@@ -1004,7 +1019,7 @@ impl WaveformDataProvider {
 
             // Format display string with prefix for multi-bit values
             let display_str = if width > 1 {
-                Self::format_multi_bit_value(value_str, width)
+                self.format_multi_bit_value(value_str, width)
             } else {
                 value_str.clone()
             };
@@ -1052,7 +1067,7 @@ impl WaveformDataProvider {
 
                 // Format display string with prefix for multi-bit values
                 let display_str = if width > 1 {
-                    Self::format_multi_bit_value(&boundary_val, width)
+                    self.format_multi_bit_value(&boundary_val, width)
                 } else {
                     boundary_val.clone()
                 };
@@ -1093,7 +1108,7 @@ impl WaveformDataProvider {
 
                         // Format display string with prefix for multi-bit values
                         let display_str = if width > 1 {
-                            Self::format_multi_bit_value(boundary_val, width)
+                            self.format_multi_bit_value(boundary_val, width)
                         } else {
                             boundary_val.clone()
                         };
@@ -1218,30 +1233,48 @@ impl WaveformDataProvider {
         }
     }
 
-    /// Format multi-bit value for display with hex prefix
-    /// Adds "0x" prefix and ensures uppercase hex digits
-    fn format_multi_bit_value(value: &str, width: u32) -> String {
-        // If already has prefix or contains X/Z, return as-is (but uppercase)
-        if value.starts_with("0x") || value.starts_with("0X") {
-            return value.to_uppercase();
-        }
+    /// Format multi-bit value for display based on configured format
+    /// Supports: hex (0x), bin (0b), oct (0o), dec (no prefix)
+    fn format_multi_bit_value(&self, value: &str, width: u32) -> String {
+        // If contains X/Z, return as-is (but uppercase)
         if value.to_uppercase().contains('X') || value.to_uppercase().contains('Z') {
             return value.to_uppercase();
         }
 
-        // Try to parse as hex (remove any existing 0x prefix)
-        let clean_value = value.trim_start_matches("0x").trim_start_matches("0X");
+        // Remove any existing prefix
+        let clean_value = value
+            .trim_start_matches("0x")
+            .trim_start_matches("0X")
+            .trim_start_matches("0b")
+            .trim_start_matches("0B")
+            .trim_start_matches("0o")
+            .trim_start_matches("0O");
 
-        // Format with 0x prefix and proper padding
-        // Calculate number of hex digits needed: ceil(width / 4)
-        let hex_digits = ((width + 3) / 4).max(1) as usize;
+        // Try to parse as u64
+        let num = match u64::from_str_radix(clean_value, 16) {
+            Ok(n) => n,
+            Err(_) => return value.to_uppercase(),
+        };
 
-        // Try to parse as u64 first, then format with padding
-        if let Ok(num) = u64::from_str_radix(clean_value, 16) {
-            format!("0x{:0width$X}", num, width = hex_digits)
-        } else {
-            // If parsing fails, just add 0x prefix
-            format!("0x{}", clean_value.to_uppercase())
+        // Format based on display_format
+        match self.display_format.as_str() {
+            "bin" => {
+                // Binary: 0b prefix, pad to width bits
+                format!("0b{:0width$b}", num, width = width as usize)
+            }
+            "oct" => {
+                // Octal: 0o prefix
+                format!("0o{:o}", num)
+            }
+            "dec" => {
+                // Decimal: no prefix
+                num.to_string()
+            }
+            "hex" | "auto" | _ => {
+                // Hex: 0x prefix, pad to ceil(width/4) hex digits
+                let hex_digits = ((width + 3) / 4).max(1) as usize;
+                format!("0x{:0width$X}", num, width = hex_digits)
+            }
         }
     }
 
@@ -1321,7 +1354,7 @@ impl WaveformDataProvider {
 
                 // Format display string with prefix for multi-bit values
                 let display_str = if data.width > 1 {
-                    Self::format_multi_bit_value(value_str, data.width)
+                    self.format_multi_bit_value(value_str, data.width)
                 } else {
                     value_str.clone()
                 };
