@@ -344,11 +344,15 @@ export function WaveformWindow({
           currentRow++;
 
           // 为每个bit创建单独的信号项
+          // 使用 @[msb:lsb] 或 @[bit_index] 格式与 fullName 中的 [msb:lsb] 区分
+          // WASM 检测到 @[...] 后，从父信号值中提取对应 bit
+          // 例如: tb_top.u_dut.u_cluster0.mem_arid[7:0]@[0] 或 @[7:0]
           const bitCount = Math.min(signal.msb - signal.lsb + 1, 32);
           for (let i = 0; i < bitCount; i++) {
             const bitIndex = signal.msb - i;
+            const baseName = signal.fullName || signal.name;
             signalList.push({
-              name: `${signal.fullName || signal.name}[${bitIndex}]`,
+              name: `${baseName}@[${bitIndex}]`,  // 特殊格式，WASM 从父信号提取 bit
               row: currentRow,
               displayName: `${signal.name}[${bitIndex}]`,
               width: 1,  // 单个bit
@@ -562,7 +566,7 @@ export function WaveformWindow({
     }
     // 不依赖 renderWaveform，使用 ref 避免循环
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewport.timeStart, viewport.timeEnd, canvasWidth, groups]);
+  }, [viewport.timeStart, viewport.timeEnd, canvasWidth, groups, expandedSignals]);
 
   // Cleanup mouse timeout on unmount
   useEffect(() => {
