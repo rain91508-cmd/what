@@ -11,6 +11,7 @@ export interface WaveformInfo {
   file: string;
   timeRange: TimeRange;
   timeUnit: TimeUnit;
+  timeUnitStr: string;     // 原始字符串如 "1ps", "3ns"
   signalCount: number;
 }
 

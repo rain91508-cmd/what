@@ -13,6 +13,9 @@ use kdb_proto::*;
 mod waveform_provider;
 pub use waveform_provider::WaveformDataProvider;
 
+// OPFS cache
+mod opfs_cache;
+
 // CWDK magic number: "CWDK" in little-endian
 const CWDK_MAGIC: u32 = 0x4B445743;
 

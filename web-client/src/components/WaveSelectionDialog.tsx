@@ -100,15 +100,16 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
         // Parse time_unit to get multiplier
         const timeUnit = waveInfo.time_unit || '1fs';
         const match = timeUnit.match(/(\d+)([a-z]+)/i);
-        let multiplier = 1;
+        // @ts-ignore - 暂时未使用但保留
+        let _multiplier = 1;
         if (match) {
           const unit = match[2].toLowerCase();
           switch (unit) {
-            case 'fs': multiplier = 1; break;
-            case 'ps': multiplier = 1000; break;
-            case 'ns': multiplier = 1000000; break;
-            case 'us': multiplier = 1000000000; break;
-            case 'ms': multiplier = 1000000000000; break;
+            case 'fs': _multiplier = 1; break;
+            case 'ps': _multiplier = 1000; break;
+            case 'ns': _multiplier = 1000000; break;
+            case 'us': _multiplier = 1000000000; break;
+            case 'ms': _multiplier = 1000000000000; break;
           }
         }
         

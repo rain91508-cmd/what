@@ -2,8 +2,6 @@
 // Session Types for Save/Restore Session Feature
 // ============================================
 
-import type { ColumnWidths } from '../components/TabPanel';
-
 export const SESSION_VERSION = 1;
 
 export interface Session {

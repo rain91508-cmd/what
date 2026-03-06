@@ -6,6 +6,12 @@
 
 import type { Viewport } from '../types';
 
+// Simple time range interface (subset of Viewport)
+export interface TimeRangeOnly {
+  timeStart: number;
+  timeEnd: number;
+}
+
 /**
  * Validate and sanitize time range values
  * Ensures timeStart and timeEnd are integers (u64 compatible)
@@ -169,7 +175,7 @@ export function updateViewport(
  * Get time range from viewport
  * Returns integers guaranteed
  */
-export function getTimeRange(viewport: Viewport): { timeStart: number; timeEnd: number } {
+export function getTimeRange(viewport: TimeRangeOnly): { timeStart: number; timeEnd: number } {
   return {
     timeStart: Math.floor(viewport.timeStart),
     timeEnd: Math.floor(viewport.timeEnd),
@@ -212,15 +218,14 @@ export function timeToPixel(
 
 /**
  * Zoom in around cursor position
+ * Returns TimeRangeOnly (timeStart/timeEnd only) for compatibility with Tab viewport
  */
 export function zoomIn(
-  viewport: Viewport,
+  viewport: TimeRangeOnly,
   cursorPosition?: number | null,
-  zoomFactor: number = 0.8
-): Viewport | null {
+  _zoomFactor: number = 0.8
+): TimeRangeOnly | null {
   const { timeStart, timeEnd } = getTimeRange(viewport);
-  const timeRange = timeEnd - timeStart;
-  const newRange = Math.floor(timeRange * zoomFactor);
   
   const cursorPos = cursorPosition ?? Math.floor((timeStart + timeEnd) / 2);
   
@@ -239,30 +244,29 @@ export function zoomIn(
     ? Math.floor((cursorPos + timeEnd) / 2) 
     : timeEnd;
   
-  return setViewTimeRange(viewport, newStart, newEnd);
+  return { timeStart: newStart, timeEnd: newEnd };
 }
 
 /**
  * Zoom out around cursor position
+ * Returns TimeRangeOnly (timeStart/timeEnd only) for compatibility with Tab viewport
  */
 export function zoomOut(
-  viewport: Viewport,
+  viewport: TimeRangeOnly,
   cursorPosition?: number | null,
-  zoomFactor: number = 1.25
-): Viewport | null {
+  _zoomFactor: number = 1.25
+): TimeRangeOnly | null {
   const { timeStart, timeEnd } = getTimeRange(viewport);
-  const timeRange = timeEnd - timeStart;
-  const newRange = Math.floor(timeRange * zoomFactor);
   
   const cursorPos = cursorPosition ?? Math.floor((timeStart + timeEnd) / 2);
   
   const distStart = cursorPos - timeStart;
   const distEnd = timeEnd - cursorPos;
   
-  const newStart = Math.floor(cursorPos - distStart * zoomFactor);
-  const newEnd = Math.floor(cursorPos + distEnd * zoomFactor);
+  const newStart = Math.floor(cursorPos - distStart * _zoomFactor);
+  const newEnd = Math.floor(cursorPos + distEnd * _zoomFactor);
   
-  return setViewTimeRange(viewport, newStart, newEnd);
+  return { timeStart: newStart, timeEnd: newEnd };
 }
 
 /**
@@ -270,7 +274,6 @@ export function zoomOut(
  */
 export function panViewport(viewport: Viewport, deltaTime: number): Viewport {
   const { timeStart, timeEnd } = getTimeRange(viewport);
-  const timeRange = timeEnd - timeStart;
   
   const newStart = Math.floor(timeStart + deltaTime);
   const newEnd = Math.floor(timeEnd + deltaTime);

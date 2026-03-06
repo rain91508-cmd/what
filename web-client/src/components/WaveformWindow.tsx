@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { waveformRenderer } from '../core/render/waveformRenderer';
 import { mockDataProvider } from '../core/data/mockDataProvider';
-import type { Viewport, Signal } from '../types';
+import type { Signal } from '../types';
 import type { WaveformSignal, ColumnWidths, TimeConfig } from './TabPanel';
 import { lod0ToDisplay, initTimeConfig } from './TabPanel';
 import type { SignalInfo, DisplayFormat } from '../types/dataProvider';
 import { FilterInput } from './FilterInput';
 import { wildcardMatch } from '../utils/wildcardMatch';
 import { zoomIn, zoomOut } from '../utils/zoomHelpers';
-import { sanitizeTimeRange } from '../utils/viewport';
+import { sanitizeTimeRange, type TimeRangeOnly } from '../utils/viewport';
 import { getProvider, WaveformDataProvider } from '../wasm/waveformProvider';
 
 interface SignalGroup {
@@ -31,8 +31,8 @@ interface WaveformWindowProps {
   onSelectedGroupUpdate: (selectedGroup: string) => void;
   onSignalsProcessed: (processedIds: number[]) => void;  // 通知父组件已处理的信号 ID
   onColumnWidthsChange?: (widths: ColumnWidths) => void;  // 列宽变化回调
-  viewport?: Viewport;          // 外部控制的 viewport（可选）
-  onViewportChange?: (viewport: Viewport) => void;  // viewport 变化回调
+  viewport?: TimeRangeOnly;          // 外部控制的 viewport（可选）
+  onViewportChange?: (viewport: TimeRangeOnly) => void;  // viewport 变化回调
   cursorPosition?: number;      // 外部控制的 cursor 位置（可选）
   onCursorPositionChange?: (position: number) => void;  // cursor 位置变化回调
   useMockData?: boolean;        // 是否使用 mock 数据
@@ -72,7 +72,7 @@ const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
 
 // 默认时间配置
 // DisplayUnitPerLoD0Unit = 1 表示 1 DisplayUnit = 1 LoD0Unit
-const DEFAULT_TIME_CONFIG: TimeConfig = initTimeConfig(1, 3);
+const DEFAULT_TIME_CONFIG: TimeConfig = initTimeConfig(1);
 
 export function WaveformWindow({
   signals,
@@ -90,10 +90,10 @@ export function WaveformWindow({
   cursorPosition: externalCursorPosition,
   onCursorPositionChange,
   useMockData = false,
-  serverUrl = 'http://localhost:8080',
-  waveformName = '',
-  signalPrefix = '',
-  spaceBeforeBracket = false,
+  serverUrl: _serverUrl = 'http://localhost:8080',
+  waveformName: _waveformName = '',
+  signalPrefix: _signalPrefix = '',
+  spaceBeforeBracket: _spaceBeforeBracket = false,
   waveformRange,
 }: WaveformWindowProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -106,8 +106,8 @@ export function WaveformWindow({
 
   // Initialize WASM provider when not using mock data
   useEffect(() => {
-    console.log(`[WaveformWindow] Provider init check: useMockData=${useMockData}, waveformName='${waveformName}'`);
-    if (!useMockData && waveformName) {
+    console.log(`[WaveformWindow] Provider init check: useMockData=${useMockData}, waveformName='${_waveformName}'`);
+    if (!useMockData && _waveformName) {
       const provider = getProvider();
       console.log(`[WaveformWindow] getProvider returned: ${provider ? 'provider' : 'null'}`);
       if (provider) {
@@ -117,27 +117,23 @@ export function WaveformWindow({
         console.warn('[WaveformWindow] WASM provider not available');
       }
     } else {
-      console.log(`[WaveformWindow] Skipping provider init: useMockData=${useMockData}, waveformName='${waveformName}'`);
+      console.log(`[WaveformWindow] Skipping provider init: useMockData=${useMockData}, waveformName='${_waveformName}'`);
     }
-  }, [useMockData, waveformName]);
+  }, [useMockData, _waveformName]);
   
   // 根据 canvas 宽度和时间配置计算 viewport
   // 所有时间值使用 LoD0Unit（整数）
-  const calculateViewport = useCallback((): Viewport => {
+  const calculateViewport = useCallback((): TimeRangeOnly => {
     return {
       timeStart: 0,     // LoD0Unit
       timeEnd: 100,     // LoD0Unit - 默认显示 100 个单位
-      signalStart: 0,
-      signalEnd: 10,
-      pixelsPerTime: 1,
-      pixelsPerSignal: 24,
     };
   }, []);
   
   // 使用外部 viewport 或内部 state
-  const [internalViewport, setInternalViewport] = useState<Viewport>(() => calculateViewport(800));
+  const [internalViewport, setInternalViewport] = useState<TimeRangeOnly>(() => calculateViewport());
   const viewport = externalViewport ?? internalViewport;
-  const setViewport = useCallback((newViewport: Viewport | ((prev: Viewport) => Viewport)) => {
+  const setViewport = useCallback((newViewport: TimeRangeOnly | ((prev: TimeRangeOnly) => TimeRangeOnly)) => {
     if (externalViewport === undefined) {
       setInternalViewport(newViewport);
     }
@@ -300,7 +296,8 @@ export function WaveformWindow({
   }, []);
 
   // 使用 ref 存储上一次的 canvas 尺寸，避免循环依赖
-  const lastCanvasSizeRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
+  // @ts-ignore - 暂时未使用但保留以备将来
+  const _lastCanvasSizeRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
 
   // 使用 ref 防止并发渲染
   const isRenderingRef = useRef(false);

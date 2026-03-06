@@ -37,7 +37,7 @@ import { zoomIn, zoomOut } from './utils/zoomHelpers'
 import { sanitizeTimeRange } from './utils/viewport'
 
 // WASM
-import { initWasm, createProvider, updateProviderSettings } from './wasm/waveformProvider'
+import { initWasm, createProvider, updateProviderSettings, setOpfsEnabled, checkOpfsSupport } from './wasm/waveformProvider'
 
 // Components
 import { MenuBar } from './components/MenuBar'
@@ -67,7 +67,7 @@ import { SESSION_VERSION } from './types/session'
 
 // Types
 import type { Signal } from './types/kdb'
-import type { WaveformInfo, ColumnWidths, TimeConfig, Tab, NavigationHistoryEntry } from './components/TabPanel'
+import type { WaveformInfo, ColumnWidths, TimeConfig, Tab, NavigationHistoryEntry, SignalGroup } from './components/TabPanel'
 import { initTimeConfig, parseTimeUnitStr } from './components/TabPanel'
 
 // 默认时间配置
@@ -145,6 +145,13 @@ function App() {
   // Info text for MenuBar (full hierarchy name)
   const [menuBarInfoText, setMenuBarInfoText] = useState<string>('')
   
+  // OPFS Cache enabled state
+  const [opfsCacheEnabled, setOpfsCacheEnabled] = useState<boolean>(() => {
+    // Check localStorage for saved preference, default to false
+    const saved = localStorage.getItem('opfs_cache_enabled');
+    return saved === 'true' && checkOpfsSupport();
+  })
+  
   // Helper function to create default groups
   const createDefaultGroups = () => ({
     'root': {
@@ -217,6 +224,18 @@ function App() {
 
     init()
   }, [])
+
+  // Toggle OPFS cache
+  const handleToggleOpfs = useCallback(() => {
+    const newValue = !opfsCacheEnabled;
+    setOpfsCacheEnabled(newValue);
+    setOpfsEnabled(newValue);
+    localStorage.setItem('opfs_cache_enabled', newValue.toString());
+    // Use setTimeout to avoid circular dependency with addMessage
+    setTimeout(() => {
+      addMessage(`OPFS Cache ${newValue ? 'enabled' : 'disabled'}`);
+    }, 0);
+  }, [opfsCacheEnabled]);
 
   const addMessage = useCallback((msg: string) => {
     setMessages(prev => {
@@ -1382,34 +1401,6 @@ function App() {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   }
 
-  // Helper function to build server signal name from local signal info
-  // Uses saved prefix and space settings
-  // Inputs:
-  //   - fullName: local full name (e.g., "work@tb_top.u_dut.mem_arid[7:0]")
-  //   - prefix: prefix to remove (e.g., "work@")
-  //   - spaceBeforeBracket: whether to add space before [msb:lsb]
-  // Returns: server signal name (not escaped, for display or API use)
-  const buildServerSignalName = (
-    fullName: string,
-    prefix: string,
-    spaceBeforeBracket: boolean
-  ): string => {
-    // Remove prefix if present
-    let serverName = prefix && fullName.startsWith(prefix)
-      ? fullName.substring(prefix.length)
-      : fullName
-
-    // Handle space before bracket
-    if (spaceBeforeBracket) {
-      const bracketIndex = serverName.indexOf('[')
-      if (bracketIndex !== -1 && bracketIndex > 0 && serverName[bracketIndex - 1] !== ' ') {
-        serverName = serverName.substring(0, bracketIndex) + ' ' + serverName.substring(bracketIndex)
-      }
-    }
-
-    return serverName
-  }
-
   // Helper function to search signal on server with prefix removal and bit width handling
   // Inputs:
   //   - fullName: full hierarchical name (e.g., "work@tb_top.u_dut.mem_arid[7:0]")
@@ -2152,8 +2143,12 @@ function App() {
             }
           }
           restoredGroups[groupId] = {
-            ...group,
+            id: groupId,
+            name: group.name,
+            parentId: group.parentId,
             signals: restoredSignals,
+            expanded: group.expanded,
+            children: [],
           }
         }
 
@@ -2303,6 +2298,8 @@ function App() {
           setSessionDialogMode('restore')
           setShowSessionDialog(true)
         }}
+        opfsEnabled={opfsCacheEnabled}
+        onToggleOpfs={handleToggleOpfs}
       />
 
       {/* Tool Bar */}
