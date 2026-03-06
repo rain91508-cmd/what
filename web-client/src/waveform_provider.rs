@@ -1144,11 +1144,19 @@ impl WaveformDataProvider {
             console_log!("[WASM]   Parsed {} transitions from chunk", transitions.len());
 
             // Filter transitions to viewport range and handle initial values
-            // For non-first tiles, skip the first transition (it's the initial value at tile start)
+            // For non-first tiles, check if first transition is the initial value marker
+            // (time equals tile start time) - if so, skip it
             if !is_first_tile && !transitions.is_empty() {
-                console_log!("[WASM]   Skipping first transition (initial value) for non-first tile");
-                transitions.remove(0);
-                console_log!("[WASM]   Remaining transitions after removing initial: {}", transitions.len());
+                let first_time = transitions[0].time;
+                if first_time == header.time_start {
+                    console_log!("[WASM]   First transition time ({}) equals tile start ({}), skipping initial value", 
+                        first_time, header.time_start);
+                    transitions.remove(0);
+                    console_log!("[WASM]   Remaining transitions after removing initial: {}", transitions.len());
+                } else {
+                    console_log!("[WASM]   First transition time ({}) != tile start ({}), keeping it", 
+                        first_time, header.time_start);
+                }
             }
 
             // Filter transitions to viewport range
