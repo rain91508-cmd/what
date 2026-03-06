@@ -924,8 +924,12 @@ impl WaveformDataProvider {
                     console_log!("[WASM]   Tile {}: FOUND in cache", tile_id);
                     cache_hits += 1;
                 }
-                _ => {
+                Ok(None) => {
                     console_log!("[WASM]   Tile {}: NOT FOUND in cache", tile_id);
+                    missing_tiles.push(*tile_id);
+                }
+                Err(e) => {
+                    console_log!("[WASM]   Tile {}: ERROR reading cache - {:?}", tile_id, e);
                     missing_tiles.push(*tile_id);
                 }
             }
@@ -937,6 +941,10 @@ impl WaveformDataProvider {
             console_log!("[WASM] All tiles found in cache, no server fetch needed!");
             return Ok(());
         }
+        
+        // Show which tiles are missing
+        let missing_tiles_str: Vec<String> = missing_tiles.iter().map(|t| t.to_string()).collect();
+        console_log!("[WASM] Missing tiles: [{}]", missing_tiles_str.join(", "));
         
         console_log!("[WASM] Step 3: Fetching {} missing tiles from server", missing_tiles.len());
         
