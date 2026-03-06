@@ -1153,17 +1153,23 @@ impl WaveformDataProvider {
 
             // Filter transitions to viewport range
             // Keep transitions within [viewport_start, viewport_end]
-            // Also keep one transition before viewport_start for proper initial value
-            let filtered_transitions: Vec<Transition> = transitions
-                .into_iter()
-                .filter(|t| {
-                    // Keep if within viewport, or if it's the last transition before viewport_start
-                    t.time >= viewport_start || t.time <= viewport_end
-                })
-                .collect();
+            // For first tile, also keep transitions before viewport_start (for initial value)
+            let filtered_transitions: Vec<Transition> = if is_first_tile {
+                // First tile: keep all transitions up to viewport_end
+                transitions
+                    .into_iter()
+                    .filter(|t| t.time <= viewport_end)
+                    .collect()
+            } else {
+                // Non-first tiles: keep transitions within viewport range
+                transitions
+                    .into_iter()
+                    .filter(|t| t.time >= viewport_start && t.time <= viewport_end)
+                    .collect()
+            };
 
-            console_log!("[WASM]   Filtered to {} transitions in viewport range [{}-{}]", 
-                filtered_transitions.len(), viewport_start, viewport_end);
+            console_log!("[WASM]   Filtered to {} transitions in viewport range [{}-{}] (first_tile={})", 
+                filtered_transitions.len(), viewport_start, viewport_end, is_first_tile);
 
             // Get width from signal info
             let width = self.get_signal_width(signal_name);
