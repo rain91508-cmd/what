@@ -356,11 +356,15 @@ export function WaveformWindow({
 
       for (const signal of displaySignals) {
         try {
-          const valueInfo = wasmProvider.get_signal_value_at_time(signal.fullName || signal.name, cursor.position);
+          const signalName = signal.fullName || signal.name;
+          console.log(`[WaveformWindow] Getting value for signal: ${signalName} at time ${cursor.position}`);
+          const valueInfo = wasmProvider.get_signal_value_at_time(signalName, cursor.position);
+          console.log(`[WaveformWindow] Value info for ${signalName}:`, valueInfo);
           if (valueInfo && typeof valueInfo === 'object') {
-            // ValueInfo object has display_str field
-            const displayStr = (valueInfo as any).display_str || '0x0';
-            values.set(signal.fullName || signal.name, displayStr);
+            // ValueInfo object has displayStr field (camelCase from WASM serde)
+            const displayStr = (valueInfo as any).displayStr || (valueInfo as any).display_str || '0x0';
+            console.log(`[WaveformWindow] Got value for ${signalName}: ${displayStr}`);
+            values.set(signalName, displayStr);
 
             // For expanded multi-bit signals, also get individual bit values
             if (signal.msb !== signal.lsb && expandedSignals.has(signal.unique_id)) {
@@ -581,15 +585,20 @@ export function WaveformWindow({
       const signalName = displaySignals[0].fullName || displaySignals[0].name;
 
       try {
+        console.log(`[WaveformWindow] Finding transitions for signal: ${signalName} at time ${clickTime}`);
         const transitions = wasmProvider.find_transitions_around(signalName, clickTime);
+        console.log(`[WaveformWindow] Transitions result:`, transitions);
         if (transitions && Array.isArray(transitions) && transitions.length >= 2) {
           const prev = transitions[0] as number | null;
           const next = transitions[1] as number | null;
+          console.log(`[WaveformWindow] prev=${prev}, next=${next}, threshold=${snapThreshold}`);
 
           if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
             finalTime = prev;
+            console.log(`[WaveformWindow] Snapped to prev: ${finalTime}`);
           } else if (next !== null && Math.abs(next - clickTime) <= snapThreshold) {
             finalTime = next;
+            console.log(`[WaveformWindow] Snapped to next: ${finalTime}`);
           }
         }
       } catch (error) {
