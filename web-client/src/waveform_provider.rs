@@ -351,16 +351,21 @@ impl WaveformDataProvider {
         );
 
         console_log!("[WASM] Required blocks: {}", blocks.len());
+        console_log!("[WASM] OPFS Cache enabled: {}", self.opfs_cache.enabled);
 
         // Check each block in cache
         let mut missing_blocks: Vec<MissingBlock> = Vec::new();
         let mut memory_hits = 0u32;
         let mut opfs_hits = 0u32;
 
-        for block in blocks {
-            match self.opfs_cache.read(&block).await? {
-                Some(_data) => {
+        for (idx, block) in blocks.iter().enumerate() {
+            console_log!("[WASM] Checking block {}/{}: lod={}, tile={}, group={}", 
+                idx + 1, blocks.len(), block.lod, block.tile, block.group);
+            
+            match self.opfs_cache.read(block).await? {
+                Some(data) => {
                     // Data found in cache
+                    console_log!("[WASM]   Block FOUND in cache, data size={} bytes", data.len());
                     if self.opfs_cache.enabled {
                         opfs_hits += 1;
                     } else {
@@ -369,10 +374,14 @@ impl WaveformDataProvider {
                 }
                 None => {
                     // Data not found, add to missing list
+                    console_log!("[WASM]   Block NOT FOUND in cache, adding to missing list");
                     let draw_sig_ids: Vec<u32> = self.signals_with_id.iter()
                         .filter(|s| OpfsCacheManager::get_group_id(s.draw_sig_id) == block.group)
                         .map(|s| s.draw_sig_id)
                         .collect();
+
+                    console_log!("[WASM]   Missing block affects {} signals: {:?}", 
+                        draw_sig_ids.len(), draw_sig_ids);
 
                     missing_blocks.push(MissingBlock {
                         lod: block.lod,
@@ -387,6 +396,14 @@ impl WaveformDataProvider {
         let misses = missing_blocks.len() as u32;
         console_log!("[WASM] Cache check complete: memory_hits={}, opfs_hits={}, misses={}",
             memory_hits, opfs_hits, misses);
+        
+        if !missing_blocks.is_empty() {
+            console_log!("[WASM] Missing blocks summary:");
+            for (idx, block) in missing_blocks.iter().enumerate() {
+                console_log!("[WASM]   Missing[{}]: lod={}, tile={}, group={}, signals={}",
+                    idx, block.lod, block.tile, block.group, block.draw_sig_ids.len());
+            }
+        }
 
         let result = PrepareDataResult {
             missing_blocks,
@@ -432,13 +449,16 @@ impl WaveformDataProvider {
         let header = ChunkHeader::from_bytes(data)
             .map_err(|e| JsValue::from_str(&e))?;
 
-        console_log!("[WASM] Processing chunk: level={}, signals={}, time={}-{}",
+        console_log!("[WASM] Processing server chunk: level={}, signals={}, time={}-{}",
             header.level, header.signal_count, header.time_start, header.time_end);
 
         // Calculate tile information
         let lod = header.level as u32;
         let tile_span = OpfsCacheManager::get_tile_span(lod);
         let tile_id = header.time_start / tile_span;
+        
+        console_log!("[WASM]   Calculated tile: lod={}, tile_span={}, tile_id={}",
+            lod, tile_span, tile_id);
 
         // Group signals by their group_id
         let mut signals_by_group: std::collections::HashMap<u32, Vec<crate::opfs_cache::SignalData>> = 
@@ -457,6 +477,9 @@ impl WaveformDataProvider {
             let block_header = SignalBlockHeader::from_bytes(&data[offset..])
                 .map_err(|e| JsValue::from_str(&e))?;
 
+            console_log!("[WASM]   Processing signal block {}: handle={}, transitions={}",
+                signal_idx, block_header.signal_handle, block_header.transition_count);
+
             // Parse transitions for this signal
             let transitions = self.parse_transitions_for_cache(
                 data,
@@ -468,6 +491,9 @@ impl WaveformDataProvider {
             // In real implementation, we need to map signal handle to draw_sig_id
             let draw_sig_id = signal_idx as u32;
             let group_id = OpfsCacheManager::get_group_id(draw_sig_id);
+            
+            console_log!("[WASM]     Signal {}: draw_sig_id={} -> group_id={}",
+                signal_idx, draw_sig_id, group_id);
 
             // Convert transitions to opfs_cache format
             let opfs_transitions: Vec<crate::opfs_cache::Transition> = transitions
@@ -512,6 +538,8 @@ impl WaveformDataProvider {
 
         // Write each group to cache
         let group_count = signals_by_group.len();
+        console_log!("[WASM]   Grouping complete: {} groups", group_count);
+        
         for (group_id, signals) in &signals_by_group {
             let block = crate::opfs_cache::DataBlock {
                 lod,
@@ -519,17 +547,22 @@ impl WaveformDataProvider {
                 group: *group_id,
             };
 
+            console_log!("[WASM]   Writing group {} to cache: {} signals", 
+                group_id, signals.len());
+            console_log!("[WASM]     Block: lod={}, tile={}, group={}", 
+                lod, tile_id, group_id);
+
             let group_data = crate::opfs_cache::GroupData { signals: signals.clone() };
             let bin_data = crate::opfs_cache::serialize_group_data(&group_data);
 
-            console_log!("[WASM] Writing block: lod={}, tile={}, group={}, size={} bytes",
-                lod, tile_id, group_id, bin_data.len());
+            console_log!("[WASM]     Serialized size: {} bytes", bin_data.len());
 
             // Write to cache (OPFS + Memory)
             self.opfs_cache.write(&block, bin_data).await?;
+            console_log!("[WASM]     Block written to cache successfully");
         }
 
-        console_log!("[WASM] Chunk processed: {} groups written", group_count);
+        console_log!("[WASM] Server chunk processed: {} groups written to cache", group_count);
 
         Ok(())
     }
@@ -834,8 +867,15 @@ impl WaveformDataProvider {
         let time_start = self.viewport.time_start as u64;
         let time_end = self.viewport.time_end as u64;
 
+        // Calculate tile information for debugging
+        let tile_span = OpfsCacheManager::get_tile_span(lod);
+        let start_tile = time_start / tile_span;
+        let end_tile = time_end / tile_span;
+        
         console_log!("[WASM] Fetching {} signals in batches (max {} per batch) at LoD {}, time {}-{}",
             total_signals, MAX_BATCH_SIZE, lod, time_start, time_end);
+        console_log!("[WASM]   Tile info: span={}, start_tile={}, end_tile={}, tiles={}",
+            tile_span, start_tile, end_tile, end_tile - start_tile + 1);
 
         // Filter out bit extraction signals - they don't need server data
         let signals_to_fetch: Vec<String> = signal_names.iter()

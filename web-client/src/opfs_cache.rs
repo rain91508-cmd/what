@@ -603,26 +603,57 @@ pub fn compute_required_blocks(
     lod: u32,
 ) -> Vec<DataBlock> {
     let tile_span = OpfsCacheManager::get_tile_span(lod);
-
+    
     // Calculate tile range
     let start_tile = time_start / tile_span;
     let end_tile = time_end / tile_span;
+    
+    web_sys::console::log_1(&format!(
+        "[OPFS] compute_required_blocks: signals={}, time={}-{}, lod={}, tile_span={}",
+        signals.len(), time_start, time_end, lod, tile_span
+    ).into());
+    web_sys::console::log_1(&format!(
+        "[OPFS]   Tile range: {} to {} (tiles: {})",
+        start_tile, end_tile, end_tile - start_tile + 1
+    ).into());
 
     // Collect unique groups
     let mut groups: Vec<u32> = signals
         .iter()
-        .map(|s| OpfsCacheManager::get_group_id(s.draw_sig_id))
+        .map(|s| {
+            let group_id = OpfsCacheManager::get_group_id(s.draw_sig_id);
+            web_sys::console::log_1(&format!(
+                "[OPFS]   Signal '{}': draw_sig_id={} -> group_id={}",
+                s.name, s.draw_sig_id, group_id
+            ).into());
+            group_id
+        })
         .collect();
     groups.sort_unstable();
     groups.dedup();
+    
+    web_sys::console::log_1(&format!(
+        "[OPFS]   Unique groups: {:?} (count: {})",
+        groups, groups.len()
+    ).into());
 
     // Generate all block combinations
     let mut blocks = Vec::new();
     for tile in start_tile..=end_tile {
         for &group in &groups {
-            blocks.push(DataBlock { lod, tile, group });
+            let block = DataBlock { lod, tile, group };
+            web_sys::console::log_1(&format!(
+                "[OPFS]   Required block: lod={}, tile={}, group={}",
+                lod, tile, group
+            ).into());
+            blocks.push(block);
         }
     }
+    
+    web_sys::console::log_1(&format!(
+        "[OPFS]   Total blocks to check: {}",
+        blocks.len()
+    ).into());
 
     blocks
 }
