@@ -41,6 +41,11 @@ interface WaveformWindowProps {
   waveformName?: string;        // 波形名称
   signalPrefix?: string;        // 信号前缀
   spaceBeforeBracket?: boolean; // 是否在 [ 前加空格
+  // Waveform total range for sanity checks
+  waveformRange?: {
+    start: number;  // LoD0Unit - total start time of waveform
+    end: number;    // LoD0Unit - total end time of waveform
+  };
 }
 
 interface CursorState {
@@ -89,6 +94,7 @@ export function WaveformWindow({
   waveformName = '',
   signalPrefix = '',
   spaceBeforeBracket = false,
+  waveformRange,
 }: WaveformWindowProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -181,11 +187,14 @@ export function WaveformWindow({
 
   // 拖动选择放大功能的状态
   const [isSelecting, setIsSelecting] = useState(false);
+  const [isPanning, setIsPanning] = useState(false); // 标尺区域拖动平移
   const [selectionStartX, setSelectionStartX] = useState<number | null>(null);
   const [selectionStartY, setSelectionStartY] = useState<number | null>(null);
   const [selectionEndX, setSelectionEndX] = useState<number | null>(null);
   const [selectionEndY, setSelectionEndY] = useState<number | null>(null);
   const selectionStartRef = useRef<number | null>(null);
+  const panStartXRef = useRef<number | null>(null); // 平移开始时的鼠标X位置
+  const panStartTimeStartRef = useRef<number>(0); // 平移开始时的viewport timeStart
 
   // 使用 props 中的列宽，如果没有则使用默认值
   const widths = columnWidths || DEFAULT_COLUMN_WIDTHS;
@@ -644,70 +653,88 @@ export function WaveformWindow({
   }, [cursor.position, cursor.visible, displaySignals, expandedSignals, useMockData]);
 
   // 鼠标按下：立即设置 cursor 并开始选择
+  const RULER_HEIGHT = 30; // 标尺区域高度
+
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
 
-    // 立即设置 cursor 位置（在鼠标按下时刻）
-    const canvasWidth = rect.width;
-    const clickTime = viewport.timeStart + (x / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
+    // 判断是否在标尺区域（顶部30px）
+    const isInRuler = y < RULER_HEIGHT;
 
-    // 获取可见信号列表进行吸附
-    let finalTime = clickTime;
-    const timeRange = viewport.timeEnd - viewport.timeStart;
-    const snapThreshold = Math.max(timeRange * 0.02, 10);
+    if (isInRuler) {
+      // 标尺区域：开始平移拖动
+      setIsPanning(true);
+      panStartXRef.current = x;
+      panStartTimeStartRef.current = viewport.timeStart;
+      
+      // 同时设置 cursor 位置
+      const canvasWidth = rect.width;
+      const clickTime = viewport.timeStart + (x / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
+      setCursor({ position: Math.round(clickTime), visible: true });
+    } else {
+      // 波形区域：开始选择/缩放拖动
+      // 立即设置 cursor 位置（在鼠标按下时刻）
+      const canvasWidth = rect.width;
+      const clickTime = viewport.timeStart + (x / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
 
-    if (useMockData) {
-      // Mock 数据模式：使用 mockDataProvider
-      const visibleSignals = mockDataProvider.getSignalNames();
-      if (visibleSignals.length > 0) {
-        const signalName = visibleSignals[0];
-        const { prev, next } = mockDataProvider.findTransitionsAround(signalName, clickTime);
+      // 获取可见信号列表进行吸附
+      let finalTime = clickTime;
+      const timeRange = viewport.timeEnd - viewport.timeStart;
+      const snapThreshold = Math.max(timeRange * 0.02, 10);
 
-        if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
-          finalTime = prev;
-        } else if (next !== null && Math.abs(next - clickTime) <= snapThreshold) {
-          finalTime = next;
-        }
-      }
-    } else if (wasmProviderRef.current && displaySignals.length > 0) {
-      // WASM 模式：从已获取数据的信号中找 transition
-      const wasmProvider = wasmProviderRef.current;
-      const signalName = displaySignals[0].fullName || displaySignals[0].name;
-
-      try {
-        console.log(`[WaveformWindow] Finding transitions for signal: ${signalName} at time ${clickTime}`);
-        const transitions = wasmProvider.find_transitions_around(signalName, clickTime);
-        console.log(`[WaveformWindow] Transitions result:`, transitions);
-        if (transitions && Array.isArray(transitions) && transitions.length >= 2) {
-          const prev = transitions[0] as number | null;
-          const next = transitions[1] as number | null;
-          console.log(`[WaveformWindow] prev=${prev}, next=${next}, threshold=${snapThreshold}`);
+      if (useMockData) {
+        // Mock 数据模式：使用 mockDataProvider
+        const visibleSignals = mockDataProvider.getSignalNames();
+        if (visibleSignals.length > 0) {
+          const signalName = visibleSignals[0];
+          const { prev, next } = mockDataProvider.findTransitionsAround(signalName, clickTime);
 
           if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
             finalTime = prev;
-            console.log(`[WaveformWindow] Snapped to prev: ${finalTime}`);
           } else if (next !== null && Math.abs(next - clickTime) <= snapThreshold) {
             finalTime = next;
-            console.log(`[WaveformWindow] Snapped to next: ${finalTime}`);
           }
         }
-      } catch (error) {
-        console.error('[WaveformWindow] Failed to find transitions:', error);
-      }
-    }
+      } else if (wasmProviderRef.current && displaySignals.length > 0) {
+        // WASM 模式：从已获取数据的信号中找 transition
+        const wasmProvider = wasmProviderRef.current;
+        const signalName = displaySignals[0].fullName || displaySignals[0].name;
 
-    setCursor({ position: Math.round(finalTime), visible: true });
-    
-    // 开始拖动选择
-    const y = e.clientY - rect.top;
-    setIsSelecting(true);
-    setSelectionStartX(x);
-    setSelectionStartY(y);
-    setSelectionEndX(x);
-    setSelectionEndY(y);
-    selectionStartRef.current = x;
+        try {
+          console.log(`[WaveformWindow] Finding transitions for signal: ${signalName} at time ${clickTime}`);
+          const transitions = wasmProvider.find_transitions_around(signalName, clickTime);
+          console.log(`[WaveformWindow] Transitions result:`, transitions);
+          if (transitions && Array.isArray(transitions) && transitions.length >= 2) {
+            const prev = transitions[0] as number | null;
+            const next = transitions[1] as number | null;
+            console.log(`[WaveformWindow] prev=${prev}, next=${next}, threshold=${snapThreshold}`);
+
+            if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
+              finalTime = prev;
+              console.log(`[WaveformWindow] Snapped to prev: ${finalTime}`);
+            } else if (next !== null && Math.abs(next - clickTime) <= snapThreshold) {
+              finalTime = next;
+              console.log(`[WaveformWindow] Snapped to next: ${finalTime}`);
+            }
+          }
+        } catch (error) {
+          console.error('[WaveformWindow] Failed to find transitions:', error);
+        }
+      }
+
+      setCursor({ position: Math.round(finalTime), visible: true });
+      
+      // 开始拖动选择
+      setIsSelecting(true);
+      setSelectionStartX(x);
+      setSelectionStartY(y);
+      setSelectionEndX(x);
+      setSelectionEndY(y);
+      selectionStartRef.current = x;
+    }
   }, [viewport, setCursor, useMockData, displaySignals, wasmProviderRef]);
 
   // 鼠标移动：更新选择区域
@@ -737,11 +764,40 @@ export function WaveformWindow({
       setSelectionEndX(x);
       setSelectionEndY(y);
     }
+    
+    // 如果在平移中，更新 viewport
+    if (isPanning && panStartXRef.current !== null && onViewportChange) {
+      const canvasWidth = rect.width;
+      const deltaX = x - panStartXRef.current;
+      const timeSpan = viewport.timeEnd - viewport.timeStart;
+      const timeDelta = (deltaX / canvasWidth) * timeSpan;
+      
+      // 计算新的 viewport（向左拖动，时间减少；向右拖动，时间增加）
+      const newTimeStart = panStartTimeStartRef.current - timeDelta;
+      const newTimeEnd = newTimeStart + timeSpan;
+      
+      // 使用 sanity 函数验证
+      const sanitized = sanitizeTimeRange(newTimeStart, newTimeEnd, waveformRange);
+      
+      // 更新 viewport
+      onViewportChange({
+        timeStart: sanitized.timeStart,
+        timeEnd: sanitized.timeEnd,
+      });
+    }
+    
     // 注意：不在这里更新 cursor，只在单击时更新
-  }, [viewport, isSelecting, canvasWidth]);
+  }, [viewport, isSelecting, isPanning, canvasWidth, onViewportChange, waveformRange]);
 
-  // 鼠标释放：结束选择并处理放大/缩小（cursor 已在 mousedown 时设置）
+  // 鼠标释放：结束选择/平移并处理相应操作（cursor 已在 mousedown 时设置）
   const handleCanvasMouseUp = useCallback(() => {
+    // 处理平移结束
+    if (isPanning) {
+      setIsPanning(false);
+      panStartXRef.current = null;
+      return;
+    }
+    
     if (!isSelecting || !canvasRef.current) return;
 
     // 使用 getBoundingClientRect 获取实际显示宽度
@@ -766,7 +822,7 @@ export function WaveformWindow({
         const rawTimeEnd = viewport.timeStart + (endX / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
         
         // Validate time range
-        const sanitized = sanitizeTimeRange(rawTimeStart, rawTimeEnd);
+        const sanitized = sanitizeTimeRange(rawTimeStart, rawTimeEnd, waveformRange);
 
         setViewport(prev => ({
           ...prev,
@@ -783,7 +839,7 @@ export function WaveformWindow({
         const newViewport = zoomIn(viewport, cursor.position);
         if (newViewport) {
           // Validate the zoom result
-          const sanitized = sanitizeTimeRange(newViewport.timeStart, newViewport.timeEnd);
+          const sanitized = sanitizeTimeRange(newViewport.timeStart, newViewport.timeEnd, waveformRange);
           setViewport({
             ...newViewport,
             timeStart: sanitized.timeStart,
@@ -795,7 +851,7 @@ export function WaveformWindow({
         const newViewport = zoomOut(viewport, cursor.position);
         if (newViewport) {
           // Validate the zoom result
-          const sanitized = sanitizeTimeRange(newViewport.timeStart, newViewport.timeEnd);
+          const sanitized = sanitizeTimeRange(newViewport.timeStart, newViewport.timeEnd, waveformRange);
           setViewport({
             ...newViewport,
             timeStart: sanitized.timeStart,
@@ -814,7 +870,7 @@ export function WaveformWindow({
     setSelectionEndX(null);
     setSelectionEndY(null);
     selectionStartRef.current = null;
-  }, [isSelecting, selectionStartX, selectionStartY, selectionEndX, selectionEndY, viewport, setViewport, cursor]);
+  }, [isSelecting, isPanning, selectionStartX, selectionStartY, selectionEndX, selectionEndY, viewport, setViewport, cursor, waveformRange]);
 
   // Use refs for all cursor state to avoid dependency on React state in rAF loop
   const mousePosRef = useRef<number | null>(null);
@@ -846,7 +902,13 @@ export function WaveformWindow({
     setMouseX(null);
     setDisplayMouseX(null);
     setRenderMouseX(null);
-  }, []);
+    
+    // 如果正在平移，取消平移状态
+    if (isPanning) {
+      setIsPanning(false);
+      panStartXRef.current = null;
+    }
+  }, [isPanning]);
 
   const handleColumnResize = (column: 'hierarchy' | 'name' | 'value', e: React.MouseEvent) => {
     e.preventDefault();
