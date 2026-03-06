@@ -541,24 +541,69 @@ impl WaveformDataProvider {
             offset += SignalBlockHeader::SIZE;
         }
 
-        // Write each group to cache
+        // Write each group to cache (with merge support for V2 format)
         let group_count = signals_by_group.len();
         console_log!("[WASM]   Grouping complete: {} groups", group_count);
         
-        for (group_id, signals) in &signals_by_group {
+        for (group_id, new_signals) in &signals_by_group {
             let block = crate::opfs_cache::DataBlock {
                 lod,
                 tile: tile_id,
                 group: *group_id,
             };
 
-            console_log!("[WASM]   Writing group {} to cache: {} signals", 
-                group_id, signals.len());
+            console_log!("[WASM]   Processing group {}: {} new signals", 
+                group_id, new_signals.len());
             console_log!("[WASM]     Block: lod={}, tile={}, group={}", 
                 lod, tile_id, group_id);
 
-            let group_data = crate::opfs_cache::GroupData { signals: signals.clone() };
-            let bin_data = crate::opfs_cache::serialize_group_data(&group_data);
+            // Try to read existing group data from cache
+            let mut merged_signals: Vec<crate::opfs_cache::SignalData> = Vec::new();
+            
+            match self.opfs_cache.read(&block).await {
+                Ok(Some(existing_data)) => {
+                    console_log!("[WASM]     Existing group data found: {} bytes", existing_data.len());
+                    // Deserialize existing data using V2 format
+                    match crate::opfs_cache::deserialize_group_data_v2(&existing_data) {
+                        Ok(existing_group) => {
+                            console_log!("[WASM]     Existing signals: {}", existing_group.signals.len());
+                            
+                            // Merge: keep existing signals, add new ones or update existing ones
+                            let mut signal_map: std::collections::HashMap<u32, crate::opfs_cache::SignalData> = 
+                                std::collections::HashMap::new();
+                            
+                            // Add existing signals
+                            for sig in existing_group.signals {
+                                signal_map.insert(sig.draw_sig_id, sig);
+                            }
+                            
+                            // Add or update with new signals
+                            for sig in new_signals.clone() {
+                                signal_map.insert(sig.draw_sig_id, sig);
+                            }
+                            
+                            merged_signals = signal_map.into_values().collect();
+                            console_log!("[WASM]     Merged signals: {} (existing + new)", merged_signals.len());
+                        }
+                        Err(e) => {
+                            console_log!("[WASM]     Error deserializing existing data: {}, using new signals only", e);
+                            merged_signals = new_signals.clone();
+                        }
+                    }
+                }
+                Ok(None) => {
+                    console_log!("[WASM]     No existing group data, using new signals only");
+                    merged_signals = new_signals.clone();
+                }
+                Err(e) => {
+                    console_log!("[WASM]     Error reading existing cache: {:?}, using new signals only", e);
+                    merged_signals = new_signals.clone();
+                }
+            }
+
+            // Serialize merged data using V2 format
+            let group_data = crate::opfs_cache::GroupData { signals: merged_signals };
+            let bin_data = crate::opfs_cache::serialize_group_data_v2(&group_data);
 
             console_log!("[WASM]     Serialized size: {} bytes", bin_data.len());
 
@@ -862,8 +907,8 @@ impl WaveformDataProvider {
     /// max_batch_size: maximum number of signals per request (default 256)
     /// 
     /// NOTE: This function now integrates with OPFS cache:
-    /// 1. Check cache using prepare_data
-    /// 2. Fetch only missing tiles from server
+    /// 1. Check cache per signal per tile
+    /// 2. Fetch only missing signal+tile combinations from server
     /// 3. Store fetched data in cache using supplement_data
     pub async fn fetch_signals_data_batch(&mut self, signal_names: Vec<String>) -> Result<(), JsValue> {
         const MAX_BATCH_SIZE: usize = 256;
@@ -904,106 +949,111 @@ impl WaveformDataProvider {
 
         // Step 1: Calculate all required tiles based on time range
         console_log!("[WASM] Step 1: Calculating required tiles...");
-        let mut tiles_to_fetch: Vec<u64> = Vec::new();
-        for tile_id in start_tile..=end_tile {
-            tiles_to_fetch.push(tile_id);
-        }
+        let tiles_to_fetch: Vec<u64> = (start_tile..=end_tile).collect();
         console_log!("[WASM]   Total tiles to check: {}", tiles_to_fetch.len());
 
-        // Step 2: Check cache and find missing tiles
-        console_log!("[WASM] Step 2: Checking OPFS cache...");
-        let mut missing_tiles: Vec<u64> = Vec::new();
-        let mut cache_hits = 0u32;
+        // Step 2: Per-signal per-tile cache check
+        // Structure: tile_id -> Vec<signal_names> that need to be fetched for this tile
+        console_log!("[WASM] Step 2: Checking cache per signal per tile...");
+        let mut tile_missing_signals: std::collections::HashMap<u64, Vec<String>> = std::collections::HashMap::new();
+        let mut total_cache_hits = 0u32;
+        let mut total_cache_misses = 0u32;
         
         for tile_id in &tiles_to_fetch {
-            // Check if any group in this tile is missing from cache
-            // For simplicity, we check group 0 (all signals in group 0 for now)
-            let block = crate::opfs_cache::DataBlock {
-                lod,
-                tile: *tile_id,
-                group: 0, // TODO: Check all groups
-            };
+            let mut tile_hits = 0u32;
+            let mut tile_misses = 0u32;
             
-            match self.opfs_cache.read(&block).await {
-                Ok(Some(_)) => {
-                    console_log!("[WASM]   Tile {}: FOUND in cache", tile_id);
-                    cache_hits += 1;
+            for signal_name in &signals_to_fetch {
+                // Check if signal has data in memory cache
+                if let Some(signal_data) = self.signal_data.get(signal_name) {
+                    // Signal exists in memory, check if it has data for this tile
+                    // For now, assume if signal exists, it has all tile data
+                    // TODO: More granular check per tile
+                    tile_hits += 1;
+                    continue;
                 }
-                Ok(None) => {
-                    console_log!("[WASM]   Tile {}: NOT FOUND in cache", tile_id);
-                    missing_tiles.push(*tile_id);
-                }
-                Err(e) => {
-                    console_log!("[WASM]   Tile {}: ERROR reading cache - {:?}", tile_id, e);
-                    missing_tiles.push(*tile_id);
-                }
-            }
-        }
-        
-        console_log!("[WASM]   Cache hits: {}, Missing tiles: {}", cache_hits, missing_tiles.len());
-        
-        // Check if all requested signals have data in signal_data cache
-        // Even if tiles are in cache, new signals may not have data loaded
-        let signals_missing_data: Vec<String> = signals_to_fetch.iter()
-            .filter(|name| !self.signal_data.contains_key(*name))
-            .cloned()
-            .collect();
-        
-        if !signals_missing_data.is_empty() {
-            console_log!("[WASM]   Signals missing data in cache: {:?}", signals_missing_data);
-            // If tiles are in cache but signals don't have data, we need to load from cache
-            // or fetch from server if cache doesn't have the signal data
-            // For now, add all tiles to missing_tiles to force a fetch
-            if missing_tiles.is_empty() {
-                console_log!("[WASM]   Tiles in cache but signals missing data, loading from cache or fetching...");
-                // Try to load from OPFS cache first
-                let mut loaded_from_cache = false;
-                for tile_id in &tiles_to_fetch {
+                
+                // Signal not in memory, need to check OPFS cache
+                // Get draw_sig_id for this signal
+                if let Some(draw_sig_id) = self.get_draw_sig_id(signal_name) {
+                    let group_id = OpfsCacheManager::get_group_id(draw_sig_id);
                     let block = crate::opfs_cache::DataBlock {
                         lod,
                         tile: *tile_id,
-                        group: 0,
+                        group: group_id,
                     };
                     
-                    if let Ok(Some(data)) = self.opfs_cache.read(&block).await {
-                        console_log!("[WASM]   Loading tile {} from OPFS cache for new signals", tile_id);
-                        // Parse the cached data for the new signals
-                        // TODO: Need to parse the group data and extract signal data
-                        // For now, add to missing_tiles to fetch from server
-                        missing_tiles.push(*tile_id);
-                        loaded_from_cache = true;
+                    // Check if group file exists in cache
+                    match self.opfs_cache.read(&block).await {
+                        Ok(Some(data)) => {
+                            // Group file exists, check if specific signal exists using V2 format
+                            match crate::opfs_cache::read_signal_from_group_v2(&data, draw_sig_id) {
+                                Ok(Some(_)) => {
+                                    // Signal found in cache
+                                    tile_hits += 1;
+                                }
+                                Ok(None) => {
+                                    // Group file exists but signal not found
+                                    tile_misses += 1;
+                                    tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push(signal_name.clone());
+                                }
+                                Err(e) => {
+                                    console_log!("[WASM]   Error reading signal {} from tile {}: {:?}", signal_name, tile_id, e);
+                                    tile_misses += 1;
+                                    tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push(signal_name.clone());
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            // Group file not in cache
+                            tile_misses += 1;
+                            tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push(signal_name.clone());
+                        }
+                        Err(e) => {
+                            console_log!("[WASM]   Error reading cache for tile {}: {:?}", tile_id, e);
+                            tile_misses += 1;
+                            tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push(signal_name.clone());
+                        }
                     }
+                } else {
+                    // Signal not found in draw list, treat as miss
+                    tile_misses += 1;
+                    tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push(signal_name.clone());
                 }
-                
-                if !loaded_from_cache {
-                    console_log!("[WASM]   Could not load from cache, fetching from server");
-                    missing_tiles.extend(&tiles_to_fetch);
-                }
+            }
+            
+            total_cache_hits += tile_hits;
+            total_cache_misses += tile_misses;
+            
+            if tile_misses > 0 {
+                console_log!("[WASM]   Tile {}: hits={}, misses={}", tile_id, tile_hits, tile_misses);
             }
         }
         
-        if missing_tiles.is_empty() {
-            console_log!("[WASM] All tiles found in cache and all signals have data, no server fetch needed!");
+        console_log!("[WASM]   Total cache hits: {}, misses: {}", total_cache_hits, total_cache_misses);
+        
+        if tile_missing_signals.is_empty() {
+            console_log!("[WASM] All signals found in cache for all tiles, no server fetch needed!");
             return Ok(());
         }
         
-        // Show which tiles are missing
-        let missing_tiles_str: Vec<String> = missing_tiles.iter().map(|t| t.to_string()).collect();
-        console_log!("[WASM] Missing tiles: [{}]", missing_tiles_str.join(", "));
+        // Show which tiles need which signals
+        console_log!("[WASM] Tiles with missing signals:");
+        for (tile_id, signals) in &tile_missing_signals {
+            console_log!("[WASM]   Tile {}: {} signals missing", tile_id, signals.len());
+        }
         
-        console_log!("[WASM] Step 3: Fetching {} missing tiles from server", missing_tiles.len());
+        console_log!("[WASM] Step 3: Fetching missing signals per tile from server");
         
-        // Step 3: Fetch missing tiles from server
-        for (tile_idx, tile_id) in missing_tiles.iter().enumerate() {
+        // Step 3: Fetch missing signals per tile from server
+        let total_tiles_to_fetch = tile_missing_signals.len();
+        for (tile_idx, (tile_id, tile_signal_names)) in tile_missing_signals.iter().enumerate() {
             let tile_time_start = *tile_id * tile_span;
             let tile_time_end = ((*tile_id + 1) * tile_span).min(time_end);
             
             console_log!("[WASM] Fetching tile {}/{}: tile_id={}, time={}-{} (span={})",
-                tile_idx + 1, missing_tiles.len(), tile_id, tile_time_start, tile_time_end, tile_span);
-            
-            // Use all signals for this tile (not filtered by group for now)
-            let tile_signal_names = signals_to_fetch.clone();
-            console_log!("[WASM]   Tile {} needs {} signals", tile_id, tile_signal_names.len());
+                tile_idx + 1, total_tiles_to_fetch, tile_id, tile_time_start, tile_time_end, tile_span);
+            console_log!("[WASM]   Tile {} needs {} signals: {:?}", tile_id, tile_signal_names.len(), tile_signal_names);
             
             // Fetch this tile's data from server
             for (batch_idx, batch) in tile_signal_names.chunks(MAX_BATCH_SIZE).enumerate() {
@@ -1091,9 +1141,9 @@ impl WaveformDataProvider {
                 // First, parse chunk data and store in signal_data for rendering
                 // Pass tile info for proper handling of initial values and viewport filtering
                 let is_first_tile = tile_idx == 0;
-                let is_last_tile = tile_idx == missing_tiles.len() - 1;
+                let is_last_tile = tile_idx == total_tiles_to_fetch - 1;
                 console_log!("[WASM]   Parsing chunk data for {} signals (tile {}/{}, first={}, last={})", 
-                    tile_signal_names.len(), tile_idx + 1, missing_tiles.len(), is_first_tile, is_last_tile);
+                    tile_signal_names.len(), tile_idx + 1, total_tiles_to_fetch, is_first_tile, is_last_tile);
                 self.parse_chunk_data_for_batch(&tile_signal_names, &bytes, time_start, time_end, is_first_tile, is_last_tile)?;
                 console_log!("[WASM]   Chunk data parsed and stored in signal_data");
                 
@@ -1107,7 +1157,7 @@ impl WaveformDataProvider {
             }
         }
         
-        console_log!("[WASM] Finished fetching {} tiles", missing_tiles.len());
+        console_log!("[WASM] Finished fetching {} tiles", total_tiles_to_fetch);
         
         Ok(())
     }
@@ -1256,6 +1306,13 @@ impl WaveformDataProvider {
             .find(|s| s.name == signal_name)
             .map(|s| s.width)
             .unwrap_or(1)
+    }
+
+    /// Get draw_sig_id for a signal name
+    fn get_draw_sig_id(&self, signal_name: &str) -> Option<u32> {
+        self.signals_with_id.iter()
+            .find(|s| s.name == signal_name)
+            .map(|s| s.draw_sig_id)
     }
 
     /// Parse chunk binary data for single signal (legacy method)

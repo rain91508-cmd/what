@@ -148,27 +148,41 @@ pub struct PrepareDataResult {
 // Group Bin File Format
 // =============================================================================
 
-/// Group bin file header (4 bytes)
+/// Group bin file header V2 (16 bytes)
+/// Format: [magic: u32][version: u8][reserved: u8][signal_count: u16][data_area_offset: u32][reserved2: u32]
 #[derive(Debug, Clone)]
-pub struct GroupBinHeader {
-    pub signal_count: u16,
-    pub reserved: u16,
+pub struct GroupBinHeaderV2 {
+    pub magic: u32,           // Magic number: 0x47524F55 ("GROU")
+    pub version: u8,          // Version: 2
+    pub reserved: u8,         // Reserved
+    pub signal_count: u16,    // Actual number of signals in this group
+    pub data_area_offset: u32, // Offset to data area from start of file
 }
 
-impl GroupBinHeader {
-    pub const SIZE: usize = 4;
+impl GroupBinHeaderV2 {
+    pub const MAGIC: u32 = 0x47524F55; // "GROU"
+    pub const VERSION: u8 = 2;
+    pub const SIZE: usize = 16;
+    pub const SIGNAL_DIRECTORY_SIZE: usize = 256 * 4; // 256 slots × 4 bytes
 
-    pub fn new(signal_count: u16) -> Self {
+    pub fn new(signal_count: u16, data_area_offset: u32) -> Self {
         Self {
-            signal_count,
+            magic: Self::MAGIC,
+            version: Self::VERSION,
             reserved: 0,
+            signal_count,
+            data_area_offset,
         }
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(Self::SIZE);
+        bytes.extend_from_slice(&self.magic.to_le_bytes());
+        bytes.push(self.version);
+        bytes.push(self.reserved);
         bytes.extend_from_slice(&self.signal_count.to_le_bytes());
-        bytes.extend_from_slice(&self.reserved.to_le_bytes());
+        bytes.extend_from_slice(&self.data_area_offset.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 4]); // reserved2
         bytes
     }
 
@@ -177,64 +191,130 @@ impl GroupBinHeader {
             return Err("Group bin header too small".to_string());
         }
 
+        let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        if magic != Self::MAGIC {
+            return Err(format!("Invalid magic: {:08X}, expected {:08X}", magic, Self::MAGIC));
+        }
+
+        let version = data[4];
+        if version != Self::VERSION {
+            return Err(format!("Unsupported version: {}, expected {}", version, Self::VERSION));
+        }
+
         Ok(Self {
-            signal_count: u16::from_le_bytes([data[0], data[1]]),
-            reserved: u16::from_le_bytes([data[2], data[3]]),
+            magic,
+            version,
+            reserved: data[5],
+            signal_count: u16::from_le_bytes([data[6], data[7]]),
+            data_area_offset: u32::from_le_bytes([data[8], data[9], data[10], data[11]]),
         })
     }
 }
 
-/// Signal offset table entry (8 bytes)
+/// Signal directory entry (4 bytes)
+/// Format: [exists: 1 bit][offset: 31 bits]
+/// - Bit 31 (MSB): 1 = signal exists, 0 = empty slot
+/// - Bits 0-30: offset to signal data in data area
 #[derive(Debug, Clone)]
-pub struct SignalOffsetEntry {
-    pub draw_sig_id: u32,
-    pub offset: u32,
+pub struct SignalDirectoryEntry {
+    pub exists: bool,
+    pub offset: u32, // Max 2GB offset (sufficient for group data)
 }
 
-impl SignalOffsetEntry {
-    pub const SIZE: usize = 8;
+impl SignalDirectoryEntry {
+    pub const EMPTY: u32 = 0;
+
+    pub fn new(exists: bool, offset: u32) -> Self {
+        Self { exists, offset }
+    }
+
+    pub fn to_u32(&self) -> u32 {
+        if self.exists {
+            (1u32 << 31) | (self.offset & 0x7FFFFFFF)
+        } else {
+            0
+        }
+    }
+
+    pub fn from_u32(value: u32) -> Self {
+        let exists = (value & (1u32 << 31)) != 0;
+        let offset = value & 0x7FFFFFFF;
+        Self { exists, offset }
+    }
+}
+
+/// Signal directory with 256 fixed slots
+/// Index = draw_sig_id % 256
+pub struct SignalDirectory {
+    pub entries: [u32; 256],
+}
+
+impl SignalDirectory {
+    pub const SIZE: usize = 256 * 4; // 1024 bytes
+
+    pub fn new() -> Self {
+        Self { entries: [0; 256] }
+    }
+
+    pub fn get(&self, index: usize) -> SignalDirectoryEntry {
+        if index < 256 {
+            SignalDirectoryEntry::from_u32(self.entries[index])
+        } else {
+            SignalDirectoryEntry::new(false, 0)
+        }
+    }
+
+    pub fn set(&mut self, index: usize, entry: SignalDirectoryEntry) {
+        if index < 256 {
+            self.entries[index] = entry.to_u32();
+        }
+    }
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(Self::SIZE);
-        bytes.extend_from_slice(&self.draw_sig_id.to_le_bytes());
-        bytes.extend_from_slice(&self.offset.to_le_bytes());
+        for entry in &self.entries {
+            bytes.extend_from_slice(&entry.to_le_bytes());
+        }
         bytes
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self, String> {
         if data.len() < Self::SIZE {
-            return Err("Signal offset entry too small".to_string());
+            return Err("Signal directory too small".to_string());
         }
 
-        Ok(Self {
-            draw_sig_id: u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
-            offset: u32::from_le_bytes([data[4], data[5], data[6], data[7]]),
-        })
+        let mut entries = [0u32; 256];
+        for i in 0..256 {
+            let offset = i * 4;
+            entries[i] = u32::from_le_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]]);
+        }
+
+        Ok(Self { entries })
     }
 }
 
-/// Serialize group data to bin format
-pub fn serialize_group_data(group_data: &GroupData) -> Vec<u8> {
-    let signal_count = group_data.signals.len() as u16;
-    let header = GroupBinHeader::new(signal_count);
-
-    // Calculate offsets
-    let header_size = GroupBinHeader::SIZE;
-    let offset_table_size = signal_count as usize * SignalOffsetEntry::SIZE;
-    let data_start = header_size + offset_table_size;
-
-    // Build offset table and data
-    let mut offset_table: Vec<SignalOffsetEntry> = Vec::new();
+/// Serialize group data to bin format V2 (fixed 256 slots)
+/// Format: [HeaderV2][SignalDirectory(256×4bytes)][DataArea]
+/// Each signal is placed at directory index = draw_sig_id % 256
+pub fn serialize_group_data_v2(group_data: &GroupData) -> Vec<u8> {
+    // Calculate data area offset (header + signal directory)
+    let data_area_offset = (GroupBinHeaderV2::SIZE + SignalDirectory::SIZE) as u32;
+    
+    // Create signal directory and collect signal data
+    let mut directory = SignalDirectory::new();
     let mut signal_data_bytes: Vec<u8> = Vec::new();
+    let mut actual_signal_count = 0u16;
 
     for signal in &group_data.signals {
-        let offset = data_start + signal_data_bytes.len();
-        offset_table.push(SignalOffsetEntry {
-            draw_sig_id: signal.draw_sig_id,
-            offset: offset as u32,
-        });
+        let index_in_group = (signal.draw_sig_id % 256) as usize;
+        let offset = data_area_offset as u32 + signal_data_bytes.len() as u32;
+        
+        // Set directory entry
+        directory.set(index_in_group, SignalDirectoryEntry::new(true, offset));
+        actual_signal_count += 1;
 
-        // Serialize signal data: [transition_count: u32] + [time: u64, value_len: u8, value: bytes] × count
+        // Serialize signal data: [draw_sig_id: u32][transition_count: u32] + [time: u64, value_len: u8, value: bytes] × count
+        signal_data_bytes.extend_from_slice(&signal.draw_sig_id.to_le_bytes());
         signal_data_bytes.extend_from_slice(&(signal.transitions.len() as u32).to_le_bytes());
         for transition in &signal.transitions {
             signal_data_bytes.extend_from_slice(&transition.time.to_le_bytes());
@@ -243,52 +323,72 @@ pub fn serialize_group_data(group_data: &GroupData) -> Vec<u8> {
         }
     }
 
+    // Create header
+    let header = GroupBinHeaderV2::new(actual_signal_count, data_area_offset);
+
     // Combine all parts
     let mut result = Vec::new();
     result.extend_from_slice(&header.to_bytes());
-    for entry in offset_table {
-        result.extend_from_slice(&entry.to_bytes());
-    }
+    result.extend_from_slice(&directory.to_bytes());
     result.extend_from_slice(&signal_data_bytes);
 
     result
 }
 
-/// Deserialize group data from bin format
-pub fn deserialize_group_data(data: &[u8]) -> Result<GroupData, String> {
-    if data.len() < GroupBinHeader::SIZE {
+/// Deserialize group data from bin format V2 (fixed 256 slots)
+/// Format: [HeaderV2][SignalDirectory(256×4bytes)][DataArea]
+pub fn deserialize_group_data_v2(data: &[u8]) -> Result<GroupData, String> {
+    if data.len() < GroupBinHeaderV2::SIZE {
         return Err("Data too small for header".to_string());
     }
 
-    let header = GroupBinHeader::from_bytes(data)?;
-    let signal_count = header.signal_count as usize;
-
-    // Parse offset table
-    let offset_table_start = GroupBinHeader::SIZE;
-    let data_area_start = offset_table_start + signal_count * SignalOffsetEntry::SIZE;
-
+    let header = GroupBinHeaderV2::from_bytes(data)?;
+    
+    // Parse signal directory
+    let directory_start = GroupBinHeaderV2::SIZE;
+    let data_area_start = header.data_area_offset as usize;
+    
     if data.len() < data_area_start {
-        return Err("Data too small for offset table".to_string());
+        return Err("Data too small for signal directory".to_string());
     }
+
+    let directory = SignalDirectory::from_bytes(&data[directory_start..data_area_start])?;
 
     let mut signals = Vec::new();
 
-    for i in 0..signal_count {
-        let entry_start = offset_table_start + i * SignalOffsetEntry::SIZE;
-        let entry = SignalOffsetEntry::from_bytes(&data[entry_start..])?;
+    // Iterate through all 256 slots to find existing signals
+    for index_in_group in 0..256 {
+        let entry = directory.get(index_in_group);
+        
+        if !entry.exists {
+            continue;
+        }
 
         // Parse signal data at offset
         let offset = entry.offset as usize;
-        if offset + 4 > data.len() {
-            return Err(format!("Signal {} data offset out of bounds", i));
+        if offset + 8 > data.len() {
+            console_log!("[OPFS] Warning: Signal at index {} offset out of bounds", index_in_group);
+            continue;
+        }
+
+        // Read draw_sig_id (for verification)
+        let stored_draw_sig_id = u32::from_le_bytes([
+            data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+        ]);
+        
+        // Verify the signal is at correct position
+        let expected_index = (stored_draw_sig_id % 256) as usize;
+        if expected_index != index_in_group {
+            console_log!("[OPFS] Warning: Signal {} at wrong index {}, expected {}", 
+                stored_draw_sig_id, index_in_group, expected_index);
         }
 
         let transition_count = u32::from_le_bytes([
-            data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+            data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7],
         ]) as usize;
 
         let mut transitions = Vec::new();
-        let mut pos = offset + 4;
+        let mut pos = offset + 8;
 
         for _ in 0..transition_count {
             if pos + 9 > data.len() {
@@ -315,12 +415,93 @@ pub fn deserialize_group_data(data: &[u8]) -> Result<GroupData, String> {
         }
 
         signals.push(SignalData {
-            draw_sig_id: entry.draw_sig_id,
+            draw_sig_id: stored_draw_sig_id,
             transitions,
         });
     }
 
     Ok(GroupData { signals })
+}
+
+/// Read a single signal from group data V2 by draw_sig_id
+/// Returns None if signal not found
+pub fn read_signal_from_group_v2(data: &[u8], draw_sig_id: u32) -> Result<Option<SignalData>, String> {
+    if data.len() < GroupBinHeaderV2::SIZE {
+        return Err("Data too small for header".to_string());
+    }
+
+    let header = GroupBinHeaderV2::from_bytes(data)?;
+    
+    // Parse signal directory
+    let directory_start = GroupBinHeaderV2::SIZE;
+    let data_area_start = header.data_area_offset as usize;
+    
+    if data.len() < data_area_start {
+        return Err("Data too small for signal directory".to_string());
+    }
+
+    let directory = SignalDirectory::from_bytes(&data[directory_start..data_area_start])?;
+    
+    // Calculate index in group
+    let index_in_group = (draw_sig_id % 256) as usize;
+    let entry = directory.get(index_in_group);
+    
+    if !entry.exists {
+        return Ok(None);
+    }
+
+    // Parse signal data at offset
+    let offset = entry.offset as usize;
+    if offset + 8 > data.len() {
+        return Err("Signal data offset out of bounds".to_string());
+    }
+
+    // Read stored draw_sig_id (for verification)
+    let stored_draw_sig_id = u32::from_le_bytes([
+        data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+    ]);
+    
+    if stored_draw_sig_id != draw_sig_id {
+        console_log!("[OPFS] Warning: Expected signal {} but found {} at index {}", 
+            draw_sig_id, stored_draw_sig_id, index_in_group);
+        return Ok(None);
+    }
+
+    let transition_count = u32::from_le_bytes([
+        data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7],
+    ]) as usize;
+
+    let mut transitions = Vec::new();
+    let mut pos = offset + 8;
+
+    for _ in 0..transition_count {
+        if pos + 9 > data.len() {
+            break;
+        }
+
+        let time = u64::from_le_bytes([
+            data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
+            data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
+        ]);
+        pos += 8;
+
+        let value_len = data[pos] as usize;
+        pos += 1;
+
+        if pos + value_len > data.len() {
+            break;
+        }
+
+        let value = data[pos..pos + value_len].to_vec();
+        pos += value_len;
+
+        transitions.push(Transition { time, value });
+    }
+
+    Ok(Some(SignalData {
+        draw_sig_id,
+        transitions,
+    }))
 }
 
 // =============================================================================
