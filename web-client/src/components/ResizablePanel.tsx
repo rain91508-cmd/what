@@ -83,14 +83,17 @@ export function ResizablePanel({
 interface SplitterProps {
   direction: 'horizontal' | 'vertical';
   onDrag: (delta: number) => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
 }
 
-export function Splitter({ direction, onDrag }: SplitterProps) {
+export function Splitter({ direction, onDrag, onDragStart, onDragEnd }: SplitterProps) {
   const [isDragging, setIsDragging] = useState(false);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setIsDragging(true);
+    onDragStart?.();
     const startPos = direction === 'horizontal' ? e.clientX : e.clientY;
 
     const handleMouseMove = (e: MouseEvent) => {
@@ -101,6 +104,7 @@ export function Splitter({ direction, onDrag }: SplitterProps) {
 
     const handleMouseUp = () => {
       setIsDragging(false);
+      onDragEnd?.();
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
