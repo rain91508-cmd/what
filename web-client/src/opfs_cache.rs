@@ -469,11 +469,10 @@ impl OpfsCacheManager {
     }
 
     /// Calculate tile span for given LOD
-    /// Tile span equals the LoD resolution (16^lod)
-    /// This ensures each tile covers a time range that matches the LoD's granularity
+    /// Tile span = TILE_SPAN_MULTIPLIER * 16^lod
+    /// This ensures each tile covers a reasonable time range for caching
     pub fn get_tile_span(lod: u32) -> u64 {
-        // Tile span = 16^lod (same as LoD resolution)
-        LOD_MULTIPLIER.pow(lod)
+        TILE_SPAN_MULTIPLIER * LOD_MULTIPLIER.pow(lod)
     }
 
     /// Calculate tile ID for given time and LOD
@@ -707,8 +706,10 @@ mod tests {
 
     #[test]
     fn test_tile_span_calculation() {
-        assert_eq!(OpfsCacheManager::get_tile_span(0), 1_000_000);
-        assert_eq!(OpfsCacheManager::get_tile_span(1), 16_000_000);
-        assert_eq!(OpfsCacheManager::get_tile_span(2), 256_000_000);
+        // Tile span = TILE_SPAN_MULTIPLIER * 16^lod = 1_000_000 * 16^lod
+        assert_eq!(OpfsCacheManager::get_tile_span(0), 1_000_000); // 1M * 1
+        assert_eq!(OpfsCacheManager::get_tile_span(1), 16_000_000); // 1M * 16
+        assert_eq!(OpfsCacheManager::get_tile_span(2), 256_000_000); // 1M * 256
+        assert_eq!(OpfsCacheManager::get_tile_span(7), 268_435_456_000_000); // 1M * 268M
     }
 }
