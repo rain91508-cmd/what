@@ -1015,9 +1015,46 @@ impl WaveformDataProvider {
                         Ok(Some(data)) => {
                             // Group file exists, check if specific signal exists using V2 format
                             match crate::opfs_cache::read_signal_from_group_v2(&data, draw_sig_id) {
-                                Ok(Some(_)) => {
-                                    // Signal found in cache
+                                Ok(Some(signal_data)) => {
+                                    // Signal found in cache, load into signal_data
                                     tile_hits += 1;
+                                    
+                                    // Convert opfs_cache::SignalData to SignalWaveData
+                                    let transitions: Vec<Transition> = signal_data.transitions
+                                        .into_iter()
+                                        .map(|t| {
+                                            // Convert bytes to string value
+                                            let value = if t.value.len() <= 8 {
+                                                // Try to parse as u64 (for numeric values)
+                                                let mut bytes = [0u8; 8];
+                                                bytes[..t.value.len()].copy_from_slice(&t.value);
+                                                let num = u64::from_le_bytes(bytes);
+                                                format!("0x{:X}", num)
+                                            } else {
+                                                // Longer values, use hex string
+                                                format!("0x{}", t.value.iter().map(|b| format!("{:02X}", b)).collect::<String>())
+                                            };
+                                            Transition { time: t.time, value }
+                                        })
+                                        .collect();
+                                    
+                                    // Merge with existing signal_data if any
+                                    if let Some(existing) = self.signal_data.get_mut(signal_name) {
+                                        // Merge transitions
+                                        let mut all_transitions = existing.transitions.clone();
+                                        all_transitions.extend(transitions);
+                                        // Sort by time and remove duplicates
+                                        all_transitions.sort_by_key(|t| t.time);
+                                        all_transitions.dedup_by_key(|t| t.time);
+                                        existing.transitions = all_transitions;
+                                    } else {
+                                        // Insert new signal_data
+                                        self.signal_data.insert(signal_name.clone(), SignalWaveData {
+                                            name: signal_name.clone(),
+                                            width: self.get_signal_width(signal_name),
+                                            transitions,
+                                        });
+                                    }
                                 }
                                 Ok(None) => {
                                     // Group file exists but signal not found
