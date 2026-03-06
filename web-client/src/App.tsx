@@ -2440,6 +2440,7 @@ function App() {
                 waveformName={currentWaveName || ''}
                 signalPrefix={currentWaveSignalPrefix}
                 spaceBeforeBracket={currentWaveSignalSpaceBeforeBracket}
+                waveformRange={activeTabData.waveformRange}
               />
             ) : null}
           </TabPanel>
