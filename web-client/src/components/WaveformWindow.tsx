@@ -424,15 +424,6 @@ export function WaveformWindow({
         await wasmProvider.fetch_signals_data_batch(signalNames);
       } catch (error) {
         console.error(`[WaveformWindow] Failed to fetch signals in batch:`, error);
-        // Fallback to individual fetch
-        for (const signal of signalList) {
-          try {
-            console.log(`[WaveformWindow] Fallback: fetching data for signal: ${signal.name}`);
-            await wasmProvider.fetch_signal_data(signal.name);
-          } catch (error) {
-            console.error(`[WaveformWindow] Failed to fetch data for ${signal.name}:`, error);
-          }
-        }
       }
 
       // Get segments from WASM provider

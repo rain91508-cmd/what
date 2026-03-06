@@ -466,69 +466,7 @@ impl WaveformDataProvider {
         server_name
     }
 
-    /// Fetch signal data from server with time range
-    /// signal_name: local signal name (from KDB)
-    pub async fn fetch_signal_data(&mut self, local_signal_name: &str) -> Result<(), JsValue> {
-        // Step 1 & 2: Convert local name to server name
-        let server_name = self.local_to_server_name(local_signal_name);
 
-        // Step 3: Base64 encode (no regex escaping needed)
-        let encoded = general_purpose::STANDARD.encode(&server_name);
-
-        // Calculate appropriate LoD
-        let lod = select_lod(&self.viewport, self.canvas_width);
-
-        // Get time range from viewport
-        let time_start = self.viewport.time_start as u64;
-        let time_end = self.viewport.time_end as u64;
-
-        // Build URL with new API format: /api/wave/{name}/lod/{lod}/time/{start}/{end}/compress/{compress}/signals/{names}/data
-        // Add time_stamp query parameter for CDN cache
-        let url = format!("{}/api/wave/{}/lod/{}/time/{}/{}/compress/none/signals/b64:{}/data?time_stamp={}",
-            self.server_url,
-            self.waveform_name,
-            lod,
-            time_start,
-            time_end,
-            encoded,
-            self.time_stamp);
-
-        console_log!("[WASM] Fetching signal '{}' (server name: '{}') at LoD {}, time {}-{}, time_stamp={}", 
-            local_signal_name, server_name, lod, time_start, time_end, self.time_stamp);
-        console_log!("[WASM] URL: {}", url);
-
-        // Use web-sys to fetch data
-        let window = web_sys::window().ok_or(JsValue::from_str("No window"))?;
-        let resp_value: JsValue = wasm_bindgen_futures::JsFuture::from(
-            window.fetch_with_str(&url)
-        ).await?;
-
-        let resp: web_sys::Response = resp_value.dyn_into()
-            .map_err(|_| JsValue::from_str("Invalid response"))?;
-
-        if !resp.ok() {
-            return Err(JsValue::from_str(&format!("HTTP error: {}", resp.status())));
-        }
-
-        // Get array buffer
-        let data: JsValue = wasm_bindgen_futures::JsFuture::from(
-            resp.array_buffer()?
-        ).await?;
-
-        let array_buffer: js_sys::ArrayBuffer = data.dyn_into()
-            .map_err(|_| JsValue::from_str("Invalid array buffer"))?;
-
-        let uint8_array = js_sys::Uint8Array::new(&array_buffer);
-        let mut bytes = vec![0u8; uint8_array.length() as usize];
-        uint8_array.copy_to(&mut bytes);
-
-        console_log!("[WASM] Received {} bytes for signal {}", bytes.len(), local_signal_name);
-
-        // Parse chunk data (store under local name for lookup)
-        self.parse_chunk_data(local_signal_name, &bytes)?;
-
-        Ok(())
-    }
 
     /// Fetch multiple signals data from server in batch with dynamic LoD
     /// signal_names: array of local signal names (from KDB)
