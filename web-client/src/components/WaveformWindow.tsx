@@ -342,6 +342,7 @@ export function WaveformWindow({
         if (isBus && isExpanded) {
           // 展开状态：先绘制原始多bit信号（第一行），再绘制各个bit
           signalList.push({
+            uniqueId: signal.unique_id,
             globalId: signal.globalId,
             name: signal.fullName || signal.name,
             row: currentRow,
@@ -359,6 +360,7 @@ export function WaveformWindow({
             const bitIndex = signal.msb - i;
             const baseName = signal.fullName || signal.name;
             signalList.push({
+              uniqueId: signal.unique_id,  // bit信号使用相同的uniqueId
               globalId: signal.globalId,  // bit信号使用相同的globalId
               name: `${baseName}@[${bitIndex}]`,  // 特殊格式，WASM 从父信号提取 bit
               row: currentRow,
@@ -371,6 +373,7 @@ export function WaveformWindow({
           // 折叠状态或单bit信号：作为一个整体
           const width = signal.msb !== signal.lsb ? signal.msb - signal.lsb + 1 : 1;
           signalList.push({
+            uniqueId: signal.unique_id,
             globalId: signal.globalId,
             name: signal.fullName || signal.name,
             row: currentRow,
@@ -402,7 +405,9 @@ export function WaveformWindow({
       const wasmProvider = wasmProviderRef.current;
 
       // Build WASM signals with draw_sig_id using SignalIdManager
+      // Use uniqueId for draw_sig_id to ensure per-tab isolation
       const uiSignals = signalList.map((s) => ({
+        unique_id: s.uniqueId,
         global_id: s.globalId,
         name: s.name,
         row: s.row,
