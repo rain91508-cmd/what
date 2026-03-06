@@ -911,6 +911,10 @@ impl WaveformDataProvider {
     /// 2. Fetch only missing signal+tile combinations from server
     /// 3. Store fetched data in cache using supplement_data
     pub async fn fetch_signals_data_batch(&mut self, signal_names: Vec<String>) -> Result<(), JsValue> {
+        // Clear signal_data cache for new viewport
+        // signal_data is temporary cache for current viewport only
+        self.signal_data.clear();
+        
         const MAX_BATCH_SIZE: usize = 256;
         
         let total_signals = signal_names.len();
