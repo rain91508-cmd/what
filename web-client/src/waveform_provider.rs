@@ -891,56 +891,59 @@ impl WaveformDataProvider {
         console_log!("[WASM] Total signals: {}, fetching {} (excluding {} bit-extract signals)",
             signal_names.len(), signals_to_fetch.len(), signal_names.len() - signals_to_fetch.len());
 
-        // Step 1: Check cache using prepare_data to find missing tiles
-        console_log!("[WASM] Step 1: Checking OPFS cache for required tiles...");
-        let prepare_result_js = self.prepare_data().await?;
-        let prepare_result: PrepareDataResult = serde_wasm_bindgen::from_value(prepare_result_js)
-            .map_err(|e| JsValue::from_str(&format!("Failed to parse prepare_data result: {}", e)))?;
+        // Step 1: Calculate all required tiles based on time range
+        console_log!("[WASM] Step 1: Calculating required tiles...");
+        let mut tiles_to_fetch: Vec<u64> = Vec::new();
+        for tile_id in start_tile..=end_tile {
+            tiles_to_fetch.push(tile_id);
+        }
+        console_log!("[WASM]   Total tiles to check: {}", tiles_to_fetch.len());
+
+        // Step 2: Check cache and find missing tiles
+        console_log!("[WASM] Step 2: Checking OPFS cache...");
+        let mut missing_tiles: Vec<u64> = Vec::new();
+        let mut cache_hits = 0u32;
         
-        if prepare_result.missing_blocks.is_empty() {
-            console_log!("[WASM] All data found in cache, no server fetch needed!");
-            console_log!("[WASM] Cache stats: memory_hits={}, opfs_hits={}, misses={}",
-                prepare_result.cache_stats.memory_hits,
-                prepare_result.cache_stats.opfs_hits,
-                prepare_result.cache_stats.misses);
+        for tile_id in &tiles_to_fetch {
+            // Check if any group in this tile is missing from cache
+            // For simplicity, we check group 0 (all signals in group 0 for now)
+            let block = crate::opfs_cache::DataBlock {
+                lod,
+                tile: *tile_id,
+                group: 0, // TODO: Check all groups
+            };
+            
+            match self.opfs_cache.read(&block).await {
+                Ok(Some(_)) => {
+                    console_log!("[WASM]   Tile {}: FOUND in cache", tile_id);
+                    cache_hits += 1;
+                }
+                _ => {
+                    console_log!("[WASM]   Tile {}: NOT FOUND in cache", tile_id);
+                    missing_tiles.push(*tile_id);
+                }
+            }
+        }
+        
+        console_log!("[WASM]   Cache hits: {}, Missing tiles: {}", cache_hits, missing_tiles.len());
+        
+        if missing_tiles.is_empty() {
+            console_log!("[WASM] All tiles found in cache, no server fetch needed!");
             return Ok(());
         }
         
-        console_log!("[WASM] Need to fetch {} tiles from server", prepare_result.missing_blocks.len());
-        console_log!("[WASM] Cache stats: memory_hits={}, opfs_hits={}, misses={}",
-            prepare_result.cache_stats.memory_hits,
-            prepare_result.cache_stats.opfs_hits,
-            prepare_result.cache_stats.misses);
+        console_log!("[WASM] Step 3: Fetching {} missing tiles from server", missing_tiles.len());
         
-        // Step 2: Fetch only missing tiles from server
-        // Group missing blocks by tile to minimize requests
-        let mut tiles_to_fetch: std::collections::HashMap<u64, Vec<&MissingBlock>> = std::collections::HashMap::new();
-        for block in &prepare_result.missing_blocks {
-            tiles_to_fetch.entry(block.tile).or_insert_with(Vec::new).push(block);
-        }
-        
-        console_log!("[WASM] Step 2: Fetching {} unique tiles from server", tiles_to_fetch.len());
-        
-        // Process each missing tile
-        for (tile_idx, (tile_id, blocks)) in tiles_to_fetch.iter().enumerate() {
-            let tile_time_start = tile_id * tile_span;
-            let tile_time_end = ((tile_id + 1) * tile_span).min(time_end);
+        // Step 3: Fetch missing tiles from server
+        for (tile_idx, tile_id) in missing_tiles.iter().enumerate() {
+            let tile_time_start = *tile_id * tile_span;
+            let tile_time_end = ((*tile_id + 1) * tile_span).min(time_end);
             
             console_log!("[WASM] Fetching tile {}/{}: tile_id={}, time={}-{} (span={})",
-                tile_idx + 1, tiles_to_fetch.len(), tile_id, tile_time_start, tile_time_end, tile_span);
+                tile_idx + 1, missing_tiles.len(), tile_id, tile_time_start, tile_time_end, tile_span);
             
-            // Get unique signals needed for this tile
-            let mut tile_signals: std::collections::HashSet<String> = std::collections::HashSet::new();
-            for block in blocks {
-                // Find signals in this group
-                for sig in &self.signals_with_id {
-                    if OpfsCacheManager::get_group_id(sig.draw_sig_id) == block.group {
-                        tile_signals.insert(sig.name.clone());
-                    }
-                }
-            }
-            
-            let tile_signal_names: Vec<String> = tile_signals.into_iter().collect();
+            // Use all signals for this tile (not filtered by group for now)
+            let tile_signal_names = signals_to_fetch.clone();
             console_log!("[WASM]   Tile {} needs {} signals", tile_id, tile_signal_names.len());
             
             // Fetch this tile's data from server
@@ -1006,8 +1009,7 @@ impl WaveformDataProvider {
             }
         }
         
-        console_log!("[WASM] Finished fetching {} tiles in {} batches", 
-            tiles_to_fetch.len(), prepare_result.missing_blocks.len());
+        console_log!("[WASM] Finished fetching {} tiles", missing_tiles.len());
         
         Ok(())
     }
