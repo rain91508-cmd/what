@@ -855,6 +855,11 @@ impl WaveformDataProvider {
     /// Fetch multiple signals data from server in batch with dynamic LoD
     /// signal_names: array of local signal names (from KDB)
     /// max_batch_size: maximum number of signals per request (default 256)
+    /// 
+    /// NOTE: This function now integrates with OPFS cache:
+    /// 1. Check cache using prepare_data
+    /// 2. Fetch only missing tiles from server
+    /// 3. Store fetched data in cache using supplement_data
     pub async fn fetch_signals_data_batch(&mut self, signal_names: Vec<String>) -> Result<(), JsValue> {
         const MAX_BATCH_SIZE: usize = 256;
         
@@ -886,68 +891,123 @@ impl WaveformDataProvider {
         console_log!("[WASM] Total signals: {}, fetching {} (excluding {} bit-extract signals)",
             signal_names.len(), signals_to_fetch.len(), signal_names.len() - signals_to_fetch.len());
 
-        // Process signals in batches
-        for (batch_idx, batch) in signals_to_fetch.chunks(MAX_BATCH_SIZE).enumerate() {
-            let batch_size = batch.len();
-            console_log!("[WASM] Processing batch {}: {} signals", batch_idx + 1, batch_size);
-
-            // Convert all signal names to server names
-            let server_names: Vec<String> = batch.iter()
-                .map(|local_name| self.build_server_signal_name(local_name))
-                .collect();
-
-            // Join server names with comma, then base64 encode the whole string
-            // This matches the API spec: "clk,reset,data" -> base64
-            let names_batch = server_names.join(",");
-            let encoded_batch = general_purpose::STANDARD.encode(&names_batch);
-
-            // Build URL for batch request with new API format
-            // Add time_stamp query parameter for CDN cache
-            let url = format!("{}/api/wave/{}/lod/{}/time/{}/{}/compress/none/signals/b64:{}/data?time_stamp={}",
-                self.server_url,
-                self.waveform_name,
-                lod,
-                time_start,
-                time_end,
-                encoded_batch,
-                self.time_stamp);
-
-            console_log!("[WASM] Batch {} URL: {} (time_stamp={})", batch_idx + 1, url, self.time_stamp);
-            
-            // Fetch batch data
-            let window = web_sys::window().ok_or(JsValue::from_str("No window"))?;
-            let resp_value: JsValue = wasm_bindgen_futures::JsFuture::from(
-                window.fetch_with_str(&url)
-            ).await?;
-            
-            let resp: web_sys::Response = resp_value.dyn_into()
-                .map_err(|_| JsValue::from_str("Invalid response"))?;
-            
-            if !resp.ok() {
-                return Err(JsValue::from_str(&format!("HTTP error: {}", resp.status())));
-            }
-            
-            // Get array buffer
-            let data: JsValue = wasm_bindgen_futures::JsFuture::from(
-                resp.array_buffer()?
-            ).await?;
-            
-            let array_buffer: js_sys::ArrayBuffer = data.dyn_into()
-                .map_err(|_| JsValue::from_str("Invalid array buffer"))?;
-            
-            let uint8_array = js_sys::Uint8Array::new(&array_buffer);
-            let mut bytes = vec![0u8; uint8_array.length() as usize];
-            uint8_array.copy_to(&mut bytes);
-            
-            console_log!("[WASM] Batch {} received {} bytes", batch_idx + 1, bytes.len());
-            
-            // Parse chunk data for all signals in batch
-            // Server returns multiple signals in one chunk
-            self.parse_chunk_data_for_batch(&batch, &bytes)?;
+        // Step 1: Check cache using prepare_data to find missing tiles
+        console_log!("[WASM] Step 1: Checking OPFS cache for required tiles...");
+        let prepare_result_js = self.prepare_data().await?;
+        let prepare_result: PrepareDataResult = serde_wasm_bindgen::from_value(prepare_result_js)
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse prepare_data result: {}", e)))?;
+        
+        if prepare_result.missing_blocks.is_empty() {
+            console_log!("[WASM] All data found in cache, no server fetch needed!");
+            console_log!("[WASM] Cache stats: memory_hits={}, opfs_hits={}, misses={}",
+                prepare_result.cache_stats.memory_hits,
+                prepare_result.cache_stats.opfs_hits,
+                prepare_result.cache_stats.misses);
+            return Ok(());
         }
         
-        console_log!("[WASM] Finished fetching {} signals in {} batches", total_signals, 
-            (total_signals + MAX_BATCH_SIZE - 1) / MAX_BATCH_SIZE);
+        console_log!("[WASM] Need to fetch {} tiles from server", prepare_result.missing_blocks.len());
+        console_log!("[WASM] Cache stats: memory_hits={}, opfs_hits={}, misses={}",
+            prepare_result.cache_stats.memory_hits,
+            prepare_result.cache_stats.opfs_hits,
+            prepare_result.cache_stats.misses);
+        
+        // Step 2: Fetch only missing tiles from server
+        // Group missing blocks by tile to minimize requests
+        let mut tiles_to_fetch: std::collections::HashMap<u64, Vec<&MissingBlock>> = std::collections::HashMap::new();
+        for block in &prepare_result.missing_blocks {
+            tiles_to_fetch.entry(block.tile).or_insert_with(Vec::new).push(block);
+        }
+        
+        console_log!("[WASM] Step 2: Fetching {} unique tiles from server", tiles_to_fetch.len());
+        
+        // Process each missing tile
+        for (tile_idx, (tile_id, blocks)) in tiles_to_fetch.iter().enumerate() {
+            let tile_time_start = tile_id * tile_span;
+            let tile_time_end = ((tile_id + 1) * tile_span).min(time_end);
+            
+            console_log!("[WASM] Fetching tile {}/{}: tile_id={}, time={}-{} (span={})",
+                tile_idx + 1, tiles_to_fetch.len(), tile_id, tile_time_start, tile_time_end, tile_span);
+            
+            // Get unique signals needed for this tile
+            let mut tile_signals: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for block in blocks {
+                // Find signals in this group
+                for sig in &self.signals_with_id {
+                    if OpfsCacheManager::get_group_id(sig.draw_sig_id) == block.group {
+                        tile_signals.insert(sig.name.clone());
+                    }
+                }
+            }
+            
+            let tile_signal_names: Vec<String> = tile_signals.into_iter().collect();
+            console_log!("[WASM]   Tile {} needs {} signals", tile_id, tile_signal_names.len());
+            
+            // Fetch this tile's data from server
+            for (batch_idx, batch) in tile_signal_names.chunks(MAX_BATCH_SIZE).enumerate() {
+                let batch_size = batch.len();
+                console_log!("[WASM]   Processing batch {}: {} signals", batch_idx + 1, batch_size);
+
+                // Convert all signal names to server names
+                let server_names: Vec<String> = batch.iter()
+                    .map(|local_name| self.build_server_signal_name(local_name))
+                    .collect();
+
+                // Join server names with comma, then base64 encode
+                let names_batch = server_names.join(",");
+                let encoded_batch = general_purpose::STANDARD.encode(&names_batch);
+
+                // Build URL for this tile's time range
+                let url = format!("{}/api/wave/{}/lod/{}/time/{}/{}/compress/none/signals/b64:{}/data?time_stamp={}",
+                    self.server_url,
+                    self.waveform_name,
+                    lod,
+                    tile_time_start,
+                    tile_time_end,
+                    encoded_batch,
+                    self.time_stamp);
+
+                console_log!("[WASM]   Tile {} Batch {} URL: time={}-{} (tile_span={})", 
+                    tile_id, batch_idx + 1, tile_time_start, tile_time_end, tile_span);
+                
+                // Fetch batch data
+                let window = web_sys::window().ok_or(JsValue::from_str("No window"))?;
+                let resp_value: JsValue = wasm_bindgen_futures::JsFuture::from(
+                    window.fetch_with_str(&url)
+                ).await?;
+                
+                let resp: web_sys::Response = resp_value.dyn_into()
+                    .map_err(|_| JsValue::from_str("Invalid response"))?;
+                
+                if !resp.ok() {
+                    return Err(JsValue::from_str(&format!("HTTP error: {}", resp.status())));
+                }
+                
+                // Get array buffer
+                let data: JsValue = wasm_bindgen_futures::JsFuture::from(
+                    resp.array_buffer()?
+                ).await?;
+                
+                let array_buffer: js_sys::ArrayBuffer = data.dyn_into()
+                    .map_err(|_| JsValue::from_str("Invalid array buffer"))?;
+                
+                let uint8_array = js_sys::Uint8Array::new(&array_buffer);
+                let mut bytes = vec![0u8; uint8_array.length() as usize];
+                uint8_array.copy_to(&mut bytes);
+                
+                console_log!("[WASM]   Tile {} Batch {} received {} bytes", 
+                    tile_id, batch_idx + 1, bytes.len());
+                
+                // Step 3: Store fetched data in cache using supplement_data
+                console_log!("[WASM]   Step 3: Storing data in OPFS cache...");
+                let js_bytes = js_sys::Uint8Array::from(&bytes[..]);
+                self.supplement_data(js_bytes.into()).await?;
+                console_log!("[WASM]   Data stored in cache successfully");
+            }
+        }
+        
+        console_log!("[WASM] Finished fetching {} tiles in {} batches", 
+            tiles_to_fetch.len(), prepare_result.missing_blocks.len());
         
         Ok(())
     }
