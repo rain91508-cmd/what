@@ -50,13 +50,15 @@ export function isOpfsEnabled(): boolean {
 /**
  * Create a new waveform data provider
  * @param timeStamp Waveform modification timestamp for CDN cache (from wave_info.modified_time)
+ * @param enableOpfs Whether to enable OPFS cache (defaults to current global setting)
  */
 export async function createProvider(
   serverUrl: string,
   waveformName: string,
   signalPrefix: string,
   spaceBeforeBracket: boolean,
-  timeStamp: number = 0
+  timeStamp: number = 0,
+  enableOpfs: boolean = opfsEnabled
 ): Promise<WaveformDataProvider> {
   if (!wasmInitialized) {
     throw new Error('WASM not initialized. Call initWasm() first.');
@@ -103,10 +105,10 @@ export async function createProvider(
     readCallback as any,
     writeCallback as any,
     existsCallback as any,
-    opfsEnabled
+    enableOpfs
   );
   
-  console.log(`[WaveformProvider] Created provider for ${waveformName}, OPFS=${opfsEnabled}`);
+  console.log(`[WaveformProvider] Created provider for ${waveformName}, OPFS=${enableOpfs}`);
   
   return provider;
 }

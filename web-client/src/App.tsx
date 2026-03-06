@@ -995,9 +995,10 @@ function App() {
     setCurrentWaveCustomRange(customRange)  // Save user custom range (if any)
 
     // Create WASM provider for the new waveform with initial viewport and time stamp
+    // Pass the current OPFS cache enabled state
     try {
-      createProvider(serverUrl, waveName, 'work@', true, waveTimeStamp)
-      console.log('[App] Created WASM provider for waveform:', waveName, 'timeStamp:', waveTimeStamp)
+      createProvider(serverUrl, waveName, 'work@', true, waveTimeStamp, opfsCacheEnabled)
+      console.log('[App] Created WASM provider for waveform:', waveName, 'timeStamp:', waveTimeStamp, 'OPFS:', opfsCacheEnabled)
     } catch (error) {
       console.error('[App] Failed to create WASM provider:', error)
     }
