@@ -55,7 +55,7 @@ pub const OPFS_GC_TARGET: u64 = 700 * 1024 * 1024;
 // Data Structures
 // =============================================================================
 
-/// Signal information with draw_sig_id
+/// Signal information with draw_sig_id (unified structure for rendering and cache)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignalWithId {
     pub global_id: u64,      // KDB global_id
@@ -63,6 +63,8 @@ pub struct SignalWithId {
     pub row: usize,          // Display row
     pub width: u32,          // Bit width
     pub draw_sig_id: u32,    // JS-allocated monotonic ID
+    #[serde(skip)]          // Not serialized, computed on demand
+    pub bit_extract: Option<(String, (u32, u32))>,  // For bit extraction signals
 }
 
 /// Data block identifier (LOD + Tile + Group)
