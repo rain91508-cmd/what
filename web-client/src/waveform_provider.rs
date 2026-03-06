@@ -1050,8 +1050,12 @@ impl WaveformDataProvider {
                 console_log!("[WASM]   Step 3: Storing data in OPFS cache and parsing for rendering...");
                 
                 // First, parse chunk data and store in signal_data for rendering
-                console_log!("[WASM]   Parsing chunk data for {} signals...", tile_signal_names.len());
-                self.parse_chunk_data_for_batch(&tile_signal_names, &bytes)?;
+                // Pass tile info for proper handling of initial values and viewport filtering
+                let is_first_tile = tile_idx == 0;
+                let is_last_tile = tile_idx == missing_tiles.len() - 1;
+                console_log!("[WASM]   Parsing chunk data for {} signals (tile {}/{}, first={}, last={})", 
+                    tile_signal_names.len(), tile_idx + 1, missing_tiles.len(), is_first_tile, is_last_tile);
+                self.parse_chunk_data_for_batch(&tile_signal_names, &bytes, time_start, time_end, is_first_tile, is_last_tile)?;
                 console_log!("[WASM]   Chunk data parsed and stored in signal_data");
                 
                 // Then, store in OPFS cache for future use
@@ -1071,7 +1075,23 @@ impl WaveformDataProvider {
 
     /// Parse chunk data for a batch of signals
     /// The batch order must match the order in the chunk
-    fn parse_chunk_data_for_batch(&mut self, batch: &[String], data: &[u8]) -> Result<(), JsValue> {
+    /// 
+    /// Parameters:
+    /// - batch: signal names in the same order as server response
+    /// - data: raw chunk data from server
+    /// - viewport_start: viewport start time (for filtering)
+    /// - viewport_end: viewport end time (for filtering)
+    /// - is_first_tile: whether this is the first tile (keep initial value)
+    /// - is_last_tile: whether this is the last tile (keep all transitions)
+    fn parse_chunk_data_for_batch(
+        &mut self, 
+        batch: &[String], 
+        data: &[u8],
+        viewport_start: u64,
+        viewport_end: u64,
+        is_first_tile: bool,
+        is_last_tile: bool,
+    ) -> Result<(), JsValue> {
         // Parse header
         let header = ChunkHeader::from_bytes(data)
             .map_err(|e| JsValue::from_str(&e))?;
@@ -1119,12 +1139,36 @@ impl WaveformDataProvider {
             }
 
             // Parse transitions for this signal
-            let transitions = self.parse_transitions_from_block(
+            let mut transitions = self.parse_transitions_from_block(
                 data,
                 &block_header,
                 &header,
                 signal_idx as usize
             )?;
+
+            console_log!("[WASM]   Parsed {} transitions from chunk", transitions.len());
+
+            // Filter transitions to viewport range and handle initial values
+            // For non-first tiles, skip the first transition (it's the initial value at tile start)
+            if !is_first_tile && !transitions.is_empty() {
+                console_log!("[WASM]   Skipping first transition (initial value) for non-first tile");
+                transitions.remove(0);
+                console_log!("[WASM]   Remaining transitions after removing initial: {}", transitions.len());
+            }
+
+            // Filter transitions to viewport range
+            // Keep transitions within [viewport_start, viewport_end]
+            // Also keep one transition before viewport_start for proper initial value
+            let filtered_transitions: Vec<Transition> = transitions
+                .into_iter()
+                .filter(|t| {
+                    // Keep if within viewport, or if it's the last transition before viewport_start
+                    t.time >= viewport_start || t.time <= viewport_end
+                })
+                .collect();
+
+            console_log!("[WASM]   Filtered to {} transitions in viewport range [{}-{}]", 
+                filtered_transitions.len(), viewport_start, viewport_end);
 
             // Get width from signal info
             let width = self.get_signal_width(signal_name);
@@ -1133,15 +1177,17 @@ impl WaveformDataProvider {
             if let Some(existing_data) = self.signal_data.get_mut(signal_name) {
                 // Append new transitions to existing ones
                 console_log!("[WASM]   Merging transitions: existing={}, new={}", 
-                    existing_data.transitions.len(), transitions.len());
-                existing_data.transitions.extend(transitions);
-                console_log!("[WASM]   Total transitions after merge: {}", existing_data.transitions.len());
+                    existing_data.transitions.len(), filtered_transitions.len());
+                existing_data.transitions.extend(filtered_transitions);
+                // Sort by time to ensure correct order after merge
+                existing_data.transitions.sort_by_key(|t| t.time);
+                console_log!("[WASM]   Total transitions after merge and sort: {}", existing_data.transitions.len());
             } else {
                 // Insert new signal data
                 self.signal_data.insert(signal_name.clone(), SignalWaveData {
                     name: signal_name.clone(),
                     width,
-                    transitions,
+                    transitions: filtered_transitions,
                 });
             }
 
