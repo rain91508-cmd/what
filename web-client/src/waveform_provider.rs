@@ -780,6 +780,19 @@ impl WaveformDataProvider {
         self.display_format = format;
     }
 
+    /// Set memory cache enabled
+    #[wasm_bindgen]
+    pub fn set_memory_cache_enabled(&mut self, enabled: bool) {
+        console_log!("[WASM] Setting memory cache enabled: {}", enabled);
+        self.opfs_cache.set_memory_cache_enabled(enabled);
+    }
+
+    /// Get memory cache enabled status
+    #[wasm_bindgen(getter)]
+    pub fn memory_cache_enabled(&self) -> bool {
+        self.opfs_cache.memory_cache_enabled
+    }
+
     /// Parse @[...] format for bit extraction
     /// Format: parent_name@[bit_index] or parent_name@[msb:lsb]
     /// Examples:

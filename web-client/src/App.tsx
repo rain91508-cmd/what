@@ -37,7 +37,7 @@ import { zoomIn, zoomOut } from './utils/zoomHelpers'
 import { sanitizeTimeRange } from './utils/viewport'
 
 // WASM
-import { initWasm, createProvider, updateProviderSettings, setOpfsEnabled, checkOpfsSupport } from './wasm/waveformProvider'
+import { initWasm, createProvider, updateProviderSettings, setOpfsEnabled, checkOpfsSupport, setMemoryCacheEnabled as setWasmMemoryCacheEnabled } from './wasm/waveformProvider'
 
 // Components
 import { MenuBar } from './components/MenuBar'
@@ -151,6 +151,13 @@ function App() {
     const saved = localStorage.getItem('opfs_cache_enabled');
     return saved === 'true' && checkOpfsSupport();
   })
+
+  // Memory LRU Cache enabled state
+  const [memoryCacheEnabled, setMemoryCacheEnabled] = useState<boolean>(() => {
+    // Check localStorage for saved preference, default to true
+    const saved = localStorage.getItem('memory_cache_enabled');
+    return saved !== 'false'; // Default to true if not set
+  })
   
   // Helper function to create default groups
   const createDefaultGroups = () => ({
@@ -236,6 +243,17 @@ function App() {
       addMessage(`OPFS Cache ${newValue ? 'enabled' : 'disabled'}`);
     }, 0);
   }, [opfsCacheEnabled]);
+
+  const handleToggleMemoryCache = useCallback(() => {
+    const newValue = !memoryCacheEnabled;
+    setMemoryCacheEnabled(newValue);  // Update React state
+    setWasmMemoryCacheEnabled(newValue);  // Call WASM function
+    localStorage.setItem('memory_cache_enabled', newValue.toString());
+    // Use setTimeout to avoid circular dependency with addMessage
+    setTimeout(() => {
+      addMessage(`Memory Cache ${newValue ? 'enabled' : 'disabled'}`);
+    }, 0);
+  }, [memoryCacheEnabled]);
 
   const addMessage = useCallback((msg: string) => {
     setMessages(prev => {
@@ -2301,6 +2319,8 @@ function App() {
         }}
         opfsEnabled={opfsCacheEnabled}
         onToggleOpfs={handleToggleOpfs}
+        memoryCacheEnabled={memoryCacheEnabled}
+        onToggleMemoryCache={handleToggleMemoryCache}
       />
 
       {/* Tool Bar */}
