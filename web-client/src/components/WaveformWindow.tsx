@@ -1663,7 +1663,27 @@ export function WaveformWindow({
             <span style={{
               position: 'absolute',
               left: `${((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * 100}%`,
-              transform: 'translateX(4px)',
+              transform: (() => {
+                const cursorX = ((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * canvasWidth;
+                const isClose = displayMouseX !== null && Math.abs(displayMouseX - cursorX) < 100;
+                
+                // If close to mouse, position on opposite side
+                if (isClose && displayMouseX !== null) {
+                  if (displayMouseX > cursorX) {
+                    // Mouse on right, cursor label on left
+                    return 'translateX(-100%) translateX(-4px)';
+                  } else {
+                    // Mouse on left, cursor label on right
+                    return 'translateX(4px)';
+                  }
+                }
+                
+                // Default: check if too close to right edge
+                if (cursorX > canvasWidth - 80) {
+                  return 'translateX(-100%) translateX(-4px)';
+                }
+                return 'translateX(4px)';
+              })(),
               color: '#ffffff',
               fontWeight: 'bold',
               zIndex: 2,
@@ -1677,7 +1697,32 @@ export function WaveformWindow({
             <span style={{
               position: 'absolute',
               left: mouseX,
-              transform: 'translateX(4px)',
+              transform: (() => {
+                const cursorX = ((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * canvasWidth;
+                const isClose = Math.abs(displayMouseX - cursorX) < 100;
+                
+                // If close to cursor, position on opposite side
+                if (isClose) {
+                  if (displayMouseX < cursorX) {
+                    // Mouse on left, label on left
+                    return 'translateX(-100%) translateX(-4px)';
+                  } else {
+                    // Mouse on right, label on right
+                    return 'translateX(4px)';
+                  }
+                }
+                
+                // Default: check edges
+                if (displayMouseX < 60) {
+                  // Too close to left edge, show on right
+                  return 'translateX(4px)';
+                } else if (displayMouseX > canvasWidth - 80) {
+                  // Too close to right edge, show on left
+                  return 'translateX(-100%) translateX(-4px)';
+                }
+                // Default: show on left (opposite of cursor default)
+                return 'translateX(-100%) translateX(-4px)';
+              })(),
               color: '#00ffff',
               fontWeight: 'bold',
               zIndex: 2,
