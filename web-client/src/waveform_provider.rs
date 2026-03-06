@@ -1145,17 +1145,17 @@ impl WaveformDataProvider {
 
             // Filter transitions to viewport range and handle initial values
             // For non-first tiles, check if first transition is the initial value marker
-            // (time equals tile start time) - if so, skip it
+            // Special boundary time: 0xFFFFFFFFFFFFFFFF (u64::MAX) indicates start boundary value
+            const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
             if !is_first_tile && !transitions.is_empty() {
                 let first_time = transitions[0].time;
-                if first_time == header.time_start {
-                    console_log!("[WASM]   First transition time ({}) equals tile start ({}), skipping initial value", 
-                        first_time, header.time_start);
+                if first_time == BOUNDARY_TIME_START {
+                    console_log!("[WASM]   First transition is start boundary value (0xFFFFFFFFFFFFFFFF), skipping");
                     transitions.remove(0);
                     console_log!("[WASM]   Remaining transitions after removing initial: {}", transitions.len());
                 } else {
-                    console_log!("[WASM]   First transition time ({}) != tile start ({}), keeping it", 
-                        first_time, header.time_start);
+                    console_log!("[WASM]   First transition time ({}) is not boundary value, keeping it", 
+                        first_time);
                 }
             }
 
