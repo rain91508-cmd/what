@@ -61,23 +61,24 @@ class WaveformRenderer {
     this.drawTimeRuler(canvasWidth, rulerHeight, viewport, timeConfig);
 
     // Draw segments (直接使用 x0, x1, y)
-    // Group segments by signal name to handle transitions
-    const segmentsBySignal = new Map<string, RenderSegment[]>();
+    // Group segments by y coordinate (row) to handle transitions correctly
+    // This ensures that signals with the same name but different rows are drawn separately
+    const segmentsByRow = new Map<number, RenderSegment[]>();
     for (const seg of segments) {
-      const signalName = seg.signalName || seg.signal_name || '';
-      if (!segmentsBySignal.has(signalName)) {
-        segmentsBySignal.set(signalName, []);
+      const rowKey = Math.round(seg.y * 100) / 100; // Round to avoid floating point issues
+      if (!segmentsByRow.has(rowKey)) {
+        segmentsByRow.set(rowKey, []);
       }
-      segmentsBySignal.get(signalName)!.push(seg);
+      segmentsByRow.get(rowKey)!.push(seg);
     }
 
-    // Draw segments for each signal, sorted by x0
-    for (const [signalName, signalSegments] of segmentsBySignal) {
+    // Draw segments for each row, sorted by x0
+    for (const [rowKey, rowSegments] of segmentsByRow) {
       // Sort by x0
-      signalSegments.sort((a, b) => a.x0 - b.x0);
+      rowSegments.sort((a, b) => a.x0 - b.x0);
 
       let prevValue: FormattedValue | null = null;
-      for (const seg of signalSegments) {
+      for (const seg of rowSegments) {
         // Draw transition edge if there's a previous segment with different value
         if (prevValue && seg.value.width === 1 && prevValue.width === 1) {
           const prevLevel = this.getSignalLevel(prevValue);

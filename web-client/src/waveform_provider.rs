@@ -1031,20 +1031,37 @@ impl WaveformDataProvider {
         
         console_log!("[WASM] extract_bits_from_transitions: msb={}, lsb={}, bit_count={}, mask={:#x}", msb, lsb, bit_count, mask);
         
-        transitions.iter().filter_map(|t| {
+        let mut result = Vec::new();
+        let mut last_value: Option<String> = None;
+        
+        for t in transitions.iter() {
             // Parse value string to u64, handling both decimal and hex formats
             let value_u64 = if t.value.starts_with("0x") || t.value.starts_with("0X") {
-                u64::from_str_radix(t.value.trim_start_matches("0x").trim_start_matches("0X"), 16).ok()?
+                match u64::from_str_radix(t.value.trim_start_matches("0x").trim_start_matches("0X"), 16) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                }
             } else {
-                t.value.parse::<u64>().ok()?
+                match t.value.parse::<u64>() {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                }
             };
             let extracted_value = (value_u64 & mask) >> lsb;
-            console_log!("[WASM]   original={}, parsed={:#x}, extracted={:#x}", t.value, value_u64, extracted_value);
-            Some(Transition {
-                time: t.time,
-                value: format!("{}", extracted_value),  // Use decimal format for single bit
-            })
-        }).collect()
+            let extracted_str = format!("{}", extracted_value);
+            
+            // Only add transition if value changed (or it's the first one)
+            if last_value.as_ref() != Some(&extracted_str) {
+                result.push(Transition {
+                    time: t.time,
+                    value: extracted_str.clone(),
+                });
+                last_value = Some(extracted_str);
+            }
+        }
+        
+        console_log!("[WASM] extract_bits_from_transitions: {} transitions after dedup", result.len());
+        result
     }
 
     /// Generate segments for LoD 0 (normal format)
