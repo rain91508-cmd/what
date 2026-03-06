@@ -942,8 +942,48 @@ impl WaveformDataProvider {
         
         console_log!("[WASM]   Cache hits: {}, Missing tiles: {}", cache_hits, missing_tiles.len());
         
+        // Check if all requested signals have data in signal_data cache
+        // Even if tiles are in cache, new signals may not have data loaded
+        let signals_missing_data: Vec<String> = signals_to_fetch.iter()
+            .filter(|name| !self.signal_data.contains_key(*name))
+            .cloned()
+            .collect();
+        
+        if !signals_missing_data.is_empty() {
+            console_log!("[WASM]   Signals missing data in cache: {:?}", signals_missing_data);
+            // If tiles are in cache but signals don't have data, we need to load from cache
+            // or fetch from server if cache doesn't have the signal data
+            // For now, add all tiles to missing_tiles to force a fetch
+            if missing_tiles.is_empty() {
+                console_log!("[WASM]   Tiles in cache but signals missing data, loading from cache or fetching...");
+                // Try to load from OPFS cache first
+                let mut loaded_from_cache = false;
+                for tile_id in &tiles_to_fetch {
+                    let block = crate::opfs_cache::DataBlock {
+                        lod,
+                        tile: *tile_id,
+                        group: 0,
+                    };
+                    
+                    if let Ok(Some(data)) = self.opfs_cache.read(&block).await {
+                        console_log!("[WASM]   Loading tile {} from OPFS cache for new signals", tile_id);
+                        // Parse the cached data for the new signals
+                        // TODO: Need to parse the group data and extract signal data
+                        // For now, add to missing_tiles to fetch from server
+                        missing_tiles.push(*tile_id);
+                        loaded_from_cache = true;
+                    }
+                }
+                
+                if !loaded_from_cache {
+                    console_log!("[WASM]   Could not load from cache, fetching from server");
+                    missing_tiles.extend(&tiles_to_fetch);
+                }
+            }
+        }
+        
         if missing_tiles.is_empty() {
-            console_log!("[WASM] All tiles found in cache, no server fetch needed!");
+            console_log!("[WASM] All tiles found in cache and all signals have data, no server fetch needed!");
             return Ok(());
         }
         
