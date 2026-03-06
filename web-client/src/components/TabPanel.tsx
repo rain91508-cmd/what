@@ -144,6 +144,7 @@ export function displayToLod0(displayUnits: number, timeConfig: TimeConfig): num
 
 /**
  * LoD0Unit → Real Time fs（绝对时间，以 fs 为单位）
+ * LoD0Unit = time_unit (服务器返回的时间单位)
  * @param lod0Units LoD0Unit 值（整数）
  * @param waveformTimeUnit WaveformInfo.timeUnit（服务器返回的数字枚举）
  * @returns 绝对时间（fs）
@@ -154,6 +155,7 @@ export function lod0ToFs(lod0Units: number, waveformTimeUnit: number): number {
 
 /**
  * LoD0Unit → Real Time fs（绝对时间）- 支持 timeUnitStr
+ * LoD0Unit = time_unit (服务器返回的时间单位)
  * @param lod0Units LoD0Unit 值（整数）
  * @param waveformTimeUnit WaveformInfo.timeUnit（服务器返回的数字枚举）
  * @param waveformTimeUnitStr WaveformInfo.timeUnitStr（如 "1ps", "3ns"）
@@ -173,6 +175,7 @@ export function lod0ToFsWithStr(
 
 /**
  * Real Time fs → LoD0Unit（取整）
+ * LoD0Unit = time_unit (服务器返回的时间单位)
  * @param fs 绝对时间（fs）
  * @param waveformTimeUnit WaveformInfo.timeUnit（服务器返回的数字枚举）
  * @returns LoD0Unit 值（整数）

@@ -18,7 +18,7 @@ export interface SignalMockData {
 const mockDataCache = new Map<string, SignalMockData>();
 
 // Maximum time for mock data (in LoD0Units) - 1000 units
-// Assuming 1 LoD0Unit = 1 ns (typical waveform unit)
+// LoD0Unit = time_unit (server's time unit, typically 1ns)
 const MAX_TIME_LOD0 = 1000; // 1000 LoD0Units
 
 // Number of transitions per signal
