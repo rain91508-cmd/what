@@ -304,16 +304,33 @@ impl WaveformDataProvider {
     /// * `signals_js` - Array of { global_id, name, row, width, draw_sig_id }
     #[wasm_bindgen]
     pub fn set_draw_list(&mut self, signals_js: JsValue) -> Result<(), JsValue> {
-        let signals: Vec<SignalWithId> = serde_wasm_bindgen::from_value(signals_js)
+        let signals_with_id: Vec<SignalWithId> = serde_wasm_bindgen::from_value(signals_js)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse signals: {}", e)))?;
 
-        console_log!("[WASM] Set draw list: {} signals", signals.len());
-        for (i, s) in signals.iter().enumerate() {
+        console_log!("[WASM] Set draw list: {} signals", signals_with_id.len());
+        for (i, s) in signals_with_id.iter().enumerate() {
             console_log!("[WASM]   Signal[{}]: global_id={}, name='{}', draw_sig_id={}", 
                 i, s.global_id, s.name, s.draw_sig_id);
         }
 
-        self.signals_with_id = signals;
+        // Also build signals list for get_segments
+        // Parse bit extraction info for each signal
+        let signals: Vec<SignalInfo> = signals_with_id.iter().map(|s| {
+            let bit_extract = Self::parse_bit_extract(&s.name);
+            if let Some((ref parent, (msb, lsb))) = bit_extract {
+                console_log!("[WASM]   Signal '{}': extract bits [{}:{}] from parent '{}'", 
+                    s.name, msb, lsb, parent);
+            }
+            SignalInfo {
+                name: s.name.clone(),
+                row: s.row,
+                width: s.width,
+                bit_extract,
+            }
+        }).collect();
+
+        self.signals_with_id = signals_with_id;
+        self.signals = signals;
         Ok(())
     }
 
