@@ -568,6 +568,14 @@ export function WaveformWindow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewport.timeStart, viewport.timeEnd, canvasWidth, groups, expandedSignals]);
 
+  // 监听 timeConfig 变化，重新渲染波形（影响标尺显示）
+  useEffect(() => {
+    if (canvasWidth > 0 && renderWaveformRef.current) {
+      renderWaveformRef.current().catch(console.error);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeConfig]);
+
   // Cleanup mouse timeout on unmount
   useEffect(() => {
     return () => {
