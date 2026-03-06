@@ -50,13 +50,19 @@ pub struct RenderSegment {
 /// For LoD 1+: both min_value and max_value are used (min/max bucket)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValueInfo {
+    #[serde(rename = "type")]
     pub value_type: String,  // "zero", "one", "all_x", "all_z", "numeric", "mixed", "min_max"
+    #[serde(rename = "displayStr")]
     pub display_str: String, // Display string (for LoD 0, or when min==max)
     pub width: u32,
+    #[serde(rename = "hasXZ")]
     pub has_xz: bool,
     // LoD 1+ min/max support
+    #[serde(rename = "minValue")]
     pub min_value: Option<String>,  // Min value for bucket (LoD 1+)
+    #[serde(rename = "maxValue")]
     pub max_value: Option<String>,  // Max value for bucket (LoD 1+)
+    #[serde(rename = "isMinMax")]
     pub is_min_max: bool,           // True if this is a min/max bucket segment
 }
 
@@ -250,7 +256,7 @@ impl WaveformDataProvider {
             viewport: Viewport { time_start: 0.0, time_end: 1000.0 },
             canvas_width: 800.0,
             canvas_height: 400.0,
-            row_height: 25.0,
+            row_height: 24.0,  // Must match CSS .waveform-signal-item height
             signal_data: HashMap::new(),
         }
     }
@@ -829,10 +835,11 @@ impl WaveformDataProvider {
             self.canvas_width, self.canvas_height);
         console_log!("[WASM] signal_data cache: {} signals", self.signal_data.len());
 
-        for (row, signal) in self.signals.iter().enumerate() {
-            let y = 20.0 + row as f64 * self.row_height + self.row_height / 2.0;
+        for signal in self.signals.iter() {
+            // Use signal.row provided by UI (accounts for group headers)
+            let y = 20.0 + signal.row as f64 * self.row_height + self.row_height / 2.0;
 
-            console_log!("[WASM] Processing signal[{}]: name='{}', y={}", row, signal.name, y);
+            console_log!("[WASM] Processing signal[row={}]: name='{}', y={}", signal.row, signal.name, y);
 
             if let Some(data) = self.signal_data.get(&signal.name) {
                 let total_transitions = data.transitions.len();
@@ -902,13 +909,20 @@ impl WaveformDataProvider {
                 console_log!("[WASM] No transitions in range, using boundary value: {}", boundary_val);
                 let (value_type, has_xz) = Self::classify_value(&boundary_val, width);
 
+                // Format display string with prefix for multi-bit values
+                let display_str = if width > 1 {
+                    Self::format_multi_bit_value(&boundary_val, width)
+                } else {
+                    boundary_val.clone()
+                };
+
                 segments.push(RenderSegment {
                     x0: 0.0,
                     x1: self.canvas_width,
                     y,
                     value: ValueInfo {
                         value_type,
-                        display_str: boundary_val.clone(),
+                        display_str,
                         width,
                         has_xz,
                         min_value: None,
@@ -935,13 +949,21 @@ impl WaveformDataProvider {
 
                     if x1 > x0 {
                         let (value_type, has_xz) = Self::classify_value(boundary_val, width);
+
+                        // Format display string with prefix for multi-bit values
+                        let display_str = if width > 1 {
+                            Self::format_multi_bit_value(boundary_val, width)
+                        } else {
+                            boundary_val.clone()
+                        };
+
                         segments.push(RenderSegment {
                             x0,
                             x1,
                             y,
                             value: ValueInfo {
                                 value_type,
-                                display_str: boundary_val.clone(),
+                                display_str,
                                 width,
                                 has_xz,
                                 min_value: None,
@@ -980,13 +1002,20 @@ impl WaveformDataProvider {
             let value_str = &normal_transitions[i].value;
             let (value_type, has_xz) = Self::classify_value(value_str, width);
 
+            // Format display string with prefix for multi-bit values
+            let display_str = if width > 1 {
+                Self::format_multi_bit_value(value_str, width)
+            } else {
+                value_str.clone()
+            };
+
             segments.push(RenderSegment {
                 x0,
                 x1,
                 y,
                 value: ValueInfo {
                     value_type,
-                    display_str: value_str.clone(),
+                    display_str,
                     width,
                     has_xz,
                     min_value: None,
@@ -1021,13 +1050,20 @@ impl WaveformDataProvider {
                 console_log!("[WASM] No transitions in range (LoD 1+), using boundary value: {}", boundary_val);
                 let (value_type, has_xz) = Self::classify_value(&boundary_val, width);
 
+                // Format display string with prefix for multi-bit values
+                let display_str = if width > 1 {
+                    Self::format_multi_bit_value(&boundary_val, width)
+                } else {
+                    boundary_val.clone()
+                };
+
                 segments.push(RenderSegment {
                     x0: 0.0,
                     x1: self.canvas_width,
                     y,
                     value: ValueInfo {
                         value_type,
-                        display_str: boundary_val.clone(),
+                        display_str,
                         width,
                         has_xz,
                         min_value: Some(boundary_val.clone()),
@@ -1054,13 +1090,21 @@ impl WaveformDataProvider {
 
                     if x1 > x0 {
                         let (value_type, has_xz) = Self::classify_value(boundary_val, width);
+
+                        // Format display string with prefix for multi-bit values
+                        let display_str = if width > 1 {
+                            Self::format_multi_bit_value(boundary_val, width)
+                        } else {
+                            boundary_val.clone()
+                        };
+
                         segments.push(RenderSegment {
                             x0,
                             x1,
                             y,
                             value: ValueInfo {
                                 value_type,
-                                display_str: boundary_val.clone(),
+                                display_str,
                                 width,
                                 has_xz,
                                 min_value: Some(boundary_val.clone()),
@@ -1174,6 +1218,33 @@ impl WaveformDataProvider {
         }
     }
 
+    /// Format multi-bit value for display with hex prefix
+    /// Adds "0x" prefix and ensures uppercase hex digits
+    fn format_multi_bit_value(value: &str, width: u32) -> String {
+        // If already has prefix or contains X/Z, return as-is (but uppercase)
+        if value.starts_with("0x") || value.starts_with("0X") {
+            return value.to_uppercase();
+        }
+        if value.to_uppercase().contains('X') || value.to_uppercase().contains('Z') {
+            return value.to_uppercase();
+        }
+
+        // Try to parse as hex (remove any existing 0x prefix)
+        let clean_value = value.trim_start_matches("0x").trim_start_matches("0X");
+
+        // Format with 0x prefix and proper padding
+        // Calculate number of hex digits needed: ceil(width / 4)
+        let hex_digits = ((width + 3) / 4).max(1) as usize;
+
+        // Try to parse as u64 first, then format with padding
+        if let Ok(num) = u64::from_str_radix(clean_value, 16) {
+            format!("0x{:0width$X}", num, width = hex_digits)
+        } else {
+            // If parsing fails, just add 0x prefix
+            format!("0x{}", clean_value.to_uppercase())
+        }
+    }
+
     /// Get signal names (for testing)
     pub fn get_signal_names(&self) -> JsValue {
         let names: Vec<&str> = self.signals.iter().map(|s| s.name.as_str()).collect();
@@ -1182,12 +1253,22 @@ impl WaveformDataProvider {
 
     /// Find transitions around a specific time for cursor snapping
     /// Returns [prev_time, next_time] where null means no transition found
+    /// Note: BOUNDARY_TIME_START (0xFFFFFFFFFFFFFFFF) is excluded from results
     pub fn find_transitions_around(&self, signal_name: &str, time: f64) -> JsValue {
+        console_log!("[WASM] find_transitions_around: signal='{}', time={}", signal_name, time);
+
         if let Some(data) = self.signal_data.get(signal_name) {
+            console_log!("[WASM]   Found signal data, transitions count: {}", data.transitions.len());
+
             let mut prev: Option<u64> = None;
             let mut next: Option<u64> = None;
 
             for transition in &data.transitions {
+                // Skip boundary value - it's not a real transition
+                if transition.time == BOUNDARY_TIME_START {
+                    continue;
+                }
+
                 let t = transition.time as f64;
                 if t < time {
                     prev = Some(transition.time);
@@ -1197,9 +1278,12 @@ impl WaveformDataProvider {
                 }
             }
 
+            console_log!("[WASM]   Result: prev={:?}, next={:?}", prev, next);
+
             let result = vec![prev, next];
             serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
         } else {
+            console_log!("[WASM]   Signal data not found in cache!");
             JsValue::NULL
         }
     }
@@ -1234,9 +1318,17 @@ impl WaveformDataProvider {
             // Return the value info
             if let Some(value_str) = value_to_return {
                 let (value_type, has_xz) = Self::classify_value(value_str, data.width);
+
+                // Format display string with prefix for multi-bit values
+                let display_str = if data.width > 1 {
+                    Self::format_multi_bit_value(value_str, data.width)
+                } else {
+                    value_str.clone()
+                };
+
                 let value_info = ValueInfo {
                     value_type,
-                    display_str: value_str.clone(),
+                    display_str,
                     width: data.width,
                     has_xz,
                     min_value: None,

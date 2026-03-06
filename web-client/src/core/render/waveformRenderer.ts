@@ -61,9 +61,70 @@ class WaveformRenderer {
     this.drawTimeRuler(canvasWidth, rulerHeight, viewport, timeConfig);
 
     // Draw segments (直接使用 x0, x1, y)
+    // Group segments by signal name to handle transitions
+    const segmentsBySignal = new Map<string, RenderSegment[]>();
     for (const seg of segments) {
-      this.drawSegment(seg);
+      const signalName = seg.signalName || seg.signal_name || '';
+      if (!segmentsBySignal.has(signalName)) {
+        segmentsBySignal.set(signalName, []);
+      }
+      segmentsBySignal.get(signalName)!.push(seg);
     }
+
+    // Draw segments for each signal, sorted by x0
+    for (const [signalName, signalSegments] of segmentsBySignal) {
+      // Sort by x0
+      signalSegments.sort((a, b) => a.x0 - b.x0);
+
+      let prevValue: FormattedValue | null = null;
+      for (const seg of signalSegments) {
+        // Draw transition edge if there's a previous segment with different value
+        if (prevValue && seg.value.width === 1 && prevValue.width === 1) {
+          const prevLevel = this.getSignalLevel(prevValue);
+          const currLevel = this.getSignalLevel(seg.value);
+          if (prevLevel !== currLevel) {
+            this.drawTransitionEdge(seg.x0, seg.y, prevLevel, currLevel);
+          }
+        }
+
+        this.drawSegment(seg);
+        prevValue = seg.value;
+      }
+    }
+  }
+
+  /**
+   * Get signal level for single-bit signals
+   * Returns: 0 for low, 1 for high, -1 for X/Z/unknown
+   */
+  private getSignalLevel(value: FormattedValue): number {
+    switch (value.type) {
+      case 'zero': return 0;
+      case 'one': return 1;
+      default: return -1;
+    }
+  }
+
+  /**
+   * Draw transition edge (vertical line) for single-bit signals
+   */
+  private drawTransitionEdge(x: number, y: number, prevLevel: number, currLevel: number): void {
+    if (!this.ctx) return;
+    if (prevLevel < 0 || currLevel < 0) return; // Don't draw for X/Z
+
+    const waveHeight = this.rowHeight * 0.35;
+    const yLow = y + waveHeight;
+    const yHigh = y - waveHeight;
+
+    const y0 = prevLevel === 0 ? yLow : yHigh;
+    const y1 = currLevel === 0 ? yLow : yHigh;
+
+    this.ctx.strokeStyle = '#000000';
+    this.ctx.lineWidth = 1;
+    this.ctx.beginPath();
+    this.ctx.moveTo(x, y0);
+    this.ctx.lineTo(x, y1);
+    this.ctx.stroke();
   }
 
   /**
@@ -154,15 +215,8 @@ class WaveformRenderer {
         break;
     }
 
-    // 绘制跳变边沿（垂直线）- 在 segment 结束时
-    if (width > 2) {
-      this.ctx.strokeStyle = '#000000';
-      this.ctx.lineWidth = 1;
-      this.ctx.beginPath();
-      this.ctx.moveTo(x1, yHigh);
-      this.ctx.lineTo(x1, yLow);
-      this.ctx.stroke();
-    }
+    // Note: Transition edge is drawn by the next segment's starting position
+    // No need to draw vertical line here - segments are contiguous
   }
 
   /**
@@ -227,13 +281,14 @@ class WaveformRenderer {
     const displayStr = value.displayStr || value.display_str;
     if (width > 20 && displayStr) {
       this.ctx.fillStyle = textColor;
-      this.ctx.font = '13px Consolas, Monaco, monospace';
+      // 增大字体，去掉粗体，与 mock data 保持一致
+      this.ctx.font = '14px Consolas, Monaco, monospace';
 
       // 截断标签以适应空间
       const label = this.truncateLabel(displayStr, width - 8);
       const textWidth = this.ctx.measureText(label).width;
       const textX = x0 + (width - textWidth) / 2;
-      const textY = y + 4;  // 垂直居中
+      const textY = y + 5;  // 垂直居中 (调整以匹配更大的字体)
 
       this.ctx.fillText(label, textX, textY);
     }
@@ -476,6 +531,9 @@ class WaveformRenderer {
     this.ctx.strokeStyle = '#666';
     this.ctx.lineWidth = 1;
 
+    let lastLabelText: string | null = null;
+    let isFirstTick = true;
+
     for (let tick = firstMajorTick; tick <= lastMajorTick; tick += majorStep) {
       const x = ((tick - viewport.timeStart) / lod0Range) * width;
 
@@ -490,45 +548,48 @@ class WaveformRenderer {
       let unitLabel = '';
       if (timeConfig && timeConfig.DisplayUnitPerLoD0Unit > 0) {
         displayValue = tick / timeConfig.DisplayUnitPerLoD0Unit;
-        // Format based on magnitude with 3-digit precision
-        // Support: T (Tera), G (Giga), M (Mega), k (kilo)
-        if (displayValue >= 1_000_000_000) {
-          displayValue = displayValue / 1_000_000_000;
-          unitLabel = 'T';
-        } else if (displayValue >= 1_000_000) {
-          displayValue = displayValue / 1_000_000;
-          unitLabel = 'G';
-        } else if (displayValue >= 1_000) {
+        // Format: keep up to 6 digits (3+3), use K suffix when exceeding 3 digits
+        // Examples: 999 -> "999", 1,000 -> "1,000", 999,999 -> "999,999", 1,000,000 -> "1,000K"
+        if (displayValue >= 1_000_000) {
           displayValue = displayValue / 1_000;
-          unitLabel = 'M';
-        } else if (displayValue >= 1) {
-          // Keep as is, no unit suffix for values < 1000
+          unitLabel = 'K';
         }
+        // else: 0-999,999, keep as-is with comma separator
       } else {
         displayValue = tick;
       }
 
-      // Draw time label with 3-digit integer precision
-      // Format: XXX.XX where integer part has up to 3 digits
+      // Draw time label: format with comma separators (e.g., 999,999K)
+      const intValue = Math.floor(displayValue);
       let labelText: string;
-      if (displayValue >= 100) {
-        // 100-999: show as integer (3 digits)
-        labelText = Math.round(displayValue).toString();
-      } else if (displayValue >= 10) {
-        // 10-99: show 1 decimal (e.g., 12.3)
-        labelText = displayValue.toFixed(1);
-      } else if (displayValue >= 1) {
-        // 1-9: show 2 decimals (e.g., 1.23)
-        labelText = displayValue.toFixed(2);
-      } else {
-        // < 1: show 3 decimals (e.g., 0.123)
-        labelText = displayValue.toFixed(3);
-      }
       if (unitLabel) {
-        labelText += unitLabel;
+        // For values with unit (e.g., 999,999K), format the number part
+        if (intValue >= 1_000) {
+          const high = Math.floor(intValue / 1_000);
+          const low = intValue % 1_000;
+          labelText = `${high},${low.toString().padStart(3, '0')}${unitLabel}`;
+        } else {
+          labelText = intValue.toString() + unitLabel;
+        }
+      } else {
+        // For values without unit (0-999,999)
+        if (intValue >= 1_000) {
+          const high = Math.floor(intValue / 1_000);
+          const low = intValue % 1_000;
+          labelText = `${high},${low.toString().padStart(3, '0')}`;
+        } else {
+          labelText = intValue.toString();
+        }
+      }
+
+      // Skip if not first tick and label is same as previous
+      if (!isFirstTick && labelText === lastLabelText) {
+        continue;
       }
 
       this.ctx.fillText(labelText, x + 2, height - 12);
+      lastLabelText = labelText;
+      isFirstTick = false;
     }
   }
 

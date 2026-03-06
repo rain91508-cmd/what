@@ -32,7 +32,7 @@ export class MockDataProvider implements DataProvider {
   private viewport: Viewport = { timeStart: 0, timeEnd: 100, signalStart: 0, signalEnd: 10 };
   private format: DisplayFormat = 'hex';
   private canvasWidth = 800;
-  private rowHeight = 24;
+  private rowHeight = 24;  // Must match CSS .waveform-signal-item height
   private rulerHeight = 20;
 
   // 存储 mock 数据
