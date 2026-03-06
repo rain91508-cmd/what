@@ -469,8 +469,11 @@ impl OpfsCacheManager {
     }
 
     /// Calculate tile span for given LOD
+    /// Tile span equals the LoD resolution (16^lod)
+    /// This ensures each tile covers a time range that matches the LoD's granularity
     pub fn get_tile_span(lod: u32) -> u64 {
-        TILE_SPAN_MULTIPLIER * LOD_MULTIPLIER.pow(lod)
+        // Tile span = 16^lod (same as LoD resolution)
+        LOD_MULTIPLIER.pow(lod)
     }
 
     /// Calculate tile ID for given time and LOD
