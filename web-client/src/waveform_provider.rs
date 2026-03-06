@@ -897,6 +897,12 @@ impl WaveformDataProvider {
         console_log!("[WASM] Total signals: {}, fetching {} (excluding {} bit-extract signals)",
             signal_names.len(), signals_to_fetch.len(), signal_names.len() - signals_to_fetch.len());
 
+        // Optimization: if no signals to fetch, return early
+        if signals_to_fetch.is_empty() {
+            console_log!("[WASM] No signals to fetch, skipping cache check and server request");
+            return Ok(());
+        }
+
         // Step 1: Calculate all required tiles based on time range
         console_log!("[WASM] Step 1: Calculating required tiles...");
         let mut tiles_to_fetch: Vec<u64> = Vec::new();
@@ -1042,8 +1048,11 @@ impl WaveformDataProvider {
                 
                 // Step 3: Store fetched data in cache using supplement_data
                 console_log!("[WASM]   Step 3: Storing data in OPFS cache...");
-                let js_bytes = js_sys::Uint8Array::from(&bytes[..]);
-                self.supplement_data(js_bytes.into()).await?;
+                // Create ArrayBuffer from bytes and pass to supplement_data
+                let array_buffer = js_sys::ArrayBuffer::new(bytes.len() as u32);
+                let uint8_array = js_sys::Uint8Array::new(&array_buffer);
+                uint8_array.copy_from(&bytes[..]);
+                self.supplement_data(array_buffer.into()).await?;
                 console_log!("[WASM]   Data stored in cache successfully");
             }
         }
