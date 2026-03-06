@@ -129,11 +129,16 @@ export function getSignalManager(): SignalIdManager | null {
 
 /**
  * Build WASM signal list from UI signals
- * This assigns draw_sig_id to each signal
+ * This assigns draw_sig_id to each signal using unique_id (per tab unique ID)
+ * 
+ * Note: draw_sig_id is used for cache group management. Since cache is per waveform,
+ * we use global_id to ensure the same signal gets the same draw_sig_id across tabs.
+ * If per-tab isolation is needed, use unique_id instead.
  */
 export async function buildWasmSignals(
   uiSignals: Array<{
-    global_id: number;
+    unique_id: number;  // Per tab unique ID
+    global_id: number;  // KDB global ID
     name: string;
     row: number;
     width?: number;
@@ -150,7 +155,9 @@ export async function buildWasmSignals(
   
   return uiSignals.map((uiSig) => {
     const width = uiSig.width || 1;
-    const draw_sig_id = manager.getOrCreateDrawSigId(uiSig.global_id);
+    // Use unique_id for draw_sig_id to ensure per-tab isolation
+    // This means the same signal in different tabs will have different draw_sig_ids
+    const draw_sig_id = manager.getOrCreateDrawSigId(uiSig.unique_id);
     
     return {
       global_id: uiSig.global_id,

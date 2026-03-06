@@ -16,6 +16,9 @@ import type { Viewport } from './index';
  * 信号信息（由 UI 提供）
  */
 export interface SignalInfo {
+  /** 信号在Waveform Tab中的唯一ID */
+  uniqueId: number;
+  
   /** 信号全局ID（来自KDB） */
   globalId: number;
   
