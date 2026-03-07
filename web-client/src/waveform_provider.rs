@@ -1862,19 +1862,22 @@ impl WaveformDataProvider {
             .cloned()
             .collect();
 
-        // If no boundary value but first transition is at viewport start, use it as initial value
+        // Determine effective boundary value for initial segment
         // Note: Compare as u64 to avoid f64 precision issues with large timestamps
         let viewport_start_u64 = self.viewport.time_start as u64;
-        let effective_boundary = if boundary_value.is_none() && !normal_transitions.is_empty() {
-            if normal_transitions[0].time == viewport_start_u64 {
-                console_log!("[WASM] First transition at viewport start, using as initial value: {}", 
-                    normal_transitions[0].value);
-                Some(normal_transitions[0].value.clone())
-            } else {
-                None
-            }
+        let effective_boundary = if let Some(bv) = boundary_value {
+            // Use explicit boundary value from data
+            Some(bv)
+        } else if !normal_transitions.is_empty() && normal_transitions[0].time > viewport_start_u64 {
+            // First transition is after viewport start, we need an initial value
+            // Use the value from the first transition (it represents the state until that transition)
+            console_log!("[WASM] First transition after viewport start, using its value as initial: {}", 
+                normal_transitions[0].value);
+            Some(normal_transitions[0].value.clone())
         } else {
-            boundary_value
+            // First transition is at viewport start, no initial segment needed
+            // The value at viewport start is determined by the first transition
+            None
         };
 
         // If no normal transitions, use boundary value to draw horizontal line
