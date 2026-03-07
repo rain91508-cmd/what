@@ -1862,11 +1862,20 @@ impl WaveformDataProvider {
             .cloned()
             .collect();
 
+        // Debug: Print first 20 transitions
+        console_log!("[WASM] === DEBUG: First 20 transitions ===");
+        console_log!("[WASM] viewport_start={}, viewport_end={}", self.viewport.time_start, self.viewport.time_end);
+        for (i, t) in normal_transitions.iter().take(20).enumerate() {
+            console_log!("[WASM]   [{}] time={}, value={}", i, t.time, t.value);
+        }
+        console_log!("[WASM] === END DEBUG ===");
+
         // Determine effective boundary value for initial segment
         // Note: Compare as u64 to avoid f64 precision issues with large timestamps
         let viewport_start_u64 = self.viewport.time_start as u64;
         let effective_boundary = if let Some(bv) = boundary_value {
             // Use explicit boundary value from data
+            console_log!("[WASM] Using explicit boundary value: {}", bv);
             Some(bv)
         } else if !normal_transitions.is_empty() && normal_transitions[0].time > viewport_start_u64 {
             // First transition is after viewport start, we need an initial value
@@ -1877,6 +1886,7 @@ impl WaveformDataProvider {
         } else {
             // First transition is at viewport start, no initial segment needed
             // The value at viewport start is determined by the first transition
+            console_log!("[WASM] First transition at or before viewport start, no initial segment");
             None
         };
 
@@ -1955,6 +1965,7 @@ impl WaveformDataProvider {
         }
 
         // Process normal transitions
+        console_log!("[WASM] === DEBUG: Processing {} normal transitions ===", normal_transitions.len());
         for i in 0..normal_transitions.len() {
             let t0 = normal_transitions[i].time as f64;
             let t1 = if i + 1 < normal_transitions.len() {
@@ -1965,6 +1976,7 @@ impl WaveformDataProvider {
 
             // Skip if outside viewport
             if t1 < self.viewport.time_start || t0 > self.viewport.time_end {
+                console_log!("[WASM]   [{}] Skipping: t0={}, t1={}, outside viewport", i, t0, t1);
                 continue;
             }
 
@@ -1978,6 +1990,8 @@ impl WaveformDataProvider {
 
             let value_str = &normal_transitions[i].value;
             let (value_type, has_xz) = Self::classify_value(value_str, width);
+
+            console_log!("[WASM]   [{}] t0={}, t1={}, x0={}, x1={}, value={}", i, t0_clamped, t1_clamped, x0, x1, value_str);
 
             // Format display string with prefix for multi-bit values
             let display_str = if width > 1 {
@@ -2182,7 +2196,13 @@ impl WaveformDataProvider {
     /// Classify value for rendering
     fn classify_value(value: &str, width: u32) -> (String, bool) {
         if width == 1 {
-            match value {
+            // Handle both "0"/"1" and "0x0"/"0x1" formats
+            let normalized = if value.starts_with("0x") || value.starts_with("0X") {
+                &value[2..]  // Strip "0x" prefix
+            } else {
+                value
+            };
+            match normalized {
                 "0" => ("zero".to_string(), false),
                 "1" => ("one".to_string(), false),
                 "X" | "x" => ("all_x".to_string(), true),
