@@ -2300,6 +2300,15 @@ if tile_missing_signals.is_empty() {
             if let Some(parent_data) = self.signal_data.get(&parent_name) {
                 let time_u64 = time as u64;
                 
+                // Check if this is LoD > 0 data (min/max format)
+                let is_lod_min_max = self.detect_min_max_format(&parent_data.transitions);
+                
+                if is_lod_min_max {
+                    // Handle LoD > 0 min/max format
+                    return self.get_min_max_value_at_time(&parent_data.transitions, time_u64, 
+                        (msb - lsb + 1) as u32, Some((msb, lsb)));
+                }
+                
                 // Find the transition that covers this time
                 let mut current_value = None;
                 let mut boundary_value = None;
@@ -2357,6 +2366,14 @@ if tile_missing_signals.is_empty() {
         if let Some(data) = self.signal_data.get(signal_name) {
             let time_u64 = time as u64;
 
+            // Check if this is LoD > 0 data (min/max format)
+            let is_lod_min_max = self.detect_min_max_format(&data.transitions);
+            
+            if is_lod_min_max {
+                // Handle LoD > 0 min/max format
+                return self.get_min_max_value_at_time(&data.transitions, time_u64, data.width, None);
+            }
+
             // Find the transition that covers this time
             // The value is valid from transition.time until the next transition
             let mut current_value = None;
@@ -2406,6 +2423,116 @@ if tile_missing_signals.is_empty() {
             console_log!("[WASM] get_signal_value_at_time: No cached data for signal '{}'", signal_name);
             JsValue::NULL
         }
+    }
+
+    /// Get value at time for LoD > 0 min/max format
+    fn get_min_max_value_at_time(
+        &self,
+        transitions: &[Transition],
+        time_u64: u64,
+        width: u32,
+        bit_extract: Option<(u32, u32)>,
+    ) -> JsValue {
+        // Filter out boundary values
+        let normal_transitions: Vec<_> = transitions.iter()
+            .filter(|t| t.time != BOUNDARY_TIME_START)
+            .collect();
+
+        // Group transitions by timestamp and find the bucket containing time_u64
+        let mut i = 0;
+        while i < normal_transitions.len() {
+            let time = normal_transitions[i].time;
+            let mut values = vec![&normal_transitions[i].value];
+
+            // Collect all values with the same timestamp
+            let mut j = i + 1;
+            while j < normal_transitions.len() && normal_transitions[j].time == time {
+                values.push(&normal_transitions[j].value);
+                j += 1;
+            }
+
+            // Determine next time (end of this bucket)
+            let next_time = if j < normal_transitions.len() {
+                normal_transitions[j].time
+            } else {
+                u64::MAX
+            };
+
+            // Check if time_u64 falls within this bucket
+            if time_u64 >= time && time_u64 < next_time {
+                // Extract min and max values
+                let (min_val, max_val) = if values.len() >= 2 {
+                    (values[0].clone(), values[1].clone())
+                } else {
+                    (values[0].clone(), values[0].clone())
+                };
+
+                // Apply bit extraction if needed
+                let (final_min, final_max) = if let Some((msb, lsb)) = bit_extract {
+                    let extract_bits = |val: &str| -> String {
+                        let value_u64 = if val.starts_with("0x") || val.starts_with("0X") {
+                            u64::from_str_radix(val.trim_start_matches("0x").trim_start_matches("0X"), 16).unwrap_or(0)
+                        } else {
+                            val.parse::<u64>().unwrap_or(0)
+                        };
+                        
+                        let bit_count = msb - lsb + 1;
+                        let mask = if bit_count >= 64 {
+                            u64::MAX
+                        } else {
+                            ((1u64 << bit_count) - 1) << lsb
+                        };
+                        let extracted = (value_u64 & mask) >> lsb;
+                        
+                        if bit_count == 1 {
+                            format!("{}", extracted)
+                        } else {
+                            format!("0x{:X}", extracted)
+                        }
+                    };
+                    
+                    (extract_bits(&min_val), extract_bits(&max_val))
+                } else {
+                    (min_val.clone(), max_val.clone())
+                };
+
+                // Check if min != max and neither is X/Z
+                let min_upper = final_min.to_uppercase();
+                let max_upper = final_max.to_uppercase();
+                let has_xz = min_upper.contains('X') || min_upper.contains('Z') ||
+                            max_upper.contains('X') || max_upper.contains('Z');
+                let is_changing = final_min != final_max && !has_xz;
+
+                let (value_type, display_str) = if is_changing {
+                    if width == 1 {
+                        // Single bit: show toggling
+                        ("min_max".to_string(), "toggling".to_string())
+                    } else {
+                        // Multi-bit: show range
+                        ("min_max".to_string(), format!("{}..{}", final_min, final_max))
+                    }
+                } else {
+                    // min == max or has X/Z, treat as normal value
+                    let (vt, _) = Self::classify_value(&final_min, width);
+                    (vt, final_min.clone())
+                };
+
+                let value_info = ValueInfo {
+                    value_type,
+                    display_str,
+                    width,
+                    has_xz,
+                    min_value: Some(final_min),
+                    max_value: Some(final_max),
+                    is_min_max: is_changing,
+                };
+                return serde_wasm_bindgen::to_value(&value_info).unwrap_or(JsValue::NULL);
+            }
+
+            i = j;
+        }
+
+        JsValue::NULL
     }
 
     /// Test signal name conversion (for debugging)
