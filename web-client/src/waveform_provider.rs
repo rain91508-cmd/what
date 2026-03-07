@@ -1025,6 +1025,7 @@ impl WaveformDataProvider {
             let mut tile_hits = 0u32;
             let mut tile_misses = 0u32;
             let is_first_tile = tile_idx == 0;  // First tile in the fetch list
+            let tile_start = tile_id * tile_span;  // Calculate tile start time
             
             for signal_name in &signals_to_fetch {
                 // Always check OPFS cache for per-tile data
@@ -1047,7 +1048,7 @@ impl WaveformDataProvider {
                                     tile_hits += 1;
                                     
                                     // Convert opfs_cache::SignalData to SignalWaveData
-                                    let mut transitions: Vec<Transition> = signal_data.transitions
+                                    let transitions: Vec<Transition> = signal_data.transitions
                                         .into_iter()
                                         .map(|t| {
                                             // Convert bytes to string value
@@ -1065,32 +1066,14 @@ impl WaveformDataProvider {
                                         })
                                         .collect();
                                     
-                                    // Process transitions: remove start boundary value and filter to viewport
-                                    // This should match the logic in parse_chunk_data_for_batch
-                                    const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
-                                    let original_count = transitions.len();
-                                    
-                                    // For non-first tiles, remove start boundary value (initial value marker)
-                                    if !is_first_tile && !transitions.is_empty() && transitions[0].time == BOUNDARY_TIME_START {
-                                        console_log!("[WASM]     Removing start boundary value from cache data for '{}' (tile {} is not first)", signal_name, tile_id);
-                                        transitions.remove(0);
-                                    }
-                                    
-                                    // Filter transitions to viewport range (same logic as parse_chunk_data_for_batch)
-                                    // First tile: keep all transitions up to time_end (including those before time_start for initial value)
-                                    // Non-first tiles: keep only transitions within [time_start, time_end]
-                                    let filtered_transitions: Vec<Transition> = if is_first_tile {
-                                        transitions.into_iter()
-                                            .filter(|t| t.time <= time_end)
-                                            .collect()
-                                    } else {
-                                        transitions.into_iter()
-                                            .filter(|t| t.time >= time_start && t.time <= time_end)
-                                            .collect()
-                                    };
-                                    
-                                    console_log!("[WASM]     Filtered {} transitions to {} for viewport [{}-{}] (first_tile={})", 
-                                        original_count, filtered_transitions.len(), time_start, time_end, is_first_tile);
+                                    // Use common function to process transitions
+                                    let filtered_transitions = self.process_tile_transitions(
+                                        transitions,
+                                        is_first_tile,
+                                        tile_start,
+                                        time_start,
+                                        time_end,
+                                    );
                                     
                                     // Merge with existing signal_data if any
                                     if let Some(existing) = self.signal_data.get_mut(signal_name) {
@@ -1260,9 +1243,10 @@ impl WaveformDataProvider {
                 // Pass tile info for proper handling of initial values and viewport filtering
                 let is_first_tile = tile_idx == 0;
                 let is_last_tile = tile_idx == total_tiles_to_fetch - 1;
-                console_log!("[WASM]   Parsing chunk data for {} signals (tile {}/{}, first={}, last={})", 
-                    tile_signal_names.len(), tile_idx + 1, total_tiles_to_fetch, is_first_tile, is_last_tile);
-                self.parse_chunk_data_for_batch(&tile_signal_names, &bytes, time_start, time_end, is_first_tile, is_last_tile)?;
+                let tile_start = tile_id * tile_span;
+                console_log!("[WASM]   Parsing chunk data for {} signals (tile {}/{}, first={}, last={}, tile_start={})", 
+                    tile_signal_names.len(), tile_idx + 1, total_tiles_to_fetch, is_first_tile, is_last_tile, tile_start);
+                self.parse_chunk_data_for_batch(&tile_signal_names, &bytes, time_start, time_end, is_first_tile, is_last_tile, tile_start)?;
                 console_log!("[WASM]   Chunk data parsed and stored in signal_data");
                 
                 // Then, store in OPFS cache for future use
@@ -1287,14 +1271,16 @@ impl WaveformDataProvider {
     /// - viewport_end: viewport end time (for filtering)
     /// - is_first_tile: whether this is the first tile (keep initial value)
     /// - is_last_tile: whether this is the last tile (keep all transitions)
+    /// - tile_start: start time of the tile (for finding initial value)
     fn parse_chunk_data_for_batch(
-        &mut self, 
-        batch: &[String], 
+        &mut self,
+        batch: &[String],
         data: &[u8],
         viewport_start: u64,
         viewport_end: u64,
         is_first_tile: bool,
-        is_last_tile: bool,
+        _is_last_tile: bool,
+        tile_start: u64,
     ) -> Result<(), JsValue> {
         // Parse header
         let header = ChunkHeader::from_bytes(data)
@@ -1352,41 +1338,14 @@ impl WaveformDataProvider {
 
             console_log!("[WASM]   Parsed {} transitions from chunk", transitions.len());
 
-            // Filter transitions to viewport range and handle initial values
-            // For non-first tiles, check if first transition is the initial value marker
-            // Special boundary time: 0xFFFFFFFFFFFFFFFF (u64::MAX) indicates start boundary value
-            const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
-            if !is_first_tile && !transitions.is_empty() {
-                let first_time = transitions[0].time;
-                if first_time == BOUNDARY_TIME_START {
-                    console_log!("[WASM]   First transition is start boundary value (0xFFFFFFFFFFFFFFFF), skipping");
-                    transitions.remove(0);
-                    console_log!("[WASM]   Remaining transitions after removing initial: {}", transitions.len());
-                } else {
-                    console_log!("[WASM]   First transition time ({}) is not boundary value, keeping it", 
-                        first_time);
-                }
-            }
-
-            // Filter transitions to viewport range
-            // Keep transitions within [viewport_start, viewport_end]
-            // For first tile, also keep transitions before viewport_start (for initial value)
-            let filtered_transitions: Vec<Transition> = if is_first_tile {
-                // First tile: keep all transitions up to viewport_end
-                transitions
-                    .into_iter()
-                    .filter(|t| t.time <= viewport_end)
-                    .collect()
-            } else {
-                // Non-first tiles: keep transitions within viewport range
-                transitions
-                    .into_iter()
-                    .filter(|t| t.time >= viewport_start && t.time <= viewport_end)
-                    .collect()
-            };
-
-            console_log!("[WASM]   Filtered to {} transitions in viewport range [{}-{}] (first_tile={})", 
-                filtered_transitions.len(), viewport_start, viewport_end, is_first_tile);
+            // Use common function to process transitions
+            let filtered_transitions = self.process_tile_transitions(
+                transitions,
+                is_first_tile,
+                tile_start,
+                viewport_start,
+                viewport_end,
+            );
 
             // Get width from signal info
             let width = self.get_signal_width(signal_name);
@@ -1428,6 +1387,73 @@ impl WaveformDataProvider {
         self.signals_with_id.iter()
             .find(|s| s.name == signal_name)
             .map(|s| s.draw_sig_id)
+    }
+
+    /// Process transitions for a tile (common logic for server and cache data)
+    /// 
+    /// # Arguments
+    /// * `transitions` - Raw transitions from server or cache
+    /// * `is_first_tile` - Whether this is the first tile in the fetch list
+    /// * `tile_start` - Start time of the tile
+    /// * `viewport_start` - Start time of the viewport
+    /// * `viewport_end` - End time of the viewport
+    /// 
+    /// # Returns
+    /// Filtered and processed transitions
+    fn process_tile_transitions(
+        &self,
+        mut transitions: Vec<Transition>,
+        is_first_tile: bool,
+        tile_start: u64,
+        viewport_start: u64,
+        viewport_end: u64,
+    ) -> Vec<Transition> {
+        const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
+        
+        // Step 1: Remove start boundary value for non-first tiles
+        if !is_first_tile && !transitions.is_empty() && transitions[0].time == BOUNDARY_TIME_START {
+            console_log!("[WASM]   Removing start boundary value (non-first tile)");
+            transitions.remove(0);
+        }
+        
+        // Step 2: Viewport filtering
+        let mut filtered: Vec<Transition> = if is_first_tile {
+            // First tile: keep all transitions up to viewport_end
+            transitions.into_iter()
+                .filter(|t| t.time <= viewport_end)
+                .collect()
+        } else {
+            // Non-first tiles: keep only transitions within viewport
+            transitions.into_iter()
+                .filter(|t| t.time >= viewport_start && t.time <= viewport_end)
+                .collect()
+        };
+        
+        // Step 3: For first tile, find initial value from [tile_start, viewport_start]
+        // If there's a normal transition in this range, use the one closest to viewport_start
+        if is_first_tile && viewport_start > tile_start {
+            // Find transitions in [tile_start, viewport_start] (excluding boundary value)
+            let initial_candidates: Vec<&Transition> = filtered.iter()
+                .filter(|t| t.time >= tile_start && t.time < viewport_start && t.time != BOUNDARY_TIME_START)
+                .collect();
+            
+            if !initial_candidates.is_empty() {
+                // Find the one closest to viewport_start (last one before viewport_start)
+                let closest = initial_candidates.last().unwrap();
+                console_log!("[WASM]   Found initial value at time {} (closest to viewport start {})", 
+                    closest.time, viewport_start);
+                
+                // If the closest transition is not already at viewport_start, 
+                // we need to ensure it's included in the result
+                // The transition is already in filtered (since time <= viewport_end)
+                // We just log it for debugging
+            }
+        }
+        
+        console_log!("[WASM]   Processed {} transitions for viewport [{}-{}] (first_tile={}, tile_start={})", 
+            filtered.len(), viewport_start, viewport_end, is_first_tile, tile_start);
+        
+        filtered
     }
 
     /// Parse chunk binary data for single signal (legacy method)
