@@ -1573,8 +1573,13 @@ function App() {
           const result = await searchSignalOnServer(currentWaveName, signal.fullName, currentWaveSignalPrefix)
 
           if (result.found) {
-            console.log(`[Signal Search] Found with existing prefix!`)
-            // Signal found with existing prefix, add directly
+            console.log(`[Signal Search] Found with existing prefix! spaceBeforeBracket=${result.spaceBeforeBracket}`)
+            // Signal found with existing prefix, update spaceBeforeBracket if needed
+            if (result.spaceBeforeBracket !== undefined && result.spaceBeforeBracket !== currentWaveSignalSpaceBeforeBracket) {
+              console.log(`[Signal Search] Updating spaceBeforeBracket: ${currentWaveSignalSpaceBeforeBracket} -> ${result.spaceBeforeBracket}`)
+              setCurrentWaveSignalSpaceBeforeBracket(result.spaceBeforeBracket)
+              updateProviderSettings(currentWaveSignalPrefix, result.spaceBeforeBracket)
+            }
             addSignalToWaveform(signal)
             return
           }
