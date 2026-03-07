@@ -651,12 +651,12 @@ impl LodLevel {
         Self(level.min(Self::MAX_LEVEL))
     }
 
-    /// 获取 bucket 大小（2^level 个转换点）
+    /// 获取 bucket 大小（2^level 时间单位）
     ///
-    /// LoD 0: 1 (原始数据)
-    /// LoD 1: 2 (每2个点合并)
-    /// LoD 2: 4 (每4个点合并)
-    /// LoD n: 2^n
+    /// LoD 0: 1 (原始数据，bucket 大小为 1 时间单位)
+    /// LoD 1: 2 (每个 bucket 覆盖 2 时间单位)
+    /// LoD 2: 4 (每个 bucket 覆盖 4 时间单位)
+    /// LoD n: 2^n (每个 bucket 覆盖 2^n 时间单位)
     pub fn bucket_size(&self) -> usize {
         2usize.pow(self.0)
     }
@@ -669,8 +669,9 @@ impl LodLevel {
 
 /// LoD 配置
 ///
-/// 注意：LoD 是基于数据点数量的降采样，与时间窗口无关。
-/// 每个 LoD 层级使用 bucket_size = 2^level 个转换点进行 min/max 降采样。
+/// 注意：LoD 是基于时间的降采样，与数据点数量无关。
+/// 每个 LoD 层级使用 bucket_size = 2^level 时间单位进行 min/max 降采样。
+/// 每个 bucket 覆盖固定的时间范围，输出该时间范围内的 min/max 值。
 #[derive(Debug, Clone)]
 pub struct LodConfig {
     /// LoD 层级数量 (0 表示原始数据，1+ 表示降采样层级)
@@ -1294,7 +1295,7 @@ impl WaveDataManager {
         let (start_time, end_time) = time_range;
 
         // 为每个 LoD 层级生成 chunk
-        // 注意：LoD 是基于数据点数量的降采样，与时间窗口无关
+        // 注意：LoD 是基于时间的降采样，每个 bucket 覆盖固定的时间范围
         let mut chunks = Vec::new();
         let chunk_id = 0u32;
 
