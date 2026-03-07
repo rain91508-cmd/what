@@ -1821,9 +1821,9 @@ if tile_missing_signals.is_empty() {
     /// Generate segments for LoD 0 (normal format) according to the drawing spec
     /// 
     /// Drawing Rules:
-    /// - First tile: start value -> first transition, then transitions
-    /// - Non-first tiles: transitions only (continues from previous tile)
-    /// - Empty tile (no transitions): draw start value across entire tile
+    /// - First transition at/after viewport start: start value -> first transition
+    /// - Then draw each transition's value until next transition
+    /// - Last transition -> viewport end
     fn generate_normal_segments(&self, transitions: &[Transition], width: u32, y: f64,
         signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>) {
 
@@ -1866,45 +1866,59 @@ if tile_missing_signals.is_empty() {
             return;
         }
 
-        // Find first transition time to determine if this is first tile
-        let first_trans_time = normal_transitions[0].time as f64;
-        let is_first_tile = first_trans_time >= self.viewport.time_start;
+        // Find the first transition at or after viewport start
+        let viewport_start_u64 = self.viewport.time_start as u64;
+        let first_visible_idx = normal_transitions.iter()
+            .position(|t| t.time >= viewport_start_u64)
+            .unwrap_or(0);
 
-        // First tile: draw start value from viewport start to first transition
-        if is_first_tile {
-            if let Some(ref start_val) = start_value {
+        // If first visible transition is after viewport start, draw start value segment
+        if first_visible_idx < normal_transitions.len() {
+            let first_trans_time = normal_transitions[first_visible_idx].time as f64;
+            
+            // Check if we need an initial segment (first transition is after viewport start)
+            if first_trans_time > self.viewport.time_start {
+                // Determine the value for the initial segment
+                // Use the value from the transition just before viewport start, or start value
+                let initial_value = if first_visible_idx > 0 {
+                    // Use the previous transition's value
+                    normal_transitions[first_visible_idx - 1].value.clone()
+                } else if let Some(ref sv) = start_value {
+                    // Use start value
+                    sv.clone()
+                } else {
+                    // Fallback: use first transition's value
+                    normal_transitions[first_visible_idx].value.clone()
+                };
+
                 let t0 = self.viewport.time_start;
-                let t1 = first_trans_time;
+                let t1 = first_trans_time.min(self.viewport.time_end);
+                let x0 = 0.0;
+                let x1 = ((t1 - self.viewport.time_start) / time_range) * self.canvas_width;
 
-                if t1 >= self.viewport.time_start {
-                    let t1_clamped = t1.min(self.viewport.time_end);
-                    let x0 = 0.0;
-                    let x1 = ((t1_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
+                if x1 > x0 {
+                    let (value_type, has_xz) = Self::classify_value(&initial_value, width);
+                    let display_str = if width > 1 {
+                        self.format_multi_bit_value(&initial_value, width)
+                    } else {
+                        initial_value.clone()
+                    };
 
-                    if x1 > x0 {
-                        let (value_type, has_xz) = Self::classify_value(start_val, width);
-                        let display_str = if width > 1 {
-                            self.format_multi_bit_value(start_val, width)
-                        } else {
-                            start_val.clone()
-                        };
-
-                        segments.push(RenderSegment {
-                            x0,
-                            x1,
-                            y,
-                            value: ValueInfo {
-                                value_type,
-                                display_str,
-                                width,
-                                has_xz,
-                                min_value: None,
-                                max_value: None,
-                                is_min_max: false,
-                            },
-                            signal_name: signal_name.to_string(),
-                        });
-                    }
+                    segments.push(RenderSegment {
+                        x0,
+                        x1,
+                        y,
+                        value: ValueInfo {
+                            value_type,
+                            display_str,
+                            width,
+                            has_xz,
+                            min_value: None,
+                            max_value: None,
+                            is_min_max: false,
+                        },
+                        signal_name: signal_name.to_string(),
+                    });
                 }
             }
         }
@@ -1961,9 +1975,9 @@ if tile_missing_signals.is_empty() {
     /// Generate segments for LoD 1+ (min/max format) according to the drawing spec
     /// 
     /// Drawing Rules:
-    /// - First tile: start value -> first transition, then min/max pairs
-    /// - Non-first tiles: min/max pairs only (continues from previous tile)
-    /// - Empty tile (no transitions): draw start value across entire tile
+    /// - First transition at/after viewport start: start value -> first transition
+    /// - Then draw min/max pairs
+    /// - Last transition -> viewport end
     /// - Min/Max pairs: same timestamp, min first, max second
     fn generate_min_max_segments(&self, transitions: &[Transition], width: u32, y: f64,
         signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>) {
@@ -2007,45 +2021,59 @@ if tile_missing_signals.is_empty() {
             return;
         }
 
-        // Find first transition time to determine if this is first tile
-        let first_trans_time = normal_transitions[0].time as f64;
-        let is_first_tile = first_trans_time >= self.viewport.time_start;
+        // Find the first transition at or after viewport start
+        let viewport_start_u64 = self.viewport.time_start as u64;
+        let first_visible_idx = normal_transitions.iter()
+            .position(|t| t.time >= viewport_start_u64)
+            .unwrap_or(0);
 
-        // First tile: draw start value from viewport start to first transition
-        if is_first_tile {
-            if let Some(ref start_val) = start_value {
+        // If first visible transition is after viewport start, draw initial segment
+        if first_visible_idx < normal_transitions.len() {
+            let first_trans_time = normal_transitions[first_visible_idx].time as f64;
+            
+            // Check if we need an initial segment (first transition is after viewport start)
+            if first_trans_time > self.viewport.time_start {
+                // Determine the value for the initial segment
+                // Use the value from the transition just before viewport start, or start value
+                let initial_value = if first_visible_idx > 0 {
+                    // Use the previous transition's value
+                    normal_transitions[first_visible_idx - 1].value.clone()
+                } else if let Some(ref sv) = start_value {
+                    // Use start value
+                    sv.clone()
+                } else {
+                    // Fallback: use first transition's value
+                    normal_transitions[first_visible_idx].value.clone()
+                };
+
                 let t0 = self.viewport.time_start;
-                let t1 = first_trans_time;
+                let t1 = first_trans_time.min(self.viewport.time_end);
+                let x0 = 0.0;
+                let x1 = ((t1 - self.viewport.time_start) / time_range) * self.canvas_width;
 
-                if t1 >= self.viewport.time_start {
-                    let t1_clamped = t1.min(self.viewport.time_end);
-                    let x0 = 0.0;
-                    let x1 = ((t1_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
+                if x1 > x0 {
+                    let (value_type, has_xz) = Self::classify_value(&initial_value, width);
+                    let display_str = if width > 1 {
+                        self.format_multi_bit_value(&initial_value, width)
+                    } else {
+                        initial_value.clone()
+                    };
 
-                    if x1 > x0 {
-                        let (value_type, has_xz) = Self::classify_value(start_val, width);
-                        let display_str = if width > 1 {
-                            self.format_multi_bit_value(start_val, width)
-                        } else {
-                            start_val.clone()
-                        };
-
-                        segments.push(RenderSegment {
-                            x0,
-                            x1,
-                            y,
-                            value: ValueInfo {
-                                value_type,
-                                display_str,
-                                width,
-                                has_xz,
-                                min_value: Some(start_val.clone()),
-                                max_value: Some(start_val.clone()),
-                                is_min_max: false,
-                            },
-                            signal_name: signal_name.to_string(),
-                        });
-                    }
+                    segments.push(RenderSegment {
+                        x0,
+                        x1,
+                        y,
+                        value: ValueInfo {
+                            value_type,
+                            display_str,
+                            width,
+                            has_xz,
+                            min_value: Some(initial_value.clone()),
+                            max_value: Some(initial_value),
+                            is_min_max: false,
+                        },
+                        signal_name: signal_name.to_string(),
+                    });
                 }
             }
         }

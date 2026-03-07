@@ -55,8 +55,9 @@ For **subsequent tiles**:
 
 ```
 IF tile has no normal transitions (only start value):
+    // Use the last draw value from previous tile
     Draw single segment from tile_start to tile_end
-    Value = start_value
+    Value = previous_tile_last_draw_value
 ELSE:
     // Note: No initial segment needed, continues from previous tile
     
@@ -67,6 +68,8 @@ ELSE:
     Draw segment from last_transition.time to tile_end
     Value = last_transition.value
 ```
+
+**Important**: For non-first tiles without transitions, the segment should use the **last draw value from the previous tile**, not this tile's start value. This ensures waveform continuity across tiles.
 
 ### Rule 3: Min/Max Handling (LoD 1+)
 
