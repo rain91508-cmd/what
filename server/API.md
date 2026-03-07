@@ -987,7 +987,7 @@ LoD 是基于**数据点数量**的降采样，与时间窗口无关：
 - 时间值**保持不变**，只减少转换点的数量
 - 每个 bucket 保留该时间段内的最小值和最大值，确保波形特征不丢失
 - Bucket 大小计算公式: `2^level`
-- **Min/Max 输出规则**: 在 bucket 开始点输出 min 值；当 bucket 内 min ≠ max 或包含 X/Z 状态时，在 bucket 结束点额外输出 max 值，确保波形变化被正确表示
+- **Min/Max 输出规则**: 当 bucket 内 min = max 时，只输出 min 值；当 min ≠ max 或包含 X/Z 状态时，输出 min 和 max 两个值（min 在 bucket 开始点，max 在 bucket 结束点），确保波形变化被正确表示
 
 **使用建议：**
 - `lod=0`: 需要完整精度时使用（如放大查看细节）
