@@ -15,6 +15,61 @@ const FST_MAGIC: &[u8] = b"FST\x00";
 /// FST 文件最小大小 (魔数 + 头部信息)
 const FST_MIN_SIZE: u64 = 32;
 
+/// 搜索方向
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchDirection {
+    /// 向前搜索：查找 time 之前的最近一个值
+    Forward,
+    /// 向后搜索：查找 time 之后的最近一个值
+    Backward,
+}
+
+/// 搜索边界值
+/// 
+/// # Arguments
+/// * `signal_data` - 信号数据
+/// * `time` - 搜索时间点
+/// * `direction` - 搜索方向
+/// * `width` - 信号宽度
+/// 
+/// # Returns
+/// * 找到的边界值
+pub fn search_boundary_value(
+    signal_data: &SignalWaveData,
+    time: u64,
+    direction: SearchDirection,
+    width: u16,
+) -> SignalValue {
+    match direction {
+        SearchDirection::Forward => {
+            // 向前搜索：查找 time 之前的最近一个值
+            // 使用 value_at 方法（二分查找）
+            signal_data.value_at(time)
+                .map(|t| t.value.clone())
+                .unwrap_or_else(|| {
+                    // 如果没有找到，返回默认值 'X'
+                    let x_str = if width == 1 {
+                        "X".to_string()
+                    } else {
+                        format!("b{}", "X".repeat(width as usize))
+                    };
+                    SignalValue::Numeric(x_str)
+                })
+        }
+        SearchDirection::Backward => {
+            // 向后搜索：查找 time 之后的最近一个值
+            // 在 transitions 中查找第一个 time > time 的 transition
+            signal_data.transitions.iter()
+                .find(|t| t.time > time)
+                .map(|t| t.value.clone())
+                .unwrap_or_else(|| {
+                    // 如果没有找到，使用向前搜索的结果作为默认值
+                    search_boundary_value(signal_data, time, SearchDirection::Forward, width)
+                })
+        }
+    }
+}
+
 /// 波形文件基本信息
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct WaveFileInfo {
@@ -1101,6 +1156,7 @@ impl WaveService {
             for (name, handle, _) in all_signals {
                 let full_data = full_signals_data.get(&handle).unwrap();
                 let mut signal_data = SignalWaveData::new(handle.into(), full_data.width, full_data.value_type);
+                let width = full_data.width;  // 获取信号宽度
 
                 // 过滤时间范围内的 transitions
                 for trans in &full_data.transitions {
@@ -1109,25 +1165,12 @@ impl WaveService {
                     }
                 }
 
-                // Start Value: 向前搜索，获取 time_start 之前的最近一个值
-                let start_value = full_data.value_at(time_start)
-                    .map(|t| t.value.clone())
-                    .unwrap_or_else(|| {
-                        let x_str = if full_data.width == 1 {
-                            "X".to_string()
-                        } else {
-                            format!("b{}", "X".repeat(full_data.width as usize))
-                        };
-                        SignalValue::Numeric(x_str)
-                    });
-
-                // End Value: 向后搜索，获取 time_end 之后的最近一个值
-                // 在完整数据中查找第一个 time > time_end 的 transition
-                let end_value = full_data.transitions.iter()
-                    .find(|t| t.time > time_end)
-                    .map(|t| t.value.clone())
-                    .unwrap_or_else(|| start_value.clone());
-
+                // Start Value: 向前搜索
+                let start_value = search_boundary_value(full_data, time_start, SearchDirection::Forward, width);
+                
+                // End Value: 向后搜索
+                let end_value = search_boundary_value(full_data, time_end, SearchDirection::Backward, width);
+                
                 info!("信号 {} 时间范围内数据: {} transitions, start={:?}, end={:?}", 
                     name, signal_data.transitions.len(), start_value, end_value);
 
@@ -1300,22 +1343,11 @@ impl WaveService {
                     
                     info!("Tile {} 信号 {}: 从完整数据中提取了 {} 个 transitions", tile_idx, name, count);
 
-                    // Start Value: 向前搜索，获取 tile_start 之前的最近一个值
-                    let start_value = full_data.value_at(tile_start)
-                        .map(|t| t.value.clone())
-                        .unwrap_or_else(|| {
-                            if *width == 1 {
-                                SignalValue::Numeric("X".to_string())
-                            } else {
-                                SignalValue::Numeric(format!("b{}", "X".repeat(*width as usize)))
-                            }
-                        });
-
-                    // End Value: 向后搜索，获取 tile_end 之后的最近一个值
-                    let end_value = full_data.transitions.iter()
-                        .find(|t| t.time > tile_end)
-                        .map(|t| t.value.clone())
-                        .unwrap_or_else(|| start_value.clone());
+                    // Start Value: 向前搜索
+                    let start_value = search_boundary_value(full_data, tile_start, SearchDirection::Forward, *width);
+                    
+                    // End Value: 向后搜索
+                    let end_value = search_boundary_value(full_data, tile_end, SearchDirection::Backward, *width);
 
                     // 在 tile_signal 开头添加 start_value（使用 tile_start 时间）
                     // 这样 LoD 生成器可以正确计算第一个 bucket 的 min
