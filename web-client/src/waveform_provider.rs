@@ -1021,9 +1021,10 @@ impl WaveformDataProvider {
         let mut total_cache_hits = 0u32;
         let mut total_cache_misses = 0u32;
         
-        for tile_id in &tiles_to_fetch {
+        for (tile_idx, tile_id) in tiles_to_fetch.iter().enumerate() {
             let mut tile_hits = 0u32;
             let mut tile_misses = 0u32;
+            let is_first_tile = tile_idx == 0;  // First tile in the fetch list
             
             for signal_name in &signals_to_fetch {
                 // Always check OPFS cache for per-tile data
@@ -1066,9 +1067,10 @@ impl WaveformDataProvider {
                                     
                                     // Remove start boundary value (0xFFFFFFFFFFFFFFFF) if present
                                     // This is the initial value marker for non-first tiles
+                                    // For first tile, keep it as it provides the initial value for rendering
                                     const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
-                                    if !transitions.is_empty() && transitions[0].time == BOUNDARY_TIME_START {
-                                        console_log!("[WASM]     Removing start boundary value from cache data for '{}'", signal_name);
+                                    if !is_first_tile && !transitions.is_empty() && transitions[0].time == BOUNDARY_TIME_START {
+                                        console_log!("[WASM]     Removing start boundary value from cache data for '{}' (tile {} is not first)", signal_name, tile_id);
                                         transitions.remove(0);
                                     }
                                     
