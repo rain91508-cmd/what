@@ -1260,6 +1260,8 @@ impl WaveService {
             for tile_idx in 0..num_tiles {
                 let tile_start = start_time + tile_span * tile_idx as u64;
                 let tile_end = tile_start + tile_span;
+                
+                info!("处理 Tile {}: time={}-{}", tile_idx, tile_start, tile_end);
 
                 let mut tile_signals: Vec<SignalWaveData> = Vec::with_capacity(signal_handles.len());
 
@@ -1269,23 +1271,38 @@ impl WaveService {
                     // 提取时间范围内的 transitions
                     let mut tile_signal = SignalWaveData::new((*handle).into(), *width, SignalValueType::Numeric);
                     
+                    let mut count = 0;
                     for trans in &full_data.transitions {
                         if trans.time >= tile_start && trans.time <= tile_end {
                             tile_signal.add_transition(trans.clone());
+                            count += 1;
                         }
                     }
+                    
+                    info!("Tile {} 信号 {}: 从完整数据中提取了 {} 个 transitions", tile_idx, name, count);
 
-                    // 添加起始边界值（使用特殊时间戳）
-                    if let Some(boundary_trans) = full_data.value_at(tile_start) {
-                        tile_signal.transitions.insert(0, Transition {
-                            time: ChunkSerializer::BOUNDARY_TIME_START,
-                            value: boundary_trans.value.clone(),
+                    // 保存边界值（用于后续添加，不参与 LoD 计算）
+                    let boundary_value = full_data.value_at(tile_start)
+                        .map(|t| t.value.clone())
+                        .unwrap_or_else(|| {
+                            // 如果没有找到边界值，使用默认值 'X'
+                            if *width == 1 {
+                                SignalValue::Numeric("X".to_string())
+                            } else {
+                                SignalValue::Numeric(format!("b{}", "X".repeat(*width as usize)))
+                            }
                         });
-                    }
 
-                    // 生成 LoD 数据
-                    let lod_data = LodPyramidGenerator::new(config.clone()).generate_level(&tile_signal, lod);
-                    info!("Tile {} 信号 {}: {} transitions", tile_idx, name, lod_data.transitions.len());
+                    // 生成 LoD 数据（基于实际的 transitions，不包括 boundary value）
+                    let mut lod_data = LodPyramidGenerator::new(config.clone()).generate_level(&tile_signal, lod);
+                    info!("Tile {} 信号 {}: 生成 LoD {} 数据: {} transitions", tile_idx, name, lod.0, lod_data.transitions.len());
+                    
+                    // 在 LoD 数据开头添加 boundary value（始终添加）
+                    lod_data.transitions.insert(0, Transition {
+                        time: ChunkSerializer::BOUNDARY_TIME_START,
+                        value: boundary_value,
+                    });
+                    info!("Tile {} 信号 {}: 添加 boundary value 到 LoD 数据", tile_idx, name);
                     
                     tile_signals.push(lod_data);
                 }
