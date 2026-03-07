@@ -80,9 +80,25 @@ class WaveformRenderer {
       // Detect continuous min/max segments for single-bit signals
       const minMaxGroups = this.detectMinMaxGroups(rowSegments);
 
+      // Find large min/max groups (groupSize > 2) and draw them as single boxes
+      const largeGroups = this.findLargeMinMaxGroups(rowSegments, minMaxGroups);
+
       let prevValue: FormattedValue | null = null;
-      for (let i = 0; i < rowSegments.length; i++) {
+      let i = 0;
+      while (i < rowSegments.length) {
         const seg = rowSegments[i];
+
+        // Check if this segment is part of a large min/max group
+        const largeGroup = largeGroups.find(g => i >= g.startIndex && i <= g.endIndex);
+        if (largeGroup) {
+          // Draw the entire group as a single box
+          this.drawMinMaxGroupBox(largeGroup.x0, largeGroup.x1, largeGroup.y, largeGroup.groupSize);
+          // Skip all segments in this group
+          i = largeGroup.endIndex + 1;
+          prevValue = seg.value;
+          continue;
+        }
+
         // Draw transition edge if there's a previous segment with different value
         if (prevValue && seg.value.width === 1 && prevValue.width === 1) {
           const prevLevel = this.getSignalLevel(prevValue);
@@ -95,16 +111,13 @@ class WaveformRenderer {
         // Check if this segment is part of a min/max group
         const groupInfo = minMaxGroups.get(i);
         if (groupInfo && seg.value.width === 1) {
-          // Debug: log group info
-          if (i === 0) {
-            console.log(`[Renderer] MinMax group detected: total ${minMaxGroups.size} segments, groupSize=${groupInfo.groupSize}`);
-          }
-          // Pass group info to drawMinMaxWaveform
+          // For small groups (groupSize <= 2), draw individual segments
           this.drawMinMaxWaveform(seg.x0, seg.x1, seg.y, seg.value, seg.x1 - seg.x0, groupInfo);
         } else {
           this.drawSegment(seg);
         }
         prevValue = seg.value;
+        i++;
       }
     }
   }
@@ -122,6 +135,94 @@ class WaveformRenderer {
   }
 
   /**
+   * Find large min/max groups (groupSize > 2) for drawing as single boxes
+   */
+  private findLargeMinMaxGroups(
+    segments: RenderSegment[],
+    minMaxGroups: Map<number, { isContinuous: boolean; groupSize: number; groupIndex: number }>
+  ): { startIndex: number; endIndex: number; x0: number; x1: number; y: number; groupSize: number }[] {
+    const result: { startIndex: number; endIndex: number; x0: number; x1: number; y: number; groupSize: number }[] = [];
+    
+    let currentGroup: { startIndex: number; endIndex: number; x0: number; x1: number; y: number; groupSize: number } | null = null;
+    
+    for (let i = 0; i < segments.length; i++) {
+      const groupInfo = minMaxGroups.get(i);
+      if (groupInfo && groupInfo.groupSize > 2) {
+        const seg = segments[i];
+        if (!currentGroup) {
+          // Start new group
+          currentGroup = {
+            startIndex: i,
+            endIndex: i,
+            x0: seg.x0,
+            x1: seg.x1,
+            y: seg.y,
+            groupSize: groupInfo.groupSize
+          };
+        } else if (currentGroup.groupSize === groupInfo.groupSize) {
+          // Continue current group
+          currentGroup.endIndex = i;
+          currentGroup.x1 = seg.x1;
+        } else {
+          // Different group size, save current and start new
+          result.push(currentGroup);
+          currentGroup = {
+            startIndex: i,
+            endIndex: i,
+            x0: seg.x0,
+            x1: seg.x1,
+            y: seg.y,
+            groupSize: groupInfo.groupSize
+          };
+        }
+      } else if (currentGroup) {
+        // End of current group
+        result.push(currentGroup);
+        currentGroup = null;
+      }
+    }
+    
+    if (currentGroup) {
+      result.push(currentGroup);
+    }
+    
+    return result;
+  }
+
+  /**
+   * Draw a large min/max group as a single box with "toggling" text
+   */
+  private drawMinMaxGroupBox(x0: number, x1: number, y: number, _groupSize: number): void {
+    if (!this.ctx) return;
+    
+    const width = x1 - x0;
+    const rectHeight = this.rowHeight * 0.75;
+    const rectY = y - rectHeight / 2;
+    
+    // Deep gray background
+    this.ctx.fillStyle = '#666666';
+    this.ctx.fillRect(x0, rectY, width, rectHeight);
+    
+    // Border
+    this.ctx.strokeStyle = '#444444';
+    this.ctx.lineWidth = 1;
+    this.ctx.strokeRect(x0, rectY, width, rectHeight);
+    
+    // "toggling" text (if space allows)
+    if (width > 50) {
+      this.ctx.fillStyle = '#ffffff';
+      this.ctx.font = '11px Consolas, Monaco, sans-serif';
+      const label = 'toggling';
+      const textWidth = this.ctx.measureText(label).width;
+      if (textWidth < width - 10) {
+        const textX = x0 + (width - textWidth) / 2;
+        const textY = y + 4;
+        this.ctx.fillText(label, textX, textY);
+      }
+    }
+  }
+
+  /**
    * Detect continuous min/max segment groups for single-bit signals
    * Returns a map from segment index to group info
    * 
@@ -132,25 +233,16 @@ class WaveformRenderer {
   private detectMinMaxGroups(segments: RenderSegment[]): Map<number, { isContinuous: boolean; groupSize: number; groupIndex: number }> {
     const result = new Map<number, { isContinuous: boolean; groupSize: number; groupIndex: number }>();
     
-    // Debug: log total segments
-    console.log(`[detectMinMaxGroups] Total segments: ${segments.length}`);
-    
     // Find all single-bit segments with is_min_max=true (min≠max, toggling)
     const minMaxSegments: { index: number; x0: number; x1: number }[] = [];
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
       const isMinMax = seg.value.isMinMax || seg.value.is_min_max;
-      // Debug: log first few segments
-      if (i < 5) {
-        console.log(`[detectMinMaxGroups] Segment ${i}: type=${seg.value.type}, width=${seg.value.width}, isMinMax=${isMinMax}`);
-      }
       // Only include segments where min≠max (toggling)
       if (seg.value.type === 'min_max' && seg.value.width === 1 && isMinMax) {
         minMaxSegments.push({ index: i, x0: seg.x0, x1: seg.x1 });
       }
     }
-    
-    console.log(`[detectMinMaxGroups] Found ${minMaxSegments.length} min/max segments`);
     
     if (minMaxSegments.length === 0) {
       return result;
