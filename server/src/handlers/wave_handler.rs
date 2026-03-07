@@ -1,5 +1,6 @@
 use crate::error::{Result, ServerError};
-use crate::services::{FstBackend, WaveService};
+use crate::services::{FstBackend, WaveService, CompressionAlgorithm};
+use crate::services::wave_data::{MultiTileChunkSerializer, TileInfo};
 use crate::state::ServerState;
 use axum::{
     body::Body,
@@ -452,6 +453,116 @@ pub async fn get_wave_data_multi(
     info!(
         "返回多信号波形数据：{} (LoD {}, time {}-{}, compress {}, {} 个信号)",
         waveform_name, lod, start_time, end_time, compress_str, full_signal_names.len()
+    );
+    Ok(response)
+}
+
+/// 获取多个信号的波形数据（Tile-based 模式）
+///
+/// # 路径格式
+/// `/api/wave/{waveform}/lod/{lod}/tile/{start}/{span}/{num}/compress/{compress}/signals/{names}/data`
+///
+/// # 参数说明
+/// - `start`: 第一个 tile 的起始时间
+/// - `span`: 每个 tile 的时间跨度
+/// - `num`: tile 数量（1-100）
+///
+/// # 与 time 模式的区别
+/// - time 模式: 获取单个时间范围的波形数据
+/// - tile 模式: 获取多个连续的 tile，每个 tile 是一个独立的时间范围
+///
+/// # 示例
+/// - `/api/wave/riscv2/lod/2/tile/0/1000000/10/compress/zstd/signals/b64:xxx/data`
+///   获取 10 个 tiles，每个 tile 1000000 时间单位，从时间 0 开始
+pub async fn get_wave_data_tiles(
+    State(state): State<ServerState>,
+    Path((waveform_name, lod, start_time, tile_span, num_tiles, compress_str, signal_names)): Path<(String, u32, u64, u64, usize, String, String)>,
+    Query(query): Query<WaveDataQuery>,
+) -> Result<Response<Body>> {
+    state.stats.record_request(crate::state::RequestType::Wave).await;
+
+    // 验证 LoD 层级
+    if lod > 20 {
+        return Err(ServerError::InvalidLod(lod));
+    }
+
+    // 解码信号名
+    let full_signal_names: Vec<String> = if signal_names.starts_with("b64:") {
+        // Base64 编码
+        let b64_part = &signal_names[4..];
+        match base64::decode(b64_part) {
+            Ok(decoded) => {
+                let decoded_str = String::from_utf8_lossy(&decoded);
+                decoded_str.split(',').map(|s| s.to_string()).collect()
+            }
+            Err(_) => return Err(ServerError::InvalidSignalNameFormat),
+        }
+    } else if signal_names.starts_with("trie:") {
+        // Trie 压缩编码
+        match crate::utils::trie::decode_signals(&signal_names) {
+            Ok(signals) => signals,
+            Err(_) => return Err(ServerError::InvalidSignalNameFormat),
+        }
+    } else {
+        // 普通逗号分隔
+        signal_names.split(',').map(|s| s.to_string()).collect()
+    };
+
+    if full_signal_names.is_empty() {
+        return Err(ServerError::SignalNotFound("No signals specified".to_string()));
+    }
+
+    // 解析压缩算法
+    let compression = match compress_str.as_str() {
+        "zstd" => crate::services::CompressionAlgorithm::Zstd,
+        "lz4" => crate::services::CompressionAlgorithm::Lz4,
+        _ => crate::services::CompressionAlgorithm::None,
+    };
+
+    // 获取波形数据
+    let wave_service = crate::services::WaveService::new(state.clone());
+    let (data, file_size) = wave_service
+        .get_wave_data_tiles(
+            &waveform_name,
+            &full_signal_names,
+            lod,
+            start_time,
+            tile_span,
+            num_tiles,
+            compression,
+        )
+        .await?;
+
+    // 构建响应
+    let content_length = data.len();
+    let body = Body::from(data);
+    let mut response = Response::new(body);
+
+    // 设置 Content-Type
+    response.headers_mut().insert(
+        "content-type",
+        "application/octet-stream".parse().unwrap(),
+    );
+
+    // 设置 CDN 缓存头
+    response.headers_mut().insert(
+        "cache-control",
+        "public, max-age=3600, immutable".parse().unwrap(),
+    );
+
+    // 设置 Content-Length
+    response
+        .headers_mut()
+        .insert("content-length", content_length.to_string().parse().unwrap());
+
+    // 设置 Accept-Ranges
+    response
+        .headers_mut()
+        .insert("accept-ranges", "bytes".parse().unwrap());
+
+    info!(
+        "返回多信号 Tile 数据：{} (LoD {}, tiles={}×{}, compress {}, {} 个信号, {} bytes)",
+        waveform_name, lod, num_tiles, tile_span, compress_str, full_signal_names.len(), content_length
     );
     Ok(response)
 }

@@ -54,6 +54,12 @@ pub enum ServerError {
 
     #[error("配置错误：{0}")]
     ConfigError(String),
+
+    #[error("无效的 Chunk 格式")]
+    InvalidChunkFormat,
+
+    #[error("无效的信号名格式")]
+    InvalidSignalNameFormat,
 }
 
 impl IntoResponse for ServerError {
@@ -120,6 +126,16 @@ impl IntoResponse for ServerError {
             ServerError::ConfigError(msg) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "CONFIG_ERROR", msg.clone())
             }
+            ServerError::InvalidChunkFormat => (
+                StatusCode::BAD_REQUEST,
+                "INVALID_CHUNK_FORMAT",
+                "无效的 Chunk 数据格式".to_string(),
+            ),
+            ServerError::InvalidSignalNameFormat => (
+                StatusCode::BAD_REQUEST,
+                "INVALID_SIGNAL_NAME_FORMAT",
+                "无效的信号名格式".to_string(),
+            ),
         };
 
         error!("服务器错误：{:?} - {}", error_code, message);

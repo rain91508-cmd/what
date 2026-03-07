@@ -633,21 +633,21 @@ pub struct LodLevel(pub u32);
 
 impl LodLevel {
     /// 最大 LoD 层级
-    pub const MAX_LEVEL: u32 = 12;
+    pub const MAX_LEVEL: u32 = 20;
 
     /// 创建 LoD 层级（自动限制在有效范围内）
     pub fn new(level: u32) -> Self {
         Self(level.min(Self::MAX_LEVEL))
     }
 
-    /// 获取 bucket 大小（16^level 个转换点）
+    /// 获取 bucket 大小（2^level 个转换点）
     ///
     /// LoD 0: 1 (原始数据)
-    /// LoD 1: 16 (每16个点合并)
-    /// LoD 2: 256 (每256个点合并)
-    /// LoD n: 16^n
+    /// LoD 1: 2 (每2个点合并)
+    /// LoD 2: 4 (每4个点合并)
+    /// LoD n: 2^n
     pub fn bucket_size(&self) -> usize {
-        16usize.pow(self.0)
+        2usize.pow(self.0)
     }
 
     /// 判断是否为有效层级
@@ -659,7 +659,7 @@ impl LodLevel {
 /// LoD 配置
 ///
 /// 注意：LoD 是基于数据点数量的降采样，与时间窗口无关。
-/// 每个 LoD 层级使用 bucket_size = 16^level 个转换点进行 min/max 降采样。
+/// 每个 LoD 层级使用 bucket_size = 2^level 个转换点进行 min/max 降采样。
 #[derive(Debug, Clone)]
 pub struct LodConfig {
     /// LoD 层级数量 (0 表示原始数据，1+ 表示降采样层级)
@@ -673,7 +673,7 @@ pub struct LodConfig {
 impl Default for LodConfig {
     fn default() -> Self {
         Self {
-            levels: 12,
+            levels: 20,
             max_transitions_per_chunk: usize::MAX, // 无限制
             enable_compression: true,
         }
@@ -1388,5 +1388,336 @@ mod tests {
         assert_eq!(header.level, 0);
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0].1.len(), 4); // 4 transitions
+    }
+}
+
+/// ==================== MultiTileChunk 多 Tile 数据格式 ====================
+///
+/// 用于支持 tile-based API，一次请求返回多个连续的 tile 数据
+///
+/// ## 数据格式
+///
+/// ```
+/// +------------------+
+/// | MultiTileHeader  | 40 bytes
+/// | (多Tile文件头)    |
+/// +------------------+
+/// | TileOffsetTable  | 8 bytes × num_tiles
+/// | (Tile偏移表)      |
+/// +------------------+
+/// | Tile 1 Data      | 变长
+/// | (Tile 1数据)      |
+/// +------------------+
+/// | Tile 2 Data      | 变长
+/// | (Tile 2数据)      |
+/// +------------------+
+/// | ...              |
+/// +------------------+
+/// | Tile N Data      | 变长
+/// | (Tile N数据)      |
+/// +------------------+
+/// ```
+
+/// MultiTile 文件头（40字节）
+#[derive(Debug, Clone, Copy)]
+pub struct MultiTileHeader {
+    /// 魔数 'WATI' = 0x57415449 (Waveform Tiles)
+    pub magic: u32,
+    /// 版本号
+    pub version: u16,
+    /// LoD 层级
+    pub lod: u16,
+    /// Tile 数量
+    pub num_tiles: u32,
+    /// 起始时间
+    pub start_time: u64,
+    /// 每个 tile 的时间跨度
+    pub tile_span: u64,
+    /// 信号数量
+    pub signal_count: u32,
+    /// 保留字段
+    pub reserved: u32,
+    /// 压缩类型（0=无压缩, 1=zstd, 2=lz4）
+    pub compression: u32,
+}
+
+impl MultiTileHeader {
+    pub const MAGIC: u32 = 0x57415449; // 'WATI'
+    pub const VERSION: u16 = 1;
+    pub const SIZE: usize = 40;
+
+    pub fn new(
+        lod: u16,
+        num_tiles: u32,
+        start_time: u64,
+        tile_span: u64,
+        signal_count: u32,
+        compression: CompressionAlgorithm,
+    ) -> Self {
+        Self {
+            magic: Self::MAGIC,
+            version: Self::VERSION,
+            lod,
+            num_tiles,
+            start_time,
+            tile_span,
+            signal_count,
+            reserved: 0,
+            compression: compression as u32,
+        }
+    }
+
+    /// 序列化为字节数组（小端序）
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut bytes = [0u8; Self::SIZE];
+        bytes[0..4].copy_from_slice(&self.magic.to_le_bytes());
+        bytes[4..6].copy_from_slice(&self.version.to_le_bytes());
+        bytes[6..8].copy_from_slice(&self.lod.to_le_bytes());
+        bytes[8..12].copy_from_slice(&self.num_tiles.to_le_bytes());
+        bytes[12..20].copy_from_slice(&self.start_time.to_le_bytes());
+        bytes[20..28].copy_from_slice(&self.tile_span.to_le_bytes());
+        bytes[28..32].copy_from_slice(&self.signal_count.to_le_bytes());
+        bytes[32..36].copy_from_slice(&self.reserved.to_le_bytes());
+        bytes[36..40].copy_from_slice(&self.compression.to_le_bytes());
+        bytes
+    }
+
+    /// 从字节数组解析（小端序）
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() < Self::SIZE {
+            return Err(ServerError::InvalidChunkFormat);
+        }
+
+        let magic = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+        if magic != Self::MAGIC {
+            return Err(ServerError::InvalidChunkFormat);
+        }
+
+        Ok(Self {
+            magic,
+            version: u16::from_le_bytes(bytes[4..6].try_into().unwrap()),
+            lod: u16::from_le_bytes(bytes[6..8].try_into().unwrap()),
+            num_tiles: u32::from_le_bytes(bytes[8..12].try_into().unwrap()),
+            start_time: u64::from_le_bytes(bytes[12..20].try_into().unwrap()),
+            tile_span: u64::from_le_bytes(bytes[20..28].try_into().unwrap()),
+            signal_count: u32::from_le_bytes(bytes[28..32].try_into().unwrap()),
+            reserved: u32::from_le_bytes(bytes[32..36].try_into().unwrap()),
+            compression: u32::from_le_bytes(bytes[36..40].try_into().unwrap()),
+        })
+    }
+}
+
+/// Tile 偏移表项（8字节）
+#[derive(Debug, Clone, Copy)]
+pub struct TileOffsetEntry {
+    /// Tile 数据在文件中的偏移量（相对于 MultiTileHeader 开头）
+    pub offset: u64,
+}
+
+impl TileOffsetEntry {
+    pub const SIZE: usize = 8;
+
+    pub fn new(offset: u64) -> Self {
+        Self { offset }
+    }
+
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        self.offset.to_le_bytes()
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() < Self::SIZE {
+            return Err(ServerError::InvalidChunkFormat);
+        }
+        Ok(Self {
+            offset: u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
+        })
+    }
+}
+
+/// MultiTileChunk 序列化器
+pub struct MultiTileChunkSerializer;
+
+impl MultiTileChunkSerializer {
+    /// 将多个 tile 的波形数据序列化为 MultiTileChunk 格式
+    ///
+    /// # Arguments
+    /// * `lod` - LoD 层级
+    /// * `start_time` - 起始时间
+    /// * `tile_span` - 每个 tile 的时间跨度
+    /// * `tiles_data` - 每个 tile 的信号数据列表 (Vec<Vec<SignalWaveData>>)
+    /// * `compression` - 压缩算法
+    pub fn serialize(
+        lod: u16,
+        start_time: u64,
+        tile_span: u64,
+        tiles_data: &[Vec<SignalWaveData>],
+        compression: CompressionAlgorithm,
+    ) -> Result<Vec<u8>> {
+        let num_tiles = tiles_data.len() as u32;
+        if num_tiles == 0 {
+            return Err(ServerError::InvalidParameter("No tile data".to_string()));
+        }
+
+        let signal_count = tiles_data[0].len() as u32;
+        
+        // 创建文件头
+        let header = MultiTileHeader::new(
+            lod,
+            num_tiles,
+            start_time,
+            tile_span,
+            signal_count,
+            compression,
+        );
+
+        // 计算偏移表的位置
+        let header_size = MultiTileHeader::SIZE;
+        let offset_table_size = TileOffsetEntry::SIZE * num_tiles as usize;
+        let data_start_offset = header_size + offset_table_size;
+
+        // 序列化每个 tile 的数据并计算偏移量
+        let mut tile_data_list: Vec<Vec<u8>> = Vec::new();
+        let mut tile_offsets: Vec<u64> = Vec::new();
+        let mut current_offset = data_start_offset as u64;
+
+        for (tile_idx, tile_signals) in tiles_data.iter().enumerate() {
+            let tile_start_time = start_time + tile_span * tile_idx as u64;
+            let tile_end_time = tile_start_time + tile_span;
+
+            // 使用现有的 ChunkSerializer 序列化单个 tile
+            let tile_data = ChunkSerializer::serialize(
+                tile_idx as u32,
+                lod,
+                &tile_signals.iter().collect::<Vec<_>>(),
+                (tile_start_time, tile_end_time),
+                compression,
+            )?;
+
+            tile_offsets.push(current_offset);
+            current_offset += tile_data.len() as u64;
+            tile_data_list.push(tile_data);
+        }
+
+        // 组装最终数据
+        let mut result = Vec::with_capacity(current_offset as usize);
+        
+        // 写入文件头
+        result.extend_from_slice(&header.to_bytes());
+        
+        // 写入偏移表
+        for offset in tile_offsets {
+            result.extend_from_slice(&TileOffsetEntry::new(offset).to_bytes());
+        }
+        
+        // 写入每个 tile 的数据
+        for tile_data in tile_data_list {
+            result.extend_from_slice(&tile_data);
+        }
+
+        Ok(result)
+    }
+
+    /// 从 MultiTileChunk 数据反序列化
+    ///
+    /// 返回: (MultiTileHeader, Vec<(ChunkHeader, Vec<(SignalBlockHeader, Vec<Transition>)>)>)
+    pub fn deserialize(data: &[u8]) -> Result<(MultiTileHeader, Vec<(ChunkHeader, Vec<(SignalBlockHeader, Vec<Transition>)>)>)> {
+        // 解析文件头
+        let header = MultiTileHeader::from_bytes(data)?;
+
+        let mut tiles = Vec::with_capacity(header.num_tiles as usize);
+        let header_size = MultiTileHeader::SIZE;
+        let offset_table_size = TileOffsetEntry::SIZE * header.num_tiles as usize;
+
+        // 解析每个 tile
+        for i in 0..header.num_tiles {
+            // 读取偏移表项
+            let offset_entry_offset = header_size + TileOffsetEntry::SIZE * i as usize;
+            let offset_entry = TileOffsetEntry::from_bytes(&data[offset_entry_offset..])?;
+
+            // 解析 tile 数据（使用现有的 ChunkSerializer）
+            let tile_data = &data[offset_entry.offset as usize..];
+            let (chunk_header, signals) = ChunkSerializer::deserialize(tile_data)?;
+            
+            tiles.push((chunk_header, signals));
+        }
+
+        Ok((header, tiles))
+    }
+
+    /// 获取指定 tile 的数据偏移量
+    pub fn get_tile_offset(data: &[u8], tile_idx: usize) -> Result<u64> {
+        let header = MultiTileHeader::from_bytes(data)?;
+        
+        if tile_idx >= header.num_tiles as usize {
+            return Err(ServerError::InvalidParameter(format!(
+                "Tile index {} out of range (0-{})",
+                tile_idx,
+                header.num_tiles - 1
+            )));
+        }
+
+        let header_size = MultiTileHeader::SIZE;
+        let offset_entry_offset = header_size + TileOffsetEntry::SIZE * tile_idx;
+        let offset_entry = TileOffsetEntry::from_bytes(&data[offset_entry_offset..])?;
+        
+        Ok(offset_entry.offset)
+    }
+}
+
+/// Tile 信息结构（用于客户端解析）
+#[derive(Debug, Clone)]
+pub struct TileInfo {
+    /// Tile 索引
+    pub idx: usize,
+    /// 起始时间
+    pub start_time: u64,
+    /// 结束时间
+    pub end_time: u64,
+    /// 数据在 MultiTileChunk 中的偏移量
+    pub data_offset: u64,
+    /// 数据大小
+    pub data_size: u64,
+}
+
+impl TileInfo {
+    /// 从 MultiTileChunk 数据解析所有 tile 的信息
+    pub fn parse_all(data: &[u8]) -> Result<Vec<Self>> {
+        let header = MultiTileHeader::from_bytes(data)?;
+        let header_size = MultiTileHeader::SIZE;
+        let offset_table_size = TileOffsetEntry::SIZE * header.num_tiles as usize;
+        
+        let mut tiles = Vec::with_capacity(header.num_tiles as usize);
+        
+        for i in 0..header.num_tiles as usize {
+            // 读取当前 tile 的偏移量
+            let offset_entry_offset = header_size + TileOffsetEntry::SIZE * i;
+            let offset_entry = TileOffsetEntry::from_bytes(&data[offset_entry_offset..])?;
+            
+            // 计算数据大小
+            let data_size = if i < header.num_tiles as usize - 1 {
+                // 读取下一个 tile 的偏移量
+                let next_offset_entry = TileOffsetEntry::from_bytes(
+                    &data[offset_entry_offset + TileOffsetEntry::SIZE..]
+                )?;
+                next_offset_entry.offset - offset_entry.offset
+            } else {
+                // 最后一个 tile，使用数据总长度
+                data.len() as u64 - offset_entry.offset
+            };
+
+            let tile_start_time = header.start_time + header.tile_span * i as u64;
+            let tile_end_time = tile_start_time + header.tile_span;
+
+            tiles.push(Self {
+                idx: i,
+                start_time: tile_start_time,
+                end_time: tile_end_time,
+                data_offset: offset_entry.offset,
+                data_size,
+            });
+        }
+
+        Ok(tiles)
     }
 }
