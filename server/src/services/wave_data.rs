@@ -732,23 +732,36 @@ impl LodPyramidGenerator {
         source: &SignalWaveData,
         level: LodLevel,
     ) -> SignalWaveData {
-        let bucket_size = level.bucket_size();
+        let bucket_size = level.bucket_size() as u64;
         let mut result = SignalWaveData::new(source.handle, source.width, source.value_type);
 
-        // 获取第一个转换点的四态值
+        if source.transitions.is_empty() {
+            return result;
+        }
+
+        // 获取时间范围
+        let start_time = source.transitions[0].time;
+        let end_time = source.transitions.last().unwrap().time;
+
+        // 计算需要多少个 bucket
+        let total_buckets = ((end_time - start_time) / bucket_size + 1) as usize;
+        info!("LoD {} 生成: start_time={}, end_time={}, bucket_size={}, total_buckets={}", 
+            level.0, start_time, end_time, bucket_size, total_buckets);
+
+        // 初始化第一个 bucket 的状态
         let first_fs = source.transitions[0]
             .value
             .to_four_state()
             .unwrap_or_else(|| FourStateValue::new(source.width));
         let mut bucket_min = first_fs.clone();
         let mut bucket_max = first_fs.clone();
-        let mut bucket_start_time = source.transitions[0].time;
-        let mut bucket_end_time = source.transitions[0].time;
+        let mut current_bucket_idx: usize = 0;
         let mut last_value = source.transitions[0].value.clone();
-        let mut bucket_idx = 0usize;
 
-        for (i, trans) in source.transitions.iter().enumerate() {
-            let current_bucket = i / bucket_size;
+        // 遍历所有 transitions
+        for trans in &source.transitions {
+            // 计算当前 transition 属于哪个 bucket（基于时间）
+            let trans_bucket_idx = ((trans.time - start_time) / bucket_size) as usize;
 
             // 获取当前转换点的四态值
             let trans_fs = trans
@@ -756,23 +769,31 @@ impl LodPyramidGenerator {
                 .to_four_state()
                 .unwrap_or_else(|| FourStateValue::new(source.width));
 
-            if current_bucket > bucket_idx {
-                // 输出上一个 bucket 的 min/max
+            if trans_bucket_idx > current_bucket_idx {
+                // 先输出当前 bucket 的 min/max
+                let bucket_end_time = start_time + (current_bucket_idx as u64 + 1) * bucket_size;
                 let min_str = bucket_min.to_string();
                 let max_str = bucket_max.to_string();
                 
-                // min 和 max 都使用 bucket_end_time
                 result.add_transition(Transition::from_numeric(bucket_end_time, &min_str));
                 
-                // 如果 min != max 或有 X/Z 状态，输出 max
                 let has_xz = bucket_min.has_xz() || bucket_max.has_xz();
                 if max_str != min_str || has_xz {
                     result.add_transition(Transition::from_numeric(bucket_end_time, &max_str));
                 }
 
+                // 输出中间空 bucket（如果有）
+                for bucket_idx in (current_bucket_idx + 1)..trans_bucket_idx {
+                    let bucket_end_time = start_time + (bucket_idx as u64 + 1) * bucket_size;
+                    // 空 bucket：输出上一个值
+                    let value_str = last_value.to_four_state()
+                        .unwrap_or_else(|| FourStateValue::new(source.width))
+                        .to_string();
+                    result.add_transition(Transition::from_numeric(bucket_end_time, &value_str));
+                }
+
                 // 开始新 bucket
-                bucket_idx = current_bucket;
-                bucket_start_time = trans.time;
+                current_bucket_idx = trans_bucket_idx;
                 bucket_min = trans_fs.clone();
                 bucket_max = trans_fs.clone();
             } else {
@@ -781,33 +802,22 @@ impl LodPyramidGenerator {
                 bucket_max = four_state_max(&bucket_max, &trans_fs);
             }
 
-            bucket_end_time = trans.time;
             last_value = trans.value.clone();
         }
 
         // 输出最后一个 bucket
-        let total_buckets = (source.transitions.len() + bucket_size - 1) / bucket_size;
-        if bucket_idx < total_buckets {
-            let min_str = bucket_min.to_string();
-            let max_str = bucket_max.to_string();
+        let last_bucket_end_time = start_time + (current_bucket_idx as u64 + 1) * bucket_size;
+        let min_str = bucket_min.to_string();
+        let max_str = bucket_max.to_string();
 
-            // 调试日志
-            info!("LoD {} 最后一个 bucket: min={}, max={}, end_time={}, has_xz={}",
-                level.0, min_str, max_str, bucket_end_time,
-                bucket_min.has_xz() || bucket_max.has_xz());
-
-            // min 和 max 都使用 bucket_end_time
-            result.add_transition(Transition::from_numeric(bucket_end_time, &min_str));
-            info!("  输出 min: time={}, value={}", bucket_end_time, min_str);
-            
-            // 如果 min != max 或有 X/Z 状态，输出 max
-            let has_xz = bucket_min.has_xz() || bucket_max.has_xz();
-            if max_str != min_str || has_xz {
-                result.add_transition(Transition::from_numeric(bucket_end_time, &max_str));
-                info!("  输出 max: time={}, value={}", bucket_end_time, max_str);
-            }
+        result.add_transition(Transition::from_numeric(last_bucket_end_time, &min_str));
+        
+        let has_xz = bucket_min.has_xz() || bucket_max.has_xz();
+        if max_str != min_str || has_xz {
+            result.add_transition(Transition::from_numeric(last_bucket_end_time, &max_str));
         }
 
+        info!("LoD {} 生成完成: {} transitions", level.0, result.transitions.len());
         result
     }
 
