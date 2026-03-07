@@ -13,15 +13,16 @@
 
 ```typescript
 // 全局配置（所有波形共享，硬编码）
+// 注意：与服务器 API 保持一致
 const CONFIG = {
-  // LOD 配置：分辨率倍数
-  LOD_MULTIPLIER: 16,              // 每级 LOD 时间跨度 ×16
+  // LOD 配置：分辨率倍数（与服务器一致：bucket_size = 2^level）
+  LOD_MULTIPLIER: 2,               // 每级 LOD 时间跨度 ×2
   
   // LOD 0 基准（原始数据）
   LOD0_RESOLUTION: 1,              // 1 time_unit
   
-  // Tile 配置
-  TILE_SPAN_MULTIPLIER: 1_000_000, // LOD0 的 tile 跨度 = 1M time_units
+  // Tile 配置（2的幂次，便于对齐）
+  TILE_SPAN_MULTIPLIER: 65_536,    // LOD0 的 tile 跨度 = 64K time_units (2^16)
   
   // Group 配置
   GROUP_SIZE: 256,                 // 每个 group 256 个信号
@@ -37,13 +38,15 @@ const CONFIG = {
 };
 
 // LOD 时间跨度计算
+// tile_span = 65_536 * 2^lod
 function getTileSpan(lod: number): number {
   return CONFIG.TILE_SPAN_MULTIPLIER * Math.pow(CONFIG.LOD_MULTIPLIER, lod);
 }
 
-// LOD 分辨率计算
+// LOD 分辨率计算（与服务器一致）
+// resolution = 2^lod
 function getResolution(lod: number): number {
-  return CONFIG.LOD0_RESOLUTION * Math.pow(CONFIG.LOD_MULTIPLIER, lod);
+  return Math.pow(CONFIG.LOD_MULTIPLIER, lod);
 }
 ```
 
