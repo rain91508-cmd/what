@@ -75,12 +75,15 @@ pub async fn list_waves(
     state.stats.record_request(crate::state::RequestType::Wave).await;
     
     let wave_service = WaveService::new(state.clone());
-    let mut waves = wave_service.list_waves().await?;
-
+    let waves = wave_service.list_waves().await?;
+    
     // 应用分页
-    if let Some(offset) = query.offset {
-        waves = waves.into_iter().skip(offset).collect();
-    }
+    let mut waves: Vec<_> = if let Some(offset) = query.offset {
+        waves.into_iter().skip(offset).collect()
+    } else {
+        waves
+    };
+    
     if let Some(limit) = query.limit {
         waves = waves.into_iter().take(limit).collect();
     }
