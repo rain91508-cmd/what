@@ -1130,6 +1130,15 @@ impl WaveService {
                 let mut lod_data = LodPyramidGenerator::new(config.clone()).generate_level(&signal_data, lod);
                 info!("信号 {} 生成 LoD {} 数据: {} transitions", name, lod.0, lod_data.transitions.len());
                 
+                // 如果时间范围内没有 transitions，添加一个 min=max=boundary value 的 transition
+                if lod_data.transitions.is_empty() {
+                    info!("信号 {}: 时间范围内无数据，添加 min=max=boundary value", name);
+                    lod_data.add_transition(Transition {
+                        time: time_start,
+                        value: boundary_value.clone(),
+                    });
+                }
+                
                 // 在 LoD 数据开头添加 boundary value（始终添加）
                 lod_data.transitions.insert(0, Transition {
                     time: ChunkSerializer::BOUNDARY_TIME_START,
@@ -1296,6 +1305,15 @@ impl WaveService {
                     // 生成 LoD 数据（基于实际的 transitions，不包括 boundary value）
                     let mut lod_data = LodPyramidGenerator::new(config.clone()).generate_level(&tile_signal, lod);
                     info!("Tile {} 信号 {}: 生成 LoD {} 数据: {} transitions", tile_idx, name, lod.0, lod_data.transitions.len());
+                    
+                    // 如果 tile 内没有 transitions，添加一个 min=max=boundary value 的 transition
+                    if lod_data.transitions.is_empty() {
+                        info!("Tile {} 信号 {}: tile 内无数据， 添加 min=max=boundary value", tile_idx, name);
+                        lod_data.add_transition(Transition {
+                            time: tile_start,
+                            value: boundary_value.clone(),
+                        });
+                    }
                     
                     // 在 LoD 数据开头添加 boundary value（始终添加）
                     lod_data.transitions.insert(0, Transition {
