@@ -1863,8 +1863,10 @@ impl WaveformDataProvider {
             .collect();
 
         // If no boundary value but first transition is at viewport start, use it as initial value
+        // Note: Compare as u64 to avoid f64 precision issues with large timestamps
+        let viewport_start_u64 = self.viewport.time_start as u64;
         let effective_boundary = if boundary_value.is_none() && !normal_transitions.is_empty() {
-            if normal_transitions[0].time as f64 == self.viewport.time_start {
+            if normal_transitions[0].time == viewport_start_u64 {
                 console_log!("[WASM] First transition at viewport start, using as initial value: {}", 
                     normal_transitions[0].value);
                 Some(normal_transitions[0].value.clone())
