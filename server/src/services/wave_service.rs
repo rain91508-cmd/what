@@ -1342,15 +1342,6 @@ impl WaveService {
                 &widths,
             );
             
-            // 批量搜索 End Value
-            let end_values = search_boundary_values_optimized(
-                &signal_data_map,
-                time_end,
-                SearchDirection::Backward,
-                wave_end,
-                &widths,
-            );
-            
             for (name, handle, _) in all_signals {
                 let full_data = full_signals_data.get(&handle).unwrap();
                 let mut signal_data = SignalWaveData::new(handle.into(), full_data.width, full_data.value_type);
@@ -1362,7 +1353,7 @@ impl WaveService {
                     }
                 }
 
-                // 获取 Start Value 和 End Value
+                // 获取 Start Value
                 let start_value = start_values.get(&handle)
                     .and_then(|v| v.clone())
                     .unwrap_or_else(|| {
@@ -1374,12 +1365,8 @@ impl WaveService {
                         }
                     });
                 
-                let end_value = end_values.get(&handle)
-                    .and_then(|v| v.clone())
-                    .unwrap_or_else(|| start_value.clone());
-                
-                info!("信号 {} 时间范围内数据: {} transitions, start={:?}, end={:?}", 
-                    name, signal_data.transitions.len(), start_value, end_value);
+                info!("信号 {} 时间范围内数据: {} transitions, start={:?}", 
+                    name, signal_data.transitions.len(), start_value);
 
                 // 在 signal_data 开头添加 start_value（使用 time_start 时间）
                 // 这样 LoD 生成器可以正确计算第一个 bucket 的 min
@@ -1394,17 +1381,12 @@ impl WaveService {
                 let mut lod_data = LodPyramidGenerator::new(config.clone()).generate_level(&signal_data, lod);
                 info!("信号 {} 生成 LoD {} 数据: {} transitions", name, lod.0, lod_data.transitions.len());
                 
-                // 在 LoD 数据开头添加 Start Value 和 End Value（始终添加）
-                // 注意：顺序很重要，Start Value 在前，End Value 在后
+                // 在 LoD 数据开头添加 Start Value（始终添加）
                 lod_data.transitions.insert(0, Transition {
                     time: ChunkSerializer::BOUNDARY_TIME_START,
                     value: start_value,
                 });
-                lod_data.transitions.insert(1, Transition {
-                    time: ChunkSerializer::BOUNDARY_TIME_START,
-                    value: end_value,
-                });
-                info!("信号 {} 添加 Start Value 和 End Value 到 LoD 数据", name);
+                info!("信号 {} 添加 Start Value 到 LoD 数据", name);
                 
                 result.push(lod_data);
             }
@@ -1556,15 +1538,6 @@ impl WaveService {
                     wave_end,
                     &widths,
                 );
-                
-                // 批量搜索 End Value
-                let end_values = search_boundary_values_optimized(
-                    &signal_data_map,
-                    tile_end,
-                    SearchDirection::Backward,
-                    wave_end,
-                    &widths,
-                );
 
                 let mut tile_signals: Vec<SignalWaveData> = Vec::with_capacity(signal_handles.len());
 
@@ -1584,7 +1557,7 @@ impl WaveService {
                     
                     info!("Tile {} 信号 {}: 从完整数据中提取了 {} 个 transitions", tile_idx, name, count);
 
-                    // 获取 Start Value 和 End Value
+                    // 获取 Start Value
                     let start_value = start_values.get(handle)
                         .and_then(|v| v.clone())
                         .unwrap_or_else(|| {
@@ -1594,10 +1567,6 @@ impl WaveService {
                                 SignalValue::Numeric(format!("b{}", "X".repeat(*width as usize)))
                             }
                         });
-                    
-                    let end_value = end_values.get(handle)
-                        .and_then(|v| v.clone())
-                        .unwrap_or_else(|| start_value.clone());
 
                     // 在 tile_signal 开头添加 start_value（使用 tile_start 时间）
                     // 这样 LoD 生成器可以正确计算第一个 bucket 的 min
@@ -1612,17 +1581,12 @@ impl WaveService {
                     let mut lod_data = LodPyramidGenerator::new(config.clone()).generate_level(&tile_signal, lod);
                     info!("Tile {} 信号 {}: 生成 LoD {} 数据: {} transitions", tile_idx, name, lod.0, lod_data.transitions.len());
                     
-                    // 在 LoD 数据开头添加 Start Value 和 End Value（始终添加）
-                    // 注意：顺序很重要，Start Value 在前，End Value 在后
+                    // 在 LoD 数据开头添加 Start Value（始终添加）
                     lod_data.transitions.insert(0, Transition {
                         time: ChunkSerializer::BOUNDARY_TIME_START,
                         value: start_value,
                     });
-                    lod_data.transitions.insert(1, Transition {
-                        time: ChunkSerializer::BOUNDARY_TIME_START,
-                        value: end_value,
-                    });
-                    info!("Tile {} 信号 {}: 添加 Start Value 和 End Value 到 LoD 数据", tile_idx, name);
+                    info!("Tile {} 信号 {}: 添加 Start Value 到 LoD 数据", tile_idx, name);
                     
                     tile_signals.push(lod_data);
                 }

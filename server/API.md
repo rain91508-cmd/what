@@ -988,26 +988,23 @@ LoD 是基于**数据点数量**的降采样，与时间窗口无关：
 - 每个 bucket 保留该时间段内的最小值和最大值，确保波形特征不丢失
 - Bucket 大小计算公式: `2^level`
 - **Min/Max 输出规则**: 当 bucket 内 min = max 时，只输出 1 个记录；当 min ≠ max 或包含 X/Z 状态时，输出 2 个记录（min 和 max 都使用 bucket 结束时间），确保波形变化被正确表示
-- **Start/End Value 处理**:
+- **Start Value 处理**:
   - **Start Value**: 请求时间范围起始点之前的最近一个值（向前搜索）
-  - **End Value**: 请求时间范围结束点之后的最近一个值（向后搜索）
-  - Start Value 和 End Value 都使用特殊时间戳 `0xFFFFFFFFFFFFFFFF` (BOUNDARY_TIME_START)
-  - 通过位置区分：offset 较小的是 Start Value，后面的是 End Value
-  - **保证每个返回的 chunk 都有 Start 和 End Value**：即使请求时间范围在波形开始点（如 time=0），也会返回默认值 'X'
+  - Start Value 使用特殊时间戳 `0xFFFFFFFFFFFFFFFF` (BOUNDARY_TIME_START)
+  - **保证每个返回的 chunk 都有 Start Value**：即使请求时间范围在波形开始点（如 time=0），也会返回默认值 'X'
   - **默认值 'X'**：1-bit 信号返回 `"X"`，n-bit 信号返回 `"bXXX...X"` (n 个 X)
 - **数据格式**:
   ```
   [Start Value] (time=BOUNDARY_TIME_START, value=向前搜索得到的值)
-  [End Value] (time=BOUNDARY_TIME_START, value=向后搜索得到的值)
   
   每个 normal transition (LoD bucket):
     [min] (time=bucket_end)
     [max] (time=bucket_end, 如果 min!=max)
   ```
 - **空时间范围处理**：当请求的时间范围或 tile 内没有任何 transitions 时：
-  - 只返回 Start Value 和 End Value
-  - transition_count = 2
-- **Start/End Value 搜索算法**:
+  - 只返回 Start Value
+  - transition_count = 1
+- **Start Value 搜索算法**:
   - 使用二分法查找最小有记录的区域
   - 为每个信号单独搜索最小区域
   - 找到所有信号的公有最小区域（取并集）
