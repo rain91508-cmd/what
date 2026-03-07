@@ -233,6 +233,54 @@ impl SignalBlockHeader {
     }
 }
 
+/// Multi-tile chunk header (40 bytes) - for tile-based API
+#[derive(Debug, Clone)]
+pub struct MultiTileHeader {
+    pub magic: u32,
+    pub version: u16,
+    pub lod: u16,
+    pub num_tiles: u32,
+    pub start_time: u64,
+    pub tile_span: u64,
+    pub signal_count: u32,
+    pub reserved: u32,
+    pub compression: u32,
+}
+
+impl MultiTileHeader {
+    pub const MAGIC: u32 = 0x57415449; // 'WATI'
+    pub const SIZE: usize = 40;
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self, String> {
+        if data.len() < Self::SIZE {
+            return Err("Multi-tile header too small".to_string());
+        }
+
+        let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        if magic != Self::MAGIC {
+            return Err(format!("Invalid multi-tile magic: 0x{:08X}", magic));
+        }
+
+        Ok(Self {
+            magic,
+            version: u16::from_le_bytes([data[4], data[5]]),
+            lod: u16::from_le_bytes([data[6], data[7]]),
+            num_tiles: u32::from_le_bytes([data[8], data[9], data[10], data[11]]),
+            start_time: u64::from_le_bytes([
+                data[12], data[13], data[14], data[15],
+                data[16], data[17], data[18], data[19],
+            ]),
+            tile_span: u64::from_le_bytes([
+                data[20], data[21], data[22], data[23],
+                data[24], data[25], data[26], data[27],
+            ]),
+            signal_count: u32::from_le_bytes([data[28], data[29], data[30], data[31]]),
+            reserved: u32::from_le_bytes([data[32], data[33], data[34], data[35]]),
+            compression: u32::from_le_bytes([data[36], data[37], data[38], data[39]]),
+        })
+    }
+}
+
 /// Waveform data provider
 #[wasm_bindgen]
 pub struct WaveformDataProvider {
@@ -1090,30 +1138,52 @@ if tile_missing_signals.is_empty() {
     return Ok(());
 }
         
-        // Step 3: Fetch missing signals per tile from server
-        let total_tiles_to_fetch = tile_missing_signals.len();
-        for (tile_idx, (tile_id, tile_signal_names)) in tile_missing_signals.iter().enumerate() {
-            let tile_time_start = *tile_id * tile_span;
-            let tile_time_end = ((*tile_id + 1) * tile_span).min(time_end);
+        // Step 3: Fetch missing signals using tile-based API
+        // Group tiles by contiguous ranges to minimize HTTP requests
+        const MAX_TILES_PER_REQUEST: usize = 100;
+        
+        // Collect all unique signal names from all tiles
+        let all_signal_names: Vec<String> = tile_missing_signals.values()
+            .flat_map(|v| v.iter().cloned())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        
+        for batch in all_signal_names.chunks(MAX_BATCH_SIZE) {
+            // Convert all signal names to server names
+            let server_names: Vec<String> = batch.iter()
+                .map(|local_name| self.build_server_signal_name(local_name))
+                .collect();
+
+            // Join server names with comma, then base64 encode
+            let names_batch = server_names.join(",");
+            let encoded_batch = general_purpose::STANDARD.encode(&names_batch);
+
+            // Group contiguous tiles for batch request
+            let tile_ids: Vec<u64> = tile_missing_signals.keys().cloned().collect();
+            let mut tile_idx = 0;
             
-            // Fetch this tile's data from server
-            for batch in tile_signal_names.chunks(MAX_BATCH_SIZE) {
-                // Convert all signal names to server names
-                let server_names: Vec<String> = batch.iter()
-                    .map(|local_name| self.build_server_signal_name(local_name))
-                    .collect();
-
-                // Join server names with comma, then base64 encode
-                let names_batch = server_names.join(",");
-                let encoded_batch = general_purpose::STANDARD.encode(&names_batch);
-
-                // Build URL for this tile's time range
-                let url = format!("{}/api/wave/{}/lod/{}/time/{}/{}/compress/none/signals/b64:{}/data?time_stamp={}",
+            while tile_idx < tile_ids.len() {
+                // Find contiguous tile range
+                let start_tile = tile_ids[tile_idx];
+                let start_time = start_tile * tile_span;
+                
+                // Count contiguous tiles (up to MAX_TILES_PER_REQUEST)
+                let mut num_tiles = 1;
+                while tile_idx + num_tiles < tile_ids.len() 
+                    && tile_ids[tile_idx + num_tiles] == start_tile + num_tiles as u64
+                    && num_tiles < MAX_TILES_PER_REQUEST {
+                    num_tiles += 1;
+                }
+                
+                // Build URL for tile-based API
+                let url = format!("{}/api/wave/{}/lod/{}/tile/{}/{}/{}/compress/none/signals/b64:{}/data?time_stamp={}",
                     self.server_url,
                     self.waveform_name,
                     lod,
-                    tile_time_start,
-                    tile_time_end,
+                    start_time,
+                    tile_span,
+                    num_tiles,
                     encoded_batch,
                     self.time_stamp);
                 
@@ -1142,14 +1212,62 @@ if tile_missing_signals.is_empty() {
                 let mut bytes = vec![0u8; uint8_array.length() as usize];
                 uint8_array.copy_to(&mut bytes);
                 
-                // Parse chunk data and store in signal_data for rendering
-                let is_first_tile = tile_idx == 0;
-                let tile_start = tile_id * tile_span;
-                self.parse_chunk_data_for_batch(&tile_signal_names, &bytes, time_start, time_end, is_first_tile, false, tile_start)?;
+                // Parse multi-tile response
+                self.parse_multi_tile_response(&bytes, batch, time_start, time_end, tile_span).await?;
                 
-                // Store in OPFS cache for future use
-                self.process_server_chunk(&bytes, &tile_signal_names).await?;
+                tile_idx += num_tiles;
             }
+        }
+        
+        Ok(())
+    }
+
+    /// Parse multi-tile response and process each tile
+    async fn parse_multi_tile_response(
+        &mut self,
+        data: &[u8],
+        signal_names: &[String],
+        viewport_start: u64,
+        viewport_end: u64,
+        tile_span: u64,
+    ) -> Result<(), JsValue> {
+        // Parse multi-tile header
+        let header = MultiTileHeader::from_bytes(data)
+            .map_err(|e| JsValue::from_str(&e))?;
+        
+        // Read tile offset table
+        let offset_table_start = MultiTileHeader::SIZE;
+        let mut tile_offsets = Vec::with_capacity(header.num_tiles as usize);
+        
+        for i in 0..header.num_tiles {
+            let offset_pos = offset_table_start + (i as usize * 8);
+            let offset = u64::from_le_bytes([
+                data[offset_pos], data[offset_pos + 1], data[offset_pos + 2], data[offset_pos + 3],
+                data[offset_pos + 4], data[offset_pos + 5], data[offset_pos + 6], data[offset_pos + 7],
+            ]);
+            tile_offsets.push(offset);
+        }
+        
+        // Process each tile
+        for (tile_idx, offset) in tile_offsets.iter().enumerate() {
+            let tile_id = (header.start_time / tile_span) + tile_idx as u64;
+            let tile_start = tile_id * tile_span;
+            let is_first_tile = tile_idx == 0;
+            
+            // Extract tile data (from offset to next tile or end of data)
+            let tile_end_offset = if tile_idx + 1 < tile_offsets.len() {
+                tile_offsets[tile_idx + 1]
+            } else {
+                data.len() as u64
+            };
+            
+            let tile_data = &data[*offset as usize..tile_end_offset as usize];
+            
+            // Parse tile data (standard chunk format)
+            self.parse_chunk_data_for_batch(signal_names, tile_data, viewport_start, viewport_end, is_first_tile, false, tile_start)?;
+            
+            // Store in OPFS cache for future use
+            self.process_server_chunk(tile_data, signal_names).await?;
         }
         
         Ok(())
