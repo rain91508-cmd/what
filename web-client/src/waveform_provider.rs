@@ -123,9 +123,9 @@ const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
 /// Calculate appropriate LoD based on viewport and canvas width
 /// 
 /// Algorithm:
-/// 1. Calculate effective_time_per_pixel = time_span / (canvas_width * TILE_SPAN_MULTIPLIER)
-///    This accounts for the tile span multiplier to prevent selecting too high LoD
-/// 2. Select the finest LoD where lod.resolution >= effective_time_per_pixel
+/// 1. Calculate time_per_pixel = time_span / canvas_width
+///    This is the time range represented by each pixel
+/// 2. Select the finest LoD where lod.resolution >= time_per_pixel
 ///    This ensures each pixel shows at most one transition point
 /// 3. If no LoD satisfies, use max LoD
 fn select_lod(viewport: &Viewport, canvas_width: f64) -> u32 {
@@ -134,14 +134,13 @@ fn select_lod(viewport: &Viewport, canvas_width: f64) -> u32 {
     }
     
     let time_span = viewport.time_end - viewport.time_start;
-    // Account for TILE_SPAN_MULTIPLIER to prevent selecting too high LoD
-    // which would result in excessively large tile spans
-    let effective_time_per_pixel = time_span as f64 / (canvas_width * crate::opfs_cache::TILE_SPAN_MULTIPLIER as f64);
+    // Calculate time per pixel directly
+    let time_per_pixel = time_span as f64 / canvas_width;
     
-    // Find the finest LoD where resolution >= effective_time_per_pixel
+    // Find the finest LoD where resolution >= time_per_pixel
     // This ensures we don't over-sample (multiple transitions per pixel)
     for (lod, resolution) in LOD_TABLE.iter() {
-        if (*resolution as f64) >= effective_time_per_pixel {
+        if (*resolution as f64) >= time_per_pixel {
             return *lod;
         }
     }

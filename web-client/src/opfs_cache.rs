@@ -33,8 +33,8 @@ pub const LOD_MULTIPLIER: u64 = 2;
 /// LOD 0 base resolution: 1 time_unit
 pub const LOD0_RESOLUTION: u64 = 1;
 
-/// Tile span multiplier for LOD 0: 65536 time_units (2^16, power of 2 for alignment)
-pub const TILE_SPAN_MULTIPLIER: u64 = 65_536;
+/// Tile span multiplier for LOD 0: 256 time_units (2^8, smaller granularity)
+pub const TILE_SPAN_MULTIPLIER: u64 = 256;
 
 /// Group size: 256 signals per group
 pub const GROUP_SIZE: u32 = 256;

@@ -22,7 +22,7 @@ const CONFIG = {
   LOD0_RESOLUTION: 1,              // 1 time_unit
   
   // Tile 配置（2的幂次，便于对齐）
-  TILE_SPAN_MULTIPLIER: 65_536,    // LOD0 的 tile 跨度 = 64K time_units (2^16)
+  TILE_SPAN_MULTIPLIER: 256,       // LOD0 的 tile 跨度 = 256 time_units (2^8)
   
   // Group 配置
   GROUP_SIZE: 256,                 // 每个 group 256 个信号
@@ -38,7 +38,7 @@ const CONFIG = {
 };
 
 // LOD 时间跨度计算
-// tile_span = 65_536 * 2^lod
+// tile_span = 256 * 2^lod
 function getTileSpan(lod: number): number {
   return CONFIG.TILE_SPAN_MULTIPLIER * Math.pow(CONFIG.LOD_MULTIPLIER, lod);
 }
@@ -47,6 +47,18 @@ function getTileSpan(lod: number): number {
 // resolution = 2^lod
 function getResolution(lod: number): number {
   return Math.pow(CONFIG.LOD_MULTIPLIER, lod);
+}
+
+// LOD 选择算法
+// 选择最小的 lod，使得 resolution >= time_span / canvas_width
+function selectLod(timeSpan: number, canvasWidth: number): number {
+  const timePerPixel = timeSpan / canvasWidth;
+  for (let lod = 0; lod <= 20; lod++) {
+    if (getResolution(lod) >= timePerPixel) {
+      return lod;
+    }
+  }
+  return 20; // max lod
 }
 ```
 
