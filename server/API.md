@@ -988,6 +988,10 @@ LoD 是基于**数据点数量**的降采样，与时间窗口无关：
 - 每个 bucket 保留该时间段内的最小值和最大值，确保波形特征不丢失
 - Bucket 大小计算公式: `2^level`
 - **Min/Max 输出规则**: 当 bucket 内 min = max 时，只输出 min 值；当 min ≠ max 或包含 X/Z 状态时，输出 min 和 max 两个值（min 在 bucket 开始点，max 在 bucket 结束点），确保波形变化被正确表示
+- **Boundary Value 处理**: Start Boundary Value（请求时间范围起始点的信号值）与 Min/Max 完全分离：
+  - Boundary Value 使用特殊时间戳 `0xFFFFFFFFFFFFFFFF`，不参与 LoD 计算
+  - Min/Max 基于实际的 transitions 计算，使用正常时间戳
+  - 返回数据中，Boundary Value 始终放在第一个位置，后跟 LoD 压缩后的 transitions
 
 **使用建议：**
 - `lod=0`: 需要完整精度时使用（如放大查看细节）
