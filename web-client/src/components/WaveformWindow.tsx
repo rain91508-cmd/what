@@ -9,7 +9,7 @@ import { FilterInput } from './FilterInput';
 import { wildcardMatch } from '../utils/wildcardMatch';
 import { zoomIn, zoomOut } from '../utils/zoomHelpers';
 import { sanitizeTimeRange, type TimeRangeOnly } from '../utils/viewport';
-import { getProvider, WaveformDataProvider, buildWasmSignals } from '../wasm/waveformProvider';
+import { getProvider, WaveformDataProvider, buildWasmSignals, updateProviderSettings } from '../wasm/waveformProvider';
 
 interface SignalGroup {
   id: string;
@@ -414,6 +414,11 @@ export function WaveformWindow({
       }));
       
       try {
+        // Update provider settings (prefix and spaceBeforeBracket)
+        // This is important for correct signal name conversion when fetching data
+        updateProviderSettings(_signalPrefix, _spaceBeforeBracket);
+        console.log(`[WaveformWindow] Updated provider settings: prefix='${_signalPrefix}', spaceBeforeBracket=${_spaceBeforeBracket}`);
+        
         // Build signals with draw_sig_id
         const wasmSignalsWithId = await buildWasmSignals(uiSignals, _waveformName || 'unknown');
         console.log(`[WaveformWindow] Built ${wasmSignalsWithId.length} WASM signals with draw_sig_id`);
