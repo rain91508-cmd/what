@@ -633,7 +633,7 @@ pub struct LodLevel(pub u32);
 
 impl LodLevel {
     /// 最大 LoD 层级
-    pub const MAX_LEVEL: u32 = 20;
+    pub const MAX_LEVEL: u32 = 32;
 
     /// 创建 LoD 层级（自动限制在有效范围内）
     pub fn new(level: u32) -> Self {
@@ -732,6 +732,7 @@ impl LodPyramidGenerator {
         let mut bucket_min = first_fs.clone();
         let mut bucket_max = first_fs.clone();
         let mut bucket_start_time = source.transitions[0].time;
+        let mut bucket_end_time = source.transitions[0].time;
         let mut last_value = source.transitions[0].value.clone();
         let mut bucket_idx = 0usize;
 
@@ -749,11 +750,13 @@ impl LodPyramidGenerator {
                 let min_str = bucket_min.to_string();
                 let max_str = bucket_max.to_string();
 
-                // 始终输出 min（修复：移除了 != last_value 的错误去重）
+                // 始终输出 min 在 bucket 开始时间
                 result.add_transition(Transition::from_numeric(bucket_start_time, &min_str));
-                // 输出 max（如果与 min 不同）
-                if max_str != min_str {
-                    result.add_transition(Transition::from_numeric(bucket_start_time, &max_str));
+                
+                // 如果 min != max 或有 X/Z 状态，在 bucket 结束点输出 max
+                let has_xz = bucket_min.has_xz() || bucket_max.has_xz();
+                if max_str != min_str || has_xz {
+                    result.add_transition(Transition::from_numeric(bucket_end_time, &max_str));
                 }
 
                 // 开始新 bucket
@@ -767,19 +770,23 @@ impl LodPyramidGenerator {
                 bucket_max = four_state_max(&bucket_max, &trans_fs);
             }
 
+            bucket_end_time = trans.time;
             last_value = trans.value.clone();
         }
 
         // 输出最后一个 bucket
-        if bucket_idx < (source.transitions.len() + bucket_size - 1) / bucket_size {
+        let total_buckets = (source.transitions.len() + bucket_size - 1) / bucket_size;
+        if bucket_idx < total_buckets {
             let min_str = bucket_min.to_string();
             let max_str = bucket_max.to_string();
 
-            // 始终输出 min（修复：移除了 != last_value 的错误去重）
+            // 始终输出 min 在 bucket 开始时间
             result.add_transition(Transition::from_numeric(bucket_start_time, &min_str));
-            // 输出 max（如果与 min 不同）
-            if max_str != min_str {
-                result.add_transition(Transition::from_numeric(bucket_start_time, &max_str));
+            
+            // 如果 min != max 或有 X/Z 状态，在 bucket 结束点输出 max
+            let has_xz = bucket_min.has_xz() || bucket_max.has_xz();
+            if max_str != min_str || has_xz {
+                result.add_transition(Transition::from_numeric(bucket_end_time, &max_str));
             }
         }
 
