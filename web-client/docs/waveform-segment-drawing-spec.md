@@ -71,6 +71,14 @@ ELSE:
 
 **Important**: For non-first tiles without transitions, the segment should use the **last draw value from the previous tile**, not this tile's start value. This ensures waveform continuity across tiles.
 
+**Viewport End Handling**: If the last tile's end time is before the viewport end time, extend the last segment to viewport_end using the last drawn value:
+
+```
+IF last_tile_end < viewport_end:
+    Draw segment from last_tile_end to viewport_end
+    Value = last_drawn_value
+```
+
 ### Rule 3: Min/Max Handling (LoD 1+)
 
 For LoD 1+ data with min/max pairs:
