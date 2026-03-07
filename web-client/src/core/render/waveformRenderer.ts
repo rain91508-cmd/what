@@ -362,6 +362,35 @@ class WaveformRenderer {
     this.ctx.lineWidth = 2;
     this.ctx.setLineDash([]);
 
+    // Handle min_max type (LoD > 0, min=max case) by checking the actual value
+    if (value.type === 'min_max') {
+      // For min=max case, use min_value to determine level
+      const minVal = value.minValue || value.min_value;
+      if (minVal === '0' || minVal === '00' || minVal === '00000000') {
+        // Low level
+        this.ctx.strokeStyle = '#000000';
+        this.ctx.beginPath();
+        this.ctx.moveTo(x0, yLow);
+        this.ctx.lineTo(x1, yLow);
+        this.ctx.stroke();
+      } else if (minVal === '1' || minVal === '01' || minVal === '00000001') {
+        // High level
+        this.ctx.strokeStyle = '#00aa00';
+        this.ctx.beginPath();
+        this.ctx.moveTo(x0, yHigh);
+        this.ctx.lineTo(x1, yHigh);
+        this.ctx.stroke();
+      } else {
+        // Unknown, draw mid level
+        this.ctx.strokeStyle = '#888888';
+        this.ctx.beginPath();
+        this.ctx.moveTo(x0, yMid);
+        this.ctx.lineTo(x1, yMid);
+        this.ctx.stroke();
+      }
+      return;
+    }
+
     switch (value.type) {
       case 'zero':
         // 低电平：在下方绘制水平线
