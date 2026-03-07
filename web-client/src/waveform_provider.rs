@@ -470,6 +470,12 @@ impl WaveformDataProvider {
     /// signal_names: optional list of signal names in the same order as server response
     /// Used to map signal_handle to draw_sig_id
     async fn process_server_chunk(&mut self, data: &[u8], signal_names: &[String]) -> Result<(), JsValue> {
+        // Skip if both OPFS and memory cache are disabled
+        if !self.opfs_cache.enabled && !self.opfs_cache.memory_cache_enabled {
+            console_log!("[WASM] Skipping server chunk processing: both OPFS and memory cache are disabled");
+            return Ok(());
+        }
+
         // Parse chunk header
         let header = ChunkHeader::from_bytes(data)
             .map_err(|e| JsValue::from_str(&e))?;
