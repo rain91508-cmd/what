@@ -1143,11 +1143,10 @@ if tile_missing_signals.is_empty() {
         const MAX_TILES_PER_REQUEST: usize = 100;
         
         // Collect all unique signal names from all tiles
-        let all_signal_names: Vec<String> = tile_missing_signals.values()
-            .flat_map(|v| v.iter().cloned())
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect();
+        // Note: We must request ALL signals in the viewport, not just missing ones
+        // because server returns all requested signals and we need to maintain
+        // the correct order for signal identification
+        let all_signal_names: Vec<String> = signals_to_fetch.clone();
         
         for batch in all_signal_names.chunks(MAX_BATCH_SIZE) {
             // Convert all signal names to server names
