@@ -95,6 +95,10 @@ class WaveformRenderer {
         // Check if this segment is part of a min/max group
         const groupInfo = minMaxGroups.get(i);
         if (groupInfo && seg.value.width === 1) {
+          // Debug: log group info
+          if (i === 0) {
+            console.log(`[Renderer] MinMax group detected: total ${minMaxGroups.size} segments, groupSize=${groupInfo.groupSize}`);
+          }
           // Pass group info to drawMinMaxWaveform
           this.drawMinMaxWaveform(seg.x0, seg.x1, seg.y, seg.value, seg.x1 - seg.x0, groupInfo);
         } else {
