@@ -24,7 +24,217 @@ pub enum SearchDirection {
     Backward,
 }
 
-/// 搜索边界值
+/// 最小搜索区间
+const MIN_SEARCH_SPAN: u64 = 1000;
+
+/// 搜索区间信息
+#[derive(Debug, Clone)]
+struct SearchRegion {
+    handle: Handle,
+    start: u64,
+    end: u64,
+}
+
+/// 使用二分法为单个信号查找最小有 transition 的区间
+/// 
+/// # Returns
+/// * Some((start, end)) - 找到的最小有 transition 的区间
+/// * None - 没有找到任何 transition
+fn find_min_region_binary(
+    signal_data: &SignalWaveData,
+    search_start: u64,
+    search_end: u64,
+    direction: SearchDirection,
+) -> Option<(u64, u64)> {
+    if signal_data.transitions.is_empty() {
+        return None;
+    }
+
+    let mut start = search_start;
+    let mut end = search_end;
+    let mut last_found_region: Option<(u64, u64)> = None;
+
+    while end - start > MIN_SEARCH_SPAN {
+        let mid = (start + end) / 2;
+
+        // 检查区间内是否有 transition
+        let has_transition = match direction {
+            SearchDirection::Forward => {
+                // 向前搜索：检查 [mid, search_end] 区间
+                signal_data.transitions.iter().any(|t| t.time >= mid && t.time <= search_end)
+            }
+            SearchDirection::Backward => {
+                // 向后搜索：检查 [search_start, mid] 区间
+                signal_data.transitions.iter().any(|t| t.time >= search_start && t.time <= mid)
+            }
+        };
+
+        if has_transition {
+            last_found_region = Some((start, end));
+            // 缩小范围
+            match direction {
+                SearchDirection::Forward => start = mid,
+                SearchDirection::Backward => end = mid,
+            }
+        } else {
+            // 扩大范围（如果之前找到过，使用之前的区间）
+            match direction {
+                SearchDirection::Forward => end = mid,
+                SearchDirection::Backward => start = mid,
+            }
+        }
+    }
+
+    // 如果当前区间没有找到，使用上一个找到的区间
+    if last_found_region.is_none() {
+        // 检查当前区间是否有 transition
+        let has_transition = match direction {
+            SearchDirection::Forward => {
+                signal_data.transitions.iter().any(|t| t.time >= start && t.time <= search_end)
+            }
+            SearchDirection::Backward => {
+                signal_data.transitions.iter().any(|t| t.time >= search_start && t.time <= end)
+            }
+        };
+        if has_transition {
+            last_found_region = Some((start, end));
+        }
+    }
+
+    last_found_region
+}
+
+/// 为多个信号搜索边界值（优化版本）
+/// 
+/// # Arguments
+/// * `signal_data_map` - 信号数据映射
+/// * `time` - 搜索时间点
+/// * `direction` - 搜索方向
+/// * `wave_end` - 波形结束时间
+/// * `widths` - 信号宽度映射
+/// 
+/// # Returns
+/// * 每个信号找到的边界值
+pub fn search_boundary_values_optimized(
+    signal_data_map: &std::collections::HashMap<Handle, &SignalWaveData>,
+    time: u64,
+    direction: SearchDirection,
+    wave_end: u64,
+    widths: &std::collections::HashMap<Handle, u16>,
+) -> std::collections::HashMap<Handle, Option<SignalValue>> {
+    let mut results: std::collections::HashMap<Handle, Option<SignalValue>> = std::collections::HashMap::new();
+
+    // Step 1: 为每个信号找到最小有 transition 的区间
+    let mut search_regions: Vec<SearchRegion> = Vec::new();
+    
+    for (handle, signal_data) in signal_data_map {
+        let (search_start, search_end) = match direction {
+            SearchDirection::Forward => (0, time),
+            SearchDirection::Backward => (time, wave_end),
+        };
+
+        if let Some((start, end)) = find_min_region_binary(signal_data, search_start, search_end, direction) {
+            search_regions.push(SearchRegion {
+                handle: *handle,
+                start,
+                end,
+            });
+        } else {
+            // 没有找到任何 transition，结果为 None
+            results.insert(*handle, None);
+        }
+    }
+
+    // 如果所有信号都没有找到区间，直接返回
+    if search_regions.is_empty() {
+        return results;
+    }
+
+    // Step 2: 合并排序区间边界
+    // 收集所有边界点
+    let mut boundaries: Vec<(u64, Handle, bool)> = Vec::new(); // (time, handle, is_start)
+    for region in &search_regions {
+        boundaries.push((region.start, region.handle, true));
+        boundaries.push((region.end, region.handle, false));
+    }
+    
+    // 按时间排序，从距离目标最远的开始
+    boundaries.sort_by(|a, b| {
+        match direction {
+            SearchDirection::Forward => b.0.cmp(&a.0), // 降序，从最远的开始
+            SearchDirection::Backward => a.0.cmp(&b.0), // 升序，从最远的开始
+        }
+    });
+
+    // Step 3: 多信号一起搜索
+    let mut found_values: std::collections::HashMap<Handle, SignalValue> = std::collections::HashMap::new();
+    let mut pending_handles: std::collections::HashSet<Handle> = search_regions.iter()
+        .map(|r| r.handle)
+        .collect();
+
+    // 按区间搜索
+    for (boundary_time, _, is_start) in &boundaries {
+        if pending_handles.is_empty() {
+            break;
+        }
+
+        // 找到当前边界涉及的信号
+        let current_handles: Vec<Handle> = pending_handles.iter()
+            .filter(|h| {
+                search_regions.iter()
+                    .any(|r| &r.handle == *h && *boundary_time >= r.start && *boundary_time <= r.end)
+            })
+            .cloned()
+            .collect();
+
+        if current_handles.is_empty() {
+            continue;
+        }
+
+        // 在信号数据中搜索
+        for handle in &current_handles {
+            if let Some(signal_data) = signal_data_map.get(handle) {
+                let value = match direction {
+                    SearchDirection::Forward => {
+                        // 查找 <= time 的最后一个值
+                        signal_data.value_at(time).map(|t| t.value.clone())
+                    }
+                    SearchDirection::Backward => {
+                        // 查找 > time 的第一个值
+                        signal_data.transitions.iter()
+                            .find(|t| t.time > time)
+                            .map(|t| t.value.clone())
+                    }
+                };
+
+                if let Some(v) = value {
+                    found_values.insert(*handle, v);
+                    pending_handles.remove(handle);
+                }
+            }
+        }
+    }
+
+    // Step 4: 组装结果
+    for (handle, _) in signal_data_map {
+        if let Some(value) = found_values.get(handle) {
+            results.insert(*handle, Some(value.clone()));
+        } else {
+            // 没有找到，使用默认值
+            let width = widths.get(handle).copied().unwrap_or(1);
+            let default_value = if width == 1 {
+                SignalValue::Numeric("X".to_string())
+            } else {
+                SignalValue::Numeric(format!("b{}", "X".repeat(width as usize)))
+            };
+            results.insert(*handle, Some(default_value));
+        }
+    }
+
+    results
+}
+
+/// 搜索边界值（简化版本，用于单个信号）
 /// 
 /// # Arguments
 /// * `signal_data` - 信号数据
