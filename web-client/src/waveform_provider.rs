@@ -2055,25 +2055,26 @@ if tile_missing_signals.is_empty() {
                 let x1 = ((t1 - self.viewport.time_start) / time_range) * self.canvas_width;
 
                 if x1 > x0 {
-                    let (value_type, has_xz) = Self::classify_value(&initial_value, width);
+                    let (_value_type, has_xz) = Self::classify_value(&initial_value, width);
                     let display_str = if width > 1 {
                         self.format_multi_bit_value(&initial_value, width)
                     } else {
                         initial_value.clone()
                     };
 
+                    // For LoD > 0, always use 'min_max' type to ensure proper grouping
                     segments.push(RenderSegment {
                         x0,
                         x1,
                         y,
                         value: ValueInfo {
-                            value_type,
+                            value_type: "min_max".to_string(),
                             display_str,
                             width,
                             has_xz,
                             min_value: Some(initial_value.clone()),
                             max_value: Some(initial_value),
-                            is_min_max: false,
+                            is_min_max: false,  // min == max
                         },
                         signal_name: signal_name.to_string(),
                     });
@@ -2131,18 +2132,16 @@ if tile_missing_signals.is_empty() {
                         max_upper.contains('X') || max_upper.contains('Z');
             let is_changing = min_val != max_val && !has_xz;
 
-            let (value_type, display_str) = if is_changing {
+            // For LoD > 0, always use 'min_max' type to ensure proper grouping
+            let display_str = if is_changing {
                 if width == 1 {
-                    // Single bit: show toggling
-                    ("min_max".to_string(), "toggling".to_string())
+                    "toggling".to_string()
                 } else {
-                    // Multi-bit: show range
-                    ("min_max".to_string(), format!("{}..{}", min_val, max_val))
+                    format!("{}..{}", min_val, max_val)
                 }
             } else {
-                // min == max or has X/Z, treat as normal value
-                let (vt, _) = Self::classify_value(&min_val, width);
-                (vt, min_val.clone())
+                // min == max or has X/Z
+                min_val.clone()
             };
 
             segments.push(RenderSegment {
@@ -2150,7 +2149,7 @@ if tile_missing_signals.is_empty() {
                 x1,
                 y,
                 value: ValueInfo {
-                    value_type,
+                    value_type: "min_max".to_string(),  // Always use min_max for LoD > 0
                     display_str,
                     width,
                     has_xz,
