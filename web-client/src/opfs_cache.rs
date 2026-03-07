@@ -667,8 +667,9 @@ impl OpfsCacheManager {
     }
 
     /// Calculate tile span for given LOD
-    /// Tile span = TILE_SPAN_MULTIPLIER * 16^lod
+    /// Tile span = TILE_SPAN_MULTIPLIER * 2^lod = 65_536 * 2^lod
     /// This ensures each tile covers a reasonable time range for caching
+    /// LOD0: 64K, LOD1: 128K, LOD2: 256K, LOD3: 512K, ...
     pub fn get_tile_span(lod: u32) -> u64 {
         TILE_SPAN_MULTIPLIER * LOD_MULTIPLIER.pow(lod)
     }
