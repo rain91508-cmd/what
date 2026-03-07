@@ -1377,8 +1377,9 @@ impl WaveService {
                     });
                 }
 
-                // 生成 LoD 数据（基于实际的 transitions，包括 start value）
-                let mut lod_data = LodPyramidGenerator::new(config.clone()).generate_level(&signal_data, lod);
+                // 生成 LoD 数据（使用请求的时间范围）
+                let mut lod_data = LodPyramidGenerator::new(config.clone())
+                    .generate_level_with_range(&signal_data, lod, time_start, time_end);
                 info!("信号 {} 生成 LoD {} 数据: {} transitions", name, lod.0, lod_data.transitions.len());
                 
                 // 在 LoD 数据开头添加 Start Value（始终添加）
@@ -1577,8 +1578,9 @@ impl WaveService {
                         });
                     }
 
-                    // 生成 LoD 数据（基于实际的 transitions，包括 start value）
-                    let mut lod_data = LodPyramidGenerator::new(config.clone()).generate_level(&tile_signal, lod);
+                    // 生成 LoD 数据（使用 tile 时间范围）
+                    let mut lod_data = LodPyramidGenerator::new(config.clone())
+                        .generate_level_with_range(&tile_signal, lod, tile_start, tile_end);
                     info!("Tile {} 信号 {}: 生成 LoD {} 数据: {} transitions", tile_idx, name, lod.0, lod_data.transitions.len());
                     
                     // 在 LoD 数据开头添加 Start Value（始终添加）
