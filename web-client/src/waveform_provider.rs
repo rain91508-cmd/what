@@ -130,25 +130,16 @@ fn select_lod(viewport: &Viewport, canvas_width: f64) -> u32 {
     // which would result in excessively large tile spans
     let effective_time_per_pixel = time_span as f64 / (canvas_width * crate::opfs_cache::TILE_SPAN_MULTIPLIER as f64);
     
-    console_log!("[WASM] LoD selection: time_span={}, canvas_width={:.0}, TILE_SPAN_MULTIPLIER={}, effective_time_per_pixel={:.6}", 
-        time_span, canvas_width, crate::opfs_cache::TILE_SPAN_MULTIPLIER, effective_time_per_pixel);
-    
     // Find the finest LoD where resolution >= effective_time_per_pixel
     // This ensures we don't over-sample (multiple transitions per pixel)
     for (lod, resolution) in LOD_TABLE.iter() {
         if (*resolution as f64) >= effective_time_per_pixel {
-            console_log!("[WASM] Selected LoD {} (resolution: {} time_units/pixel, tile_span: {})", 
-                lod, resolution, crate::opfs_cache::TILE_SPAN_MULTIPLIER * resolution);
             return *lod;
         }
     }
     
     // If none found, use max LoD
-    let max_lod = LOD_TABLE.last().unwrap().0;
-    let max_resolution = LOD_TABLE.last().unwrap().1;
-    console_log!("[WASM] Selected max LoD {} (resolution: {}, tile_span: {})", 
-        max_lod, max_resolution, crate::opfs_cache::TILE_SPAN_MULTIPLIER * max_resolution);
-    max_lod
+    LOD_TABLE.last().unwrap().0
 }
 
 /// Chunk header (32 bytes)
@@ -255,8 +246,7 @@ impl WaveformDataProvider {
         space_before_bracket: bool,
         time_stamp: u64,
     ) -> Self {
-        console_log!("[WASM] WaveformDataProvider created: waveform={}, prefix='{}', space={}, time_stamp={}",
-            waveform_name, signal_prefix, space_before_bracket, time_stamp);
+
 
         Self {
             server_url: server_url.clone(),
@@ -295,7 +285,7 @@ impl WaveformDataProvider {
         self.enable_opfs = enable_opfs;
         self.opfs_cache.init(opfs_read, opfs_write, opfs_exists, enable_opfs);
         self.opfs_cache.set_waveform(self.waveform_name.clone());
-        console_log!("[WASM] init_with_opfs: enabled={}", enable_opfs);
+
     }
 
     /// Set signals with draw_sig_id (new API)
@@ -307,20 +297,9 @@ impl WaveformDataProvider {
         let signals_with_id: Vec<SignalWithId> = serde_wasm_bindgen::from_value(signals_js)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse signals: {}", e)))?;
 
-        console_log!("[WASM] Set draw list: {} signals", signals_with_id.len());
-        for (i, s) in signals_with_id.iter().enumerate() {
-            console_log!("[WASM]   Signal[{}]: global_id={}, name='{}', draw_sig_id={}", 
-                i, s.global_id, s.name, s.draw_sig_id);
-        }
-
-        // Also build signals list for get_segments
-        // Parse bit extraction info for each signal
+        // Set draw list with signals
         let signals: Vec<SignalInfo> = signals_with_id.iter().map(|s| {
             let bit_extract = Self::parse_bit_extract(&s.name);
-            if let Some((ref parent, (msb, lsb))) = bit_extract {
-                console_log!("[WASM]   Signal '{}': extract bits [{}:{}] from parent '{}'", 
-                    s.name, msb, lsb, parent);
-            }
             SignalInfo {
                 name: s.name.clone(),
                 row: s.row,
@@ -355,9 +334,6 @@ impl WaveformDataProvider {
         let time_start = self.viewport.time_start as u64;
         let time_end = self.viewport.time_end as u64;
 
-        console_log!("[WASM] prepare_data: {} signals, LoD={}, time={}-{}",
-            self.signals_with_id.len(), lod, time_start, time_end);
-
         // Calculate required blocks
         let blocks = crate::opfs_cache::compute_required_blocks(
             &self.signals_with_id,
@@ -366,22 +342,15 @@ impl WaveformDataProvider {
             lod
         );
 
-        console_log!("[WASM] Required blocks: {}", blocks.len());
-        console_log!("[WASM] OPFS Cache enabled: {}", self.opfs_cache.enabled);
-
         // Check each block in cache
         let mut missing_blocks: Vec<MissingBlock> = Vec::new();
         let mut memory_hits = 0u32;
         let mut opfs_hits = 0u32;
 
-        for (idx, block) in blocks.iter().enumerate() {
-            console_log!("[WASM] Checking block {}/{}: lod={}, tile={}, group={}", 
-                idx + 1, blocks.len(), block.lod, block.tile, block.group);
-            
+        for block in blocks.iter() {
             match self.opfs_cache.read(block).await? {
-                Some(data) => {
+                Some(_data) => {
                     // Data found in cache
-                    console_log!("[WASM]   Block FOUND in cache, data size={} bytes", data.len());
                     if self.opfs_cache.enabled {
                         opfs_hits += 1;
                     } else {
@@ -390,14 +359,10 @@ impl WaveformDataProvider {
                 }
                 None => {
                     // Data not found, add to missing list
-                    console_log!("[WASM]   Block NOT FOUND in cache, adding to missing list");
                     let draw_sig_ids: Vec<u32> = self.signals_with_id.iter()
                         .filter(|s| OpfsCacheManager::get_group_id(s.draw_sig_id) == block.group)
                         .map(|s| s.draw_sig_id)
                         .collect();
-
-                    console_log!("[WASM]   Missing block affects {} signals: {:?}", 
-                        draw_sig_ids.len(), draw_sig_ids);
 
                     missing_blocks.push(MissingBlock {
                         lod: block.lod,
@@ -410,16 +375,8 @@ impl WaveformDataProvider {
         }
 
         let misses = missing_blocks.len() as u32;
-        console_log!("[WASM] Cache check complete: memory_hits={}, opfs_hits={}, misses={}",
-            memory_hits, opfs_hits, misses);
-        
-        if !missing_blocks.is_empty() {
-            console_log!("[WASM] Missing blocks summary:");
-            for (idx, block) in missing_blocks.iter().enumerate() {
-                console_log!("[WASM]   Missing[{}]: lod={}, tile={}, group={}, signals={}",
-                    idx, block.lod, block.tile, block.group, block.draw_sig_ids.len());
-            }
-        }
+        console_log!("[Cache] LoD{} tiles:{} mem_hit:{} opfs_hit:{} miss:{}",
+            lod, blocks.len(), memory_hits, opfs_hits, misses);
 
         let result = PrepareDataResult {
             missing_blocks,
@@ -455,12 +412,10 @@ impl WaveformDataProvider {
 
         // Check minimum size for valid chunk
         if bytes.len() < ChunkHeader::SIZE {
-            console_log!("[WASM] Error: Data too small for chunk header ({} < {})", bytes.len(), ChunkHeader::SIZE);
             return Err(JsValue::from_str(&format!("Data too small: {} bytes", bytes.len())));
         }
 
         // Parse chunk and store in cache
-        // TODO: Pass signal names to process_server_chunk for proper draw_sig_id mapping
         self.process_server_chunk(&bytes, &[]).await?;
 
         Ok(())
@@ -472,7 +427,6 @@ impl WaveformDataProvider {
     async fn process_server_chunk(&mut self, data: &[u8], signal_names: &[String]) -> Result<(), JsValue> {
         // Skip if both OPFS and memory cache are disabled
         if !self.opfs_cache.enabled && !self.opfs_cache.memory_cache_enabled {
-            console_log!("[WASM] Skipping server chunk processing: both OPFS and memory cache are disabled");
             return Ok(());
         }
 
@@ -480,16 +434,10 @@ impl WaveformDataProvider {
         let header = ChunkHeader::from_bytes(data)
             .map_err(|e| JsValue::from_str(&e))?;
 
-        console_log!("[WASM] Processing server chunk: level={}, signals={}, time={}-{}",
-            header.level, header.signal_count, header.time_start, header.time_end);
-
         // Calculate tile information
         let lod = header.level as u32;
         let tile_span = OpfsCacheManager::get_tile_span(lod);
         let tile_id = header.time_start / tile_span;
-        
-        console_log!("[WASM]   Calculated tile: lod={}, tile_span={}, tile_id={}",
-            lod, tile_span, tile_id);
 
         // Group signals by their group_id
         let mut signals_by_group: std::collections::HashMap<u32, Vec<crate::opfs_cache::SignalData>> = 
@@ -500,16 +448,12 @@ impl WaveformDataProvider {
         
         for signal_idx in 0..header.signal_count {
             if offset + SignalBlockHeader::SIZE > data.len() {
-                console_log!("[WASM] Warning: Not enough data for signal block {}", signal_idx);
                 break;
             }
 
             // Parse signal block header
             let block_header = SignalBlockHeader::from_bytes(&data[offset..])
                 .map_err(|e| JsValue::from_str(&e))?;
-
-            console_log!("[WASM]   Processing signal block {}: handle={}, transitions={}",
-                signal_idx, block_header.signal_handle, block_header.transition_count);
 
             // Parse transitions for this signal
             let transitions = self.parse_transitions_for_cache(
@@ -519,24 +463,16 @@ impl WaveformDataProvider {
             )?;
 
             // Get draw_sig_id from signal name mapping
-            // signal_names should be provided in the same order as server response
             let draw_sig_id = if (signal_idx as usize) < signal_names.len() {
                 let signal_name = &signal_names[signal_idx as usize];
                 match self.get_draw_sig_id(signal_name) {
                     Some(id) => id,
-                    None => {
-                        console_log!("[WASM]     Warning: Could not find draw_sig_id for signal '{}'", signal_name);
-                        signal_idx as u32 // Fallback to signal index
-                    }
+                    None => signal_idx as u32
                 }
             } else {
-                console_log!("[WASM]     Warning: No signal name provided for index {}, using index as draw_sig_id", signal_idx);
-                signal_idx as u32 // Fallback to signal index
+                signal_idx as u32
             };
             let group_id = OpfsCacheManager::get_group_id(draw_sig_id);
-            
-            console_log!("[WASM]     Signal {}: draw_sig_id={} -> group_id={}",
-                signal_idx, draw_sig_id, group_id);
 
             // Convert transitions to opfs_cache format
             let opfs_transitions: Vec<crate::opfs_cache::Transition> = transitions
@@ -1104,53 +1040,36 @@ impl WaveformDataProvider {
                                     tile_misses += 1;
                                     tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push(signal_name.clone());
                                 }
-                                Err(e) => {
-                                    console_log!("[WASM]   Error reading signal {} from tile {}: {:?}", signal_name, tile_id, e);
-                                    tile_misses += 1;
-                                    tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push(signal_name.clone());
-                                }
-                            }
-                        }
-                        Ok(None) => {
-                            // Group file not in cache
-                            tile_misses += 1;
-                            tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push(signal_name.clone());
-                        }
-                        Err(e) => {
-                            console_log!("[WASM]   Error reading cache for tile {}: {:?}", tile_id, e);
+                                Err(_e) => {
                             tile_misses += 1;
                             tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push(signal_name.clone());
                         }
                     }
-                } else {
-                    // Signal not found in draw list, treat as miss
+                }
+                Ok(None) => {
+                    // Group file not in cache
+                    tile_misses += 1;
+                    tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push(signal_name.clone());
+                }
+                Err(_e) => {
                     tile_misses += 1;
                     tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push(signal_name.clone());
                 }
             }
-            
-            total_cache_hits += tile_hits;
-            total_cache_misses += tile_misses;
-            
-            if tile_misses > 0 {
-                console_log!("[WASM]   Tile {}: hits={}, misses={}", tile_id, tile_hits, tile_misses);
-            }
+        } else {
+            // Signal not found in draw list, treat as miss
+            tile_misses += 1;
+            tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push(signal_name.clone());
         }
-        
-        console_log!("[WASM]   Total cache hits: {}, misses: {}", total_cache_hits, total_cache_misses);
-        
-        if tile_missing_signals.is_empty() {
-            console_log!("[WASM] All signals found in cache for all tiles, no server fetch needed!");
-            return Ok(());
-        }
-        
-        // Show which tiles need which signals
-        console_log!("[WASM] Tiles with missing signals:");
-        for (tile_id, signals) in &tile_missing_signals {
-            console_log!("[WASM]   Tile {}: {} signals missing", tile_id, signals.len());
-        }
-        
-        console_log!("[WASM] Step 3: Fetching missing signals per tile from server");
+    }
+    
+    total_cache_hits += tile_hits;
+    total_cache_misses += tile_misses;
+}
+
+if tile_missing_signals.is_empty() {
+    return Ok(());
+}
         
         // Step 3: Fetch missing signals per tile from server
         let total_tiles_to_fetch = tile_missing_signals.len();
@@ -1158,15 +1077,8 @@ impl WaveformDataProvider {
             let tile_time_start = *tile_id * tile_span;
             let tile_time_end = ((*tile_id + 1) * tile_span).min(time_end);
             
-            console_log!("[WASM] Fetching tile {}/{}: tile_id={}, time={}-{} (span={})",
-                tile_idx + 1, total_tiles_to_fetch, tile_id, tile_time_start, tile_time_end, tile_span);
-            console_log!("[WASM]   Tile {} needs {} signals: {:?}", tile_id, tile_signal_names.len(), tile_signal_names);
-            
             // Fetch this tile's data from server
-            for (batch_idx, batch) in tile_signal_names.chunks(MAX_BATCH_SIZE).enumerate() {
-                let batch_size = batch.len();
-                console_log!("[WASM]   Processing batch {}: {} signals", batch_idx + 1, batch_size);
-
+            for batch in tile_signal_names.chunks(MAX_BATCH_SIZE) {
                 // Convert all signal names to server names
                 let server_names: Vec<String> = batch.iter()
                     .map(|local_name| self.build_server_signal_name(local_name))
@@ -1185,9 +1097,6 @@ impl WaveformDataProvider {
                     tile_time_end,
                     encoded_batch,
                     self.time_stamp);
-
-                console_log!("[WASM]   Tile {} Batch {} URL: {}", 
-                    tile_id, batch_idx + 1, url);
                 
                 // Fetch batch data
                 let window = web_sys::window().ok_or(JsValue::from_str("No window"))?;
@@ -1198,71 +1107,31 @@ impl WaveformDataProvider {
                 let resp: web_sys::Response = resp_value.dyn_into()
                     .map_err(|_| JsValue::from_str("Invalid response"))?;
                 
-                let status = resp.status();
-                let content_type = resp.headers().get("content-type").ok().flatten().unwrap_or_else(|| "unknown".to_string());
-                console_log!("[WASM]   Response status: {}, content-type: {}", status, content_type);
-                
                 if !resp.ok() {
-                    return Err(JsValue::from_str(&format!("HTTP error: {}", status)));
+                    return Err(JsValue::from_str(&format!("HTTP error: {}", resp.status())));
                 }
                 
                 // Get array buffer
-                let data_result = wasm_bindgen_futures::JsFuture::from(
+                let data: JsValue = wasm_bindgen_futures::JsFuture::from(
                     resp.array_buffer()?
-                ).await;
+                ).await?;
                 
-                let data: JsValue = match data_result {
-                    Ok(d) => d,
-                    Err(e) => {
-                        console_log!("[WASM]   Error getting array buffer: {:?}", e);
-                        return Err(JsValue::from_str("Failed to get array buffer"));
-                    }
-                };
-                
-                let array_buffer: js_sys::ArrayBuffer = match data.dyn_into() {
-                    Ok(ab) => ab,
-                    Err(_) => {
-                        console_log!("[WASM]   Error: Response is not an ArrayBuffer");
-                        return Err(JsValue::from_str("Invalid array buffer"));
-                    }
-                };
+                let array_buffer: js_sys::ArrayBuffer = data.dyn_into()
+                    .map_err(|_| JsValue::from_str("Invalid array buffer"))?;
                 
                 let uint8_array = js_sys::Uint8Array::new(&array_buffer);
                 let mut bytes = vec![0u8; uint8_array.length() as usize];
                 uint8_array.copy_to(&mut bytes);
                 
-                console_log!("[WASM]   Tile {} Batch {} received {} bytes", 
-                    tile_id, batch_idx + 1, bytes.len());
-                
-                // Debug: Show first 64 bytes of received data
-                let preview_len = bytes.len().min(64);
-                let preview: Vec<String> = bytes[..preview_len].iter()
-                    .map(|b| format!("{:02X}", b))
-                    .collect();
-                console_log!("[WASM]   Data preview (first {} bytes): {}", 
-                    preview_len, preview.join(" "));
-                
-                // Step 3: Store fetched data in cache and parse for rendering
-                console_log!("[WASM]   Step 3: Storing data in OPFS cache and parsing for rendering...");
-                
-                // First, parse chunk data and store in signal_data for rendering
-                // Pass tile info for proper handling of initial values and viewport filtering
+                // Parse chunk data and store in signal_data for rendering
                 let is_first_tile = tile_idx == 0;
-                let is_last_tile = tile_idx == total_tiles_to_fetch - 1;
                 let tile_start = tile_id * tile_span;
-                console_log!("[WASM]   Parsing chunk data for {} signals (tile {}/{}, first={}, last={}, tile_start={})", 
-                    tile_signal_names.len(), tile_idx + 1, total_tiles_to_fetch, is_first_tile, is_last_tile, tile_start);
-                self.parse_chunk_data_for_batch(&tile_signal_names, &bytes, time_start, time_end, is_first_tile, is_last_tile, tile_start)?;
-                console_log!("[WASM]   Chunk data parsed and stored in signal_data");
+                self.parse_chunk_data_for_batch(&tile_signal_names, &bytes, time_start, time_end, is_first_tile, false, tile_start)?;
                 
-                // Then, store in OPFS cache for future use
-                // Pass signal names to ensure correct draw_sig_id mapping
+                // Store in OPFS cache for future use
                 self.process_server_chunk(&bytes, &tile_signal_names).await?;
-                console_log!("[WASM]   Data stored in cache successfully");
             }
         }
-        
-        console_log!("[WASM] Finished fetching {} tiles", total_tiles_to_fetch);
         
         Ok(())
     }
@@ -1313,36 +1182,16 @@ impl WaveformDataProvider {
             let block_header = SignalBlockHeader::from_bytes(&data[offset..])
                 .map_err(|e| JsValue::from_str(&e))?;
 
-            console_log!("[WASM] Signal block {}: handle={}, transitions={}",
-                signal_idx, block_header.signal_handle, block_header.transition_count);
-            console_log!("[WASM]   time_array_offset={}, value_array_offset={}",
-                block_header.time_array_offset, block_header.value_array_offset);
-
             // Get signal name from batch (same order as server)
             let signal_name = &batch[signal_idx as usize];
 
-            // Debug: print first 32 bytes of data area
-            let data_area_start = ChunkHeader::SIZE + (header.signal_count as usize * SignalBlockHeader::SIZE);
-            if data.len() > data_area_start {
-                let debug_len = std::cmp::min(32, data.len() - data_area_start);
-                let debug_bytes: Vec<String> = data[data_area_start..data_area_start + debug_len]
-                    .iter()
-                    .map(|b| format!("{:02X}", b))
-                    .collect();
-                console_log!("[WASM]   Data area (first {} bytes): {}", debug_len, debug_bytes.join(" "));
-            } else {
-                console_log!("[WASM]   Warning: No data area (data_len={} <= data_area_start={})", data.len(), data_area_start);
-            }
-
             // Parse transitions for this signal
-            let mut transitions = self.parse_transitions_from_block(
+            let transitions = self.parse_transitions_from_block(
                 data,
                 &block_header,
                 &header,
                 signal_idx as usize
             )?;
-
-            console_log!("[WASM]   Parsed {} transitions from chunk", transitions.len());
 
             // Use common function to process transitions
             let filtered_transitions = self.process_tile_transitions(
@@ -1358,15 +1207,9 @@ impl WaveformDataProvider {
 
             // Store signal data - merge with existing data if present
             if let Some(existing_data) = self.signal_data.get_mut(signal_name) {
-                // Append new transitions to existing ones
-                console_log!("[WASM]   Merging transitions: existing={}, new={}", 
-                    existing_data.transitions.len(), filtered_transitions.len());
                 existing_data.transitions.extend(filtered_transitions);
-                // Sort by time to ensure correct order after merge
                 existing_data.transitions.sort_by_key(|t| t.time);
-                console_log!("[WASM]   Total transitions after merge and sort: {}", existing_data.transitions.len());
             } else {
-                // Insert new signal data
                 self.signal_data.insert(signal_name.clone(), SignalWaveData {
                     name: signal_name.clone(),
                     width,
@@ -1418,7 +1261,6 @@ impl WaveformDataProvider {
         
         // Step 1: Remove start boundary value for non-first tiles
         if !is_first_tile && !transitions.is_empty() && transitions[0].time == BOUNDARY_TIME_START {
-            console_log!("[WASM]   Removing start boundary value (non-first tile)");
             transitions.remove(0);
         }
         
@@ -1438,7 +1280,6 @@ impl WaveformDataProvider {
                 } else if !transitions.is_empty() && transitions[0].time == BOUNDARY_TIME_START {
                     // No normal transition found, use start boundary value as initial
                     let mut boundary = transitions[0].clone();
-                    console_log!("[WASM]   No normal transition found before viewport_start, using boundary value");
                     boundary.time = viewport_start;  // Update time to viewport_start
                     Some(boundary)
                 } else {
@@ -1455,8 +1296,6 @@ impl WaveformDataProvider {
             
             // Combine: initial value first (if found), then viewport transitions
             if let Some(mut initial) = initial_value {
-                console_log!("[WASM]   Using initial value at time {} for viewport start {}", 
-                    initial.time, viewport_start);
                 // Update initial value time to viewport_start for correct rendering
                 initial.time = viewport_start;
                 
@@ -1472,9 +1311,6 @@ impl WaveformDataProvider {
                 .filter(|t| t.time >= viewport_start && t.time <= viewport_end)
                 .collect()
         };
-        
-        console_log!("[WASM]   Processed {} transitions for viewport [{}-{}] (first_tile={}, tile_start={})", 
-            filtered.len(), viewport_start, viewport_end, is_first_tile, tile_start);
         
         filtered
     }
@@ -1715,21 +1551,12 @@ impl WaveformDataProvider {
         let mut segments = Vec::new();
         let time_range = self.viewport.time_end - self.viewport.time_start;
 
-        console_log!("[WASM] get_segments: {} signals, viewport={}-{}, canvas={}x{}",
-            self.signals.len(), self.viewport.time_start, self.viewport.time_end,
-            self.canvas_width, self.canvas_height);
-        console_log!("[WASM] signal_data cache: {} signals", self.signal_data.len());
-
         for signal in self.signals.iter() {
             // Use signal.row provided by UI (accounts for group headers)
             let y = 20.0 + signal.row as f64 * self.row_height + self.row_height / 2.0;
 
-            console_log!("[WASM] Processing signal[row={}]: name='{}', y={}", signal.row, signal.name, y);
-
             // Check if this is a bit extraction signal
             if let Some((ref parent_name, (msb, lsb))) = signal.bit_extract {
-                console_log!("[WASM]   Bit extraction: extract [{}:{}] from parent '{}'", msb, lsb, parent_name);
-                
                 // Get parent signal data
                 if let Some(parent_data) = self.signal_data.get(parent_name) {
                     // Extract bits from parent signal
@@ -1737,7 +1564,6 @@ impl WaveformDataProvider {
                         &parent_data.transitions, parent_data.width, msb, lsb);
                     
                     let width = if msb == lsb { 1 } else { msb - lsb + 1 };
-                    console_log!("[WASM]   Extracted {} transitions, width={}", extracted_transitions.len(), width);
                     
                     // Generate segments from extracted data
                     let is_lod_min_max = self.detect_min_max_format(&extracted_transitions);
@@ -1748,16 +1574,11 @@ impl WaveformDataProvider {
                         self.generate_normal_segments(&extracted_transitions, width, y, &signal.name,
                             time_range, &mut segments);
                     }
-                } else {
-                    console_log!("[WASM]   No parent data found for '{}'", parent_name);
                 }
                 continue;
             }
 
             if let Some(data) = self.signal_data.get(&signal.name) {
-                let total_transitions = data.transitions.len();
-                console_log!("[WASM]   Total transitions: {}", total_transitions);
-
                 // Check if this is LoD 1+ data (min/max format)
                 // LoD 1+ has transitions with same timestamp in pairs (min, max)
                 let is_lod_min_max = self.detect_min_max_format(&data.transitions);
@@ -1771,15 +1592,8 @@ impl WaveformDataProvider {
                     self.generate_normal_segments(&data.transitions, data.width, y, &signal.name,
                         time_range, &mut segments);
                 }
-
-                console_log!("[WASM]   Generated {} segments for signal '{}'", 
-                    segments.len(), signal.name);
-            } else {
-                console_log!("[WASM]   No data found for signal '{}'", signal.name);
             }
         }
-
-        console_log!("[WASM] Total segments generated: {}", segments.len());
 
         serde_wasm_bindgen::to_value(&segments)
             .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)))
@@ -1965,7 +1779,6 @@ impl WaveformDataProvider {
         }
 
         // Process normal transitions
-        console_log!("[WASM] === DEBUG: Processing {} normal transitions ===", normal_transitions.len());
         for i in 0..normal_transitions.len() {
             let t0 = normal_transitions[i].time as f64;
             let t1 = if i + 1 < normal_transitions.len() {
@@ -1976,7 +1789,6 @@ impl WaveformDataProvider {
 
             // Skip if outside viewport
             if t1 < self.viewport.time_start || t0 > self.viewport.time_end {
-                console_log!("[WASM]   [{}] Skipping: t0={}, t1={}, outside viewport", i, t0, t1);
                 continue;
             }
 
@@ -1990,8 +1802,6 @@ impl WaveformDataProvider {
 
             let value_str = &normal_transitions[i].value;
             let (value_type, has_xz) = Self::classify_value(value_str, width);
-
-            console_log!("[WASM]   [{}] t0={}, t1={}, x0={}, x1={}, value={}", i, t0_clamped, t1_clamped, x0, x1, value_str);
 
             // Format display string with prefix for multi-bit values
             let display_str = if width > 1 {
