@@ -1981,6 +1981,9 @@ if tile_missing_signals.is_empty() {
     /// - Min/Max pairs: same timestamp, min first, max second
     fn generate_min_max_segments(&self, transitions: &[Transition], width: u32, y: f64,
         signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>) {
+        
+        console_log!("[WASM] generate_min_max_segments: viewport={}-{}, transitions={}", 
+            self.viewport.time_start, self.viewport.time_end, transitions.len());
 
         // Separate start value (boundary) from normal transitions
         let start_value = transitions.iter()
