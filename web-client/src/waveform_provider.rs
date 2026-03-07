@@ -1422,39 +1422,43 @@ impl WaveformDataProvider {
             transitions.remove(0);
         }
         
-        // Step 2: Viewport filtering
-        let mut filtered: Vec<Transition> = if is_first_tile {
-            // First tile: keep all transitions up to viewport_end
-            transitions.into_iter()
-                .filter(|t| t.time <= viewport_end)
-                .collect()
+        // Step 2: Process transitions based on tile position
+        let filtered: Vec<Transition> = if is_first_tile {
+            // First tile: need to handle initial value
+            // Find initial value from [tile_start, viewport_start]
+            let initial_value = if viewport_start > tile_start {
+                transitions.iter()
+                    .filter(|t| t.time >= tile_start && t.time < viewport_start && t.time != BOUNDARY_TIME_START)
+                    .last()  // Get the one closest to viewport_start
+                    .cloned()
+            } else {
+                None
+            };
+            
+            // Find transitions within [viewport_start, viewport_end]
+            let viewport_transitions: Vec<Transition> = transitions.into_iter()
+                .filter(|t| t.time >= viewport_start && t.time <= viewport_end)
+                .collect();
+            
+            // Combine: initial value first (if found), then viewport transitions
+            if let Some(mut initial) = initial_value {
+                console_log!("[WASM]   Using initial value at time {} for viewport start {}", 
+                    initial.time, viewport_start);
+                // Update initial value time to viewport_start for correct rendering
+                initial.time = viewport_start;
+                
+                let mut result = vec![initial];
+                result.extend(viewport_transitions);
+                result
+            } else {
+                viewport_transitions
+            }
         } else {
             // Non-first tiles: keep only transitions within viewport
             transitions.into_iter()
                 .filter(|t| t.time >= viewport_start && t.time <= viewport_end)
                 .collect()
         };
-        
-        // Step 3: For first tile, find initial value from [tile_start, viewport_start]
-        // If there's a normal transition in this range, use the one closest to viewport_start
-        if is_first_tile && viewport_start > tile_start {
-            // Find transitions in [tile_start, viewport_start] (excluding boundary value)
-            let initial_candidates: Vec<&Transition> = filtered.iter()
-                .filter(|t| t.time >= tile_start && t.time < viewport_start && t.time != BOUNDARY_TIME_START)
-                .collect();
-            
-            if !initial_candidates.is_empty() {
-                // Find the one closest to viewport_start (last one before viewport_start)
-                let closest = initial_candidates.last().unwrap();
-                console_log!("[WASM]   Found initial value at time {} (closest to viewport start {})", 
-                    closest.time, viewport_start);
-                
-                // If the closest transition is not already at viewport_start, 
-                // we need to ensure it's included in the result
-                // The transition is already in filtered (since time <= viewport_end)
-                // We just log it for debugging
-            }
-        }
         
         console_log!("[WASM]   Processed {} transitions for viewport [{}-{}] (first_tile={}, tile_start={})", 
             filtered.len(), viewport_start, viewport_end, is_first_tile, tile_start);
