@@ -1046,7 +1046,7 @@ impl WaveformDataProvider {
                                     tile_hits += 1;
                                     
                                     // Convert opfs_cache::SignalData to SignalWaveData
-                                    let transitions: Vec<Transition> = signal_data.transitions
+                                    let mut transitions: Vec<Transition> = signal_data.transitions
                                         .into_iter()
                                         .map(|t| {
                                             // Convert bytes to string value
@@ -1063,6 +1063,14 @@ impl WaveformDataProvider {
                                             Transition { time: t.time, value }
                                         })
                                         .collect();
+                                    
+                                    // Remove start boundary value (0xFFFFFFFFFFFFFFFF) if present
+                                    // This is the initial value marker for non-first tiles
+                                    const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
+                                    if !transitions.is_empty() && transitions[0].time == BOUNDARY_TIME_START {
+                                        console_log!("[WASM]     Removing start boundary value from cache data for '{}'", signal_name);
+                                        transitions.remove(0);
+                                    }
                                     
                                     // Merge with existing signal_data if any
                                     if let Some(existing) = self.signal_data.get_mut(signal_name) {
