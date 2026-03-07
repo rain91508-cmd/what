@@ -125,18 +125,20 @@ class WaveformRenderer {
    * Detect continuous min/max segment groups for single-bit signals
    * Returns a map from segment index to group info
    * 
-   * For LoD > 0, segments are grouped by time continuity:
+   * For LoD > 0, only segments with is_min_max=true (min≠max) are grouped
    * - A group is continuous if segments are adjacent in time (x1 of prev == x0 of next)
    * - Group size determines drawing style (vertical lines vs toggling box)
    */
   private detectMinMaxGroups(segments: RenderSegment[]): Map<number, { isContinuous: boolean; groupSize: number; groupIndex: number }> {
     const result = new Map<number, { isContinuous: boolean; groupSize: number; groupIndex: number }>();
     
-    // Find all single-bit segments that are part of min/max data (LoD > 0)
+    // Find all single-bit segments with is_min_max=true (min≠max, toggling)
     const minMaxSegments: { index: number; x0: number; x1: number }[] = [];
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
-      if (seg.value.type === 'min_max' && seg.value.width === 1) {
+      const isMinMax = seg.value.isMinMax || seg.value.is_min_max;
+      // Only include segments where min≠max (toggling)
+      if (seg.value.type === 'min_max' && seg.value.width === 1 && isMinMax) {
         minMaxSegments.push({ index: i, x0: seg.x0, x1: seg.x1 });
       }
     }
