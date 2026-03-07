@@ -1427,10 +1427,23 @@ impl WaveformDataProvider {
             // First tile: need to handle initial value
             // Find initial value from [tile_start, viewport_start]
             let initial_value = if viewport_start > tile_start {
-                transitions.iter()
+                // First, try to find normal transition in [tile_start, viewport_start]
+                let normal_initial = transitions.iter()
                     .filter(|t| t.time >= tile_start && t.time < viewport_start && t.time != BOUNDARY_TIME_START)
                     .last()  // Get the one closest to viewport_start
-                    .cloned()
+                    .cloned();
+                
+                if normal_initial.is_some() {
+                    normal_initial
+                } else if !transitions.is_empty() && transitions[0].time == BOUNDARY_TIME_START {
+                    // No normal transition found, use start boundary value as initial
+                    let mut boundary = transitions[0].clone();
+                    console_log!("[WASM]   No normal transition found before viewport_start, using boundary value");
+                    boundary.time = viewport_start;  // Update time to viewport_start
+                    Some(boundary)
+                } else {
+                    None
+                }
             } else {
                 None
             };
