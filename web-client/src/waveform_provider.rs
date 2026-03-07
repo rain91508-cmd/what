@@ -1672,6 +1672,11 @@ if tile_missing_signals.is_empty() {
             transitions.push(Transition { time: chunk_header.time_start, value: "0".to_string() });
         }
 
+        // Debug: print all parsed transitions
+        for (i, t) in transitions.iter().enumerate() {
+            console_log!("[WASM]   Parsed[{}]: time={}, value={}", i, t.time, t.value);
+        }
+        
         console_log!("[WASM] Parsed {} transitions at LoD {}", transitions.len(), chunk_header.level);
         Ok(transitions)
     }
@@ -1739,11 +1744,22 @@ if tile_missing_signals.is_empty() {
     /// Detect if transitions are in min/max format (LoD 1+)
     /// Returns true if consecutive transitions have the same timestamp
     fn detect_min_max_format(&self, transitions: &[Transition]) -> bool {
+        const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
+        
         if transitions.len() < 2 {
             return false;
         }
-        // Check first few transitions for same timestamp pattern
-        for i in 0..transitions.len().min(4).saturating_sub(1) {
+        
+        // Skip boundary value (first transition with time = BOUNDARY_TIME_START)
+        // and check remaining transitions for same timestamp pattern (min/max pairs)
+        let start_idx = if transitions[0].time == BOUNDARY_TIME_START {
+            1
+        } else {
+            0
+        };
+        
+        // Check for same timestamp pattern (min/max pairs)
+        for i in start_idx..transitions.len().min(start_idx + 4).saturating_sub(1) {
             if transitions[i].time == transitions[i + 1].time {
                 return true;
             }
