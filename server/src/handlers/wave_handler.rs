@@ -212,7 +212,7 @@ pub async fn get_wave_data(
     
     // 验证 LoD 层级
     let lod = query.lod.unwrap_or(0);
-    if lod > 11 {
+    if lod > 32 {
         return Err(crate::error::ServerError::InvalidLod(lod));
     }
 
@@ -343,7 +343,7 @@ pub async fn get_wave_data_multi(
     state.stats.record_request(crate::state::RequestType::Wave).await;
 
     // 验证 LoD 层级
-    if lod > 12 {
+    if lod > 32 {
         return Err(ServerError::InvalidLod(lod));
     }
 
@@ -482,7 +482,7 @@ pub async fn get_wave_data_tiles(
     state.stats.record_request(crate::state::RequestType::Wave).await;
 
     // 验证 LoD 层级
-    if lod > 20 {
+    if lod > 32 {
         return Err(ServerError::InvalidLod(lod));
     }
 
