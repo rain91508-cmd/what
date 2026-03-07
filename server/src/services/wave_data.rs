@@ -86,11 +86,22 @@ pub struct FourStateValue {
 }
 
 impl FourStateValue {
-    /// 创建新的四态值
+    /// 创建新的四态值（初始化为0）
     pub fn new(width: u16) -> Self {
         let bytes = ((width as usize * 2 + 7) / 8).max(1);
         Self {
             data: vec![0u8; bytes],
+            width,
+        }
+    }
+
+    /// 创建新的四态值（初始化为X）
+    pub fn new_x(width: u16) -> Self {
+        let bytes = ((width as usize * 2 + 7) / 8).max(1);
+        // X = 10 (二进制), 即每个字节的每2位都是10
+        // 0xAA = 10101010, 正好是8个X状态
+        Self {
+            data: vec![0xAAu8; bytes],
             width,
         }
     }
@@ -780,13 +791,20 @@ impl LodPyramidGenerator {
             let min_str = bucket_min.to_string();
             let max_str = bucket_max.to_string();
 
+            // 调试日志
+            info!("LoD {} 最后一个 bucket: min={}, max={}, start_time={}, end_time={}, has_xz={}",
+                level.0, min_str, max_str, bucket_start_time, bucket_end_time,
+                bucket_min.has_xz() || bucket_max.has_xz());
+
             // 始终输出 min 在 bucket 开始时间
             result.add_transition(Transition::from_numeric(bucket_start_time, &min_str));
+            info!("  输出 min: time={}, value={}", bucket_start_time, min_str);
             
             // 如果 min != max 或有 X/Z 状态，在 bucket 结束点输出 max
             let has_xz = bucket_min.has_xz() || bucket_max.has_xz();
             if max_str != min_str || has_xz {
                 result.add_transition(Transition::from_numeric(bucket_end_time, &max_str));
+                info!("  输出 max: time={}, value={}", bucket_end_time, max_str);
             }
         }
 
