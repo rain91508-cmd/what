@@ -53,12 +53,12 @@ function getResolution(lod: number): number {
 // 选择最小的 lod，使得 resolution >= time_span / canvas_width
 function selectLod(timeSpan: number, canvasWidth: number): number {
   const timePerPixel = timeSpan / canvasWidth;
-  for (let lod = 0; lod <= 20; lod++) {
+  for (let lod = 0; lod <= 32; lod++) {
     if (getResolution(lod) >= timePerPixel) {
       return lod;
     }
   }
-  return 20; // max lod
+  return 32; // max lod
 }
 ```
 

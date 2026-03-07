@@ -91,8 +91,8 @@ pub struct SignalWaveData {
 
 /// LoD (Level of Detail) configuration
 /// resolution = time units per bucket (each transition represents this many time units)
-/// Based on server API: resolution = 2^lod, max level = 20
-const LOD_TABLE: [(u32, u64); 21] = [
+/// Based on server API: resolution = 2^lod, max level = 32
+const LOD_TABLE: [(u32, u64); 33] = [
     (0, 1),                    // LOD0: resolution 1 (原始数据)
     (1, 2),                    // LOD1: resolution 2
     (2, 4),                    // LOD2: resolution 4
@@ -114,6 +114,18 @@ const LOD_TABLE: [(u32, u64); 21] = [
     (18, 262_144),             // LOD18: resolution 256K
     (19, 524_288),             // LOD19: resolution 512K
     (20, 1_048_576),           // LOD20: resolution 1M
+    (21, 2_097_152),           // LOD21: resolution 2M
+    (22, 4_194_304),           // LOD22: resolution 4M
+    (23, 8_388_608),           // LOD23: resolution 8M
+    (24, 16_777_216),          // LOD24: resolution 16M
+    (25, 33_554_432),          // LOD25: resolution 32M
+    (26, 67_108_864),          // LOD26: resolution 64M
+    (27, 134_217_728),         // LOD27: resolution 128M
+    (28, 268_435_456),         // LOD28: resolution 256M
+    (29, 536_870_912),         // LOD29: resolution 512M
+    (30, 1_073_741_824),       // LOD30: resolution 1G
+    (31, 2_147_483_648),       // LOD31: resolution 2G
+    (32, 4_294_967_296),       // LOD32: resolution 4G
 ];
 
 /// Special timestamp for boundary value (start of time range)
