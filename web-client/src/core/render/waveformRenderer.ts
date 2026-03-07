@@ -125,58 +125,59 @@ class WaveformRenderer {
    * Detect continuous min/max segment groups for single-bit signals
    * Returns a map from segment index to group info
    * 
-   * For LoD > 0, all single-bit segments in a tile should be grouped together
-   * to draw as a continuous min/max region
+   * For LoD > 0, segments are grouped by time continuity:
+   * - A group is continuous if segments are adjacent in time (x1 of prev == x0 of next)
+   * - Group size determines drawing style (vertical lines vs toggling box)
    */
   private detectMinMaxGroups(segments: RenderSegment[]): Map<number, { isContinuous: boolean; groupSize: number; groupIndex: number }> {
     const result = new Map<number, { isContinuous: boolean; groupSize: number; groupIndex: number }>();
     
     // Find all single-bit segments that are part of min/max data (LoD > 0)
-    // This includes both min≠max (isMinMax=true) and min=max (isMinMax=false) segments
-    const minMaxIndices: number[] = [];
+    const minMaxSegments: { index: number; x0: number; x1: number }[] = [];
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
-      // For LoD > 0, type is 'min_max' for all segments (including min=max)
       if (seg.value.type === 'min_max' && seg.value.width === 1) {
-        minMaxIndices.push(i);
+        minMaxSegments.push({ index: i, x0: seg.x0, x1: seg.x1 });
       }
     }
     
-    if (minMaxIndices.length === 0) {
+    if (minMaxSegments.length === 0) {
       return result;
     }
     
-    // Group continuous min/max segments
-    // For LoD > 0, we group ALL single-bit min/max segments together
-    // even if they have isMinMax=false (min=max), as they are part of the same tile
-    let currentGroup: number[] = [minMaxIndices[0]];
+    // Sort by x0 to ensure time order
+    minMaxSegments.sort((a, b) => a.x0 - b.x0);
     
-    for (let i = 1; i < minMaxIndices.length; i++) {
-      const idx = minMaxIndices[i];
-      const prevIdx = minMaxIndices[i - 1];
+    // Group by time continuity (adjacent in time)
+    let currentGroup: { index: number; x0: number; x1: number }[] = [minMaxSegments[0]];
+    
+    for (let i = 1; i < minMaxSegments.length; i++) {
+      const curr = minMaxSegments[i];
+      const prev = minMaxSegments[i - 1];
       
-      // Check if continuous (adjacent segments)
-      // For LoD > 0, segments are always continuous within a tile
-      if (idx === prevIdx + 1) {
-        currentGroup.push(idx);
+      // Check if continuous in time (prev.x1 == curr.x0)
+      // Use a small epsilon to handle floating point errors
+      const epsilon = 0.001;
+      if (Math.abs(curr.x0 - prev.x1) < epsilon) {
+        currentGroup.push(curr);
       } else {
         // Save current group and start new one
         const groupSize = currentGroup.length;
         for (let j = 0; j < currentGroup.length; j++) {
-          result.set(currentGroup[j], {
+          result.set(currentGroup[j].index, {
             isContinuous: groupSize > 1,
             groupSize,
             groupIndex: j
           });
         }
-        currentGroup = [idx];
+        currentGroup = [curr];
       }
     }
     
     // Save last group
     const groupSize = currentGroup.length;
     for (let j = 0; j < currentGroup.length; j++) {
-      result.set(currentGroup[j], {
+      result.set(currentGroup[j].index, {
         isContinuous: groupSize > 1,
         groupSize,
         groupIndex: j
