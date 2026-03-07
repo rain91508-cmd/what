@@ -718,8 +718,31 @@ impl LodPyramidGenerator {
             return source.clone();
         }
 
+        // 使用 transitions 的时间范围
+        let start_time = source.transitions[0].time;
+        let end_time = source.transitions.last().unwrap().time;
+        
+        self.generate_level_with_range(source, level, start_time, end_time)
+    }
+
+    /// 生成单个 LoD 层级（指定时间范围）
+    ///
+    /// 用于 tile 模式，确保 bucket 数量与 tile 时间范围匹配
+    pub fn generate_level_with_range(
+        &self,
+        source: &SignalWaveData,
+        level: LodLevel,
+        range_start: u64,
+        range_end: u64,
+    ) -> SignalWaveData {
+        info!("generate_level_with_range called: level={}, range_start={}, range_end={}", level.0, range_start, range_end);
+        
+        if level.0 == 0 || source.transitions.is_empty() {
+            return source.clone();
+        }
+
         match source.value_type {
-            SignalValueType::Numeric => self.generate_numeric_level(source, level),
+            SignalValueType::Numeric => self.generate_numeric_level_with_range(source, level, range_start, range_end),
             SignalValueType::String | SignalValueType::Real => {
                 self.generate_sample_level(source, level)
             }
@@ -727,7 +750,106 @@ impl LodPyramidGenerator {
         }
     }
 
-    /// 数值类型的四态 min/max 降采样
+    /// 数值类型的四态 min/max 降采样（指定时间范围）
+    fn generate_numeric_level_with_range(
+        &self,
+        source: &SignalWaveData,
+        level: LodLevel,
+        range_start: u64,
+        range_end: u64,
+    ) -> SignalWaveData {
+        let bucket_size = level.bucket_size() as u64;
+        let mut result = SignalWaveData::new(source.handle, source.width, source.value_type);
+
+        if source.transitions.is_empty() {
+            return result;
+        }
+
+        // 使用指定的时间范围计算 bucket 数量
+        let total_buckets = ((range_end - range_start) / bucket_size) as usize;
+        info!("LoD {} 生成: range_start={}, range_end={}, bucket_size={}, total_buckets={}", 
+            level.0, range_start, range_end, bucket_size, total_buckets);
+
+        // 初始化第一个 bucket 的状态
+        let first_fs = source.transitions[0]
+            .value
+            .to_four_state()
+            .unwrap_or_else(|| FourStateValue::new(source.width));
+        let mut bucket_min = first_fs.clone();
+        let mut bucket_max = first_fs.clone();
+        let mut current_bucket_idx: usize = 0;
+        let mut last_value = source.transitions[0].value.clone();
+
+        // 遍历所有 transitions
+        for trans in &source.transitions {
+            // 计算当前 transition 属于哪个 bucket（基于时间范围）
+            let trans_bucket_idx = if trans.time >= range_start && trans.time < range_end {
+                ((trans.time - range_start) / bucket_size) as usize
+            } else if trans.time >= range_end {
+                total_buckets  // 超出范围的放入最后一个 bucket
+            } else {
+                continue;  // 小于 range_start 的跳过
+            };
+
+            // 获取当前转换点的四态值
+            let trans_fs = trans
+                .value
+                .to_four_state()
+                .unwrap_or_else(|| FourStateValue::new(source.width));
+
+            if trans_bucket_idx > current_bucket_idx {
+                // 先输出当前 bucket 的 min/max
+                let bucket_end_time = range_start + (current_bucket_idx as u64 + 1) * bucket_size;
+                let min_str = bucket_min.to_string();
+                let max_str = bucket_max.to_string();
+                
+                result.add_transition(Transition::from_numeric(bucket_end_time, &min_str));
+                
+                let has_xz = bucket_min.has_xz() || bucket_max.has_xz();
+                if max_str != min_str || has_xz {
+                    result.add_transition(Transition::from_numeric(bucket_end_time, &max_str));
+                }
+
+                // 输出中间空 bucket（如果有）
+                for bucket_idx in (current_bucket_idx + 1)..trans_bucket_idx.min(total_buckets) {
+                    let bucket_end_time = range_start + (bucket_idx as u64 + 1) * bucket_size;
+                    // 空 bucket：输出上一个值
+                    let value_str = last_value.to_four_state()
+                        .unwrap_or_else(|| FourStateValue::new(source.width))
+                        .to_string();
+                    result.add_transition(Transition::from_numeric(bucket_end_time, &value_str));
+                }
+
+                // 开始新 bucket
+                current_bucket_idx = trans_bucket_idx.min(total_buckets - 1);
+                bucket_min = trans_fs.clone();
+                bucket_max = trans_fs.clone();
+            } else {
+                // 更新当前 bucket 的 min/max（四态比较）
+                bucket_min = four_state_min(&bucket_min, &trans_fs);
+                bucket_max = four_state_max(&bucket_max, &trans_fs);
+            }
+
+            last_value = trans.value.clone();
+        }
+
+        // 输出最后一个 bucket
+        let last_bucket_end_time = range_start + (current_bucket_idx as u64 + 1) * bucket_size;
+        let min_str = bucket_min.to_string();
+        let max_str = bucket_max.to_string();
+
+        result.add_transition(Transition::from_numeric(last_bucket_end_time, &min_str));
+        
+        let has_xz = bucket_min.has_xz() || bucket_max.has_xz();
+        if max_str != min_str || has_xz {
+            result.add_transition(Transition::from_numeric(last_bucket_end_time, &max_str));
+        }
+
+        info!("LoD {} 生成完成: {} transitions", level.0, result.transitions.len());
+        result
+    }
+
+    /// 数值类型的四态 min/max 降采样（使用 transitions 的时间范围）
     fn generate_numeric_level(
         &self,
         source: &SignalWaveData,
