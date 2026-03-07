@@ -70,6 +70,13 @@ pub fn create_router(state: ServerState) -> Router<ServerState> {
         .route(
             "/api/wave/:waveform_name/lod/:lod/time/:start/:end/compress/:compress/signals/:signal_names/data",
             get(get_wave_data_multi),
+        )
+        // Tile-based API：获取多个连续的 tiles
+        // 格式：/api/wave/{waveform}/lod/{lod}/tile/{start}/{span}/{num}/compress/{compress}/signals/{signal_names}/data
+        // 示例：/api/wave/riscv2/lod/2/tile/0/1000000/10/compress/zstd/signals/b64:xxx/data
+        .route(
+            "/api/wave/:waveform_name/lod/:lod/tile/:start/:span/:num/compress/:compress/signals/:signal_names/data",
+            get(get_wave_data_tiles),
         );
 
     // 合并所有路由

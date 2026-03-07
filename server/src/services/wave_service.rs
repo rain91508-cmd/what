@@ -1,10 +1,13 @@
 use crate::error::{Result, ServerError};
-use crate::services::wave_data::{LodConfig, LodLevel, SignalWaveData, Transition, ChunkSerializer, CompressionAlgorithm, SignalValueType};
+use crate::services::wave_data::{LodConfig, LodLevel, SignalWaveData, Transition, ChunkSerializer, CompressionAlgorithm, SignalValueType, MultiTileChunkSerializer};
 use crate::services::compute_file_hash;
 use crate::state::ServerState;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::fs;
 use tracing::{debug, error, info, warn};
+use moka::future::Cache;
+use fstapi::Handle;
 
 /// FST 文件魔数 (用于识别 FST 文件)
 const FST_MAGIC: &[u8] = b"FST\x00";
@@ -81,10 +84,55 @@ impl Default for FstBackend {
     }
 }
 
+/// 信号句柄缓存
+/// 
+/// 缓存结构: (波形路径, 信号名) -> (handle, width)
+/// 使用 LRU 策略自动淘汰不常用的信号
+#[derive(Debug, Clone)]
+pub struct SignalHandleCache {
+    cache: Cache<(String, String), (Handle, u16)>,
+}
+
+impl SignalHandleCache {
+    /// 创建新的信号句柄缓存
+    pub fn new(max_capacity: u64) -> Self {
+        Self {
+            cache: Cache::builder()
+                .max_capacity(max_capacity)
+                .build(),
+        }
+    }
+
+    /// 获取信号 handle
+    pub async fn get(&self, wave_path: &str, signal_name: &str) -> Option<(Handle, u16)> {
+        self.cache.get(&(wave_path.to_string(), signal_name.to_string())).await
+    }
+
+    /// 缓存信号 handle
+    pub async fn put(&self, wave_path: &str, signal_name: String, handle: Handle, width: u16) {
+        self.cache.insert((wave_path.to_string(), signal_name), (handle, width)).await;
+    }
+
+    /// 使指定波形文件的缓存失效
+    pub async fn invalidate(&self, wave_path: &str) {
+        // 遍历并删除匹配的 key
+        let keys_to_remove: Vec<_> = self.cache
+            .iter()
+            .filter(|(key, _)| key.0 == wave_path)
+            .map(|(key, _)| (*key).clone())
+            .collect();
+        
+        for key in keys_to_remove {
+            self.cache.invalidate(&key).await;
+        }
+    }
+}
+
 /// 波形数据服务
 pub struct WaveService {
     state: ServerState,
     backend: FstBackend,
+    signal_cache: Arc<SignalHandleCache>,
 }
 
 impl WaveService {
@@ -93,12 +141,17 @@ impl WaveService {
         Self {
             state,
             backend: FstBackend::default(),
+            signal_cache: Arc::new(SignalHandleCache::new(10000)), // 最多缓存 10000 个信号
         }
     }
 
     /// 创建指定后端的波形数据服务
     pub fn with_backend(state: ServerState, backend: FstBackend) -> Self {
-        Self { state, backend }
+        Self {
+            state,
+            backend,
+            signal_cache: Arc::new(SignalHandleCache::new(10000)), // 最多缓存 10000 个信号
+        }
     }
 
     /// 设置后端
@@ -684,19 +737,21 @@ impl WaveService {
             return Err(ServerError::SignalNotFound("No signals specified".to_string()));
         }
         
-        // 读取所有信号并生成 LoD
-        let mut signal_data_list: Vec<SignalWaveData> = Vec::new();
-        for signal_name in signal_names {
-            let signal_data = match self.backend {
-                FstBackend::FstApi => {
-                    self.read_signal_data_fstapi(&wave_path, signal_name, lod_level, time_start, time_end).await?
+        // 使用优化的批量读取函数（支持 SignalHandleCache）
+        let signal_data_list = match self.backend {
+            FstBackend::FstApi => {
+                self.read_signals_data_fstapi(&wave_path, signal_names, lod_level, time_start, time_end).await?
+            }
+            FstBackend::WaveFst => {
+                // wavefst 后端仍使用逐个读取
+                let mut list = Vec::new();
+                for signal_name in signal_names {
+                    let signal_data = self.read_signal_data_wavefst(&wave_path, signal_name, lod_level, time_start, time_end).await?;
+                    list.push(signal_data);
                 }
-                FstBackend::WaveFst => {
-                    self.read_signal_data_wavefst(&wave_path, signal_name, lod_level, time_start, time_end).await?
-                }
-            };
-            signal_data_list.push(signal_data);
-        }
+                list
+            }
+        };
         
         // 序列化为多信号 chunk
         let signal_refs: Vec<&SignalWaveData> = signal_data_list.iter().collect();
@@ -733,6 +788,110 @@ impl WaveService {
         );
 
         Ok((data, file_size, content_length))
+    }
+
+    /// 获取多个信号的波形数据（Tile-based 模式）
+    ///
+    /// # Arguments
+    /// * `wave_name` - 波形文件名
+    /// * `signal_names` - 信号名列表
+    /// * `lod` - LoD 层级
+    /// * `start_time` - 第一个 tile 的起始时间
+    /// * `tile_span` - 每个 tile 的时间跨度
+    /// * `num_tiles` - tile 数量
+    /// * `compression` - 压缩算法
+    pub async fn get_wave_data_tiles(
+        &self,
+        wave_name: &str,
+        signal_names: &[String],
+        lod: u32,
+        start_time: u64,
+        tile_span: u64,
+        num_tiles: usize,
+        compression: CompressionAlgorithm,
+    ) -> Result<(Vec<u8>, u64)> {
+        let wave_path = self.get_wave_path(wave_name)?;
+        let metadata = fs::metadata(&wave_path).await?;
+        let file_size = metadata.len();
+
+        // 验证 LoD 层级
+        let lod_level = LodLevel::new(lod);
+        if !lod_level.is_valid() {
+            return Err(ServerError::InvalidLod(lod));
+        }
+
+        // 限制 tile 数量（防止请求过大）
+        const MAX_TILES: usize = 100;
+        if num_tiles == 0 || num_tiles > MAX_TILES {
+            return Err(ServerError::InvalidParameter(format!(
+                "num_tiles must be between 1 and {}, got {}",
+                MAX_TILES, num_tiles
+            )));
+        }
+
+        // 验证 tile_span
+        if tile_span == 0 {
+            return Err(ServerError::InvalidParameter(
+                "tile_span must be greater than 0".to_string()
+            ));
+        }
+
+        info!(
+            "获取多信号 Tile 数据: wave={}, signals={:?}, lod={}, tiles={}×{} ({}-{})",
+            wave_name, signal_names, lod, num_tiles, tile_span,
+            start_time, start_time + tile_span * num_tiles as u64
+        );
+
+        // 读取所有信号数据
+        if signal_names.is_empty() {
+            return Err(ServerError::SignalNotFound("No signals specified".to_string()));
+        }
+
+        // 使用优化的批量读取函数
+        let tiles_data = match self.backend {
+            FstBackend::FstApi => {
+                self.read_signals_data_tiles_fstapi(
+                    &wave_path, signal_names, lod_level, start_time, tile_span, num_tiles
+                ).await?
+            }
+            FstBackend::WaveFst => {
+                // wavefst 后端：逐个读取每个 tile
+                let mut tiles = Vec::with_capacity(num_tiles);
+                for tile_idx in 0..num_tiles {
+                    let tile_start = start_time + tile_span * tile_idx as u64;
+                    let tile_end = tile_start + tile_span;
+                    
+                    let mut tile_signals = Vec::with_capacity(signal_names.len());
+                    for signal_name in signal_names {
+                        let signal_data = self.read_signal_data_wavefst(
+                            &wave_path, signal_name, lod_level, tile_start, tile_end
+                        ).await?;
+                        tile_signals.push(signal_data);
+                    }
+                    tiles.push(tile_signals);
+                }
+                tiles
+            }
+        };
+
+        // 序列化为 MultiTileChunk 格式
+        let multi_tile_data = MultiTileChunkSerializer::serialize(
+            lod as u16,
+            start_time,
+            tile_span,
+            &tiles_data,
+            compression,
+        )?;
+
+        info!(
+            "返回多信号 Tile 数据: wave={}, {} 个信号, {} tiles, {} bytes",
+            wave_name,
+            signal_names.len(),
+            num_tiles,
+            multi_tile_data.len()
+        );
+
+        Ok((multi_tile_data, file_size))
     }
 
     /// 读取 FST 文件的时间单位字符串
@@ -812,6 +971,319 @@ impl WaveService {
                 1_000
             }
         }
+    }
+
+    /// 使用 fstapi 批量读取多个信号数据（优化版本）
+    ///
+    /// 使用 SignalHandleCache 缓存信号 handle，避免重复遍历 vars
+    /// 一次 FST 文件遍历读取所有信号数据
+    async fn read_signals_data_fstapi(
+        &self,
+        wave_path: &PathBuf,
+        signal_names: &[String],
+        lod: LodLevel,
+        time_start: u64,
+        time_end: u64,
+    ) -> Result<Vec<SignalWaveData>> {
+        let path_str = wave_path.to_string_lossy().to_string();
+        let signal_names: Vec<String> = signal_names.to_vec();
+        let cache = self.signal_cache.clone();
+
+        // 使用 spawn_blocking 避免阻塞异步运行时
+        let signal_data_list = tokio::task::spawn_blocking(move || {
+            info!("正在使用 fstapi 批量读取信号数据: {}, signals={:?}", path_str, signal_names);
+
+            let mut reader = fstapi::Reader::open(&path_str)
+                .map_err(|e| {
+                    error!("无法打开 FST 文件 {}: {}", path_str, e);
+                    ServerError::Internal(format!("无法打开 FST 文件: {}", e))
+                })?;
+
+            // 检查缓存中已有的信号 handle
+            let mut cached_signals: Vec<(String, Handle, u16)> = Vec::new();
+            let mut uncached_signal_names: Vec<String> = Vec::new();
+
+            for signal_name in &signal_names {
+                // 尝试从缓存获取
+                if let Some((handle, width)) = futures::executor::block_on(cache.get(&path_str, signal_name)) {
+                    info!("从缓存找到信号: {} (handle={:?}, width={})", signal_name, handle, width);
+                    cached_signals.push((signal_name.clone(), handle, width));
+                } else {
+                    uncached_signal_names.push(signal_name.clone());
+                }
+            }
+
+            // 如果有未缓存的信号，遍历 vars 查找
+            let mut found_signals: Vec<(String, Handle, u16)> = Vec::new();
+            if !uncached_signal_names.is_empty() {
+                info!("需要查找 {} 个未缓存的信号", uncached_signal_names.len());
+                
+                for var_result in reader.vars() {
+                    let (name, var) = var_result
+                        .map_err(|e| ServerError::Internal(format!("读取变量失败: {}", e)))?;
+
+                    if uncached_signal_names.contains(&name) {
+                        let handle = var.handle();
+                        let width = var.length() as u16;
+                        info!("找到信号: {} (handle={:?}, width={}), 加入缓存", name, handle, width);
+                        
+                        // 加入缓存
+                        futures::executor::block_on(cache.put(&path_str, name.clone(), handle, width));
+                        
+                        found_signals.push((name, handle, width));
+                        
+                        // 如果所有信号都找到了，提前退出
+                        if found_signals.len() == uncached_signal_names.len() {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // 合并缓存和找到的信号
+            let all_signals: Vec<(String, Handle, u16)> = cached_signals.into_iter()
+                .chain(found_signals.into_iter())
+                .collect();
+
+            if all_signals.len() != signal_names.len() {
+                let found_names: std::collections::HashSet<_> = all_signals.iter()
+                    .map(|(name, _, _)| name.clone())
+                    .collect();
+                let missing: Vec<_> = signal_names.iter()
+                    .filter(|name| !found_names.contains(*name))
+                    .collect();
+                return Err(ServerError::SignalNotFound(format!("未找到信号: {:?}", missing)));
+            }
+
+            // 设置 mask 读取所有信号
+            for (_, handle, _) in &all_signals {
+                reader.set_mask(*handle);
+            }
+
+            // 初始化所有信号的数据结构
+            let mut signals_data: std::collections::HashMap<Handle, SignalWaveData> = std::collections::HashMap::new();
+            for (name, handle, width) in &all_signals {
+                let signal_data = SignalWaveData::new((*handle).into(), *width, SignalValueType::Numeric);
+                signals_data.insert(*handle, signal_data);
+                info!("初始化信号数据结构: {} (handle={:?}, width={})", name, handle, width);
+            }
+
+            // 首先读取完整数据以获取边界值
+            let mut full_signals_data: std::collections::HashMap<Handle, SignalWaveData> = std::collections::HashMap::new();
+            for (name, handle, width) in &all_signals {
+                let signal_data = SignalWaveData::new((*handle).into(), *width, SignalValueType::Numeric);
+                full_signals_data.insert(*handle, signal_data);
+            }
+            
+            reader.for_each_block(|time, h, value, _var_len| {
+                if let Some(signal_data) = full_signals_data.get_mut(&h) {
+                    let transition = Transition::from_fst(time, value, SignalValueType::Numeric);
+                    signal_data.add_transition(transition);
+                }
+            }).map_err(|e| ServerError::Internal(format!("读取完整波形数据失败: {:?}", e)))?;
+
+            info!("读取到完整数据: {:?}", full_signals_data.iter()
+                .map(|(h, d)| format!("handle={:?}, transitions={}", h, d.transitions.len()))
+                .collect::<Vec<_>>());
+
+            // 然后读取时间范围内的数据
+            reader.set_time_range_limit(time_start, time_end);
+            reader.for_each_block(|time, h, value, _var_len| {
+                if let Some(signal_data) = signals_data.get_mut(&h) {
+                    let transition = Transition::from_fst(time, value, SignalValueType::Numeric);
+                    signal_data.add_transition(transition);
+                }
+            }).map_err(|e| ServerError::Internal(format!("读取波形数据失败: {:?}", e)))?;
+
+            info!("读取到时间范围内数据: {:?}", signals_data.iter()
+                .map(|(h, d)| format!("handle={:?}, transitions={}", h, d.transitions.len()))
+                .collect::<Vec<_>>());
+
+            // 为每个信号处理边界值和生成 LoD
+            let config = LodConfig::default();
+            let mut result: Vec<SignalWaveData> = Vec::new();
+            
+            for (name, handle, _) in all_signals {
+                let mut signal_data = signals_data.remove(&handle).unwrap();
+                let full_data = full_signals_data.get(&handle).unwrap();
+
+                // 如果时间范围内没有数据，使用完整数据的边界值
+                if signal_data.transitions.is_empty() {
+                    if let Some(boundary_trans) = full_data.value_at(time_start) {
+                        signal_data.add_transition(Transition {
+                            time: time_start,
+                            value: boundary_trans.value.clone(),
+                        });
+                        info!("信号 {} 添加边界值: time={}, value={:?}", name, time_start, boundary_trans.value);
+                    }
+                }
+
+                // 生成 LoD 数据
+                let lod_data = LodPyramidGenerator::new(config.clone()).generate_level(&signal_data, lod);
+                info!("信号 {} 生成 LoD {} 数据: {} transitions", name, lod.0, lod_data.transitions.len());
+                
+                result.push(lod_data);
+            }
+
+            Ok::<_, ServerError>(result)
+        })
+        .await
+        .map_err(|e| ServerError::Internal(format!("任务执行失败: {}", e)))??;
+
+        Ok(signal_data_list)
+    }
+
+    /// 使用 fstapi 批量读取多个 tile 的信号数据
+    ///
+    /// 优化点：
+    /// 1. 只打开一次 FST 文件
+    /// 2. 按时间顺序处理 tiles，利用连续性
+    /// 3. Tile N+1 的起始边界值可以从 Tile N 的结束值获取
+    async fn read_signals_data_tiles_fstapi(
+        &self,
+        wave_path: &PathBuf,
+        signal_names: &[String],
+        lod: LodLevel,
+        start_time: u64,
+        tile_span: u64,
+        num_tiles: usize,
+    ) -> Result<Vec<Vec<SignalWaveData>>> {
+        let path_str = wave_path.to_string_lossy().to_string();
+        let signal_names: Vec<String> = signal_names.to_vec();
+        let cache = self.signal_cache.clone();
+
+        // 使用 spawn_blocking 避免阻塞异步运行时
+        let tiles_data = tokio::task::spawn_blocking(move || {
+            info!("正在使用 fstapi 批量读取 {} 个 tiles: {}, signals={:?}", num_tiles, path_str, signal_names);
+
+            let mut reader = fstapi::Reader::open(&path_str)
+                .map_err(|e| {
+                    error!("无法打开 FST 文件 {}: {}", path_str, e);
+                    ServerError::Internal(format!("无法打开 FST 文件: {}", e))
+                })?;
+
+            // 步骤 1: 获取所有信号的 handles（使用缓存）
+            let mut signal_handles: Vec<(String, Handle, u16)> = Vec::new();
+            
+            for signal_name in &signal_names {
+                // 尝试从缓存获取
+                if let Some((handle, width)) = futures::executor::block_on(cache.get(&path_str, signal_name)) {
+                    info!("从缓存找到信号: {} (handle={:?}, width={})", signal_name, handle, width);
+                    signal_handles.push((signal_name.clone(), handle, width));
+                }
+            }
+
+            // 查找未缓存的信号
+            let cached_names: std::collections::HashSet<_> = signal_handles.iter()
+                .map(|(name, _, _)| name.clone())
+                .collect();
+            let uncached_names: Vec<_> = signal_names.iter()
+                .filter(|name| !cached_names.contains(*name))
+                .cloned()
+                .collect();
+
+            if !uncached_names.is_empty() {
+                info!("需要查找 {} 个未缓存的信号", uncached_names.len());
+                for var_result in reader.vars() {
+                    let (name, var) = var_result
+                        .map_err(|e| ServerError::Internal(format!("读取变量失败: {}", e)))?;
+
+                    if uncached_names.contains(&name) {
+                        let handle = var.handle();
+                        let width = var.length() as u16;
+                        info!("找到信号: {} (handle={:?}, width={}), 加入缓存", name, handle, width);
+                        
+                        futures::executor::block_on(cache.put(&path_str, name.clone(), handle, width));
+                        signal_handles.push((name, handle, width));
+
+                        if signal_handles.len() == signal_names.len() {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if signal_handles.len() != signal_names.len() {
+                let found_names: std::collections::HashSet<_> = signal_handles.iter()
+                    .map(|(name, _, _)| name.clone())
+                    .collect();
+                let missing: Vec<_> = signal_names.iter()
+                    .filter(|name| !found_names.contains(*name))
+                    .collect();
+                return Err(ServerError::SignalNotFound(format!("未找到信号: {:?}", missing)));
+            }
+
+            // 步骤 2: 设置所有信号的 mask
+            for (_, handle, _) in &signal_handles {
+                reader.set_mask(*handle);
+            }
+
+            // 步骤 3: 读取完整数据（用于边界值）
+            let mut full_signals_data: std::collections::HashMap<Handle, SignalWaveData> = 
+                std::collections::HashMap::new();
+            for (name, handle, width) in &signal_handles {
+                let signal_data = SignalWaveData::new((*handle).into(), *width, SignalValueType::Numeric);
+                full_signals_data.insert(*handle, signal_data);
+            }
+
+            reader.for_each_block(|time, h, value, _var_len| {
+                if let Some(signal_data) = full_signals_data.get_mut(&h) {
+                    let transition = Transition::from_fst(time, value, SignalValueType::Numeric);
+                    signal_data.add_transition(transition);
+                }
+            }).map_err(|e| ServerError::Internal(format!("读取完整波形数据失败: {:?}", e)))?;
+
+            info!("读取到完整数据: {} signals, {} total transitions", 
+                full_signals_data.len(),
+                full_signals_data.values().map(|d| d.transitions.len()).sum::<usize>()
+            );
+
+            // 步骤 4: 按 tile 分割数据
+            let config = LodConfig::default();
+            let mut tiles_result: Vec<Vec<SignalWaveData>> = Vec::with_capacity(num_tiles);
+
+            for tile_idx in 0..num_tiles {
+                let tile_start = start_time + tile_span * tile_idx as u64;
+                let tile_end = tile_start + tile_span;
+
+                let mut tile_signals: Vec<SignalWaveData> = Vec::with_capacity(signal_handles.len());
+
+                for (name, handle, width) in &signal_handles {
+                    let full_data = full_signals_data.get(handle).unwrap();
+                    
+                    // 提取时间范围内的 transitions
+                    let mut tile_signal = SignalWaveData::new((*handle).into(), *width, SignalValueType::Numeric);
+                    
+                    for trans in &full_data.transitions {
+                        if trans.time >= tile_start && trans.time <= tile_end {
+                            tile_signal.add_transition(trans.clone());
+                        }
+                    }
+
+                    // 添加起始边界值（使用特殊时间戳）
+                    if let Some(boundary_trans) = full_data.value_at(tile_start) {
+                        tile_signal.transitions.insert(0, Transition {
+                            time: ChunkSerializer::BOUNDARY_TIME_START,
+                            value: boundary_trans.value.clone(),
+                        });
+                    }
+
+                    // 生成 LoD 数据
+                    let lod_data = LodPyramidGenerator::new(config.clone()).generate_level(&tile_signal, lod);
+                    info!("Tile {} 信号 {}: {} transitions", tile_idx, name, lod_data.transitions.len());
+                    
+                    tile_signals.push(lod_data);
+                }
+
+                tiles_result.push(tile_signals);
+            }
+
+            Ok::<_, ServerError>(tiles_result)
+        })
+        .await
+        .map_err(|e| ServerError::Internal(format!("任务执行失败: {}", e)))??;
+
+        Ok(tiles_data)
     }
 
     /// 使用 fstapi 读取信号数据（返回 SignalWaveData）

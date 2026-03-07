@@ -466,7 +466,85 @@ GET /api/wave/{waveform_name}/lod/{lod}/time/{start}/{end}/compress/{compress}/s
 
 ---
 
-#### 3.6 信号名编码格式
+#### 3.6 获取波形数据（Tile-based 模式）
+
+```http
+GET /api/wave/{waveform_name}/lod/{lod}/tile/{start}/{span}/{num}/compress/{compress}/signals/{signal_names}/data
+```
+
+**描述**: 获取多个连续的 tiles 波形数据，每个 tile 是一个独立的时间范围
+
+**与 time 模式的区别**:
+- `time` 模式: 获取单个连续时间范围的波形数据
+- `tile` 模式: 获取多个连续的 tiles，每个 tile 独立处理边界值
+
+**路径参数**:
+- `waveform_name`: 波形文件名
+- `lod`: LoD (Level of Detail) 层级 0-20
+- `start`: 第一个 tile 的起始时间
+- `span`: 每个 tile 的时间跨度
+- `num`: tile 数量（1-100）
+- `compress`: 压缩算法（`none`, `zstd`, `lz4`）
+- `signal_names`: 信号名称，逗号分隔多个信号
+
+**示例**:
+- 获取 10 个 tiles，每个 1000000 时间单位: `/api/wave/riscv2/lod/2/tile/0/1000000/10/compress/zstd/signals/b64:xxx/data`
+
+**响应数据格式（二进制）**:
+
+Tile-based API 返回 MultiTileChunk 格式：
+
+```
++------------------+
+| MultiTileHeader  | 40 bytes
+| (多Tile文件头)    |
++------------------+
+| TileOffsetTable  | 8 bytes × num_tiles
+| (Tile偏移表)      |
++------------------+
+| Tile 1 Data      | 变长 (标准 Chunk 格式)
+| (Tile 1数据)      |
++------------------+
+| Tile 2 Data      | 变长 (标准 Chunk 格式)
+| (Tile 2数据)      |
++------------------+
+| ...              |
++------------------+
+| Tile N Data      | 变长 (标准 Chunk 格式)
+| (Tile N数据)      |
++------------------+
+```
+
+**MultiTileHeader 结构（40字节）**:
+
+| 偏移 | 大小 | 字段 | 说明 |
+|------|------|------|------|
+| 0 | 4B | magic | 魔数 0x57415449 ("WATI") |
+| 4 | 2B | version | 版本号 (当前为 1) |
+| 6 | 2B | lod | LoD 层级 |
+| 8 | 4B | num_tiles | Tile 数量 |
+| 12 | 8B | start_time | 起始时间 |
+| 20 | 8B | tile_span | 每个 tile 的时间跨度 |
+| 28 | 4B | signal_count | 信号数量 |
+| 32 | 4B | reserved | 保留 |
+| 36 | 4B | compression | 压缩类型 |
+
+**TileOffsetEntry 结构（8字节）**:
+
+| 偏移 | 大小 | 字段 | 说明 |
+|------|------|------|------|
+| 0 | 8B | offset | Tile 数据偏移量 |
+
+**每个 Tile 的数据格式**: 与标准 Chunk 格式相同
+
+**使用场景**:
+- 波形查看器需要预加载多个视口的数据
+- 分页显示大量波形数据
+- 提高多段数据请求的吞吐量（减少 HTTP 请求次数）
+
+---
+
+#### 3.7 信号名编码格式
 
 **支持两种编码格式**:
 
