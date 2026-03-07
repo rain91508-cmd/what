@@ -1382,12 +1382,22 @@ impl WaveService {
                     .generate_level_with_range(&signal_data, lod, time_start, time_end);
                 info!("信号 {} 生成 LoD {} 数据: {} transitions", name, lod.0, lod_data.transitions.len());
                 
-                // 在 LoD 数据开头添加 Start Value（始终添加）
+                // 获取 End Value：tile 内最后一个 transition 的值
+                let end_value = lod_data.transitions.last()
+                    .map(|t| t.value.clone())
+                    .unwrap_or_else(|| start_value.clone());
+                
+                // 在 LoD 数据开头添加 Start Value 和 End Value（始终添加）
+                // 注意：顺序很重要，Start Value 在前，End Value 在后
                 lod_data.transitions.insert(0, Transition {
                     time: ChunkSerializer::BOUNDARY_TIME_START,
                     value: start_value,
                 });
-                info!("信号 {} 添加 Start Value 到 LoD 数据", name);
+                lod_data.transitions.insert(1, Transition {
+                    time: ChunkSerializer::BOUNDARY_TIME_START,
+                    value: end_value,
+                });
+                info!("信号 {} 添加 Start Value 和 End Value 到 LoD 数据", name);
                 
                 result.push(lod_data);
             }
@@ -1583,12 +1593,22 @@ impl WaveService {
                         .generate_level_with_range(&tile_signal, lod, tile_start, tile_end);
                     info!("Tile {} 信号 {}: 生成 LoD {} 数据: {} transitions", tile_idx, name, lod.0, lod_data.transitions.len());
                     
-                    // 在 LoD 数据开头添加 Start Value（始终添加）
+                    // 获取 End Value：tile 内最后一个 transition 的值
+                    let end_value = lod_data.transitions.last()
+                        .map(|t| t.value.clone())
+                        .unwrap_or_else(|| start_value.clone());
+                    
+                    // 在 LoD 数据开头添加 Start Value 和 End Value（始终添加）
+                    // 注意：顺序很重要，Start Value 在前，End Value 在后
                     lod_data.transitions.insert(0, Transition {
                         time: ChunkSerializer::BOUNDARY_TIME_START,
                         value: start_value,
                     });
-                    info!("Tile {} 信号 {}: 添加 Start Value 到 LoD 数据", tile_idx, name);
+                    lod_data.transitions.insert(1, Transition {
+                        time: ChunkSerializer::BOUNDARY_TIME_START,
+                        value: end_value,
+                    });
+                    info!("Tile {} 信号 {}: 添加 Start Value 和 End Value 到 LoD 数据", tile_idx, name);
                     
                     tile_signals.push(lod_data);
                 }
