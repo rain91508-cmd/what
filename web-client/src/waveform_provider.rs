@@ -1752,6 +1752,7 @@ if tile_missing_signals.is_empty() {
         const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
         
         if transitions.len() < 2 {
+            console_log!("[WASM] detect_min_max_format: transitions.len() < 2, returning false");
             return false;
         }
         
@@ -1763,12 +1764,18 @@ if tile_missing_signals.is_empty() {
             0
         };
         
+        console_log!("[WASM] detect_min_max_format: transitions={}, start_idx={}", transitions.len(), start_idx);
+        
         // Check for same timestamp pattern (min/max pairs)
         for i in start_idx..transitions.len().min(start_idx + 4).saturating_sub(1) {
+            console_log!("[WASM]   Checking transitions[{}].time={} vs transitions[{}].time={}", 
+                i, transitions[i].time, i+1, transitions[i+1].time);
             if transitions[i].time == transitions[i + 1].time {
+                console_log!("[WASM]   Found min/max pair at index {}", i);
                 return true;
             }
         }
+        console_log!("[WASM] detect_min_max_format: no min/max pairs found");
         false
     }
 
