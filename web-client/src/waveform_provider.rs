@@ -1065,20 +1065,38 @@ impl WaveformDataProvider {
                                         })
                                         .collect();
                                     
-                                    // Remove start boundary value (0xFFFFFFFFFFFFFFFF) if present
-                                    // This is the initial value marker for non-first tiles
-                                    // For first tile, keep it as it provides the initial value for rendering
+                                    // Process transitions: remove start boundary value and filter to viewport
+                                    // This should match the logic in parse_chunk_data_for_batch
                                     const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
+                                    let original_count = transitions.len();
+                                    
+                                    // For non-first tiles, remove start boundary value (initial value marker)
                                     if !is_first_tile && !transitions.is_empty() && transitions[0].time == BOUNDARY_TIME_START {
                                         console_log!("[WASM]     Removing start boundary value from cache data for '{}' (tile {} is not first)", signal_name, tile_id);
                                         transitions.remove(0);
                                     }
                                     
+                                    // Filter transitions to viewport range (same logic as parse_chunk_data_for_batch)
+                                    // First tile: keep all transitions up to time_end (including those before time_start for initial value)
+                                    // Non-first tiles: keep only transitions within [time_start, time_end]
+                                    let filtered_transitions: Vec<Transition> = if is_first_tile {
+                                        transitions.into_iter()
+                                            .filter(|t| t.time <= time_end)
+                                            .collect()
+                                    } else {
+                                        transitions.into_iter()
+                                            .filter(|t| t.time >= time_start && t.time <= time_end)
+                                            .collect()
+                                    };
+                                    
+                                    console_log!("[WASM]     Filtered {} transitions to {} for viewport [{}-{}] (first_tile={})", 
+                                        original_count, filtered_transitions.len(), time_start, time_end, is_first_tile);
+                                    
                                     // Merge with existing signal_data if any
                                     if let Some(existing) = self.signal_data.get_mut(signal_name) {
                                         // Merge transitions
                                         let mut all_transitions = existing.transitions.clone();
-                                        all_transitions.extend(transitions);
+                                        all_transitions.extend(filtered_transitions);
                                         // Sort by time and remove duplicates
                                         all_transitions.sort_by_key(|t| t.time);
                                         all_transitions.dedup_by_key(|t| t.time);
@@ -1088,7 +1106,7 @@ impl WaveformDataProvider {
                                         self.signal_data.insert(signal_name.clone(), SignalWaveData {
                                             name: signal_name.clone(),
                                             width: self.get_signal_width(signal_name),
-                                            transitions,
+                                            transitions: filtered_transitions,
                                         });
                                     }
                                 }
