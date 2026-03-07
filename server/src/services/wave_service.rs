@@ -1068,7 +1068,7 @@ impl WaveService {
                 info!("初始化信号数据结构: {} (handle={:?}, width={})", name, handle, width);
             }
 
-            // 首先读取完整数据以获取边界值
+            // 读取完整数据
             let mut full_signals_data: std::collections::HashMap<Handle, SignalWaveData> = std::collections::HashMap::new();
             for (name, handle, width) in &all_signals {
                 let signal_data = SignalWaveData::new((*handle).into(), *width, SignalValueType::Numeric);
@@ -1077,7 +1077,15 @@ impl WaveService {
             
             reader.for_each_block(|time, h, value, _var_len| {
                 if let Some(signal_data) = full_signals_data.get_mut(&h) {
+                    // 调试：打印前几个值的原始数据
+                    if signal_data.transitions.len() < 5 {
+                        info!("FST原始数据: handle={:?}, time={}, value={:?}, len={}", 
+                            h, time, value, value.len());
+                    }
                     let transition = Transition::from_fst(time, value, SignalValueType::Numeric);
+                    if signal_data.transitions.len() < 5 {
+                        info!("解析后: time={}, value={:?}", transition.time, transition.value);
+                    }
                     signal_data.add_transition(transition);
                 }
             }).map_err(|e| ServerError::Internal(format!("读取完整波形数据失败: {:?}", e)))?;
@@ -1086,41 +1094,39 @@ impl WaveService {
                 .map(|(h, d)| format!("handle={:?}, transitions={}", h, d.transitions.len()))
                 .collect::<Vec<_>>());
 
-            // 然后读取时间范围内的数据
-            reader.set_time_range_limit(time_start, time_end);
-            reader.for_each_block(|time, h, value, _var_len| {
-                if let Some(signal_data) = signals_data.get_mut(&h) {
-                    let transition = Transition::from_fst(time, value, SignalValueType::Numeric);
-                    signal_data.add_transition(transition);
-                }
-            }).map_err(|e| ServerError::Internal(format!("读取波形数据失败: {:?}", e)))?;
-
-            info!("读取到时间范围内数据: {:?}", signals_data.iter()
-                .map(|(h, d)| format!("handle={:?}, transitions={}", h, d.transitions.len()))
-                .collect::<Vec<_>>());
-
-            // 为每个信号处理边界值和生成 LoD
+            // 在内存中过滤时间范围，并处理边界值
             let config = LodConfig::default();
             let mut result: Vec<SignalWaveData> = Vec::new();
             
             for (name, handle, _) in all_signals {
-                let mut signal_data = signals_data.remove(&handle).unwrap();
                 let full_data = full_signals_data.get(&handle).unwrap();
+                let mut signal_data = SignalWaveData::new(handle.into(), full_data.width, full_data.value_type);
 
-                // 如果时间范围内没有数据，使用完整数据的边界值
-                if signal_data.transitions.is_empty() {
-                    if let Some(boundary_trans) = full_data.value_at(time_start) {
-                        signal_data.add_transition(Transition {
-                            time: time_start,
-                            value: boundary_trans.value.clone(),
-                        });
-                        info!("信号 {} 添加边界值: time={}, value={:?}", name, time_start, boundary_trans.value);
+                // 过滤时间范围内的 transitions
+                for trans in &full_data.transitions {
+                    if trans.time >= time_start && trans.time <= time_end {
+                        signal_data.add_transition(trans.clone());
                     }
                 }
 
-                // 生成 LoD 数据
-                let lod_data = LodPyramidGenerator::new(config.clone()).generate_level(&signal_data, lod);
+                // 保存边界值（用于后续添加，不参与 LoD 计算）
+                let boundary_value = full_data.value_at(time_start).map(|t| t.value.clone());
+
+                info!("信号 {} 时间范围内数据: {} transitions, boundary={:?}", 
+                    name, signal_data.transitions.len(), boundary_value);
+
+                // 生成 LoD 数据（基于实际的 transitions，不包括 boundary value）
+                let mut lod_data = LodPyramidGenerator::new(config.clone()).generate_level(&signal_data, lod);
                 info!("信号 {} 生成 LoD {} 数据: {} transitions", name, lod.0, lod_data.transitions.len());
+                
+                // 在 LoD 数据开头添加 boundary value（如果有）
+                if let Some(bv) = boundary_value {
+                    lod_data.transitions.insert(0, Transition {
+                        time: ChunkSerializer::BOUNDARY_TIME_START,
+                        value: bv,
+                    });
+                    info!("信号 {} 添加 boundary value 到 LoD 数据", name);
+                }
                 
                 result.push(lod_data);
             }
