@@ -27,14 +27,14 @@ macro_rules! console_log {
 // Global Constants
 // =============================================================================
 
-/// LOD multiplier: each level has 16x time span
-pub const LOD_MULTIPLIER: u64 = 16;
+/// LOD multiplier: each level has 2x time span (based on server API: bucket_size = 2^level)
+pub const LOD_MULTIPLIER: u64 = 2;
 
 /// LOD 0 base resolution: 1 time_unit
 pub const LOD0_RESOLUTION: u64 = 1;
 
-/// Tile span multiplier for LOD 0: 1M time_units
-pub const TILE_SPAN_MULTIPLIER: u64 = 1_000_000;
+/// Tile span multiplier for LOD 0: 65536 time_units (2^16, power of 2 for alignment)
+pub const TILE_SPAN_MULTIPLIER: u64 = 65_536;
 
 /// Group size: 256 signals per group
 pub const GROUP_SIZE: u32 = 256;

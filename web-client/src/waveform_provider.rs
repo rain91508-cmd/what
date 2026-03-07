@@ -91,21 +91,29 @@ pub struct SignalWaveData {
 
 /// LoD (Level of Detail) configuration
 /// resolution = time units per bucket (each transition represents this many time units)
-/// Based on: resolution = 16^lod
-const LOD_TABLE: [(u32, u64); 13] = [
-    (0, 1),                // LOD0: resolution 1 (原始数据，1时间单位/转换点)
-    (1, 16),               // LOD1: resolution 16 (16时间单位/转换点)
-    (2, 256),              // LOD2: resolution 256 (256时间单位/转换点)
-    (3, 4_096),            // LOD3: resolution 4096
-    (4, 65_536),           // LOD4: resolution 65536
-    (5, 1_048_576),        // LOD5: resolution ~1M
-    (6, 16_777_216),       // LOD6: resolution ~16M
-    (7, 268_435_456),      // LOD7: resolution ~268M
-    (8, 4_294_967_296),    // LOD8: resolution ~4.3G
-    (9, 68_719_476_736),   // LOD9: resolution ~68.7G
-    (10, 1_099_511_627_776), // LOD10: resolution ~1.1T
-    (11, 17_592_186_044_416), // LOD11: resolution ~17.6T
-    (12, 281_474_976_710_656), // LOD12: resolution ~281T
+/// Based on server API: resolution = 2^lod, max level = 20
+const LOD_TABLE: [(u32, u64); 21] = [
+    (0, 1),                    // LOD0: resolution 1 (原始数据)
+    (1, 2),                    // LOD1: resolution 2
+    (2, 4),                    // LOD2: resolution 4
+    (3, 8),                    // LOD3: resolution 8
+    (4, 16),                   // LOD4: resolution 16
+    (5, 32),                   // LOD5: resolution 32
+    (6, 64),                   // LOD6: resolution 64
+    (7, 128),                  // LOD7: resolution 128
+    (8, 256),                  // LOD8: resolution 256
+    (9, 512),                  // LOD9: resolution 512
+    (10, 1_024),               // LOD10: resolution 1K
+    (11, 2_048),               // LOD11: resolution 2K
+    (12, 4_096),               // LOD12: resolution 4K
+    (13, 8_192),               // LOD13: resolution 8K
+    (14, 16_384),              // LOD14: resolution 16K
+    (15, 32_768),              // LOD15: resolution 32K
+    (16, 65_536),              // LOD16: resolution 64K
+    (17, 131_072),             // LOD17: resolution 128K
+    (18, 262_144),             // LOD18: resolution 256K
+    (19, 524_288),             // LOD19: resolution 512K
+    (20, 1_048_576),           // LOD20: resolution 1M
 ];
 
 /// Special timestamp for boundary value (start of time range)
