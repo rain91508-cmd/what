@@ -1109,12 +1109,10 @@ impl WaveService {
                     }
                 }
 
-                // 保存边界值（用于后续添加，不参与 LoD 计算）
-                // 如果没有找到边界值（如波形开始点），使用默认值 'X'
-                let boundary_value = full_data.value_at(time_start)
+                // Start Value: 向前搜索，获取 time_start 之前的最近一个值
+                let start_value = full_data.value_at(time_start)
                     .map(|t| t.value.clone())
                     .unwrap_or_else(|| {
-                        // 创建全 'X' 的字符串，如 "X" 或 "XXXXXXXX"
                         let x_str = if full_data.width == 1 {
                             "X".to_string()
                         } else {
@@ -1123,28 +1121,40 @@ impl WaveService {
                         SignalValue::Numeric(x_str)
                     });
 
-                info!("信号 {} 时间范围内数据: {} transitions, boundary={:?}", 
-                    name, signal_data.transitions.len(), boundary_value);
+                // End Value: 向后搜索，获取 time_end 之后的最近一个值
+                // 在完整数据中查找第一个 time > time_end 的 transition
+                let end_value = full_data.transitions.iter()
+                    .find(|t| t.time > time_end)
+                    .map(|t| t.value.clone())
+                    .unwrap_or_else(|| start_value.clone());
 
-                // 生成 LoD 数据（基于实际的 transitions，不包括 boundary value）
+                info!("信号 {} 时间范围内数据: {} transitions, start={:?}, end={:?}", 
+                    name, signal_data.transitions.len(), start_value, end_value);
+
+                // 在 signal_data 开头添加 start_value（使用 time_start 时间）
+                // 这样 LoD 生成器可以正确计算第一个 bucket 的 min
+                if !signal_data.transitions.is_empty() {
+                    signal_data.transitions.insert(0, Transition {
+                        time: time_start,
+                        value: start_value.clone(),
+                    });
+                }
+
+                // 生成 LoD 数据（基于实际的 transitions，包括 start value）
                 let mut lod_data = LodPyramidGenerator::new(config.clone()).generate_level(&signal_data, lod);
                 info!("信号 {} 生成 LoD {} 数据: {} transitions", name, lod.0, lod_data.transitions.len());
                 
-                // 如果时间范围内没有 transitions，添加一个 min=max=boundary value 的 transition
-                if lod_data.transitions.is_empty() {
-                    info!("信号 {}: 时间范围内无数据，添加 min=max=boundary value", name);
-                    lod_data.add_transition(Transition {
-                        time: time_start,
-                        value: boundary_value.clone(),
-                    });
-                }
-                
-                // 在 LoD 数据开头添加 boundary value（始终添加）
+                // 在 LoD 数据开头添加 Start Value 和 End Value（始终添加）
+                // 注意：顺序很重要，Start Value 在前，End Value 在后
                 lod_data.transitions.insert(0, Transition {
                     time: ChunkSerializer::BOUNDARY_TIME_START,
-                    value: boundary_value,
+                    value: start_value,
                 });
-                info!("信号 {} 添加 boundary value 到 LoD 数据", name);
+                lod_data.transitions.insert(1, Transition {
+                    time: ChunkSerializer::BOUNDARY_TIME_START,
+                    value: end_value,
+                });
+                info!("信号 {} 添加 Start Value 和 End Value 到 LoD 数据", name);
                 
                 result.push(lod_data);
             }
@@ -1290,11 +1300,10 @@ impl WaveService {
                     
                     info!("Tile {} 信号 {}: 从完整数据中提取了 {} 个 transitions", tile_idx, name, count);
 
-                    // 保存边界值（用于后续添加，不参与 LoD 计算）
-                    let boundary_value = full_data.value_at(tile_start)
+                    // Start Value: 向前搜索，获取 tile_start 之前的最近一个值
+                    let start_value = full_data.value_at(tile_start)
                         .map(|t| t.value.clone())
                         .unwrap_or_else(|| {
-                            // 如果没有找到边界值，使用默认值 'X'
                             if *width == 1 {
                                 SignalValue::Numeric("X".to_string())
                             } else {
@@ -1302,25 +1311,36 @@ impl WaveService {
                             }
                         });
 
-                    // 生成 LoD 数据（基于实际的 transitions，不包括 boundary value）
+                    // End Value: 向后搜索，获取 tile_end 之后的最近一个值
+                    let end_value = full_data.transitions.iter()
+                        .find(|t| t.time > tile_end)
+                        .map(|t| t.value.clone())
+                        .unwrap_or_else(|| start_value.clone());
+
+                    // 在 tile_signal 开头添加 start_value（使用 tile_start 时间）
+                    // 这样 LoD 生成器可以正确计算第一个 bucket 的 min
+                    if !tile_signal.transitions.is_empty() {
+                        tile_signal.transitions.insert(0, Transition {
+                            time: tile_start,
+                            value: start_value.clone(),
+                        });
+                    }
+
+                    // 生成 LoD 数据（基于实际的 transitions，包括 start value）
                     let mut lod_data = LodPyramidGenerator::new(config.clone()).generate_level(&tile_signal, lod);
                     info!("Tile {} 信号 {}: 生成 LoD {} 数据: {} transitions", tile_idx, name, lod.0, lod_data.transitions.len());
                     
-                    // 如果 tile 内没有 transitions，添加一个 min=max=boundary value 的 transition
-                    if lod_data.transitions.is_empty() {
-                        info!("Tile {} 信号 {}: tile 内无数据， 添加 min=max=boundary value", tile_idx, name);
-                        lod_data.add_transition(Transition {
-                            time: tile_start,
-                            value: boundary_value.clone(),
-                        });
-                    }
-                    
-                    // 在 LoD 数据开头添加 boundary value（始终添加）
+                    // 在 LoD 数据开头添加 Start Value 和 End Value（始终添加）
+                    // 注意：顺序很重要，Start Value 在前，End Value 在后
                     lod_data.transitions.insert(0, Transition {
                         time: ChunkSerializer::BOUNDARY_TIME_START,
-                        value: boundary_value,
+                        value: start_value,
                     });
-                    info!("Tile {} 信号 {}: 添加 boundary value 到 LoD 数据", tile_idx, name);
+                    lod_data.transitions.insert(1, Transition {
+                        time: ChunkSerializer::BOUNDARY_TIME_START,
+                        value: end_value,
+                    });
+                    info!("Tile {} 信号 {}: 添加 Start Value 和 End Value 到 LoD 数据", tile_idx, name);
                     
                     tile_signals.push(lod_data);
                 }

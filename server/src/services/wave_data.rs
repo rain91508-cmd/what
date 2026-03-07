@@ -760,11 +760,11 @@ impl LodPyramidGenerator {
                 // 输出上一个 bucket 的 min/max
                 let min_str = bucket_min.to_string();
                 let max_str = bucket_max.to_string();
-
-                // 始终输出 min 在 bucket 开始时间
-                result.add_transition(Transition::from_numeric(bucket_start_time, &min_str));
                 
-                // 如果 min != max 或有 X/Z 状态，在 bucket 结束点输出 max
+                // min 和 max 都使用 bucket_end_time
+                result.add_transition(Transition::from_numeric(bucket_end_time, &min_str));
+                
+                // 如果 min != max 或有 X/Z 状态，输出 max
                 let has_xz = bucket_min.has_xz() || bucket_max.has_xz();
                 if max_str != min_str || has_xz {
                     result.add_transition(Transition::from_numeric(bucket_end_time, &max_str));
@@ -792,15 +792,15 @@ impl LodPyramidGenerator {
             let max_str = bucket_max.to_string();
 
             // 调试日志
-            info!("LoD {} 最后一个 bucket: min={}, max={}, start_time={}, end_time={}, has_xz={}",
-                level.0, min_str, max_str, bucket_start_time, bucket_end_time,
+            info!("LoD {} 最后一个 bucket: min={}, max={}, end_time={}, has_xz={}",
+                level.0, min_str, max_str, bucket_end_time,
                 bucket_min.has_xz() || bucket_max.has_xz());
 
-            // 始终输出 min 在 bucket 开始时间
-            result.add_transition(Transition::from_numeric(bucket_start_time, &min_str));
-            info!("  输出 min: time={}, value={}", bucket_start_time, min_str);
+            // min 和 max 都使用 bucket_end_time
+            result.add_transition(Transition::from_numeric(bucket_end_time, &min_str));
+            info!("  输出 min: time={}, value={}", bucket_end_time, min_str);
             
-            // 如果 min != max 或有 X/Z 状态，在 bucket 结束点输出 max
+            // 如果 min != max 或有 X/Z 状态，输出 max
             let has_xz = bucket_min.has_xz() || bucket_max.has_xz();
             if max_str != min_str || has_xz {
                 result.add_transition(Transition::from_numeric(bucket_end_time, &max_str));
@@ -1103,38 +1103,14 @@ impl ChunkSerializer {
 
         for signal in signals {
             // 过滤时间范围内的转换点
-            let mut filtered: Vec<_> = signal
+            // 注意：保留 BOUNDARY_TIME_START 的 transitions（Start Value 和 End Value）
+            // Start Value 和 End Value 已经在 wave_service 中添加，这里不需要再添加
+            let filtered: Vec<_> = signal
                 .transitions
                 .iter()
-                .filter(|t| t.time >= time_start && t.time <= time_end)
+                .filter(|t| t.time == Self::BOUNDARY_TIME_START || (t.time >= time_start && t.time <= time_end))
                 .cloned()
                 .collect();
-
-            // 总是添加起始边界值（使用特殊时间戳标记）
-            // 这样客户端可以知道请求范围起始处的信号值
-            info!(
-                "Signal {} in range {}-{}: adding boundary value at start time {}",
-                signal.handle, time_start, time_end, time_start
-            );
-            if let Some(boundary_value) = signal.value_at(time_start) {
-                info!(
-                    "Found boundary value for signal {} at time {}: {:?}",
-                    signal.handle, time_start, boundary_value.value
-                );
-                // 插入到最前面，使用特殊时间戳标记
-                filtered.insert(0, Transition {
-                    time: Self::BOUNDARY_TIME_START,
-                    value: boundary_value.value.clone(),
-                });
-            } else {
-                info!(
-                    "No boundary value found for signal {} at time {} (signal has {} transitions, last at time {})",
-                    signal.handle,
-                    time_start,
-                    signal.transitions.len(),
-                    signal.transitions.last().map(|t| t.time).unwrap_or(0)
-                );
-            }
 
             let transition_count = filtered.len() as u32;
 
