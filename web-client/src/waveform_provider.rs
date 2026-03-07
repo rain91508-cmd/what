@@ -793,6 +793,19 @@ impl WaveformDataProvider {
         self.opfs_cache.memory_cache_enabled
     }
 
+    /// Set OPFS cache enabled (dynamic toggle)
+    #[wasm_bindgen]
+    pub fn set_opfs_enabled(&mut self, enabled: bool) {
+        console_log!("[WASM] Setting OPFS cache enabled: {}", enabled);
+        self.opfs_cache.enabled = enabled;
+    }
+
+    /// Get OPFS cache enabled status
+    #[wasm_bindgen(getter)]
+    pub fn opfs_enabled(&self) -> bool {
+        self.opfs_cache.enabled
+    }
+
     /// Parse @[...] format for bit extraction
     /// Format: parent_name@[bit_index] or parent_name@[msb:lsb]
     /// Examples:

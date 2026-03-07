@@ -34,16 +34,28 @@ export function checkOpfsSupport(): boolean {
 
 /**
  * Enable/disable OPFS cache
+ * Can be called before or after provider creation
  */
 export function setOpfsEnabled(enabled: boolean): void {
   opfsEnabled = enabled && isOpfsSupported();
-  console.log(`[WaveformProvider] OPFS cache ${opfsEnabled ? 'enabled' : 'disabled'}`);
+  
+  // If provider exists, update it dynamically
+  if (provider) {
+    provider.set_opfs_enabled(opfsEnabled);
+    console.log(`[WaveformProvider] OPFS cache ${opfsEnabled ? 'enabled' : 'disabled'} (dynamic)`);
+  } else {
+    console.log(`[WaveformProvider] OPFS cache ${opfsEnabled ? 'enabled' : 'disabled'} (will apply on create)`);
+  }
 }
 
 /**
  * Check if OPFS cache is enabled
  */
 export function isOpfsEnabled(): boolean {
+  // If provider exists, get actual state from provider
+  if (provider) {
+    return provider.opfs_enabled;
+  }
   return opfsEnabled;
 }
 
