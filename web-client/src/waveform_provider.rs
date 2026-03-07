@@ -81,12 +81,26 @@ pub struct Transition {
     pub value: String,
 }
 
-/// Signal waveform data
+/// Signal waveform data with tile information
 #[derive(Debug, Clone)]
 pub struct SignalWaveData {
     pub name: String,
     pub width: u32,
     pub transitions: Vec<Transition>,
+    /// Tile information for proper segment generation
+    /// Each tuple: (tile_start, tile_end, start_value_time, start_value)
+    pub tile_info: Vec<(u64, u64, u64, String)>,
+}
+
+impl SignalWaveData {
+    pub fn new(name: String, width: u32) -> Self {
+        Self {
+            name,
+            width,
+            transitions: Vec::new(),
+            tile_info: Vec::new(),
+        }
+    }
 }
 
 /// LoD (Level of Detail) configuration
@@ -1076,10 +1090,12 @@ impl WaveformDataProvider {
                                         .collect();
                                     
                                     // Use common function to process transitions
-                                    let filtered_transitions = self.process_tile_transitions(
+                                    let tile_end = tile_start + tile_span;
+                                    let (start_value, filtered_transitions) = self.process_tile_transitions(
                                         transitions,
                                         is_first_tile,
                                         tile_start,
+                                        tile_end,
                                         time_start,
                                         time_end,
                                     );
@@ -1093,13 +1109,20 @@ impl WaveformDataProvider {
                                         all_transitions.sort_by_key(|t| t.time);
                                         all_transitions.dedup_by_key(|t| t.time);
                                         existing.transitions = all_transitions;
+                                        // Store tile info
+                                        if let Some(sv) = start_value {
+                                            existing.tile_info.push((tile_start, tile_end, sv.time, sv.value));
+                                        }
                                     } else {
                                         // Insert new signal_data
-                                        self.signal_data.insert(signal_name.clone(), SignalWaveData {
-                                            name: signal_name.clone(),
-                                            width: self.get_signal_width(signal_name),
-                                            transitions: filtered_transitions,
-                                        });
+                                        let width = self.get_signal_width(signal_name);
+                                        let mut signal_data = SignalWaveData::new(signal_name.clone(), width);
+                                        signal_data.transitions = filtered_transitions;
+                                        // Store tile info
+                                        if let Some(sv) = start_value {
+                                            signal_data.tile_info.push((tile_start, tile_end, sv.time, sv.value));
+                                        }
+                                        self.signal_data.insert(signal_name.clone(), signal_data);
                                     }
                                 }
                                 Ok(None) => {
@@ -1329,11 +1352,15 @@ if tile_missing_signals.is_empty() {
                 signal_idx as usize
             )?;
 
+            // Calculate tile end
+            let tile_end = tile_start + OpfsCacheManager::get_tile_span(header.level as u32);
+
             // Use common function to process transitions
-            let filtered_transitions = self.process_tile_transitions(
+            let (start_value, filtered_transitions) = self.process_tile_transitions(
                 transitions,
                 is_first_tile,
                 tile_start,
+                tile_end,
                 viewport_start,
                 viewport_end,
             );
@@ -1345,12 +1372,18 @@ if tile_missing_signals.is_empty() {
             if let Some(existing_data) = self.signal_data.get_mut(signal_name) {
                 existing_data.transitions.extend(filtered_transitions);
                 existing_data.transitions.sort_by_key(|t| t.time);
+                // Store tile info
+                if let Some(sv) = start_value {
+                    existing_data.tile_info.push((tile_start, tile_end, sv.time, sv.value));
+                }
             } else {
-                self.signal_data.insert(signal_name.clone(), SignalWaveData {
-                    name: signal_name.clone(),
-                    width,
-                    transitions: filtered_transitions,
-                });
+                let mut signal_data = SignalWaveData::new(signal_name.clone(), width);
+                signal_data.transitions = filtered_transitions;
+                // Store tile info
+                if let Some(sv) = start_value {
+                    signal_data.tile_info.push((tile_start, tile_end, sv.time, sv.value));
+                }
+                self.signal_data.insert(signal_name.clone(), signal_data);
             }
 
             offset += SignalBlockHeader::SIZE;
@@ -1374,81 +1407,40 @@ if tile_missing_signals.is_empty() {
             .map(|s| s.draw_sig_id)
     }
 
-    /// Process transitions for a tile (common logic for server and cache data)
+    /// Process transitions for a tile according to the drawing spec
     /// 
     /// # Arguments
-    /// * `transitions` - Raw transitions from server or cache
+    /// * `transitions` - Raw transitions from server or cache (including start value)
     /// * `is_first_tile` - Whether this is the first tile in the fetch list
     /// * `tile_start` - Start time of the tile
+    /// * `tile_end` - End time of the tile
     /// * `viewport_start` - Start time of the viewport
     /// * `viewport_end` - End time of the viewport
     /// 
     /// # Returns
-    /// Filtered and processed transitions
+    /// (start_value, normal_transitions) - Separated start value and normal transitions
     fn process_tile_transitions(
         &self,
-        mut transitions: Vec<Transition>,
-        is_first_tile: bool,
-        tile_start: u64,
+        transitions: Vec<Transition>,
+        _is_first_tile: bool,
+        _tile_start: u64,
+        _tile_end: u64,
         viewport_start: u64,
         viewport_end: u64,
-    ) -> Vec<Transition> {
+    ) -> (Option<Transition>, Vec<Transition>) {
         const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
         
-        // Step 1: Remove start boundary value for non-first tiles
-        if !is_first_tile && !transitions.is_empty() && transitions[0].time == BOUNDARY_TIME_START {
-            transitions.remove(0);
-        }
+        // Separate start value (boundary) from normal transitions
+        let start_value = transitions.iter()
+            .find(|t| t.time == BOUNDARY_TIME_START)
+            .cloned();
         
-        // Step 2: Process transitions based on tile position
-        let filtered: Vec<Transition> = if is_first_tile {
-            // First tile: need to handle initial value
-            // Find initial value from [tile_start, viewport_start]
-            let initial_value = if viewport_start > tile_start {
-                // First, try to find normal transition in [tile_start, viewport_start]
-                let normal_initial = transitions.iter()
-                    .filter(|t| t.time >= tile_start && t.time < viewport_start && t.time != BOUNDARY_TIME_START)
-                    .last()  // Get the one closest to viewport_start
-                    .cloned();
-                
-                if normal_initial.is_some() {
-                    normal_initial
-                } else if !transitions.is_empty() && transitions[0].time == BOUNDARY_TIME_START {
-                    // No normal transition found, use start boundary value as initial
-                    let mut boundary = transitions[0].clone();
-                    boundary.time = viewport_start;  // Update time to viewport_start
-                    Some(boundary)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            
-            // Find transitions within [viewport_start, viewport_end]
-            let viewport_transitions: Vec<Transition> = transitions.into_iter()
-                .filter(|t| t.time >= viewport_start && t.time <= viewport_end)
-                .collect();
-            
-            // Combine: initial value first (if found), then viewport transitions
-            if let Some(mut initial) = initial_value {
-                // Update initial value time to viewport_start for correct rendering
-                initial.time = viewport_start;
-                
-                let mut result = vec![initial];
-                result.extend(viewport_transitions);
-                result
-            } else {
-                viewport_transitions
-            }
-        } else {
-            // Non-first tiles: keep only transitions within viewport
-            transitions.into_iter()
-                .filter(|t| t.time >= viewport_start && t.time <= viewport_end)
-                .collect()
-        };
+        // Filter normal transitions within viewport
+        let normal_transitions: Vec<Transition> = transitions.into_iter()
+            .filter(|t| t.time != BOUNDARY_TIME_START && t.time >= viewport_start && t.time <= viewport_end)
+            .collect();
         
-        filtered
+        (start_value, normal_transitions)
     }
 
     /// Parse chunk binary data for single signal (legacy method)
@@ -1513,11 +1505,9 @@ if tile_missing_signals.is_empty() {
             };
 
             // Store signal data
-            self.signal_data.insert(signal_name.clone(), SignalWaveData {
-                name: signal_name,
-                width,
-                transitions,
-            });
+            let mut signal_data = SignalWaveData::new(signal_name.clone(), width);
+            signal_data.transitions = transitions;
+            self.signal_data.insert(signal_name.clone(), signal_data);
 
             offset += SignalBlockHeader::SIZE;
         }
@@ -1550,11 +1540,9 @@ if tile_missing_signals.is_empty() {
         // Get width from signal info if available
         let width = self.get_signal_width(signal_name);
 
-        self.signal_data.insert(signal_name.to_string(), SignalWaveData {
-            name: signal_name.to_string(),
-            width,
-            transitions,
-        });
+        let mut signal_data = SignalWaveData::new(signal_name.to_string(), width);
+        signal_data.transitions = transitions;
+        self.signal_data.insert(signal_name.to_string(), signal_data);
 
         Ok(())
     }
@@ -1580,6 +1568,24 @@ if tile_missing_signals.is_empty() {
 
         console_log!("[WASM] Parsing transitions for signal {}: time_start={}, value_start={}, transitions={}",
             signal_index, time_array_start, value_array_start, block_header.transition_count);
+        
+        // Debug: print first 64 bytes of time and value arrays
+        let time_preview_len = (block_header.transition_count as usize * 8).min(64);
+        let value_preview_len = (data.len() - value_array_start).min(64);
+        console_log!("[WASM] Time array (first {} bytes): {:?}", 
+            time_preview_len,
+            &data[time_array_start..time_array_start + time_preview_len]
+                .iter()
+                .map(|b| format!("{:02X}", b))
+                .collect::<Vec<_>>()
+                .join(" "));
+        console_log!("[WASM] Value array (first {} bytes): {:?}",
+            value_preview_len,
+            &data[value_array_start..value_array_start + value_preview_len]
+                .iter()
+                .map(|b| format!("{:02X}", b))
+                .collect::<Vec<_>>()
+                .join(" "));
 
         // Parse each transition
         let mut value_idx = value_array_start;
@@ -1812,61 +1818,33 @@ if tile_missing_signals.is_empty() {
         result
     }
 
-    /// Generate segments for LoD 0 (normal format)
-    /// Handles boundary value (0xFFFFFFFFFFFFFFFF) for start-of-range value
+    /// Generate segments for LoD 0 (normal format) according to the drawing spec
+    /// 
+    /// Drawing Rules:
+    /// - First tile: start value -> first transition, then transitions
+    /// - Non-first tiles: transitions only (continues from previous tile)
+    /// - Empty tile (no transitions): draw start value across entire tile
     fn generate_normal_segments(&self, transitions: &[Transition], width: u32, y: f64,
         signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>) {
 
-        // Check for boundary value (special timestamp indicating start-of-range value)
-        let boundary_value = transitions.iter()
+        // Separate start value (boundary) from normal transitions
+        let start_value = transitions.iter()
             .find(|t| t.time == BOUNDARY_TIME_START)
             .map(|t| t.value.clone());
 
-        // Filter out boundary values for normal processing
         let normal_transitions: Vec<_> = transitions.iter()
             .filter(|t| t.time != BOUNDARY_TIME_START)
             .cloned()
             .collect();
 
-        // Debug: Print first 20 transitions
-        console_log!("[WASM] === DEBUG: First 20 transitions ===");
-        console_log!("[WASM] viewport_start={}, viewport_end={}", self.viewport.time_start, self.viewport.time_end);
-        for (i, t) in normal_transitions.iter().take(20).enumerate() {
-            console_log!("[WASM]   [{}] time={}, value={}", i, t.time, t.value);
-        }
-        console_log!("[WASM] === END DEBUG ===");
-
-        // Determine effective boundary value for initial segment
-        // Note: Compare as u64 to avoid f64 precision issues with large timestamps
-        let viewport_start_u64 = self.viewport.time_start as u64;
-        let effective_boundary = if let Some(bv) = boundary_value {
-            // Use explicit boundary value from data
-            console_log!("[WASM] Using explicit boundary value: {}", bv);
-            Some(bv)
-        } else if !normal_transitions.is_empty() && normal_transitions[0].time > viewport_start_u64 {
-            // First transition is after viewport start, we need an initial value
-            // Use the value from the first transition (it represents the state until that transition)
-            console_log!("[WASM] First transition after viewport start, using its value as initial: {}", 
-                normal_transitions[0].value);
-            Some(normal_transitions[0].value.clone())
-        } else {
-            // First transition is at viewport start, no initial segment needed
-            // The value at viewport start is determined by the first transition
-            console_log!("[WASM] First transition at or before viewport start, no initial segment");
-            None
-        };
-
-        // If no normal transitions, use boundary value to draw horizontal line
+        // If no normal transitions, draw start value across viewport
         if normal_transitions.is_empty() {
-            if let Some(boundary_val) = effective_boundary.clone() {
-                console_log!("[WASM] No transitions in range, using boundary value: {}", boundary_val);
-                let (value_type, has_xz) = Self::classify_value(&boundary_val, width);
-
-                // Format display string with prefix for multi-bit values
+            if let Some(start_val) = start_value {
+                let (value_type, has_xz) = Self::classify_value(&start_val, width);
                 let display_str = if width > 1 {
-                    self.format_multi_bit_value(&boundary_val, width)
+                    self.format_multi_bit_value(&start_val, width)
                 } else {
-                    boundary_val.clone()
+                    start_val.clone()
                 };
 
                 segments.push(RenderSegment {
@@ -1888,26 +1866,27 @@ if tile_missing_signals.is_empty() {
             return;
         }
 
-        // If we have boundary value, draw segment from viewport start to first transition
-        if let Some(ref boundary_val) = effective_boundary {
-            if let Some(first_trans) = normal_transitions.first() {
-                let t0 = self.viewport.time_start;
-                let t1 = first_trans.time as f64;
+        // Find first transition time to determine if this is first tile
+        let first_trans_time = normal_transitions[0].time as f64;
+        let is_first_tile = first_trans_time >= self.viewport.time_start;
 
-                // Only draw if within viewport
-                if t1 >= self.viewport.time_start && t0 <= self.viewport.time_end {
+        // First tile: draw start value from viewport start to first transition
+        if is_first_tile {
+            if let Some(ref start_val) = start_value {
+                let t0 = self.viewport.time_start;
+                let t1 = first_trans_time;
+
+                if t1 >= self.viewport.time_start {
                     let t1_clamped = t1.min(self.viewport.time_end);
-                    let x0 = 0.0; // viewport start
+                    let x0 = 0.0;
                     let x1 = ((t1_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
 
                     if x1 > x0 {
-                        let (value_type, has_xz) = Self::classify_value(boundary_val, width);
-
-                        // Format display string with prefix for multi-bit values
+                        let (value_type, has_xz) = Self::classify_value(start_val, width);
                         let display_str = if width > 1 {
-                            self.format_multi_bit_value(boundary_val, width)
+                            self.format_multi_bit_value(start_val, width)
                         } else {
-                            boundary_val.clone()
+                            start_val.clone()
                         };
 
                         segments.push(RenderSegment {
@@ -1930,7 +1909,7 @@ if tile_missing_signals.is_empty() {
             }
         }
 
-        // Process normal transitions
+        // Draw transitions
         for i in 0..normal_transitions.len() {
             let t0 = normal_transitions[i].time as f64;
             let t1 = if i + 1 < normal_transitions.len() {
@@ -1955,7 +1934,6 @@ if tile_missing_signals.is_empty() {
             let value_str = &normal_transitions[i].value;
             let (value_type, has_xz) = Self::classify_value(value_str, width);
 
-            // Format display string with prefix for multi-bit values
             let display_str = if width > 1 {
                 self.format_multi_bit_value(value_str, width)
             } else {
@@ -1980,34 +1958,34 @@ if tile_missing_signals.is_empty() {
         }
     }
 
-    /// Generate segments for LoD 1+ (min/max format)
-    /// Groups transitions by timestamp and creates min/max segments
-    /// Handles boundary value (0xFFFFFFFFFFFFFFFF) for start-of-range value
+    /// Generate segments for LoD 1+ (min/max format) according to the drawing spec
+    /// 
+    /// Drawing Rules:
+    /// - First tile: start value -> first transition, then min/max pairs
+    /// - Non-first tiles: min/max pairs only (continues from previous tile)
+    /// - Empty tile (no transitions): draw start value across entire tile
+    /// - Min/Max pairs: same timestamp, min first, max second
     fn generate_min_max_segments(&self, transitions: &[Transition], width: u32, y: f64,
         signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>) {
 
-        // Check for boundary value (special timestamp indicating start-of-range value)
-        let boundary_value = transitions.iter()
+        // Separate start value (boundary) from normal transitions
+        let start_value = transitions.iter()
             .find(|t| t.time == BOUNDARY_TIME_START)
             .map(|t| t.value.clone());
 
-        // Filter out boundary values for normal processing
         let normal_transitions: Vec<_> = transitions.iter()
             .filter(|t| t.time != BOUNDARY_TIME_START)
             .cloned()
             .collect();
 
-        // If no normal transitions, use boundary value to draw horizontal line
+        // If no normal transitions, draw start value across viewport
         if normal_transitions.is_empty() {
-            if let Some(boundary_val) = boundary_value {
-                console_log!("[WASM] No transitions in range (LoD 1+), using boundary value: {}", boundary_val);
-                let (value_type, has_xz) = Self::classify_value(&boundary_val, width);
-
-                // Format display string with prefix for multi-bit values
+            if let Some(start_val) = start_value {
+                let (value_type, has_xz) = Self::classify_value(&start_val, width);
                 let display_str = if width > 1 {
-                    self.format_multi_bit_value(&boundary_val, width)
+                    self.format_multi_bit_value(&start_val, width)
                 } else {
-                    boundary_val.clone()
+                    start_val.clone()
                 };
 
                 segments.push(RenderSegment {
@@ -2019,8 +1997,8 @@ if tile_missing_signals.is_empty() {
                         display_str,
                         width,
                         has_xz,
-                        min_value: Some(boundary_val.clone()),
-                        max_value: Some(boundary_val),
+                        min_value: Some(start_val.clone()),
+                        max_value: Some(start_val),
                         is_min_max: false,
                     },
                     signal_name: signal_name.to_string(),
@@ -2029,26 +2007,27 @@ if tile_missing_signals.is_empty() {
             return;
         }
 
-        // If we have boundary value, draw segment from viewport start to first transition
-        if let Some(ref boundary_val) = boundary_value {
-            if let Some(first_trans) = normal_transitions.first() {
-                let t0 = self.viewport.time_start;
-                let t1 = first_trans.time as f64;
+        // Find first transition time to determine if this is first tile
+        let first_trans_time = normal_transitions[0].time as f64;
+        let is_first_tile = first_trans_time >= self.viewport.time_start;
 
-                // Only draw if within viewport
-                if t1 >= self.viewport.time_start && t0 <= self.viewport.time_end {
+        // First tile: draw start value from viewport start to first transition
+        if is_first_tile {
+            if let Some(ref start_val) = start_value {
+                let t0 = self.viewport.time_start;
+                let t1 = first_trans_time;
+
+                if t1 >= self.viewport.time_start {
                     let t1_clamped = t1.min(self.viewport.time_end);
-                    let x0 = 0.0; // viewport start
+                    let x0 = 0.0;
                     let x1 = ((t1_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
 
                     if x1 > x0 {
-                        let (value_type, has_xz) = Self::classify_value(boundary_val, width);
-
-                        // Format display string with prefix for multi-bit values
+                        let (value_type, has_xz) = Self::classify_value(start_val, width);
                         let display_str = if width > 1 {
-                            self.format_multi_bit_value(boundary_val, width)
+                            self.format_multi_bit_value(start_val, width)
                         } else {
-                            boundary_val.clone()
+                            start_val.clone()
                         };
 
                         segments.push(RenderSegment {
@@ -2060,8 +2039,8 @@ if tile_missing_signals.is_empty() {
                                 display_str,
                                 width,
                                 has_xz,
-                                min_value: Some(boundary_val.clone()),
-                                max_value: Some(boundary_val.clone()),
+                                min_value: Some(start_val.clone()),
+                                max_value: Some(start_val.clone()),
                                 is_min_max: false,
                             },
                             signal_name: signal_name.to_string(),
@@ -2071,13 +2050,13 @@ if tile_missing_signals.is_empty() {
             }
         }
 
-        // Group transitions by timestamp
+        // Process min/max pairs (same timestamp)
         let mut i = 0;
         while i < normal_transitions.len() {
             let time = normal_transitions[i].time;
             let mut values = vec![&normal_transitions[i].value];
 
-            // Collect all values with the same timestamp
+            // Collect all values with the same timestamp (min/max pair)
             let mut j = i + 1;
             while j < normal_transitions.len() && normal_transitions[j].time == time {
                 values.push(&normal_transitions[j].value);
@@ -2107,7 +2086,7 @@ if tile_missing_signals.is_empty() {
             let x0 = ((t0_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
             let x1 = ((t1_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
 
-            // Extract min and max values
+            // Extract min and max values (min first, max second)
             let (min_val, max_val) = if values.len() >= 2 {
                 (values[0].clone(), values[1].clone())
             } else {
@@ -2123,10 +2102,10 @@ if tile_missing_signals.is_empty() {
 
             let (value_type, display_str) = if is_changing {
                 if width == 1 {
-                    // Single bit: draw vertical line
-                    ("min_max".to_string(), format!("{}/{}", min_val, max_val))
+                    // Single bit: show toggling
+                    ("min_max".to_string(), "toggling".to_string())
                 } else {
-                    // Multi-bit: grid pattern
+                    // Multi-bit: show range
                     ("min_max".to_string(), format!("{}..{}", min_val, max_val))
                 }
             } else {
