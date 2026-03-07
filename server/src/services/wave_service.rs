@@ -1,5 +1,5 @@
 use crate::error::{Result, ServerError};
-use crate::services::wave_data::{LodConfig, LodLevel, SignalWaveData, Transition, ChunkSerializer, CompressionAlgorithm, SignalValueType, MultiTileChunkSerializer};
+use crate::services::wave_data::{LodConfig, LodLevel, SignalWaveData, Transition, ChunkSerializer, CompressionAlgorithm, SignalValueType, MultiTileChunkSerializer, SignalValue, FourStateValue};
 use crate::services::compute_file_hash;
 use crate::state::ServerState;
 use std::path::PathBuf;
@@ -1110,7 +1110,18 @@ impl WaveService {
                 }
 
                 // 保存边界值（用于后续添加，不参与 LoD 计算）
-                let boundary_value = full_data.value_at(time_start).map(|t| t.value.clone());
+                // 如果没有找到边界值（如波形开始点），使用默认值 'X'
+                let boundary_value = full_data.value_at(time_start)
+                    .map(|t| t.value.clone())
+                    .unwrap_or_else(|| {
+                        // 创建全 'X' 的字符串，如 "X" 或 "XXXXXXXX"
+                        let x_str = if full_data.width == 1 {
+                            "X".to_string()
+                        } else {
+                            format!("b{}", "X".repeat(full_data.width as usize))
+                        };
+                        SignalValue::Numeric(x_str)
+                    });
 
                 info!("信号 {} 时间范围内数据: {} transitions, boundary={:?}", 
                     name, signal_data.transitions.len(), boundary_value);
@@ -1119,14 +1130,12 @@ impl WaveService {
                 let mut lod_data = LodPyramidGenerator::new(config.clone()).generate_level(&signal_data, lod);
                 info!("信号 {} 生成 LoD {} 数据: {} transitions", name, lod.0, lod_data.transitions.len());
                 
-                // 在 LoD 数据开头添加 boundary value（如果有）
-                if let Some(bv) = boundary_value {
-                    lod_data.transitions.insert(0, Transition {
-                        time: ChunkSerializer::BOUNDARY_TIME_START,
-                        value: bv,
-                    });
-                    info!("信号 {} 添加 boundary value 到 LoD 数据", name);
-                }
+                // 在 LoD 数据开头添加 boundary value（始终添加）
+                lod_data.transitions.insert(0, Transition {
+                    time: ChunkSerializer::BOUNDARY_TIME_START,
+                    value: boundary_value,
+                });
+                info!("信号 {} 添加 boundary value 到 LoD 数据", name);
                 
                 result.push(lod_data);
             }
