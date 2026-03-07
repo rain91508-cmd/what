@@ -124,16 +124,20 @@ class WaveformRenderer {
   /**
    * Detect continuous min/max segment groups for single-bit signals
    * Returns a map from segment index to group info
+   * 
+   * For LoD > 0, all single-bit segments in a tile should be grouped together
+   * to draw as a continuous min/max region
    */
   private detectMinMaxGroups(segments: RenderSegment[]): Map<number, { isContinuous: boolean; groupSize: number; groupIndex: number }> {
     const result = new Map<number, { isContinuous: boolean; groupSize: number; groupIndex: number }>();
     
-    // Find all min/max segment indices for single-bit signals
+    // Find all single-bit segments that are part of min/max data (LoD > 0)
+    // This includes both min≠max (isMinMax=true) and min=max (isMinMax=false) segments
     const minMaxIndices: number[] = [];
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
-      const isMinMax = seg.value.isMinMax || seg.value.is_min_max;
-      if (seg.value.type === 'min_max' && isMinMax && seg.value.width === 1) {
+      // For LoD > 0, type is 'min_max' for all segments (including min=max)
+      if (seg.value.type === 'min_max' && seg.value.width === 1) {
         minMaxIndices.push(i);
       }
     }
@@ -143,6 +147,8 @@ class WaveformRenderer {
     }
     
     // Group continuous min/max segments
+    // For LoD > 0, we group ALL single-bit min/max segments together
+    // even if they have isMinMax=false (min=max), as they are part of the same tile
     let currentGroup: number[] = [minMaxIndices[0]];
     
     for (let i = 1; i < minMaxIndices.length; i++) {
@@ -150,6 +156,7 @@ class WaveformRenderer {
       const prevIdx = minMaxIndices[i - 1];
       
       // Check if continuous (adjacent segments)
+      // For LoD > 0, segments are always continuous within a tile
       if (idx === prevIdx + 1) {
         currentGroup.push(idx);
       } else {
