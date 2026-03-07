@@ -1186,6 +1186,8 @@ impl ChunkSerializer {
             let time_array_size = compressed_time.len() as u32;
             let value_array_size = compressed_value.len() as u32;
 
+            info!("Creating SignalBlockHeader: handle={}, transition_count={}", signal.handle, transition_count);
+            
             let block_header = SignalBlockHeader {
                 signal_handle: signal.handle,
                 time_array_offset: current_offset,
