@@ -132,16 +132,25 @@ class WaveformRenderer {
   private detectMinMaxGroups(segments: RenderSegment[]): Map<number, { isContinuous: boolean; groupSize: number; groupIndex: number }> {
     const result = new Map<number, { isContinuous: boolean; groupSize: number; groupIndex: number }>();
     
+    // Debug: log total segments
+    console.log(`[detectMinMaxGroups] Total segments: ${segments.length}`);
+    
     // Find all single-bit segments with is_min_max=true (min≠max, toggling)
     const minMaxSegments: { index: number; x0: number; x1: number }[] = [];
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
       const isMinMax = seg.value.isMinMax || seg.value.is_min_max;
+      // Debug: log first few segments
+      if (i < 5) {
+        console.log(`[detectMinMaxGroups] Segment ${i}: type=${seg.value.type}, width=${seg.value.width}, isMinMax=${isMinMax}`);
+      }
       // Only include segments where min≠max (toggling)
       if (seg.value.type === 'min_max' && seg.value.width === 1 && isMinMax) {
         minMaxSegments.push({ index: i, x0: seg.x0, x1: seg.x1 });
       }
     }
+    
+    console.log(`[detectMinMaxGroups] Found ${minMaxSegments.length} min/max segments`);
     
     if (minMaxSegments.length === 0) {
       return result;
@@ -185,6 +194,9 @@ class WaveformRenderer {
         groupIndex: j
       });
     }
+    
+    // Debug: log group info
+    console.log(`[detectMinMaxGroups] Total groups: ${result.size}, last group size: ${groupSize}`);
     
     return result;
   }
