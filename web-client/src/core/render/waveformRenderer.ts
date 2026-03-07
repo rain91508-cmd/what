@@ -77,8 +77,12 @@ class WaveformRenderer {
       // Sort by x0
       rowSegments.sort((a, b) => a.x0 - b.x0);
 
+      // Detect continuous min/max segments for single-bit signals
+      const minMaxGroups = this.detectMinMaxGroups(rowSegments);
+
       let prevValue: FormattedValue | null = null;
-      for (const seg of rowSegments) {
+      for (let i = 0; i < rowSegments.length; i++) {
+        const seg = rowSegments[i];
         // Draw transition edge if there's a previous segment with different value
         if (prevValue && seg.value.width === 1 && prevValue.width === 1) {
           const prevLevel = this.getSignalLevel(prevValue);
@@ -88,7 +92,14 @@ class WaveformRenderer {
           }
         }
 
-        this.drawSegment(seg);
+        // Check if this segment is part of a min/max group
+        const groupInfo = minMaxGroups.get(i);
+        if (groupInfo && seg.value.width === 1) {
+          // Pass group info to drawMinMaxWaveform
+          this.drawMinMaxWaveform(seg.x0, seg.x1, seg.y, seg.value, seg.x1 - seg.x0, groupInfo);
+        } else {
+          this.drawSegment(seg);
+        }
         prevValue = seg.value;
       }
     }
@@ -104,6 +115,64 @@ class WaveformRenderer {
       case 'one': return 1;
       default: return -1;
     }
+  }
+
+  /**
+   * Detect continuous min/max segment groups for single-bit signals
+   * Returns a map from segment index to group info
+   */
+  private detectMinMaxGroups(segments: RenderSegment[]): Map<number, { isContinuous: boolean; groupSize: number; groupIndex: number }> {
+    const result = new Map<number, { isContinuous: boolean; groupSize: number; groupIndex: number }>();
+    
+    // Find all min/max segment indices for single-bit signals
+    const minMaxIndices: number[] = [];
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const isMinMax = seg.value.isMinMax || seg.value.is_min_max;
+      if (seg.value.type === 'min_max' && isMinMax && seg.value.width === 1) {
+        minMaxIndices.push(i);
+      }
+    }
+    
+    if (minMaxIndices.length === 0) {
+      return result;
+    }
+    
+    // Group continuous min/max segments
+    let currentGroup: number[] = [minMaxIndices[0]];
+    
+    for (let i = 1; i < minMaxIndices.length; i++) {
+      const idx = minMaxIndices[i];
+      const prevIdx = minMaxIndices[i - 1];
+      
+      // Check if continuous (adjacent segments)
+      if (idx === prevIdx + 1) {
+        currentGroup.push(idx);
+      } else {
+        // Save current group and start new one
+        const groupSize = currentGroup.length;
+        for (let j = 0; j < currentGroup.length; j++) {
+          result.set(currentGroup[j], {
+            isContinuous: groupSize > 1,
+            groupSize,
+            groupIndex: j
+          });
+        }
+        currentGroup = [idx];
+      }
+    }
+    
+    // Save last group
+    const groupSize = currentGroup.length;
+    for (let j = 0; j < currentGroup.length; j++) {
+      result.set(currentGroup[j], {
+        isContinuous: groupSize > 1,
+        groupSize,
+        groupIndex: j
+      });
+    }
+    
+    return result;
   }
 
   /**
@@ -361,25 +430,71 @@ class WaveformRenderer {
     x1: number,
     y: number,
     value: FormattedValue,
-    width: number
+    width: number,
+    groupInfo?: { isContinuous: boolean; groupSize: number; groupIndex: number }
   ): void {
     if (!this.ctx) return;
 
     const waveHeight = this.rowHeight * 0.35;
 
     if (value.width === 1) {
-      // 单bit：绘制垂直线（不显示标签，避免重叠）
-      this.ctx.strokeStyle = '#888888';
-      this.ctx.lineWidth = 2;
-      this.ctx.setLineDash([3, 2]); // 虚线
+      // 单bit min/max 绘制规则
+      if (!groupInfo || !groupInfo.isContinuous) {
+        // 非连续：画一条实体竖线（与正常翻转竖线一样）
+        this.ctx.strokeStyle = '#000000';
+        this.ctx.lineWidth = 2;
+        this.ctx.setLineDash([]); // 实线
 
-      this.ctx.beginPath();
-      this.ctx.moveTo(x0, y - waveHeight);
-      this.ctx.lineTo(x0, y + waveHeight);
-      this.ctx.stroke();
-      this.ctx.setLineDash([]);
+        this.ctx.beginPath();
+        this.ctx.moveTo(x0, y - waveHeight);
+        this.ctx.lineTo(x0, y + waveHeight);
+        this.ctx.stroke();
+      } else if (groupInfo.groupSize <= 2) {
+        // 连续区间 <= 2 pixels：画两条实体竖线
+        this.ctx.strokeStyle = '#000000';
+        this.ctx.lineWidth = 2;
+        this.ctx.setLineDash([]); // 实线
 
-      // 单bit min/max 不绘制标签，避免重叠
+        // 第一条竖线在 x0
+        this.ctx.beginPath();
+        this.ctx.moveTo(x0, y - waveHeight);
+        this.ctx.lineTo(x0, y + waveHeight);
+        this.ctx.stroke();
+
+        // 第二条竖线在 x1（如果是组内第一个segment）
+        if (groupInfo.groupIndex === 0) {
+          this.ctx.beginPath();
+          this.ctx.moveTo(x1, y - waveHeight);
+          this.ctx.lineTo(x1, y + waveHeight);
+          this.ctx.stroke();
+        }
+      } else {
+        // 连续区间 > 2 pixels：画深灰色方框，显示 "toggling"
+        const rectHeight = this.rowHeight * 0.75;
+        const rectY = y - rectHeight / 2;
+
+        // 深灰色背景
+        this.ctx.fillStyle = '#666666';
+        this.ctx.fillRect(x0, rectY, width, rectHeight);
+
+        // 绘制边框
+        this.ctx.strokeStyle = '#444444';
+        this.ctx.lineWidth = 1;
+        this.ctx.strokeRect(x0, rectY, width, rectHeight);
+
+        // 显示 "toggling" 文字（如果空间足够）
+        if (width > 50) {
+          this.ctx.fillStyle = '#ffffff';
+          this.ctx.font = '11px Consolas, Monaco, sans-serif';
+          const label = 'toggling';
+          const textWidth = this.ctx.measureText(label).width;
+          if (textWidth < width - 10) {
+            const textX = x0 + (width - textWidth) / 2;
+            const textY = y + 4;
+            this.ctx.fillText(label, textX, textY);
+          }
+        }
+      }
     } else {
       // 多bit：绘制网格状背景
       const rectHeight = this.rowHeight * 0.75;
