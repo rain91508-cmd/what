@@ -993,6 +993,11 @@ LoD 是基于**数据点数量**的降采样，与时间窗口无关：
   - Min/Max 基于实际的 transitions 计算，使用正常时间戳
   - 返回数据中，Boundary Value 始终放在第一个位置，后跟 LoD 压缩后的 transitions
   - **保证每个返回的 chunk 都有 start boundary**：即使请求时间范围在波形开始点（如 time=0），也会返回默认值 'X' 作为 boundary
+  - **默认值 'X'**：1-bit 信号返回 `"X"`，n-bit 信号返回 `"bXXX...X"` (n 个 X)
+- **空时间范围处理**：当请求的时间范围或 tile 内没有任何 transitions 时：
+  - 仍然返回 boundary value（使用特殊时间戳）
+  - 同时返回一个 min=max=boundary value 的 transition（使用正常时间戳）
+  - 这确保了输出格式的一致性：每个 chunk 至少返回 2 个数据点（boundary + min=max）
 
 **使用建议：**
 - `lod=0`: 需要完整精度时使用（如放大查看细节）
