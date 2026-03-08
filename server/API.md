@@ -2,6 +2,21 @@
 
 硬件设计分析器数据服务器 (Hardware Design Analyzer Data Server) API 文档。
 
+## 更新日志
+
+### 2026-03-09
+
+#### LoD 算法优化
+- **修复**: Start Value 不再参与 bucket 计算，只作为 tile 起始点的参考值单独输出
+- **修复**: 输出 first/last pair 的条件改为 bucket 内有多个 transitions（时间不同），而不是值不同
+- **优化**: 改进了 LoD 生成算法，确保 bucket 计数准确
+
+#### 新增缓存管理 API
+- **新增**: `POST /api/cache/clear` - 清除所有缓存
+- **新增**: `POST /api/cache/wave-chunk/clear` - 清除波形数据块缓存
+- **新增**: `POST /api/cache/wave-metadata/clear` - 清除波形元数据缓存
+- **新增**: 启动参数 `--clear-cache-on-startup` - 启动时自动清除所有缓存
+
 ## 基础信息
 
 - **Base URL**: `http://localhost:8080`
@@ -117,6 +132,92 @@ GET /config
   "error": null
 }
 ```
+
+---
+
+#### 1.4 清除所有缓存
+
+```http
+POST /api/cache/clear
+```
+
+**描述**: 清除服务器的所有缓存数据
+
+**响应示例**:
+```json
+{
+  "status": "success",
+  "data": {
+    "message": "All caches cleared successfully"
+  },
+  "error": null
+}
+```
+
+**使用场景**:
+- 数据文件更新后需要刷新缓存
+- 调试时确保获取最新数据
+- 内存不足时释放缓存空间
+
+---
+
+#### 1.5 清除波形数据块缓存
+
+```http
+POST /api/cache/wave-chunk/clear
+```
+
+**描述**: 仅清除波形数据块缓存
+
+**响应示例**:
+```json
+{
+  "status": "success",
+  "data": {
+    "message": "Wave chunk cache cleared successfully"
+  },
+  "error": null
+}
+```
+
+---
+
+#### 1.6 清除波形元数据缓存
+
+```http
+POST /api/cache/wave-metadata/clear
+```
+
+**描述**: 仅清除波形元数据缓存
+
+**响应示例**:
+```json
+{
+  "status": "success",
+  "data": {
+    "message": "Wave metadata cache cleared successfully"
+  },
+  "error": null
+}
+```
+
+---
+
+#### 1.7 启动参数说明
+
+**`--clear-cache-on-startup`**
+
+**描述**: 服务器启动时自动清除所有缓存
+
+**使用示例**:
+```bash
+hwda-server --port 8080 --wave-dir ./waves --kdb-dir ./kdb --clear-cache-on-startup
+```
+
+**使用场景**:
+- 开发调试时确保每次启动都使用最新数据
+- 数据文件更新后重启服务器
+- 避免缓存数据不一致问题
 
 ---
 
@@ -987,21 +1088,23 @@ LoD 是基于**时间**的降采样，每个 bucket 覆盖固定的时间范围�
 - 每个 bucket 覆盖固定的时间范围 `[bucket_start, bucket_end]`
 - Bucket 大小计算公式: `2^level`
 - **First/Last 输出规则**: 
-  - 当 bucket 内只有一个 transition 时，first 和 last 是同一个 transition，只输出 1 个记录
-  - 当 bucket 内有多个 transitions 时，first 和 last 是不同的 transition，输出 2 个记录（即使值相等）
+  - 当 bucket 内只有一个 transition 时，只输出 1 个记录（first = last）
+  - 当 bucket 内有多个 transitions 时，输出 2 个记录：first 和 last
+  - **重要**：输出 2 个记录的条件是 **first 和 last 的时间不同**（即 bucket 内有多个不同时间的 transitions），而不是值不同
   - 时间戳使用 bucket offset（从 0 开始计数），表示 bucket 在 tile 中的位置
 - **Start Value 处理**:
   - **Start Value**: 请求时间范围起始点之前的最近一个值（向前搜索）
   - Start Value 使用特殊时间戳 `0xFFFFFFFFFFFFFFFF` (BOUNDARY_TIME_START)
   - **保证每个返回的 chunk 都有 Start Value**：即使请求时间范围在波形开始点（如 time=0），也会返回默认值 'X'
   - **默认值 'X'**：1-bit 信号返回 `"X"`，n-bit 信号返回 `"bXXX...X"` (n 个 X)
+  - **重要**：Start Value **不参与 bucket 计算**，它只是作为 tile 起始点的参考值单独输出
 - **数据格式**:
   ```
   [Start Value] (time=BOUNDARY_TIME_START, value=tile_start之前的最近值)
   
   每个 bucket (LoD 1+):
     [first] (time=bucket_offset, value=bucket内第一个transition的值)
-    [last] (time=bucket_offset, value=bucket内最后一个transition的值, 如果 first!=last)
+    [last] (time=bucket_offset, value=bucket内最后一个transition的值, 如果 bucket 内有多个 transitions)
   ```
 - **空 bucket 处理**：
   - 如果 bucket 内没有任何 transitions，不输出任何记录
@@ -1009,7 +1112,7 @@ LoD 是基于**时间**的降采样，每个 bucket 覆盖固定的时间范围�
   - 如果没有上一个 bucket，使用 Start Value
 - **客户端绘制建议**:
   - 只有一个 transition（first=last）：画稳定值
-  - 多个 transitions（first!=last）：画 toggling 图案（如斜线填充），即使值相等
+  - 多个 transitions（first≠last，时间不同）：画 toggling 图案（如斜线填充）
   - 空 bucket：延续上一个 bucket 的 last 值（或 Start Value）
 - **Start Value 搜索算法**:
   - 使用二分法查找最小有记录的区域

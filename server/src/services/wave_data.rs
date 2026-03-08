@@ -767,21 +767,49 @@ impl LodPyramidGenerator {
 
         // 使用指定的时间范围计算 bucket 数量
         let total_buckets = ((range_end - range_start) / bucket_size) as usize;
-        info!("LoD {} 生成: range_start={}, range_end={}, bucket_size={}, total_buckets={}", 
-            level.0, range_start, range_end, bucket_size, total_buckets);
+        info!("LoD {} 生成: range_start={}, range_end={}, bucket_size={}, total_buckets={}, source.transitions.len={}", 
+            level.0, range_start, range_end, bucket_size, total_buckets, source.transitions.len());
+        
+        // 打印前10个 transitions 用于调试
+        for (i, trans) in source.transitions.iter().take(10).enumerate() {
+            let bucket_idx = if trans.time >= range_start && trans.time < range_end {
+                ((trans.time - range_start) / bucket_size) as usize
+            } else if trans.time >= range_end {
+                total_buckets
+            } else {
+                0
+            };
+            let value_str = match &trans.value {
+                SignalValue::Numeric(s) => s.clone(),
+                SignalValue::String(s) => s.clone(),
+                SignalValue::Real(f) => f.to_string(),
+                SignalValue::Binary { .. } => "<binary>".to_string(),
+            };
+            info!("  source.transitions[{}]: time={}, bucket={}, value={}", i, trans.time, bucket_idx, value_str);
+        }
 
         // 初始化第一个 bucket 的状态
-        let first_fs = source.transitions[0]
+        let first_trans = &source.transitions[0];
+        let first_fs = first_trans
             .value
             .to_four_state()
             .unwrap_or_else(|| FourStateValue::new(source.width));
         let mut bucket_first = first_fs.clone();
         let mut bucket_last = first_fs.clone();
         let mut bucket_has_multiple = false;  // 跟踪 bucket 内是否有多个 transitions
-        let mut current_bucket_idx: usize = 0;
+        
+        // 计算第一个 transition 的 bucket 索引
+        let first_bucket_idx = if first_trans.time >= range_start && first_trans.time < range_end {
+            ((first_trans.time - range_start) / bucket_size) as usize
+        } else if first_trans.time >= range_end {
+            total_buckets
+        } else {
+            0  // 小于 range_start 的放入 bucket 0
+        };
+        let mut current_bucket_idx: usize = first_bucket_idx;
 
-        // 遍历所有 transitions
-        for trans in &source.transitions {
+        // 遍历所有 transitions（从第二个开始，第一个已经用于初始化）
+        for trans in source.transitions.iter().skip(1) {
             // 计算当前 transition 属于哪个 bucket（基于时间范围）
             let trans_bucket_idx = if trans.time >= range_start && trans.time < range_end {
                 ((trans.time - range_start) / bucket_size) as usize

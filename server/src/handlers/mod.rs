@@ -34,7 +34,7 @@ pub fn encode_signal_names(names: &[String]) -> String {
 
 use axum::{
     middleware::from_fn_with_state,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use crate::middleware::AuthMiddleware;
@@ -46,7 +46,10 @@ pub fn create_router(state: ServerState) -> Router<ServerState> {
     let health_routes = Router::new()
         .route("/health", get(health_check))
         .route("/stats", get(get_stats))
-        .route("/config", get(get_config));
+        .route("/config", get(get_config))
+        .route("/api/cache/clear", post(clear_cache))
+        .route("/api/cache/wave-chunk/clear", post(clear_wave_chunk_cache))
+        .route("/api/cache/wave-metadata/clear", post(clear_wave_metadata_cache));
 
     // 知识库 API 路由
     let kdb_routes = Router::new()

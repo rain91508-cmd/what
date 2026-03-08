@@ -1803,6 +1803,7 @@ impl WaveService {
                             if let Some((first, last)) = bucket_results.get(handle) {
                                 // 添加 first
                                 if let Some(f) = first {
+                                    info!("Bucket {}: first={:?}, last={:?}, equal={}", bucket_idx, f, last, last.as_ref().map(|l| f == l).unwrap_or(false));
                                     lod_data.add_transition(Transition {
                                         time: bucket_idx as u64,
                                         value: f.clone(),
@@ -1811,6 +1812,7 @@ impl WaveService {
                                     // 如果有 last 且不同于 first，添加 last（与普通算法一致）
                                     if let Some(l) = last {
                                         if f != l {
+                                            info!("Bucket {}: adding last because f != l", bucket_idx);
                                             lod_data.add_transition(Transition {
                                                 time: bucket_idx as u64,
                                                 value: l.clone(),
@@ -1876,21 +1878,14 @@ impl WaveService {
                                 }
                             });
 
-                        // 在 tile_signal 开头添加 start_value（使用 tile_start 时间）
-                        // 这样 LoD 生成器可以正确计算第一个 bucket 的 min
-                        if !tile_signal.transitions.is_empty() {
-                            tile_signal.transitions.insert(0, Transition {
-                                time: tile_start,
-                                value: start_value.clone(),
-                            });
-                        }
-
                         // 生成 LoD 数据（使用 tile 时间范围）
+                        // 注意：start_value 不参与 bucket 计算，只在最后作为 BOUNDARY_TIME_START 输出
                         let mut lod_data = LodPyramidGenerator::new(config.clone())
                             .generate_level_with_range(&tile_signal, lod, tile_start, tile_end);
                         info!("Tile {} 信号 {}: 生成 LoD {} 数据: {} transitions", tile_idx, name, lod.0, lod_data.transitions.len());
                         
-                        // 在 LoD 数据开头添加 Start Value（始终添加）
+                        // 在 LoD 数据开头添加 Start Value（始终添加，时间为 BOUNDARY_TIME_START）
+                        // Start Value 不参与 bucket 计算，只是作为 tile 起始点的参考值
                         lod_data.transitions.insert(0, Transition {
                             time: ChunkSerializer::BOUNDARY_TIME_START,
                             value: start_value,

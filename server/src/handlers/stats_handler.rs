@@ -1,5 +1,5 @@
 use crate::state::ServerState;
-use axum::{extract::State, Json};
+use axum::{extract::State, Json, routing::post};
 
 /// 获取服务器统计信息
 pub async fn get_stats(State(state): State<ServerState>) -> Json<serde_json::Value> {
@@ -45,6 +45,45 @@ pub async fn get_config(State(state): State<ServerState>) -> Json<serde_json::Va
                 "enable_auth": config.enable_auth,
                 "rate_limit": config.rate_limit,
             }
+        },
+        "error": null
+    }))
+}
+
+/// 清除所有缓存
+pub async fn clear_cache(State(state): State<ServerState>) -> Json<serde_json::Value> {
+    state.clear_all_caches();
+    
+    Json(serde_json::json!({
+        "status": "success",
+        "data": {
+            "message": "All caches cleared successfully"
+        },
+        "error": null
+    }))
+}
+
+/// 清除波形数据块缓存
+pub async fn clear_wave_chunk_cache(State(state): State<ServerState>) -> Json<serde_json::Value> {
+    state.clear_wave_chunk_cache();
+    
+    Json(serde_json::json!({
+        "status": "success",
+        "data": {
+            "message": "Wave chunk cache cleared successfully"
+        },
+        "error": null
+    }))
+}
+
+/// 清除波形元数据缓存
+pub async fn clear_wave_metadata_cache(State(state): State<ServerState>) -> Json<serde_json::Value> {
+    state.clear_wave_metadata_cache();
+    
+    Json(serde_json::json!({
+        "status": "success",
+        "data": {
+            "message": "Wave metadata cache cleared successfully"
         },
         "error": null
     }))

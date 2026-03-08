@@ -191,6 +191,24 @@ impl ServerState {
         }
     }
 
+    /// 清除所有缓存
+    pub fn clear_all_caches(&self) {
+        self.kdb_metadata_cache.invalidate_all();
+        self.wave_metadata_cache.invalidate_all();
+        self.wave_chunk_cache.invalidate_all();
+        self.source_cache.invalidate_all();
+    }
+
+    /// 清除波形数据块缓存
+    pub fn clear_wave_chunk_cache(&self) {
+        self.wave_chunk_cache.invalidate_all();
+    }
+
+    /// 清除波形元数据缓存
+    pub fn clear_wave_metadata_cache(&self) {
+        self.wave_metadata_cache.invalidate_all();
+    }
+
     /// 生成波形数据块的缓存键
     pub fn make_wave_chunk_key(
         waveform_name: &str,

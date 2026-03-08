@@ -26,6 +26,13 @@ async fn main() -> anyhow::Result<()> {
     // 创建服务器状态
     let state = ServerState::new(config.clone());
 
+    // 如果配置了启动时清除缓存，执行清除
+    if config.clear_cache_on_startup {
+        tracing::info!("启动时清除所有缓存...");
+        state.clear_all_caches();
+        tracing::info!("所有缓存已清除");
+    }
+
     // 记录启动信息
     tracing::info!("========================================");
     tracing::info!("  硬件设计分析器数据服务器 (HWDA Server)");
