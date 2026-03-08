@@ -2467,6 +2467,9 @@ if tile_missing_signals.is_empty() {
         console_log!("[WASM] generate_lod_segments_from_buckets: {} tiles, viewport={}-{}",
             bucket_data.len(), self.viewport.time_start, self.viewport.time_end);
         
+        // Track current value across tiles for continuity
+        let mut cross_tile_value: Option<String> = None;
+        
         for (tile_idx, (tile_start, buckets)) in bucket_data.iter().enumerate() {
             // Calculate bucket size from tile span
             let lod = self.current_lod.unwrap_or(25);
@@ -2476,11 +2479,19 @@ if tile_missing_signals.is_empty() {
                 tile_idx, tile_start, buckets.len(), bucket_size);
             
             // Get start value for this tile
-            let start_value = self.signal_data.get(signal_name)
-                .and_then(|data| data.tile_info.iter()
-                    .find(|(start, _, _, _)| start == tile_start)
-                    .map(|(_, _, _, value)| value.clone()))
-                .unwrap_or_else(|| "0".to_string());
+            // For first tile: use tile's start value
+            // For subsequent tiles: use last value from previous tile (cross-tile continuity)
+            let start_value = if tile_idx == 0 {
+                // First tile: get start value from tile_info
+                self.signal_data.get(signal_name)
+                    .and_then(|data| data.tile_info.iter()
+                        .find(|(start, _, _, _)| start == tile_start)
+                        .map(|(_, _, _, value)| value.clone()))
+                    .unwrap_or_else(|| "0".to_string())
+            } else {
+                // Subsequent tiles: use value from previous tile's last bucket
+                cross_tile_value.clone().unwrap_or_else(|| "0".to_string())
+            };
             
             let mut current_value = start_value.clone();
             let mut segments_in_tile = 0;
@@ -2599,7 +2610,11 @@ if tile_missing_signals.is_empty() {
                 segments_in_tile += 1;
             }
             
-            console_log!("[WASM]   Tile {} complete: {} segments generated", tile_idx, segments_in_tile);
+            // Store last value for cross-tile continuity
+            cross_tile_value = Some(current_value.clone());
+            
+            console_log!("[WASM]   Tile {} complete: {} segments generated, last_value={}", 
+                tile_idx, segments_in_tile, current_value);
         }
         
         console_log!("[WASM] generate_lod_segments_from_buckets complete: total {} segments", segments.len());
