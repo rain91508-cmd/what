@@ -1197,12 +1197,14 @@ impl ChunkSerializer {
     pub const BOUNDARY_TIME_START: u64 = u64::MAX;
 
     /// * `compression` - 压缩算法（默认不压缩）
+    /// * `skip_time_filter` - 是否跳过时间过滤（用于 LoD 数据，时间已经是 bucket 索引）
     pub fn serialize(
         chunk_id: u32,
         level: u16,
         signals: &[&SignalWaveData],
         time_range: (u64, u64),
         compression: CompressionAlgorithm,
+        skip_time_filter: bool,
     ) -> Result<Vec<u8>> {
         let (time_start, time_end) = time_range;
         let signal_count = signals.len() as u32;
@@ -1225,14 +1227,23 @@ impl ChunkSerializer {
             // 过滤时间范围内的转换点
             // 注意：保留 BOUNDARY_TIME_START 的 transitions（Start Value 和 End Value）
             // Start Value 和 End Value 已经在 wave_service 中添加，这里不需要再添加
-            let filtered: Vec<_> = signal
-                .transitions
-                .iter()
-                .filter(|t| t.time == Self::BOUNDARY_TIME_START || (t.time >= time_start && t.time <= time_end))
-                .cloned()
-                .collect();
+            // 如果 skip_time_filter 为 true，则不过滤时间（用于 LoD 数据）
+            let filtered: Vec<_> = if skip_time_filter {
+                signal.transitions.iter().cloned().collect()
+            } else {
+                signal
+                    .transitions
+                    .iter()
+                    .filter(|t| t.time == Self::BOUNDARY_TIME_START || (t.time >= time_start && t.time <= time_end))
+                    .cloned()
+                    .collect()
+            };
 
-            let transition_count = filtered.len() as u32;
+            // 计算 transition_count，排除 Start Value（时间为 BOUNDARY_TIME_START）
+            let transition_count = filtered
+                .iter()
+                .filter(|t| t.time != Self::BOUNDARY_TIME_START)
+                .count() as u32;
 
             // 时间数组（u64 数组）
             let time_array: Vec<u8> = filtered
@@ -1415,12 +1426,14 @@ impl WaveDataManager {
             let lod_data = self.generator.generate_level(signal, lod_level);
 
             // 序列化为 chunk
+            // LoD 数据的时间已经是 bucket 索引，不需要过滤
             let chunk_data = ChunkSerializer::serialize(
                 chunk_id,
                 level as u16,
                 &[&lod_data],
                 (start_time, end_time),
                 CompressionAlgorithm::None,
+                true, // skip_time_filter = true for LoD data
             )?;
 
             chunks.push((chunk_id, level as u16, chunk_data));
@@ -1504,7 +1517,7 @@ mod tests {
         signal.add_transition(200, 0);
         signal.add_transition(300, 1);
 
-        let chunk_data = ChunkSerializer::serialize(0, 0, &[&signal], (0, 500)).unwrap();
+        let chunk_data = ChunkSerializer::serialize(0, 0, &[&signal], (0, 500), CompressionAlgorithm::None, false).unwrap();
         let (header, signals) = ChunkSerializer::deserialize(&chunk_data).unwrap();
 
         assert_eq!(header.chunk_id, 0);
@@ -1709,12 +1722,14 @@ impl MultiTileChunkSerializer {
             let tile_end_time = tile_start_time + tile_span;
 
             // 使用现有的 ChunkSerializer 序列化单个 tile
+            // Tile 数据的时间已经是 bucket 索引，不需要过滤
             let tile_data = ChunkSerializer::serialize(
                 tile_idx as u32,
                 lod,
                 &tile_signals.iter().collect::<Vec<_>>(),
                 (tile_start_time, tile_end_time),
                 compression,
+                true, // skip_time_filter = true for tile data
             )?;
 
             tile_offsets.push(current_offset);
