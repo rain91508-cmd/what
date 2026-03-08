@@ -1905,9 +1905,11 @@ if tile_missing_signals.is_empty() {
                         }
                         
                         // Convert to vec for generate_lod_segments_from_buckets
-                        let bucket_data: Vec<(u64, HashMap<u32, BucketData>)> = tile_buckets.into_iter().collect();
+                        // Sort by tile_start to ensure correct order
+                        let mut bucket_data: Vec<(u64, HashMap<u32, BucketData>)> = tile_buckets.into_iter().collect();
+                        bucket_data.sort_by_key(|(start, _)| *start);
                         
-                        console_log!("[WASM] Cache data: {} tiles from tile_info, {} bucket entries", 
+                        console_log!("[WASM] Cache data: {} tiles from tile_info, {} bucket entries (sorted)", 
                             data.tile_info.len(), bucket_data.len());
                         
                         self.generate_lod_segments_from_buckets(
