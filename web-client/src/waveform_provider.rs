@@ -2778,6 +2778,12 @@ if tile_missing_signals.is_empty() {
             if let Some(parent_data) = self.signal_data.get(&parent_name) {
                 let time_u64 = time as u64;
                 
+                // Check if we have bucket_data (new LoD 1+ format)
+                if !parent_data.bucket_data.is_empty() {
+                    return self.get_bucket_value_at_time(parent_data, time_u64, 
+                        (msb - lsb + 1) as u32, Some((msb, lsb)));
+                }
+                
                 // Check if this is LoD > 0 data (min/max format)
                 let is_lod_min_max = self.detect_min_max_format(&parent_data.transitions);
                 
@@ -2844,6 +2850,11 @@ if tile_missing_signals.is_empty() {
         if let Some(data) = self.signal_data.get(signal_name) {
             let time_u64 = time as u64;
 
+            // Check if we have bucket_data (new LoD 1+ format)
+            if !data.bucket_data.is_empty() {
+                return self.get_bucket_value_at_time(data, time_u64, data.width, None);
+            }
+
             // Check if this is LoD > 0 data (min/max format)
             let is_lod_min_max = self.detect_min_max_format(&data.transitions);
             
@@ -2900,6 +2911,98 @@ if tile_missing_signals.is_empty() {
             // Signal data not cached
             console_log!("[WASM] get_signal_value_at_time: No cached data for signal '{}'", signal_name);
             JsValue::NULL
+        }
+    }
+
+    /// Get value at time from bucket_data (new LoD 1+ format)
+    fn get_bucket_value_at_time(
+        &self,
+        data: &SignalWaveData,
+        time_u64: u64,
+        width: u32,
+        bit_extract: Option<(u32, u32)>,
+    ) -> JsValue {
+        let lod = self.current_lod.unwrap_or(25);
+        let bucket_size = 1u64 << lod;
+        
+        // Find which tile contains this time
+        for (tile_start, buckets) in &data.bucket_data {
+            let tile_end = tile_start + OpfsCacheManager::get_tile_span(lod);
+            
+            if time_u64 >= *tile_start && time_u64 < tile_end {
+                // Calculate bucket index within this tile
+                let offset_in_tile = (time_u64 - tile_start) / bucket_size;
+                let bucket_idx = offset_in_tile as u32;
+                
+                // Find the bucket
+                if let Some(bucket) = buckets.get(&bucket_idx) {
+                    let (min_val, max_val, is_toggle) = if bucket.has_toggle() {
+                        (bucket.first.value.clone(), bucket.last.as_ref().unwrap().value.clone(), true)
+                    } else {
+                        (bucket.first.value.clone(), bucket.first.value.clone(), false)
+                    };
+                    
+                    // Apply bit extraction if needed
+                    let (final_min, final_max) = if let Some((msb, lsb)) = bit_extract {
+                        let min_u64 = Self::parse_value_to_u64(&min_val);
+                        let max_u64 = Self::parse_value_to_u64(&max_val);
+                        
+                        let bit_count = msb - lsb + 1;
+                        let mask = if bit_count >= 64 {
+                            u64::MAX
+                        } else {
+                            ((1u64 << bit_count) - 1) << lsb
+                        };
+                        
+                        let extracted_min = (min_u64 & mask) >> lsb;
+                        let extracted_max = (max_u64 & mask) >> lsb;
+                        
+                        let new_width = bit_count as u32;
+                        if new_width == 1 {
+                            (format!("{}", extracted_min), format!("{}", extracted_max))
+                        } else {
+                            (format!("0x{:X}", extracted_min), format!("0x{:X}", extracted_max))
+                        }
+                    } else {
+                        (min_val, max_val)
+                    };
+                    
+                    let display_str = if is_toggle && final_min != final_max {
+                        format!("{}..{}", final_min, final_max)
+                    } else {
+                        final_min.clone()
+                    };
+                    
+                    let (value_type, has_xz) = Self::classify_value(&display_str, width);
+                    
+                    let value_info = ValueInfo {
+                        value_type,
+                        display_str,
+                        width,
+                        has_xz,
+                        min_value: Some(final_min),
+                        max_value: Some(final_max),
+                        is_min_max: is_toggle,
+                    };
+                    return serde_wasm_bindgen::to_value(&value_info).unwrap_or(JsValue::NULL);
+                }
+                
+                // Bucket not found (empty bucket), use previous value
+                // For simplicity, return NULL for empty buckets
+                // A more complete implementation would track the current value across buckets
+                return JsValue::NULL;
+            }
+        }
+        
+        JsValue::NULL
+    }
+
+    /// Parse value string to u64
+    fn parse_value_to_u64(value: &str) -> u64 {
+        if value.starts_with("0x") || value.starts_with("0X") {
+            u64::from_str_radix(value.trim_start_matches("0x").trim_start_matches("0X"), 16).unwrap_or(0)
+        } else {
+            value.parse::<u64>().unwrap_or(0)
         }
     }
 
