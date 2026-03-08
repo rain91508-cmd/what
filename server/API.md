@@ -987,8 +987,8 @@ LoD 是基于**时间**的降采样，每个 bucket 覆盖固定的时间范围�
 - 每个 bucket 覆盖固定的时间范围 `[bucket_start, bucket_end]`
 - Bucket 大小计算公式: `2^level`
 - **First/Last 输出规则**: 
-  - 当 bucket 内 first = last 时，只输出 1 个记录
-  - 当 bucket 内 first ≠ last 时，输出 2 个记录
+  - 当 bucket 内只有一个 transition 时，first 和 last 是同一个 transition，只输出 1 个记录
+  - 当 bucket 内有多个 transitions 时，first 和 last 是不同的 transition，输出 2 个记录（即使值相等）
   - 时间戳使用 bucket offset（从 0 开始计数），表示 bucket 在 tile 中的位置
 - **Start Value 处理**:
   - **Start Value**: 请求时间范围起始点之前的最近一个值（向前搜索）
@@ -1008,8 +1008,8 @@ LoD 是基于**时间**的降采样，每个 bucket 覆盖固定的时间范围�
   - 客户端应使用上一个有数据的 bucket 的 last 值绘制
   - 如果没有上一个 bucket，使用 Start Value
 - **客户端绘制建议**:
-  - first == last：画稳定值
-  - first != last：画 toggling 图案（如斜线填充）
+  - 只有一个 transition（first=last）：画稳定值
+  - 多个 transitions（first!=last）：画 toggling 图案（如斜线填充），即使值相等
   - 空 bucket：延续上一个 bucket 的 last 值（或 Start Value）
 - **Start Value 搜索算法**:
   - 使用二分法查找最小有记录的区域
