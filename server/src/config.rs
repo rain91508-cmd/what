@@ -64,6 +64,10 @@ pub struct ServerConfig {
     /// Web 客户端静态文件目录（如果提供，将启用静态文件服务）
     #[arg(long)]
     pub web_dir: Option<PathBuf>,
+    
+    /// 启动时自动清除所有缓存
+    #[arg(long, default_value = "false")]
+    pub clear_cache_on_startup: bool,
 }
 
 impl ServerConfig {
@@ -146,6 +150,7 @@ impl Default for ServerConfig {
             rate_limit: 100,
             fst_backend: "fstapi".to_string(),
             web_dir: None,
+            clear_cache_on_startup: false,
         }
     }
 }
