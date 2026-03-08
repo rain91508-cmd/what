@@ -2,97 +2,94 @@
 
 ## Overview
 
-This document defines the rules for drawing waveform segments from tile-based data, supporting both LoD 0 (raw data) and LoD 1+ (min/max bucket data).
+This document defines the rules for drawing waveform segments from tile-based data, supporting both LoD 0 (raw data) and LoD 1+ (first/last bucket data).
 
 ## Data Format
 
-### Server Response Format
+### Server Response Format (Updated)
 
-Each tile returns:
+Each tile returns for LoD 1+:
 
 ```
-[Start Value] (time=0xFFFFFFFFFFFFFFFF, value=<value at tile start>)
-[Transition 1] (time=t1, value=v1)  <- For LoD 0: actual transition
-                                      <- For LoD 1+: min value
-[Transition 2] (time=t1, value=v2)  <- For LoD 1+: max value (if min≠max)
-[Transition 3] (time=t2, value=v3)  <- Next bucket
+[Start Value] (time=0xFFFFFFFFFFFFFFFF, value=value before tile start)
+[bucket 0] (time=0, value=first)                    <- if bucket has data
+           (time=0, value=last)                     <- if bucket has multiple transitions
+[bucket 1] (time=1, value=first)                    <- if bucket has data
+           (time=1, value=last)                     <- if bucket has multiple transitions
 ...
+[bucket 255] (time=255, value=first)                <- if bucket has data
+             (time=255, value=last)                 <- if bucket has multiple transitions
 ```
 
 ### Key Points
 
 1. **Start Value**: Always present, time = `BOUNDARY_TIME_START` (0xFFFFFFFFFFFFFFFF)
-2. **LoD 0**: Normal transitions with actual timestamps
-3. **LoD 1+**: Min/Max pairs with same timestamp (bucket end time)
-   - If min = max: only one record
-   - If min ≠ max: two records (min first, max second)
+   - Value is the last value before tile start (searched backward)
+   - If no previous value, defaults to 'X' (1-bit) or 'bXXX...X' (n-bit)
+
+2. **LoD 0**: Normal transitions with absolute timestamps
+
+3. **LoD 1+**: First/Last pairs with bucket offset (0-255)
+   - **Time**: bucket offset within tile (0 to 255), NOT absolute time
+   - **First**: value of first transition in bucket
+   - **Last**: value of last transition in bucket (only present if multiple transitions)
+   - **Empty bucket**: no records output for that bucket index
+
+4. **Time Conversion**:
+   ```
+   bucket_absolute_time = tile_start + bucket_offset * (2^lod)
+   ```
 
 ## Drawing Rules
 
-### Rule 1: First Tile Handling
+### Rule 1: LoD 1+ Tile Drawing (Per Bucket)
+
+For each tile at LoD 1+:
+
+```
+Value = start_value
+
+FOR bucket_index from 0 to 255:
+    bucket_start_time = tile_start + bucket_index * (2^lod)
+    bucket_end_time = bucket_start_time + (2^lod)
+    
+    IF bucket_index not in tile.data:
+        // Empty bucket: continue with current Value
+        draw Value from bucket_start_time to bucket_end_time
+        // Value remains unchanged
+    ELSE IF tile.data[bucket_index] has first AND last:
+        // Multiple transitions in bucket: draw toggling
+        draw toggling from bucket_start_time to bucket_end_time
+        Value = tile.data[bucket_index].last.value
+    ELSE IF tile.data[bucket_index] has only first:
+        // Single transition in bucket: draw stable value
+        draw tile.data[bucket_index].first.value from bucket_start_time to bucket_end_time
+        Value = tile.data[bucket_index].first.value
+```
+
+### Rule 2: First Tile Initial Segment
 
 For the **first tile** in the viewport:
 
 ```
-IF tile has no normal transitions (only start value):
-    Draw single segment from viewport_start to viewport_end
-    Value = start_value
-ELSE:
-    Draw segment from viewport_start to first_transition.time
-    Value = start_value
-    
-    FOR each transition i:
-        Draw segment from transition[i].time to transition[i+1].time
-        Value = transition[i].value
-    
-    Draw segment from last_transition.time to viewport_end
-    Value = last_transition.value
+IF viewport_start < first_bucket_start_time:
+    draw start_value from viewport_start to first_bucket_start_time
 ```
 
-### Rule 2: Non-First Tile Handling
+### Rule 3: Last Tile Final Segment
 
-For **subsequent tiles**:
-
-```
-IF tile has no normal transitions (only start value):
-    // Use the last draw value from previous tile
-    Draw single segment from tile_start to tile_end
-    Value = previous_tile_last_draw_value
-ELSE:
-    // Note: No initial segment needed, continues from previous tile
-    
-    FOR each transition i:
-        Draw segment from transition[i].time to transition[i+1].time
-        Value = transition[i].value
-    
-    Draw segment from last_transition.time to tile_end
-    Value = last_transition.value
-```
-
-**Important**: For non-first tiles without transitions, the segment should use the **last draw value from the previous tile**, not this tile's start value. This ensures waveform continuity across tiles.
-
-**Viewport End Handling**: If the last tile's end time is before the viewport end time, extend the last segment to viewport_end using the last drawn value:
+For the **last tile** in the viewport:
 
 ```
-IF last_tile_end < viewport_end:
-    Draw segment from last_tile_end to viewport_end
-    Value = last_drawn_value
+IF last_bucket_end_time < viewport_end:
+    draw last_Value from last_bucket_end_time to viewport_end
 ```
 
-### Rule 3: Min/Max Handling (LoD 1+)
-
-For LoD 1+ data with min/max pairs:
+### Rule 4: Cross-Tile Continuity
 
 ```
-IF current transition has same time as next transition:
-    // This is a min/max pair
-    Draw segment from current_time to next_bucket_time
-    Value = "toggling" (for 1-bit) or "min..max" (for multi-bit)
-    Skip the max transition (don't draw separate segment)
-ELSE:
-    // Single value (min=max)
-    Draw segment from current_time to next_bucket_time
-    Value = current_value
+Tile 0: Value ends at last_bucket_last_value
+Tile 1: start_value should equal Tile 0's last value (guaranteed by server)
 ```
 
 ## Algorithm
@@ -100,195 +97,209 @@ ELSE:
 ### Step 1: Parse Tile Data
 
 ```rust
-fn parse_tile_data(data: &[u8]) -> Vec<Transition> {
+fn parse_tile_data(data: &[u8], tile_start: u64, lod: u32) -> Vec<BucketData> {
+    let bucket_size = 1u64 << lod;
+    let mut buckets = Vec::new();
+    
     // Parse start value (time = BOUNDARY_TIME_START)
-    // Parse normal transitions
-    // For LoD 1+: Group min/max pairs by timestamp
-}
-```
-
-### Step 2: Filter and Sort
-
-```rust
-fn process_transitions(transitions: Vec<Transition>, is_first_tile: bool) -> Vec<Transition> {
-    // Separate start value from normal transitions
-    // Sort normal transitions by time
-    // Return filtered list
-}
-```
-
-### Step 3: Generate Segments
-
-```rust
-fn generate_segments(
-    transitions: &[Transition],
-    start_value: Option<&Transition>,
-    is_first_tile: bool,
-    viewport_start: f64,
-    viewport_end: f64,
-) -> Vec<RenderSegment> {
-    let mut segments = Vec::new();
+    let start_value = parse_start_value(data);
     
-    if transitions.is_empty() {
-        // No normal transitions, draw start value across entire range
-        if let Some(sv) = start_value {
-            segments.push(RenderSegment {
-                x0: viewport_start,
-                x1: viewport_end,
-                value: sv.value,
-            });
-        }
-        return segments;
-    }
-    
-    // First tile: draw from viewport start to first transition
-    if is_first_tile {
-        if let Some(sv) = start_value {
-            segments.push(RenderSegment {
-                x0: viewport_start,
-                x1: transitions[0].time,
-                value: sv.value,
-            });
-        }
-    }
-    
-    // Draw transitions
-    for i in 0..transitions.len() {
-        let t0 = transitions[i].time;
-        let t1 = if i + 1 < transitions.len() {
-            transitions[i + 1].time
-        } else {
-            viewport_end
-        };
+    // Parse bucket data
+    for each record in data:
+        if record.time == BOUNDARY_TIME_START:
+            continue;  // Skip start value
         
-        // Check for min/max pair (same timestamp)
-        if i + 1 < transitions.len() && transitions[i].time == transitions[i + 1].time {
-            // Min/Max pair - draw as toggling or range
-            segments.push(RenderSegment {
-                x0: t0,
-                x1: t1,
-                value: format_min_max(&transitions[i].value, &transitions[i + 1].value),
-            });
-            // Skip max transition
+        let bucket_offset = record.time as u32;  // 0-255
+        let bucket_start = tile_start + (bucket_offset as u64) * bucket_size;
+        
+        // Check if this is first or last for the bucket
+        // (same offset means first/last pair)
+    
+    buckets
+}
+```
+
+### Step 2: Generate Segments for LoD 1+
+
+```rust
+fn generate_lod_segments(
+    tile_start: u64,
+    lod: u32,
+    buckets: &HashMap<u32, BucketData>,
+    start_value: &str,
+    viewport_start: u64,
+    viewport_end: u64,
+) -> Vec<RenderSegment> {
+    let bucket_size = 1u64 << lod;
+    let mut segments = Vec::new();
+    let mut current_value = start_value.to_string();
+    
+    for bucket_idx in 0..256u32 {
+        let bucket_start = tile_start + (bucket_idx as u64) * bucket_size;
+        let bucket_end = bucket_start + bucket_size;
+        
+        // Skip if outside viewport
+        if bucket_end < viewport_start || bucket_start > viewport_end {
             continue;
         }
         
-        segments.push(RenderSegment {
-            x0: t0,
-            x1: t1,
-            value: transitions[i].value.clone(),
-        });
+        // Clamp to viewport
+        let draw_start = bucket_start.max(viewport_start);
+        let draw_end = bucket_end.min(viewport_end);
+        
+        match buckets.get(&bucket_idx) {
+            None => {
+                // Empty bucket: draw current value
+                segments.push(RenderSegment {
+                    time_start: draw_start,
+                    time_end: draw_end,
+                    value: current_value.clone(),
+                    is_toggle: false,
+                });
+            }
+            Some(bucket) => {
+                if bucket.has_last() {
+                    // Multiple transitions: draw toggling
+                    segments.push(RenderSegment {
+                        time_start: draw_start,
+                        time_end: draw_end,
+                        value: "toggling".to_string(),
+                        is_toggle: true,
+                        first_value: Some(bucket.first.value.clone()),
+                        last_value: Some(bucket.last.value.clone()),
+                    });
+                    current_value = bucket.last.value.clone();
+                } else {
+                    // Single transition: draw stable value
+                    segments.push(RenderSegment {
+                        time_start: draw_start,
+                        time_end: draw_end,
+                        value: bucket.first.value.clone(),
+                        is_toggle: false,
+                    });
+                    current_value = bucket.first.value.clone();
+                }
+            }
+        }
     }
     
     segments
 }
 ```
 
-## Edge Cases
+## Drawing Styles
 
-### Empty Tile
+### Single-Bit Signals
 
-When a tile has no transitions in the requested range:
-- Returns only start value
-- Draw as horizontal line with start value
+| Bucket State | Visual Style |
+|--------------|--------------|
+| Empty (continue value) | Horizontal line at current level (high/low) |
+| Single transition | Horizontal line at transition value |
+| First/Last pair (toggle) | **Toggling pattern**: gray box with diagonal lines or "toggling" text |
 
-### Cross-Tile Continuity
+### Multi-Bit Signals
 
-Tiles are processed in time order:
-1. Sort tiles by tile_id
-2. Process each tile sequentially
-3. Previous tile's last value becomes implicit start for next tile
-
-### Min/Max Display
-
-For cursor value query at time T:
-
-```rust
-fn get_value_at_time(transitions: &[Transition], time: u64) -> String {
-    // Find bucket containing time T
-    for i in 0..transitions.len() {
-        if transitions[i].time > time {
-            // Check if previous is min/max pair
-            if i > 1 && transitions[i - 2].time == transitions[i - 1].time {
-                return format("{}..{}", transitions[i - 2].value, transitions[i - 1].value);
-            }
-            return transitions[i - 1].value.clone();
-        }
-    }
-    // Return last value
-    transitions.last().map(|t| t.value.clone()).unwrap_or_default()
-}
-```
+| Bucket State | Visual Style |
+|--------------|--------------|
+| Empty (continue value) | Rectangle with current value |
+| Single transition | Rectangle with transition value |
+| First/Last pair (toggle) | **Range display**: "first..last" or checkerboard pattern |
 
 ## Implementation Notes
 
-1. **Time Conversion**: Convert u64 timestamps to f64 pixel coordinates
-2. **Value Classification**: Use `classify_value()` to determine value type (zero/one/mixed)
-3. **Rendering**: Single-bit signals use yHigh/yLow, multi-bit use min/max display
-4. **Caching**: Store parsed transitions in signal_data cache for cursor queries
+1. **Time Conversion**: 
+   - Server sends bucket offset (0-255)
+   - Client converts to absolute time: `tile_start + offset * (2^lod)`
+
+2. **Value State Tracking**:
+   - Maintain `current_value` across buckets
+   - Update after each non-empty bucket
+   - Use for empty buckets and cross-tile continuity
+
+3. **Toggling Detection**:
+   - **Key change**: toggling = has first AND last (regardless of values)
+   - Even if first.value == last.value, still draw as toggling
+
+4. **Empty Bucket Handling**:
+   - No data from server for that bucket index
+   - Continue drawing with `current_value`
+   - Do not change `current_value`
+
+5. **Viewport Clipping**:
+   - Clip each bucket to viewport boundaries
+   - Handle partial buckets at viewport edges
 
 ## Constants
 
 ```rust
 const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
+const TILE_SPAN_MULTIPLIER: u32 = 256;  // Buckets per tile
 ```
 
 ## Example Scenarios
 
-### Scenario 1: First Tile with Transitions
+### Scenario 1: Empty Buckets
 
 ```
-Tile 0: time=0-1000
-Transitions:
-  [Start] time=MAX, value=0
-  [0] time=100, value=1
-  [1] time=500, value=0
+Tile: time=0-1024, LoD=2 (bucket_size=4)
+Buckets:
+  [Start] value=0
+  [0] offset=0, first=1           <- bucket 0 has data
+  [1] empty                       <- bucket 1 empty
+  [2] empty                       <- bucket 2 empty
+  [3] offset=3, first=0, last=1   <- bucket 3 has toggle
 
-Segments:
-  0-100: value=0 (start value)
-  100-500: value=1
-  500-1000: value=0
+Drawing:
+  0-4: value=0 (start value, before bucket 0)
+  4-8: value=1 (bucket 0)
+  8-12: value=1 (bucket 1 empty, continue)
+  12-16: value=1 (bucket 2 empty, continue)
+  16-20: toggling (bucket 3)
 ```
 
-### Scenario 2: Non-First Tile with Transitions
+### Scenario 2: Cross-Tile Continuity
 
 ```
-Tile 1: time=1000-2000
-Transitions:
-  [Start] time=MAX, value=0 (from previous tile end)
-  [0] time=1200, value=1
-  [1] time=1500, value=0
+Tile 0: time=0-1024
+  [Start] value=0
+  [255] offset=255, first=1, last=0  <- ends with value=0
 
-Segments:
-  1000-1200: value=0 (continues from previous)
-  1200-1500: value=1
-  1500-2000: value=0
+Tile 1: time=1024-2048
+  [Start] value=0  <- matches Tile 0's last value
+  [0] offset=0, first=1
+
+Drawing:
+  Tile 0 ends with value=0
+  Tile 1 starts with value=0 (continuous)
 ```
 
-### Scenario 3: Tile with Min/Max
+### Scenario 3: Toggle with Same Values
 
 ```
-Tile 0: time=0-1000, LoD=2
-Transitions:
-  [Start] time=MAX, value=0
-  [0] time=256, value=0 (min)
-  [1] time=256, value=1 (max)
-  [2] time=512, value=1 (min=max)
+Tile: time=0-256, LoD=0 (but using LoD 1+ format)
+Bucket:
+  [Start] value=0
+  [10] offset=10, first=1, last=1  <- first=last, but still toggle!
 
-Segments:
-  0-256: value=0 (start value)
-  256-512: toggling (0..1)
-  512-1000: value=1
+Drawing:
+  0-10: value=0
+  10-11: toggling (drawn as toggle even though first=last!)
 ```
 
-### Scenario 4: Empty Tile
+## Migration from Min/Max to First/Last
 
-```
-Tile 0: time=0-1000
-Transitions:
-  [Start] time=MAX, value=1
-  (no normal transitions)
+### Key Changes
 
-Segments:
-  0-1000: value=1
-```
+| Aspect | Old (Min/Max) | New (First/Last) |
+|--------|---------------|------------------|
+| Time | Absolute timestamp | Bucket offset (0-255) |
+| Toggle condition | min ≠ max | has first AND last |
+| Empty bucket | Use start value | Continue current value |
+| Value progression | min→max | first→last |
+
+### Client Adaptation
+
+1. **Time parsing**: Convert offset to absolute time
+2. **Toggle detection**: Check for first/last pair presence
+3. **Value tracking**: Update with last.value after each bucket
+4. **Empty handling**: Continue drawing with current value
