@@ -1695,76 +1695,176 @@ impl WaveService {
             // 步骤 4: 按 tile 分割数据
             let config = LodConfig::default();
             let mut tiles_result: Vec<Vec<SignalWaveData>> = Vec::with_capacity(num_tiles);
-
-            for tile_idx in 0..num_tiles {
-                let tile_start = start_time + tile_span * tile_idx as u64;
-                let tile_end = tile_start + tile_span;
+            
+            // 判断是否使用优化算法（LoD > 15）
+            let use_optimized = lod.0 > 15;
+            
+            if use_optimized {
+                // 优化模式：使用 search_bucket_first_last_from_fst
+                info!("使用优化算法：LoD {} > 15", lod.0);
                 
-                info!("处理 Tile {}: time={}-{}", tile_idx, tile_start, tile_end);
-
-                // 批量搜索 Start Value
-                let start_values = search_boundary_values_optimized(
-                    &signal_data_map,
-                    tile_start,
-                    SearchDirection::Forward,
-                    wave_end,
-                    &widths,
-                );
-
-                let mut tile_signals: Vec<SignalWaveData> = Vec::with_capacity(signal_handles.len());
-
-                for (name, handle, width) in &signal_handles {
-                    let full_data = full_signals_data.get(handle).unwrap();
+                // 获取 bucket 大小
+                let bucket_size = lod.bucket_size() as u64;
+                
+                for tile_idx in 0..num_tiles {
+                    let tile_start = start_time + tile_span * tile_idx as u64;
+                    let tile_end = tile_start + tile_span;
                     
-                    // 提取时间范围内的 transitions
-                    let mut tile_signal = SignalWaveData::new((*handle).into(), *width, SignalValueType::Numeric);
+                    info!("处理 Tile {}: time={}-{}", tile_idx, tile_start, tile_end);
                     
-                    let mut count = 0;
-                    for trans in &full_data.transitions {
-                        if trans.time >= tile_start && trans.time <= tile_end {
-                            tile_signal.add_transition(trans.clone());
-                            count += 1;
-                        }
-                    }
+                    // 计算该 tile 内的 bucket 数量
+                    let num_buckets = (tile_span / bucket_size) as usize;
                     
-                    info!("Tile {} 信号 {}: 从完整数据中提取了 {} 个 transitions", tile_idx, name, count);
-
-                    // 获取 Start Value
-                    let start_value = start_values.get(handle)
-                        .and_then(|v| v.clone())
-                        .unwrap_or_else(|| {
-                            if *width == 1 {
-                                SignalValue::Numeric("X".to_string())
-                            } else {
-                                SignalValue::Numeric(format!("b{}", "X".repeat(*width as usize)))
-                            }
-                        });
-
-                    // 在 tile_signal 开头添加 start_value（使用 tile_start 时间）
-                    // 这样 LoD 生成器可以正确计算第一个 bucket 的 min
-                    if !tile_signal.transitions.is_empty() {
-                        tile_signal.transitions.insert(0, Transition {
-                            time: tile_start,
+                    // 获取 handles 列表
+                    let handles: Vec<Handle> = signal_handles.iter().map(|(_, h, _)| *h).collect();
+                    
+                    // 搜索 Start Value（tile_start 之前的最后一个值）
+                    let start_values = search_boundary_values_optimized(
+                        &signal_data_map,
+                        tile_start,
+                        SearchDirection::Forward,
+                        wave_end,
+                        &widths,
+                    );
+                    
+                    let mut tile_signals: Vec<SignalWaveData> = Vec::with_capacity(signal_handles.len());
+                    
+                    for (name, handle, width) in &signal_handles {
+                        // 获取 Start Value
+                        let start_value = start_values.get(handle)
+                            .and_then(|v| v.clone())
+                            .unwrap_or_else(|| {
+                                if *width == 1 {
+                                    SignalValue::Numeric("X".to_string())
+                                } else {
+                                    SignalValue::Numeric(format!("b{}", "X".repeat(*width as usize)))
+                                }
+                            });
+                        
+                        // 创建 LoD 数据结构
+                        let mut lod_data = SignalWaveData::new((*handle).into(), *width, SignalValueType::Numeric);
+                        
+                        // 添加 Start Value
+                        lod_data.add_transition(Transition {
+                            time: ChunkSerializer::BOUNDARY_TIME_START,
                             value: start_value.clone(),
                         });
+                        
+                        // 对每个 bucket 搜索 first 和 last
+                        for bucket_idx in 0..num_buckets {
+                            let bucket_start = tile_start + bucket_idx as u64 * bucket_size;
+                            let bucket_end = bucket_start + bucket_size;
+                            
+                            // 使用 search_bucket_first_last_from_fst 搜索
+                            let bucket_results = search_bucket_first_last_from_fst(
+                                &mut reader,
+                                &[*handle],
+                                bucket_start,
+                                bucket_end,
+                            );
+                            
+                            if let Some((first, last)) = bucket_results.get(handle) {
+                                // 添加 first
+                                if let Some(f) = first {
+                                    lod_data.add_transition(Transition {
+                                        time: bucket_idx as u64,
+                                        value: f,
+                                    });
+                                    
+                                    // 如果有 last 且不同于 first，添加 last
+                                    if let Some(l) = last {
+                                        if f != l {
+                                            lod_data.add_transition(Transition {
+                                                time: bucket_idx as u64,
+                                                value: l,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        info!("Tile {} 信号 {}: 生成 LoD {} 数据: {} transitions", tile_idx, name, lod.0, lod_data.transitions.len());
+                        
+                        tile_signals.push(lod_data);
+                    }
+                    
+                    tiles_result.push(tile_signals);
+                }
+            } else {
+                // 常规模式：读取完整数据后处理
+                info!("使用常规算法：LoD {} <= 15", lod.0);
+                
+                for tile_idx in 0..num_tiles {
+                    let tile_start = start_time + tile_span * tile_idx as u64;
+                    let tile_end = tile_start + tile_span;
+                    
+                    info!("处理 Tile {}: time={}-{}", tile_idx, tile_start, tile_end);
+
+                    // 批量搜索 Start Value
+                    let start_values = search_boundary_values_optimized(
+                        &signal_data_map,
+                        tile_start,
+                        SearchDirection::Forward,
+                        wave_end,
+                        &widths,
+                    );
+
+                    let mut tile_signals: Vec<SignalWaveData> = Vec::with_capacity(signal_handles.len());
+
+                    for (name, handle, width) in &signal_handles {
+                        let full_data = full_signals_data.get(handle).unwrap();
+                        
+                        // 提取时间范围内的 transitions
+                        let mut tile_signal = SignalWaveData::new((*handle).into(), *width, SignalValueType::Numeric);
+                        
+                        let mut count = 0;
+                        for trans in &full_data.transitions {
+                            if trans.time >= tile_start && trans.time <= tile_end {
+                                tile_signal.add_transition(trans.clone());
+                                count += 1;
+                            }
+                        }
+                        
+                        info!("Tile {} 信号 {}: 从完整数据中提取了 {} 个 transitions", tile_idx, name, count);
+
+                        // 获取 Start Value
+                        let start_value = start_values.get(handle)
+                            .and_then(|v| v.clone())
+                            .unwrap_or_else(|| {
+                                if *width == 1 {
+                                    SignalValue::Numeric("X".to_string())
+                                } else {
+                                    SignalValue::Numeric(format!("b{}", "X".repeat(*width as usize)))
+                                }
+                            });
+
+                        // 在 tile_signal 开头添加 start_value（使用 tile_start 时间）
+                        // 这样 LoD 生成器可以正确计算第一个 bucket 的 min
+                        if !tile_signal.transitions.is_empty() {
+                            tile_signal.transitions.insert(0, Transition {
+                                time: tile_start,
+                                value: start_value.clone(),
+                            });
+                        }
+
+                        // 生成 LoD 数据（使用 tile 时间范围）
+                        let mut lod_data = LodPyramidGenerator::new(config.clone())
+                            .generate_level_with_range(&tile_signal, lod, tile_start, tile_end);
+                        info!("Tile {} 信号 {}: 生成 LoD {} 数据: {} transitions", tile_idx, name, lod.0, lod_data.transitions.len());
+                        
+                        // 在 LoD 数据开头添加 Start Value（始终添加）
+                        lod_data.transitions.insert(0, Transition {
+                            time: ChunkSerializer::BOUNDARY_TIME_START,
+                            value: start_value,
+                        });
+                        info!("Tile {} 信号 {}: 添加 Start Value 到 LoD 数据", tile_idx, name);
+                        
+                        tile_signals.push(lod_data);
                     }
 
-                    // 生成 LoD 数据（使用 tile 时间范围）
-                    let mut lod_data = LodPyramidGenerator::new(config.clone())
-                        .generate_level_with_range(&tile_signal, lod, tile_start, tile_end);
-                    info!("Tile {} 信号 {}: 生成 LoD {} 数据: {} transitions", tile_idx, name, lod.0, lod_data.transitions.len());
-                    
-                    // 在 LoD 数据开头添加 Start Value（始终添加）
-                    lod_data.transitions.insert(0, Transition {
-                        time: ChunkSerializer::BOUNDARY_TIME_START,
-                        value: start_value,
-                    });
-                    info!("Tile {} 信号 {}: 添加 Start Value 到 LoD 数据", tile_idx, name);
-                    
-                    tile_signals.push(lod_data);
+                    tiles_result.push(tile_signals);
                 }
-
-                tiles_result.push(tile_signals);
             }
 
             Ok::<_, ServerError>(tiles_result)
