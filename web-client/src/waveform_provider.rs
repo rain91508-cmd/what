@@ -340,6 +340,7 @@ pub struct WaveformDataProvider {
     opfs_cache: OpfsCacheManager,
     signals_with_id: Vec<SignalWithId>,  // Signals with draw_sig_id
     enable_opfs: bool,  // OPFS cache enabled flag
+    current_lod: Option<u32>,  // Current LoD level for bucket size calculation
 }
 
 #[wasm_bindgen]
@@ -371,6 +372,7 @@ impl WaveformDataProvider {
             opfs_cache: OpfsCacheManager::new(),
             signals_with_id: Vec::new(),
             enable_opfs: false,  // Disabled by default
+            current_lod: None,  // Will be set when fetching data
         }
     }
 
@@ -1028,6 +1030,9 @@ impl WaveformDataProvider {
         
         // Calculate appropriate LoD based on current viewport and canvas
         let lod = select_lod(&self.viewport, self.canvas_width);
+        
+        // Store current LoD for bucket size calculation
+        self.current_lod = Some(lod);
 
         // Get time range from viewport
         let time_start = self.viewport.time_start as u64;
@@ -2388,11 +2393,12 @@ if tile_missing_signals.is_empty() {
         
         for (tile_start, buckets) in bucket_data {
             // Calculate bucket size from tile span
-            // Use tile_start to determine lod (each tile at lod L has span = 2^L * 256)
-            // For simplicity, assume lod 25 (common for waveform view)
-            let lod = 25u32;
-            let tile_span = OpfsCacheManager::get_tile_span(lod);
-            let bucket_size = tile_span / TILE_SPAN_MULTIPLIER as u64;
+            // tile_span = 2^lod * TILE_SPAN_MULTIPLIER (256)
+            // bucket_size = 2^lod
+            // We need to determine lod from the actual data or use viewport's lod
+            // For now, use the viewport's lod setting
+            let lod = self.current_lod.unwrap_or(25);
+            let bucket_size = 1u64 << lod;
             
             // Get start value for this tile
             let start_value = self.signal_data.get(signal_name)
