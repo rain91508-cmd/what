@@ -2925,72 +2925,107 @@ if tile_missing_signals.is_empty() {
         let lod = self.current_lod.unwrap_or(25);
         let bucket_size = 1u64 << lod;
         
+        // Sort bucket_data by tile_start to ensure correct order
+        let mut sorted_bucket_data: Vec<(u64, &HashMap<u32, BucketData>)> = data.bucket_data
+            .iter()
+            .map(|(start, buckets)| (*start, buckets))
+            .collect();
+        sorted_bucket_data.sort_by_key(|(start, _)| *start);
+        
         // Find which tile contains this time
-        for (tile_start, buckets) in &data.bucket_data {
+        for (tile_idx, (tile_start, buckets)) in sorted_bucket_data.iter().enumerate() {
             let tile_end = tile_start + OpfsCacheManager::get_tile_span(lod);
             
             if time_u64 >= *tile_start && time_u64 < tile_end {
                 // Calculate bucket index within this tile
-                let offset_in_tile = (time_u64 - tile_start) / bucket_size;
+                let offset_in_tile = (time_u64 - *tile_start) / bucket_size;
                 let bucket_idx = offset_in_tile as u32;
                 
-                // Find the bucket
-                if let Some(bucket) = buckets.get(&bucket_idx) {
-                    let (min_val, max_val, is_toggle) = if bucket.has_toggle() {
-                        (bucket.first.value.clone(), bucket.last.as_ref().unwrap().value.clone(), true)
+                // Try to find the bucket at this index
+                let value_to_return = if let Some(bucket) = buckets.get(&bucket_idx) {
+                    // Found bucket at exact index
+                    // For toggle bucket, use last value; for single transition, use first value
+                    if bucket.has_toggle() {
+                        bucket.last.as_ref().unwrap().value.clone()
                     } else {
-                        (bucket.first.value.clone(), bucket.first.value.clone(), false)
-                    };
-                    
-                    // Apply bit extraction if needed
-                    let (final_min, final_max) = if let Some((msb, lsb)) = bit_extract {
-                        let min_u64 = Self::parse_value_to_u64(&min_val);
-                        let max_u64 = Self::parse_value_to_u64(&max_val);
-                        
-                        let bit_count = msb - lsb + 1;
-                        let mask = if bit_count >= 64 {
-                            u64::MAX
-                        } else {
-                            ((1u64 << bit_count) - 1) << lsb
-                        };
-                        
-                        let extracted_min = (min_u64 & mask) >> lsb;
-                        let extracted_max = (max_u64 & mask) >> lsb;
-                        
-                        let new_width = bit_count as u32;
-                        if new_width == 1 {
-                            (format!("{}", extracted_min), format!("{}", extracted_max))
-                        } else {
-                            (format!("0x{:X}", extracted_min), format!("0x{:X}", extracted_max))
+                        bucket.first.value.clone()
+                    }
+                } else {
+                    // Empty bucket - need to find previous non-empty bucket
+                    // Search backwards from bucket_idx-1 to 0
+                    let mut found_value: Option<String> = None;
+                    for prev_idx in (0..bucket_idx).rev() {
+                        if let Some(prev_bucket) = buckets.get(&prev_idx) {
+                            found_value = Some(if prev_bucket.has_toggle() {
+                                prev_bucket.last.as_ref().unwrap().value.clone()
+                            } else {
+                                prev_bucket.first.value.clone()
+                            });
+                            break;
                         }
-                    } else {
-                        (min_val, max_val)
-                    };
+                    }
                     
-                    let display_str = if is_toggle && final_min != final_max {
-                        format!("{}..{}", final_min, final_max)
-                    } else {
-                        final_min.clone()
-                    };
-                    
-                    let (value_type, has_xz) = Self::classify_value(&display_str, width);
-                    
-                    let value_info = ValueInfo {
-                        value_type,
-                        display_str,
-                        width,
-                        has_xz,
-                        min_value: Some(final_min),
-                        max_value: Some(final_max),
-                        is_min_max: is_toggle,
-                    };
-                    return serde_wasm_bindgen::to_value(&value_info).unwrap_or(JsValue::NULL);
-                }
+                    // If not found in current tile, use previous tile's last value
+                    // or tile's start value
+                    found_value.unwrap_or_else(|| {
+                        if tile_idx > 0 {
+                            // Use previous tile's last bucket value
+                            let (prev_tile_start, prev_buckets) = sorted_bucket_data[tile_idx - 1];
+                            let mut last_value = "0".to_string();
+                            for idx in 0..256u32 {
+                                if let Some(bucket) = prev_buckets.get(&idx) {
+                                    last_value = if bucket.has_toggle() {
+                                        bucket.last.as_ref().unwrap().value.clone()
+                                    } else {
+                                        bucket.first.value.clone()
+                                    };
+                                }
+                            }
+                            last_value
+                        } else {
+                            // First tile - use start value from tile_info
+                            data.tile_info.iter()
+                                .find(|(start, _, _, _)| start == tile_start)
+                                .map(|(_, _, _, value)| value.clone())
+                                .unwrap_or_else(|| "0".to_string())
+                        }
+                    })
+                };
                 
-                // Bucket not found (empty bucket), use previous value
-                // For simplicity, return NULL for empty buckets
-                // A more complete implementation would track the current value across buckets
-                return JsValue::NULL;
+                // Apply bit extraction if needed
+                let final_value = if let Some((msb, lsb)) = bit_extract {
+                    let value_u64 = Self::parse_value_to_u64(&value_to_return);
+                    
+                    let bit_count = msb - lsb + 1;
+                    let mask = if bit_count >= 64 {
+                        u64::MAX
+                    } else {
+                        ((1u64 << bit_count) - 1) << lsb
+                    };
+                    
+                    let extracted_value = (value_u64 & mask) >> lsb;
+                    
+                    if bit_count == 1 {
+                        format!("{}", extracted_value)
+                    } else {
+                        format!("0x{:X}", extracted_value)
+                    }
+                } else {
+                    value_to_return
+                };
+                
+                let (value_type, has_xz) = Self::classify_value(&final_value, width);
+                
+                let value_info = ValueInfo {
+                    value_type,
+                    display_str: final_value.clone(),
+                    width,
+                    has_xz,
+                    min_value: Some(final_value.clone()),
+                    max_value: Some(final_value),
+                    is_min_max: false,
+                };
+                return serde_wasm_bindgen::to_value(&value_info).unwrap_or(JsValue::NULL);
             }
         }
         
