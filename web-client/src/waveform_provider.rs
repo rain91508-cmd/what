@@ -1102,8 +1102,7 @@ impl WaveformDataProvider {
                                     tile_hits += 1;
                                     
                                     // Convert opfs_cache::SignalData to SignalWaveData
-                                    // For LoD 1+, cache stores bucket offsets (0-255)
-                                    // Keep offsets as-is to preserve first/last pairs
+                                    // For LoD 1+, directly parse into bucket_data (like server fetch)
                                     let lod = self.current_lod.unwrap_or(25);
                                     
                                     // Debug: print raw cache transitions
@@ -1119,60 +1118,40 @@ impl WaveformDataProvider {
                                         console_log!("[WASM]   Raw[{}]: time={}, value={}", i, t.time, value_str);
                                     }
                                     
+                                    // Convert cache transitions to our Transition format
                                     let transitions: Vec<Transition> = signal_data.transitions
                                         .into_iter()
                                         .map(|t| {
-                                            // Convert bytes to string value
                                             let value = if t.value.len() <= 8 {
-                                                // Try to parse as u64 (for numeric values)
                                                 let mut bytes = [0u8; 8];
                                                 bytes[..t.value.len()].copy_from_slice(&t.value);
-                                                let num = u64::from_le_bytes(bytes);
-                                                format!("0x{:X}", num)
+                                                format!("0x{:X}", u64::from_le_bytes(bytes))
                                             } else {
-                                                // Longer values, use hex string
                                                 format!("0x{}", t.value.iter().map(|b| format!("{:02X}", b)).collect::<String>())
                                             };
-                                            
-                                            // Keep time as-is (offset for LoD 1+, absolute for LoD 0)
-                                            // First/last pairs have same offset, will be parsed correctly
                                             Transition { time: t.time, value }
                                         })
                                         .collect();
                                     
-                                    // Use common function to process transitions
+                                    // Parse into bucket_data directly (like server fetch)
+                                    let (start_value, buckets) = self.parse_buckets_from_transitions(&transitions);
                                     let tile_end = tile_start + tile_span;
-                                    let (start_value, filtered_transitions) = self.process_tile_transitions(
-                                        transitions,
-                                        is_first_tile,
-                                        tile_start,
-                                        tile_end,
-                                        time_start,
-                                        time_end,
-                                    );
                                     
-                                    // Merge with existing signal_data if any
+                                    // Merge with existing signal_data
                                     if let Some(existing) = self.signal_data.get_mut(signal_name) {
-                                        // Merge transitions
-                                        let mut all_transitions = existing.transitions.clone();
-                                        all_transitions.extend(filtered_transitions);
-                                        // Sort by time
-                                        all_transitions.sort_by_key(|t| t.time);
-                                        // Note: Don't dedup here! First/last pairs have same time (offset)
-                                        // dedup would remove one of the pair
-                                        existing.transitions = all_transitions;
+                                        // Add bucket_data for this tile
+                                        existing.bucket_data.push((tile_start, buckets));
                                         // Store tile info
                                         if let Some(sv) = start_value {
-                                            existing.tile_info.push((tile_start, tile_end, sv.time, sv.value));
+                                            existing.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv));
                                         }
                                     } else {
-                                        // Insert new signal_data
+                                        // Insert new signal_data with bucket_data
                                         let width = self.get_signal_width(signal_name);
                                         let mut signal_data = SignalWaveData::new(signal_name.clone(), width);
-                                        signal_data.transitions = filtered_transitions;
-                                        // Store tile info
+                                        signal_data.bucket_data.push((tile_start, buckets));
                                         if let Some(sv) = start_value {
-                                            signal_data.tile_info.push((tile_start, tile_end, sv.time, sv.value));
+                                            signal_data.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv));
                                         }
                                         self.signal_data.insert(signal_name.clone(), signal_data);
                                     }
