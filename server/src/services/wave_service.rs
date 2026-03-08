@@ -253,7 +253,7 @@ pub fn search_boundary_values_optimized(
 /// # Returns
 /// * 每个信号的 (first, last) 值，如果 bucket 内没有 transition 则为 None
 pub fn search_bucket_first_last_from_fst(
-    reader: &mut fstapi::Reader,
+    wave_path: &std::path::Path,
     handles: &[Handle],
     bucket_start: u64,
     bucket_end: u64,
@@ -261,14 +261,39 @@ pub fn search_bucket_first_last_from_fst(
     let mut results: std::collections::HashMap<Handle, (Option<SignalValue>, Option<SignalValue>)> = 
         handles.iter().map(|h| (*h, (None, None))).collect();
     
+    // 重新打开 reader（避免状态污染）
+    info!("Opening FST file: {:?}", wave_path);
+    let mut reader = match fstapi::Reader::open(wave_path) {
+        Ok(r) => {
+            info!("Successfully opened FST file");
+            r
+        }
+        Err(e) => {
+            error!("Failed to open FST file: {:?}", e);
+            return results;
+        }
+    };
+    
+    // 启用所有 mask（必须调用，否则 for_each_block 不会读取数据）
+    // 注意：set_mask_all 会启用所有信号的 mask，不需要单独调用 set_mask
+    info!("Setting mask all");
+    reader.set_mask_all();
+    
     let mut first_values: std::collections::HashMap<Handle, SignalValue> = std::collections::HashMap::new();
     let mut last_values: std::collections::HashMap<Handle, SignalValue> = std::collections::HashMap::new();
     
     // 设置时间范围限制
+    info!("Setting time range: [{}, {}]", bucket_start, bucket_end);
     reader.set_time_range_limit(bucket_start, bucket_end);
+    
+    // 检查 reader 状态
+    info!("Reader state: mask_all set, time range set");
+    
+    let mut block_count = 0;
     
     // 只遍历一次数据，同时记录 first 和 last
     reader.for_each_block(|_time, handle, value, _var_len| {
+        block_count += 1;
         if handles.contains(&handle) {
             let signal_value = SignalValue::Numeric(String::from_utf8_lossy(value).to_string());
             
@@ -282,8 +307,8 @@ pub fn search_bucket_first_last_from_fst(
         }
     }).ok();
     
-    // 重置时间范围限制
-    reader.reset_time_range_limit();
+    info!("search_bucket_first_last_from_fst: bucket=[{}, {}], blocks={}, first_values={}, last_values={}", 
+          bucket_start, bucket_end, block_count, first_values.len(), last_values.len());
     
     // 组装结果
     for handle in handles {
@@ -1051,12 +1076,14 @@ impl WaveService {
         };
         
         // 序列化为 chunk
+        // 这里的数据已经是 LoD 数据，时间已经是 bucket 索引，不需要过滤
         let chunk_data = ChunkSerializer::serialize(
             0,
             lod as u16,
             &[&signal_data],
             (time_start, time_end),
             compression,
+            true, // skip_time_filter = true for LoD data
         )?;
 
         // 处理 Range 请求
@@ -1148,6 +1175,7 @@ impl WaveService {
         };
         
         // 序列化为多信号 chunk
+        // 这里的数据已经是 LoD 数据，时间已经是 bucket 索引，不需要过滤
         let signal_refs: Vec<&SignalWaveData> = signal_data_list.iter().collect();
         let chunk_data = ChunkSerializer::serialize(
             0, // chunk_id
@@ -1155,6 +1183,7 @@ impl WaveService {
             &signal_refs,
             (time_start, time_end),
             compression,
+            true, // skip_time_filter = true for LoD data
         )?;
 
         // 处理 Range 请求
@@ -1591,6 +1620,7 @@ impl WaveService {
         num_tiles: usize,
     ) -> Result<Vec<Vec<SignalWaveData>>> {
         let path_str = wave_path.to_string_lossy().to_string();
+        let wave_path_clone = wave_path.clone();
         let signal_names: Vec<String> = signal_names.to_vec();
         let cache = self.signal_cache.clone();
 
@@ -1701,7 +1731,9 @@ impl WaveService {
             let mut tiles_result: Vec<Vec<SignalWaveData>> = Vec::with_capacity(num_tiles);
             
             // 判断是否使用优化算法（LoD > 15）
-            let use_optimized = lod.0 > 15;
+            // 暂时禁用优化算法，直接使用常规算法
+            let use_optimized = false; // lod.0 > 15;
+            info!("LoD={}, lod.0={}, use_optimized={}", lod.0, lod.0, use_optimized);
             
             if use_optimized {
                 // 优化模式：使用 search_bucket_first_last_from_fst
@@ -1760,8 +1792,9 @@ impl WaveService {
                             let bucket_end = bucket_start + bucket_size;
                             
                             // 使用 search_bucket_first_last_from_fst 搜索
+                            // 传递 wave_path_clone，函数内部会重新打开 reader
                             let bucket_results = search_bucket_first_last_from_fst(
-                                &mut reader,
+                                &wave_path_clone,
                                 &[*handle],
                                 bucket_start,
                                 bucket_end,
@@ -1775,7 +1808,7 @@ impl WaveService {
                                         value: f.clone(),
                                     });
                                     
-                                    // 如果有 last 且不同于 first，添加 last
+                                    // 如果有 last 且不同于 first，添加 last（与普通算法一致）
                                     if let Some(l) = last {
                                         if f != l {
                                             lod_data.add_transition(Transition {
