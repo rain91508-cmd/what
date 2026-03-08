@@ -1213,7 +1213,9 @@ if tile_missing_signals.is_empty() {
             let encoded_batch = general_purpose::STANDARD.encode(&names_batch);
 
             // Group contiguous tiles for batch request
-            let tile_ids: Vec<u64> = tile_missing_signals.keys().cloned().collect();
+            // Sort tile_ids to ensure consistent order
+            let mut tile_ids: Vec<u64> = tile_missing_signals.keys().cloned().collect();
+            tile_ids.sort();
             let mut tile_idx = 0;
             
             while tile_idx < tile_ids.len() {
