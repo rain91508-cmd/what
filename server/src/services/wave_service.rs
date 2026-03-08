@@ -239,6 +239,10 @@ pub fn search_boundary_values_optimized(
 /// 用于 LoD > 15 的情况，减少 FST 读取次数
 /// 直接使用 fstapi 的 set_time_range_limit 和 for_each_block，不需要预先读取全部数据
 /// 
+/// # 查找策略
+/// - last: 设置时间范围，迭代读取所有信号，记录最后一个值
+/// - first: 为每个信号单独设置 handle，使用 for_each_block 读取第一个 transition
+/// 
 /// # Arguments
 /// * `reader` - fstapi Reader
 /// * `handles` - 信号 handle 列表
@@ -256,24 +260,17 @@ pub fn search_bucket_first_last_from_fst(
     let mut results: std::collections::HashMap<Handle, (Option<SignalValue>, Option<SignalValue>)> = 
         handles.iter().map(|h| (*h, (None, None))).collect();
     
-    // 用于存储每个信号的 first 和 last 值
-    let mut first_values: std::collections::HashMap<Handle, SignalValue> = std::collections::HashMap::new();
+    // ========== Step 1: 查找 last（所有信号一起）==========
     let mut last_values: std::collections::HashMap<Handle, SignalValue> = std::collections::HashMap::new();
     
     // 设置时间范围限制
     reader.set_time_range_limit(bucket_start, bucket_end);
     
-    // 迭代读取数据
-    reader.for_each_block(|time, handle, value, _var_len| {
+    // 迭代读取数据，记录最后一个值
+    reader.for_each_block(|_time, handle, value, _var_len| {
         if handles.contains(&handle) {
             let signal_value = SignalValue::Numeric(String::from_utf8_lossy(value).to_string());
-            
-            // 记录 first（第一个遇到的值）
-            if !first_values.contains_key(&handle) {
-                first_values.insert(handle, signal_value.clone());
-            }
-            
-            // 更新 last（最后一个遇到的值）
+            // 持续更新 last（最后一个遇到的值）
             last_values.insert(handle, signal_value);
         }
     }).ok();
@@ -281,7 +278,31 @@ pub fn search_bucket_first_last_from_fst(
     // 重置时间范围限制
     reader.reset_time_range_limit();
     
-    // 组装结果
+    // ========== Step 2: 查找 first（每个信号单独）==========
+    let mut first_values: std::collections::HashMap<Handle, SignalValue> = std::collections::HashMap::new();
+    
+    for handle in handles {
+        // 为单个信号设置 handle filter
+        let single_handle = *handle;
+        
+        // 设置时间范围限制
+        reader.set_time_range_limit(bucket_start, bucket_end);
+        
+        // 迭代读取数据，只取第一个值
+        let mut found = false;
+        reader.for_each_block(|_time, h, value, _var_len| {
+            if !found && h == single_handle {
+                let signal_value = SignalValue::Numeric(String::from_utf8_lossy(value).to_string());
+                first_values.insert(single_handle, signal_value);
+                found = true;
+            }
+        }).ok();
+        
+        // 重置时间范围限制
+        reader.reset_time_range_limit();
+    }
+    
+    // ========== Step 3: 组装结果 ==========
     for handle in handles {
         let first = first_values.get(handle).cloned();
         let last = last_values.get(handle).cloned();
