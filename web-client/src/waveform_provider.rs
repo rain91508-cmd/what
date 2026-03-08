@@ -1102,6 +1102,10 @@ impl WaveformDataProvider {
                                     tile_hits += 1;
                                     
                                     // Convert opfs_cache::SignalData to SignalWaveData
+                                    // For LoD 1+, cache stores bucket offsets (0-255), need to convert to absolute time
+                                    let lod = self.current_lod.unwrap_or(25);
+                                    let bucket_size = 1u64 << lod;
+                                    
                                     let transitions: Vec<Transition> = signal_data.transitions
                                         .into_iter()
                                         .map(|t| {
@@ -1116,7 +1120,16 @@ impl WaveformDataProvider {
                                                 // Longer values, use hex string
                                                 format!("0x{}", t.value.iter().map(|b| format!("{:02X}", b)).collect::<String>())
                                             };
-                                            Transition { time: t.time, value }
+                                            
+                                            // Convert bucket offset to absolute time for LoD 1+
+                                            // t.time is bucket offset (0-255) for LoD 1+
+                                            let absolute_time = if lod > 0 && t.time < 256 {
+                                                tile_start + t.time * bucket_size
+                                            } else {
+                                                t.time
+                                            };
+                                            
+                                            Transition { time: absolute_time, value }
                                         })
                                         .collect();
                                     
