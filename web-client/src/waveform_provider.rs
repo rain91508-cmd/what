@@ -1919,17 +1919,34 @@ if tile_missing_signals.is_empty() {
                             data.transitions.len(), lod, bucket_size);
                         
                         // Group transitions by tile_start (from tile_info)
-                        for (tile_idx, (tile_start, _tile_end, _, _)) in data.tile_info.iter().enumerate() {
-                            // For each tile, parse all transitions into buckets
-                            // The transitions are bucket offsets, same for all tiles in the cache
-                            // But we need to create bucket_data for each tile with correct absolute times
+                        // Each tile has its own set of transitions in the cache
+                        // We need to filter transitions for each tile based on the tile's time range
+                        for (tile_idx, (tile_start, tile_end, _, _)) in data.tile_info.iter().enumerate() {
+                            // For each tile, filter transitions that belong to this tile
+                            // Transitions with time < tile_end belong to this tile
+                            // But we need to handle the case where transitions are sorted by time
                             
-                            // Parse all transitions into buckets (using offsets)
-                            let (_, buckets) = self.parse_buckets_from_transitions(&data.transitions);
+                            let tile_transitions: Vec<Transition> = data.transitions
+                                .iter()
+                                .filter(|t| {
+                                    if t.time == BOUNDARY_TIME_START {
+                                        return false; // Skip boundary value
+                                    }
+                                    // For LoD 1+, time is bucket offset (0-255)
+                                    // Convert to absolute time to check if in this tile
+                                    let abs_time = *tile_start + t.time * bucket_size;
+                                    abs_time >= *tile_start && abs_time < *tile_end
+                                })
+                                .cloned()
+                                .collect();
                             
-                            if !buckets.is_empty() {
-                                console_log!("[WASM]   Tile {}: start={}, {} buckets", 
-                                    tile_idx, tile_start, buckets.len());
+                            console_log!("[WASM]   Tile {}: start={}, end={}, {} transitions", 
+                                tile_idx, tile_start, tile_end, tile_transitions.len());
+                            
+                            // Parse this tile's transitions into buckets
+                            if !tile_transitions.is_empty() {
+                                let (_, buckets) = self.parse_buckets_from_transitions(&tile_transitions);
+                                console_log!("[WASM]   Tile {}: {} buckets parsed", tile_idx, buckets.len());
                                 tile_buckets.insert(*tile_start, buckets);
                             }
                         }
