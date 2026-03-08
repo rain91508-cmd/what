@@ -2391,14 +2391,16 @@ if tile_missing_signals.is_empty() {
     ) {
         const TILE_SPAN_MULTIPLIER: u32 = 256;
         
-        for (tile_start, buckets) in bucket_data {
+        console_log!("[WASM] generate_lod_segments_from_buckets: {} tiles, viewport={}-{}",
+            bucket_data.len(), self.viewport.time_start, self.viewport.time_end);
+        
+        for (tile_idx, (tile_start, buckets)) in bucket_data.iter().enumerate() {
             // Calculate bucket size from tile span
-            // tile_span = 2^lod * TILE_SPAN_MULTIPLIER (256)
-            // bucket_size = 2^lod
-            // We need to determine lod from the actual data or use viewport's lod
-            // For now, use the viewport's lod setting
             let lod = self.current_lod.unwrap_or(25);
             let bucket_size = 1u64 << lod;
+            
+            console_log!("[WASM]   Processing tile {}: start={}, {} buckets, bucket_size={}",
+                tile_idx, tile_start, buckets.len(), bucket_size);
             
             // Get start value for this tile
             let start_value = self.signal_data.get(signal_name)
@@ -2408,6 +2410,7 @@ if tile_missing_signals.is_empty() {
                 .unwrap_or_else(|| "0".to_string());
             
             let mut current_value = start_value.clone();
+            let mut segments_in_tile = 0;
             
             // Process each bucket in the tile
             for bucket_idx in 0..TILE_SPAN_MULTIPLIER {
@@ -2519,8 +2522,14 @@ if tile_missing_signals.is_empty() {
                         }
                     }
                 }
+                
+                segments_in_tile += 1;
             }
+            
+            console_log!("[WASM]   Tile {} complete: {} segments generated", tile_idx, segments_in_tile);
         }
+        
+        console_log!("[WASM] generate_lod_segments_from_buckets complete: total {} segments", segments.len());
     }
 
     /// Classify value for rendering
