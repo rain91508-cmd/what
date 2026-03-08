@@ -1874,19 +1874,36 @@ if tile_missing_signals.is_empty() {
                         time_range,
                         &mut segments,
                     );
-                } else {
-                    // Check if this is LoD 1+ data (min/max format)
-                    // LoD 1+ has transitions with same timestamp in pairs (min, max)
-                    let is_lod_min_max = self.detect_min_max_format(&data.transitions);
-
-                    if is_lod_min_max {
-                        // Process LoD 1+ min/max format
-                        self.generate_min_max_segments(&data.transitions, data.width, y, &signal.name, 
-                            time_range, &mut segments);
+                } else if !data.transitions.is_empty() {
+                    // Check if transitions are in LoD 1+ format (bucket offsets 0-255)
+                    // This handles cache data from old format
+                    let is_lod_format = self.detect_lod_bucket_format(&data.transitions);
+                    
+                    if is_lod_format {
+                        // Parse transitions into bucket data and generate segments
+                        let (start_value, buckets) = self.parse_buckets_from_transitions(&data.transitions);
+                        let bucket_data = vec![(0u64, buckets)]; // Use 0 as tile_start for cache data
+                        self.generate_lod_segments_from_buckets(
+                            &bucket_data,
+                            data.width,
+                            y,
+                            &signal.name,
+                            time_range,
+                            &mut segments,
+                        );
                     } else {
-                        // Process LoD 0 format (original)
-                        self.generate_normal_segments(&data.transitions, data.width, y, &signal.name,
-                            time_range, &mut segments);
+                        // Check if this is LoD 1+ data (min/max format)
+                        let is_lod_min_max = self.detect_min_max_format(&data.transitions);
+
+                        if is_lod_min_max {
+                            // Process LoD 1+ min/max format
+                            self.generate_min_max_segments(&data.transitions, data.width, y, &signal.name, 
+                                time_range, &mut segments);
+                        } else {
+                            // Process LoD 0 format (original)
+                            self.generate_normal_segments(&data.transitions, data.width, y, &signal.name,
+                                time_range, &mut segments);
+                        }
                     }
                 }
             }
@@ -1894,6 +1911,35 @@ if tile_missing_signals.is_empty() {
 
         serde_wasm_bindgen::to_value(&segments)
             .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)))
+    }
+
+    /// Detect if transitions are in LoD bucket format (First/Last format)
+    /// Returns true if time values are small (0-255), indicating bucket offsets
+    fn detect_lod_bucket_format(&self, transitions: &[Transition]) -> bool {
+        const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
+        
+        if transitions.len() < 2 {
+            return false;
+        }
+        
+        // Check first few non-boundary transitions
+        let mut checked = 0;
+        for t in transitions.iter() {
+            if t.time == BOUNDARY_TIME_START {
+                continue;
+            }
+            // If time is small (0-255), it's likely a bucket offset
+            if t.time <= 255 {
+                checked += 1;
+                if checked >= 3 {
+                    return true;
+                }
+            } else {
+                return false;
+            }
+        }
+        
+        false
     }
 
     /// Detect if transitions are in min/max format (LoD 1+)
