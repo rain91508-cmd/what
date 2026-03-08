@@ -1768,7 +1768,7 @@ impl WaveService {
                                 if let Some(f) = first {
                                     lod_data.add_transition(Transition {
                                         time: bucket_idx as u64,
-                                        value: f,
+                                        value: f.clone(),
                                     });
                                     
                                     // 如果有 last 且不同于 first，添加 last
@@ -1776,7 +1776,7 @@ impl WaveService {
                                         if f != l {
                                             lod_data.add_transition(Transition {
                                                 time: bucket_idx as u64,
-                                                value: l,
+                                                value: l.clone(),
                                             });
                                         }
                                     }
