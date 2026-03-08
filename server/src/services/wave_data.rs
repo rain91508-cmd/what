@@ -775,10 +775,9 @@ impl LodPyramidGenerator {
             .value
             .to_four_state()
             .unwrap_or_else(|| FourStateValue::new(source.width));
-        let mut bucket_min = first_fs.clone();
-        let mut bucket_max = first_fs.clone();
+        let mut bucket_first = first_fs.clone();
+        let mut bucket_last = first_fs.clone();
         let mut current_bucket_idx: usize = 0;
-        let mut last_value = source.transitions[0].value.clone();
 
         // 遍历所有 transitions
         for trans in &source.transitions {
@@ -798,51 +797,36 @@ impl LodPyramidGenerator {
                 .unwrap_or_else(|| FourStateValue::new(source.width));
 
             if trans_bucket_idx > current_bucket_idx {
-                // 先输出当前 bucket 的 min/max
-                let bucket_end_time = range_start + (current_bucket_idx as u64 + 1) * bucket_size;
-                let min_str = bucket_min.to_string();
-                let max_str = bucket_max.to_string();
+                // 先输出当前 bucket 的 first/last（使用 bucket offset 作为时间戳）
+                let first_str = bucket_first.to_string();
+                let last_str = bucket_last.to_string();
                 
-                result.add_transition(Transition::from_numeric(bucket_end_time, &min_str));
+                result.add_transition(Transition::from_numeric(current_bucket_idx as u64, &first_str));
                 
-                let has_xz = bucket_min.has_xz() || bucket_max.has_xz();
-                if max_str != min_str || has_xz {
-                    result.add_transition(Transition::from_numeric(bucket_end_time, &max_str));
+                let has_xz = bucket_first.has_xz() || bucket_last.has_xz();
+                if first_str != last_str || has_xz {
+                    result.add_transition(Transition::from_numeric(current_bucket_idx as u64, &last_str));
                 }
 
-                // 输出中间空 bucket（如果有）
-                for bucket_idx in (current_bucket_idx + 1)..trans_bucket_idx.min(total_buckets) {
-                    let bucket_end_time = range_start + (bucket_idx as u64 + 1) * bucket_size;
-                    // 空 bucket：输出上一个值
-                    let value_str = last_value.to_four_state()
-                        .unwrap_or_else(|| FourStateValue::new(source.width))
-                        .to_string();
-                    result.add_transition(Transition::from_numeric(bucket_end_time, &value_str));
-                }
-
-                // 开始新 bucket
+                // 开始新 bucket（跳过中间空 bucket，不输出）
                 current_bucket_idx = trans_bucket_idx.min(total_buckets - 1);
-                bucket_min = trans_fs.clone();
-                bucket_max = trans_fs.clone();
+                bucket_first = trans_fs.clone();
+                bucket_last = trans_fs.clone();
             } else {
-                // 更新当前 bucket 的 min/max（四态比较）
-                bucket_min = four_state_min(&bucket_min, &trans_fs);
-                bucket_max = four_state_max(&bucket_max, &trans_fs);
+                // 更新当前 bucket 的 last（四态比较）
+                bucket_last = trans_fs.clone();
             }
-
-            last_value = trans.value.clone();
         }
 
         // 输出最后一个 bucket
-        let last_bucket_end_time = range_start + (current_bucket_idx as u64 + 1) * bucket_size;
-        let min_str = bucket_min.to_string();
-        let max_str = bucket_max.to_string();
-
-        result.add_transition(Transition::from_numeric(last_bucket_end_time, &min_str));
+        let first_str = bucket_first.to_string();
+        let last_str = bucket_last.to_string();
         
-        let has_xz = bucket_min.has_xz() || bucket_max.has_xz();
-        if max_str != min_str || has_xz {
-            result.add_transition(Transition::from_numeric(last_bucket_end_time, &max_str));
+        result.add_transition(Transition::from_numeric(current_bucket_idx as u64, &first_str));
+        
+        let has_xz = bucket_first.has_xz() || bucket_last.has_xz();
+        if first_str != last_str || has_xz {
+            result.add_transition(Transition::from_numeric(current_bucket_idx as u64, &last_str));
         }
 
         info!("LoD {} 生成完成: {} transitions", level.0, result.transitions.len());
