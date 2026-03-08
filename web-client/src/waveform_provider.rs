@@ -1886,8 +1886,30 @@ if tile_missing_signals.is_empty() {
                     
                     if is_lod_format {
                         // Parse transitions into bucket data and generate segments
-                        let (start_value, buckets) = self.parse_buckets_from_transitions(&data.transitions);
-                        let bucket_data = vec![(0u64, buckets)]; // Use 0 as tile_start for cache data
+                        // Need to handle multiple tiles - group transitions by tile
+                        let mut tile_buckets: std::collections::HashMap<u64, HashMap<u32, BucketData>> = std::collections::HashMap::new();
+                        
+                        // Group transitions by tile_start (from tile_info)
+                        for (tile_start, tile_end, _, _) in &data.tile_info {
+                            // Get transitions for this tile (time < tile_end)
+                            let tile_transitions: Vec<Transition> = data.transitions
+                                .iter()
+                                .filter(|t| t.time != BOUNDARY_TIME_START && (t.time as u64) < *tile_end)
+                                .cloned()
+                                .collect();
+                            
+                            if !tile_transitions.is_empty() {
+                                let (_, buckets) = self.parse_buckets_from_transitions(&tile_transitions);
+                                tile_buckets.insert(*tile_start, buckets);
+                            }
+                        }
+                        
+                        // Convert to vec for generate_lod_segments_from_buckets
+                        let bucket_data: Vec<(u64, HashMap<u32, BucketData>)> = tile_buckets.into_iter().collect();
+                        
+                        console_log!("[WASM] Cache data: {} tiles from tile_info, {} bucket entries", 
+                            data.tile_info.len(), bucket_data.len());
+                        
                         self.generate_lod_segments_from_buckets(
                             &bucket_data,
                             data.width,
