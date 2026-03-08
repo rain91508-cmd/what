@@ -77,8 +77,31 @@ pub struct ValueInfo {
 /// Transition data point
 #[derive(Debug, Clone)]
 pub struct Transition {
-    pub time: u64,
+    pub time: u64,  // For LoD 0: absolute time; For LoD 1+: bucket offset (0-255)
     pub value: String,
+}
+
+/// Bucket data for LoD 1+ (First/Last format)
+#[derive(Debug, Clone)]
+pub struct BucketData {
+    pub offset: u32,        // Bucket offset within tile (0-255)
+    pub first: Transition,  // First transition in bucket
+    pub last: Option<Transition>, // Last transition (None if only one transition)
+}
+
+impl BucketData {
+    /// Check if this bucket has both first and last (toggle bucket)
+    pub fn has_toggle(&self) -> bool {
+        self.last.is_some()
+    }
+    
+    /// Get the value to continue after this bucket
+    pub fn get_continue_value(&self) -> String {
+        match &self.last {
+            Some(last) => last.value.clone(),
+            None => self.first.value.clone(),
+        }
+    }
 }
 
 /// Signal waveform data with tile information
@@ -90,6 +113,8 @@ pub struct SignalWaveData {
     /// Tile information for proper segment generation
     /// Each tuple: (tile_start, tile_end, start_value_time, start_value)
     pub tile_info: Vec<(u64, u64, u64, String)>,
+    /// LoD 1+ bucket data: (tile_start, buckets HashMap)
+    pub bucket_data: Vec<(u64, HashMap<u32, BucketData>)>,
 }
 
 impl SignalWaveData {
@@ -99,6 +124,7 @@ impl SignalWaveData {
             width,
             transitions: Vec::new(),
             tile_info: Vec::new(),
+            bucket_data: Vec::new(),
         }
     }
 }
@@ -1355,35 +1381,67 @@ if tile_missing_signals.is_empty() {
             // Calculate tile end
             let tile_end = tile_start + OpfsCacheManager::get_tile_span(header.level as u32);
 
-            // Use common function to process transitions
-            let (start_value, filtered_transitions) = self.process_tile_transitions(
-                transitions,
-                is_first_tile,
-                tile_start,
-                tile_end,
-                viewport_start,
-                viewport_end,
-            );
-
             // Get width from signal info
             let width = self.get_signal_width(signal_name);
 
-            // Store signal data - merge with existing data if present
-            if let Some(existing_data) = self.signal_data.get_mut(signal_name) {
-                existing_data.transitions.extend(filtered_transitions);
-                existing_data.transitions.sort_by_key(|t| t.time);
-                // Store tile info
-                if let Some(sv) = start_value {
-                    existing_data.tile_info.push((tile_start, tile_end, sv.time, sv.value));
+            // For LoD 1+, parse into bucket data; for LoD 0, use traditional transitions
+            if header.level > 0 {
+                // Parse transitions into bucket data (First/Last format)
+                let (start_value, buckets) = self.parse_buckets_from_transitions(&transitions);
+                
+                // Store signal data with bucket info
+                if let Some(existing_data) = self.signal_data.get_mut(signal_name) {
+                    // Merge bucket data
+                    if let Some((_, existing_buckets)) = existing_data.bucket_data.iter_mut()
+                        .find(|(start, _)| *start == tile_start) {
+                        // Merge with existing buckets for this tile
+                        for (offset, bucket) in buckets {
+                            existing_buckets.insert(offset, bucket);
+                        }
+                    } else {
+                        // Add new tile bucket data
+                        existing_data.bucket_data.push((tile_start, buckets));
+                    }
+                    // Also store start value in tile_info for compatibility
+                    if let Some(ref sv) = start_value {
+                        existing_data.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv.clone()));
+                    }
+                } else {
+                    let mut signal_data = SignalWaveData::new(signal_name.clone(), width);
+                    signal_data.bucket_data.push((tile_start, buckets));
+                    if let Some(ref sv) = start_value {
+                        signal_data.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv.clone()));
+                    }
+                    self.signal_data.insert(signal_name.clone(), signal_data);
                 }
             } else {
-                let mut signal_data = SignalWaveData::new(signal_name.clone(), width);
-                signal_data.transitions = filtered_transitions;
-                // Store tile info
-                if let Some(sv) = start_value {
-                    signal_data.tile_info.push((tile_start, tile_end, sv.time, sv.value));
+                // LoD 0: use traditional transition processing
+                let (start_value, filtered_transitions) = self.process_tile_transitions(
+                    transitions,
+                    is_first_tile,
+                    tile_start,
+                    tile_end,
+                    viewport_start,
+                    viewport_end,
+                );
+
+                // Store signal data - merge with existing data if present
+                if let Some(existing_data) = self.signal_data.get_mut(signal_name) {
+                    existing_data.transitions.extend(filtered_transitions);
+                    existing_data.transitions.sort_by_key(|t| t.time);
+                    // Store tile info
+                    if let Some(sv) = start_value {
+                        existing_data.tile_info.push((tile_start, tile_end, sv.time, sv.value));
+                    }
+                } else {
+                    let mut signal_data = SignalWaveData::new(signal_name.clone(), width);
+                    signal_data.transitions = filtered_transitions;
+                    // Store tile info
+                    if let Some(sv) = start_value {
+                        signal_data.tile_info.push((tile_start, tile_end, sv.time, sv.value));
+                    }
+                    self.signal_data.insert(signal_name.clone(), signal_data);
                 }
-                self.signal_data.insert(signal_name.clone(), signal_data);
             }
 
             offset += SignalBlockHeader::SIZE;
@@ -1686,6 +1744,85 @@ if tile_missing_signals.is_empty() {
         Ok(transitions)
     }
 
+    /// Parse transitions into bucket data for LoD 1+ (First/Last format)
+    /// 
+    /// For LoD 1+, transitions with the same offset form a first/last pair:
+    /// - First transition: offset=X, value=first_value
+    /// - Last transition:  offset=X, value=last_value (if present)
+    /// 
+    /// Returns (start_value, buckets HashMap)
+    fn parse_buckets_from_transitions(
+        &self,
+        transitions: &[Transition],
+    ) -> (Option<String>, HashMap<u32, BucketData>) {
+        const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
+        
+        let mut start_value: Option<String> = None;
+        let mut buckets: HashMap<u32, BucketData> = HashMap::new();
+        let mut pending_first: Option<(u32, Transition)> = None;
+        
+        for transition in transitions {
+            // Check for start value (boundary time)
+            if transition.time == BOUNDARY_TIME_START {
+                start_value = Some(transition.value.clone());
+                continue;
+            }
+            
+            // For LoD 1+, time is bucket offset (0-255)
+            let offset = transition.time as u32;
+            
+            match pending_first {
+                None => {
+                    // No pending first, this is a first transition
+                    pending_first = Some((offset, Transition {
+                        time: offset as u64,
+                        value: transition.value.clone(),
+                    }));
+                }
+                Some((pending_offset, first_trans)) => {
+                    if offset == pending_offset {
+                        // Same offset: this is the last transition (first/last pair)
+                        let bucket = BucketData {
+                            offset: pending_offset,
+                            first: first_trans,
+                            last: Some(Transition {
+                                time: offset as u64,
+                                value: transition.value.clone(),
+                            }),
+                        };
+                        buckets.insert(pending_offset, bucket);
+                        pending_first = None;
+                    } else {
+                        // Different offset: previous was a single transition
+                        let bucket = BucketData {
+                            offset: pending_offset,
+                            first: first_trans,
+                            last: None,
+                        };
+                        buckets.insert(pending_offset, bucket);
+                        // This becomes the new first
+                        pending_first = Some((offset, Transition {
+                            time: offset as u64,
+                            value: transition.value.clone(),
+                        }));
+                    }
+                }
+            }
+        }
+        
+        // Handle any remaining pending first
+        if let Some((pending_offset, first_trans)) = pending_first {
+            let bucket = BucketData {
+                offset: pending_offset,
+                first: first_trans,
+                last: None,
+            };
+            buckets.insert(pending_offset, bucket);
+        }
+        
+        (start_value, buckets)
+    }
+
     /// Get render segments for current viewport
     pub fn get_segments(&self) -> Result<JsValue, JsValue> {
         // Optimization: if no signals to draw, return empty segments early
@@ -1726,18 +1863,31 @@ if tile_missing_signals.is_empty() {
             }
 
             if let Some(data) = self.signal_data.get(&signal.name) {
-                // Check if this is LoD 1+ data (min/max format)
-                // LoD 1+ has transitions with same timestamp in pairs (min, max)
-                let is_lod_min_max = self.detect_min_max_format(&data.transitions);
-
-                if is_lod_min_max {
-                    // Process LoD 1+ min/max format
-                    self.generate_min_max_segments(&data.transitions, data.width, y, &signal.name, 
-                        time_range, &mut segments);
+                // Check if we have bucket data (new First/Last format)
+                if !data.bucket_data.is_empty() {
+                    // Use new bucket-based segment generation
+                    self.generate_lod_segments_from_buckets(
+                        &data.bucket_data,
+                        data.width,
+                        y,
+                        &signal.name,
+                        time_range,
+                        &mut segments,
+                    );
                 } else {
-                    // Process LoD 0 format (original)
-                    self.generate_normal_segments(&data.transitions, data.width, y, &signal.name,
-                        time_range, &mut segments);
+                    // Check if this is LoD 1+ data (min/max format)
+                    // LoD 1+ has transitions with same timestamp in pairs (min, max)
+                    let is_lod_min_max = self.detect_min_max_format(&data.transitions);
+
+                    if is_lod_min_max {
+                        // Process LoD 1+ min/max format
+                        self.generate_min_max_segments(&data.transitions, data.width, y, &signal.name, 
+                            time_range, &mut segments);
+                    } else {
+                        // Process LoD 0 format (original)
+                        self.generate_normal_segments(&data.transitions, data.width, y, &signal.name,
+                            time_range, &mut segments);
+                    }
                 }
             }
         }
@@ -2170,6 +2320,154 @@ if tile_missing_signals.is_empty() {
             });
 
             i = j;
+        }
+    }
+
+    /// Generate segments from bucket data for LoD 1+ (First/Last format)
+    /// 
+    /// Drawing Rules per spec:
+    /// - Empty bucket: continue with current value
+    /// - Single transition: draw stable value
+    /// - First/Last pair: draw toggling
+    fn generate_lod_segments_from_buckets(
+        &self,
+        bucket_data: &[(u64, HashMap<u32, BucketData>)],
+        width: u32,
+        y: f64,
+        signal_name: &str,
+        time_range: f64,
+        segments: &mut Vec<RenderSegment>,
+    ) {
+        const TILE_SPAN_MULTIPLIER: u32 = 256;
+        
+        for (tile_start, buckets) in bucket_data {
+            // Calculate bucket size from tile span
+            // Use tile_start to determine lod (each tile at lod L has span = 2^L * 256)
+            // For simplicity, assume lod 25 (common for waveform view)
+            let lod = 25u32;
+            let tile_span = OpfsCacheManager::get_tile_span(lod);
+            let bucket_size = tile_span / TILE_SPAN_MULTIPLIER as u64;
+            
+            // Get start value for this tile
+            let start_value = self.signal_data.get(signal_name)
+                .and_then(|data| data.tile_info.iter()
+                    .find(|(start, _, _, _)| start == tile_start)
+                    .map(|(_, _, _, value)| value.clone()))
+                .unwrap_or_else(|| "0".to_string());
+            
+            let mut current_value = start_value.clone();
+            
+            // Process each bucket in the tile
+            for bucket_idx in 0..TILE_SPAN_MULTIPLIER {
+                let bucket_start_time = tile_start + (bucket_idx as u64) * bucket_size;
+                let bucket_end_time = bucket_start_time + bucket_size;
+                
+                // Skip if outside viewport
+                if bucket_end_time < self.viewport.time_start as u64 || 
+                   bucket_start_time > self.viewport.time_end as u64 {
+                    continue;
+                }
+                
+                // Clamp to viewport
+                let draw_start = (bucket_start_time as f64).max(self.viewport.time_start);
+                let draw_end = (bucket_end_time as f64).min(self.viewport.time_end);
+                
+                // Convert to pixel coordinates
+                let x0 = ((draw_start - self.viewport.time_start) / time_range) * self.canvas_width;
+                let x1 = ((draw_end - self.viewport.time_start) / time_range) * self.canvas_width;
+                
+                if x1 <= x0 {
+                    continue;
+                }
+                
+                match buckets.get(&bucket_idx) {
+                    None => {
+                        // Empty bucket: draw current value
+                        let (value_type, has_xz) = Self::classify_value(&current_value, width);
+                        let display_str = if width > 1 {
+                            self.format_multi_bit_value(&current_value, width)
+                        } else {
+                            current_value.clone()
+                        };
+                        
+                        segments.push(RenderSegment {
+                            x0,
+                            x1,
+                            y,
+                            value: ValueInfo {
+                                value_type,
+                                display_str,
+                                width,
+                                has_xz,
+                                min_value: Some(current_value.clone()),
+                                max_value: Some(current_value.clone()),
+                                is_min_max: false,
+                            },
+                            signal_name: signal_name.to_string(),
+                        });
+                    }
+                    Some(bucket) => {
+                        if bucket.has_toggle() {
+                            // First/Last pair: draw toggling
+                            let first_val = bucket.first.value.clone();
+                            let last_val = bucket.last.as_ref().unwrap().value.clone();
+                            
+                            let display_str = if width == 1 {
+                                "toggling".to_string()
+                            } else {
+                                format!("{}..{}", first_val, last_val)
+                            };
+                            
+                            segments.push(RenderSegment {
+                                x0,
+                                x1,
+                                y,
+                                value: ValueInfo {
+                                    value_type: "min_max".to_string(),
+                                    display_str,
+                                    width,
+                                    has_xz: false,
+                                    min_value: Some(first_val.clone()),
+                                    max_value: Some(last_val.clone()),
+                                    is_min_max: true,  // This is a toggle bucket
+                                },
+                                signal_name: signal_name.to_string(),
+                            });
+                            
+                            // Update current value to last
+                            current_value = last_val;
+                        } else {
+                            // Single transition: draw stable value
+                            let value = bucket.first.value.clone();
+                            let (value_type, has_xz) = Self::classify_value(&value, width);
+                            let display_str = if width > 1 {
+                                self.format_multi_bit_value(&value, width)
+                            } else {
+                                value.clone()
+                            };
+                            
+                            segments.push(RenderSegment {
+                                x0,
+                                x1,
+                                y,
+                                value: ValueInfo {
+                                    value_type,
+                                    display_str,
+                                    width,
+                                    has_xz,
+                                    min_value: Some(value.clone()),
+                                    max_value: Some(value.clone()),
+                                    is_min_max: false,
+                                },
+                                signal_name: signal_name.to_string(),
+                            });
+                            
+                            // Update current value
+                            current_value = value;
+                        }
+                    }
+                }
+            }
         }
     }
 
