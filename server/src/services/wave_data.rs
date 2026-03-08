@@ -777,6 +777,7 @@ impl LodPyramidGenerator {
             .unwrap_or_else(|| FourStateValue::new(source.width));
         let mut bucket_first = first_fs.clone();
         let mut bucket_last = first_fs.clone();
+        let mut bucket_has_multiple = false;  // 跟踪 bucket 内是否有多个 transitions
         let mut current_bucket_idx: usize = 0;
 
         // 遍历所有 transitions
@@ -803,8 +804,8 @@ impl LodPyramidGenerator {
                 
                 result.add_transition(Transition::from_numeric(current_bucket_idx as u64, &first_str));
                 
-                let has_xz = bucket_first.has_xz() || bucket_last.has_xz();
-                if first_str != last_str || has_xz {
+                // 如果 bucket 内有多个 transitions，输出 last（即使值相等）
+                if bucket_has_multiple {
                     result.add_transition(Transition::from_numeric(current_bucket_idx as u64, &last_str));
                 }
 
@@ -812,9 +813,11 @@ impl LodPyramidGenerator {
                 current_bucket_idx = trans_bucket_idx.min(total_buckets - 1);
                 bucket_first = trans_fs.clone();
                 bucket_last = trans_fs.clone();
+                bucket_has_multiple = false;  // 新 bucket 开始，重置标志
             } else {
-                // 更新当前 bucket 的 last（四态比较）
+                // 更新当前 bucket 的 last
                 bucket_last = trans_fs.clone();
+                bucket_has_multiple = true;  // 标记 bucket 内有多个 transitions
             }
         }
 
@@ -824,8 +827,8 @@ impl LodPyramidGenerator {
         
         result.add_transition(Transition::from_numeric(current_bucket_idx as u64, &first_str));
         
-        let has_xz = bucket_first.has_xz() || bucket_last.has_xz();
-        if first_str != last_str || has_xz {
+        // 如果 bucket 内有多个 transitions，输出 last（即使值相等）
+        if bucket_has_multiple {
             result.add_transition(Transition::from_numeric(current_bucket_idx as u64, &last_str));
         }
 
