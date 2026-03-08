@@ -1106,6 +1106,19 @@ impl WaveformDataProvider {
                                     let lod = self.current_lod.unwrap_or(25);
                                     let bucket_size = 1u64 << lod;
                                     
+                                    // Debug: print raw cache transitions before conversion
+                                    console_log!("[WASM] Cache raw data for tile {}: {} transitions", tile_id, signal_data.transitions.len());
+                                    for (i, t) in signal_data.transitions.iter().take(10).enumerate() {
+                                        let value_str = if t.value.len() <= 8 {
+                                            let mut bytes = [0u8; 8];
+                                            bytes[..t.value.len()].copy_from_slice(&t.value);
+                                            format!("0x{:X}", u64::from_le_bytes(bytes))
+                                        } else {
+                                            format!("0x{}", t.value.iter().map(|b| format!("{:02X}", b)).collect::<String>())
+                                        };
+                                        console_log!("[WASM]   Raw[{}]: time={}, value={}", i, t.time, value_str);
+                                    }
+                                    
                                     let transitions: Vec<Transition> = signal_data.transitions
                                         .into_iter()
                                         .map(|t| {
