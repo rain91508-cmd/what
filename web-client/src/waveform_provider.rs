@@ -1102,11 +1102,11 @@ impl WaveformDataProvider {
                                     tile_hits += 1;
                                     
                                     // Convert opfs_cache::SignalData to SignalWaveData
-                                    // For LoD 1+, cache stores bucket offsets (0-255), need to convert to absolute time
+                                    // For LoD 1+, cache stores bucket offsets (0-255)
+                                    // Keep offsets as-is to preserve first/last pairs
                                     let lod = self.current_lod.unwrap_or(25);
-                                    let bucket_size = 1u64 << lod;
                                     
-                                    // Debug: print raw cache transitions before conversion
+                                    // Debug: print raw cache transitions
                                     console_log!("[WASM] Cache raw data for tile {}: {} transitions", tile_id, signal_data.transitions.len());
                                     for (i, t) in signal_data.transitions.iter().take(10).enumerate() {
                                         let value_str = if t.value.len() <= 8 {
@@ -1134,15 +1134,9 @@ impl WaveformDataProvider {
                                                 format!("0x{}", t.value.iter().map(|b| format!("{:02X}", b)).collect::<String>())
                                             };
                                             
-                                            // Convert bucket offset to absolute time for LoD 1+
-                                            // t.time is bucket offset (0-255) for LoD 1+
-                                            let absolute_time = if lod > 0 && t.time < 256 {
-                                                tile_start + t.time * bucket_size
-                                            } else {
-                                                t.time
-                                            };
-                                            
-                                            Transition { time: absolute_time, value }
+                                            // Keep time as-is (offset for LoD 1+, absolute for LoD 0)
+                                            // First/last pairs have same offset, will be parsed correctly
+                                            Transition { time: t.time, value }
                                         })
                                         .collect();
                                     
@@ -1162,9 +1156,10 @@ impl WaveformDataProvider {
                                         // Merge transitions
                                         let mut all_transitions = existing.transitions.clone();
                                         all_transitions.extend(filtered_transitions);
-                                        // Sort by time and remove duplicates
+                                        // Sort by time
                                         all_transitions.sort_by_key(|t| t.time);
-                                        all_transitions.dedup_by_key(|t| t.time);
+                                        // Note: Don't dedup here! First/last pairs have same time (offset)
+                                        // dedup would remove one of the pair
                                         existing.transitions = all_transitions;
                                         // Store tile info
                                         if let Some(sv) = start_value {
@@ -1912,30 +1907,29 @@ if tile_missing_signals.is_empty() {
                     
                     if is_lod_format {
                         // Parse transitions into bucket data and generate segments
-                        // Need to handle multiple tiles - group transitions by tile
+                        // For LoD 1+ cache data, transitions are bucket offsets (0-255)
+                        // We need to group them by tile and convert offsets to absolute times
+                        let lod = self.current_lod.unwrap_or(25);
+                        let bucket_size = 1u64 << lod;
+                        let tile_span = OpfsCacheManager::get_tile_span(lod);
+                        
                         let mut tile_buckets: std::collections::HashMap<u64, HashMap<u32, BucketData>> = std::collections::HashMap::new();
                         
+                        console_log!("[WASM] Grouping {} transitions by tile (lod={}, bucket_size={})", 
+                            data.transitions.len(), lod, bucket_size);
+                        
                         // Group transitions by tile_start (from tile_info)
-                        console_log!("[WASM] Grouping {} transitions by tile", data.transitions.len());
-                        for (tile_idx, (tile_start, tile_end, _, _)) in data.tile_info.iter().enumerate() {
-                            // Get transitions for this tile (time < tile_end)
-                            let tile_transitions: Vec<Transition> = data.transitions
-                                .iter()
-                                .filter(|t| t.time != BOUNDARY_TIME_START && (t.time as u64) < *tile_end)
-                                .cloned()
-                                .collect();
+                        for (tile_idx, (tile_start, _tile_end, _, _)) in data.tile_info.iter().enumerate() {
+                            // For each tile, parse all transitions into buckets
+                            // The transitions are bucket offsets, same for all tiles in the cache
+                            // But we need to create bucket_data for each tile with correct absolute times
                             
-                            console_log!("[WASM]   Tile {}: start={}, end={}, {} transitions", 
-                                tile_idx, tile_start, tile_end, tile_transitions.len());
+                            // Parse all transitions into buckets (using offsets)
+                            let (_, buckets) = self.parse_buckets_from_transitions(&data.transitions);
                             
-                            // Debug: print first few transitions
-                            for (i, t) in tile_transitions.iter().take(5).enumerate() {
-                                console_log!("[WASM]     Trans[{}]: time={}, value={}", i, t.time, t.value);
-                            }
-                            
-                            if !tile_transitions.is_empty() {
-                                let (_, buckets) = self.parse_buckets_from_transitions(&tile_transitions);
-                                console_log!("[WASM]   Tile {}: {} buckets parsed", tile_idx, buckets.len());
+                            if !buckets.is_empty() {
+                                console_log!("[WASM]   Tile {}: start={}, {} buckets", 
+                                    tile_idx, tile_start, buckets.len());
                                 tile_buckets.insert(*tile_start, buckets);
                             }
                         }
