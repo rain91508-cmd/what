@@ -206,30 +206,78 @@ function buildWasmSignals(
 }
 ```
 
-## 5. Group Bin 文件格式（极简）
+## 5. Group Bin 文件格式（V2）
+
+### 5.1 文件布局
 
 ```
-┌────────────────────────────────────────────────────────┐
-│ Header (4 bytes)                                       │
-├────────────────────────────────────────────────────────┤
-│  signal_count: u16    = 实际信号数量（可能 < 256）      │
-│  reserved: u16        = 0                              │
-├────────────────────────────────────────────────────────┤
-│ Signal Offset Table (8 bytes × signal_count)           │
-├────────────────────────────────────────────────────────┤
-│  [draw_sig_id: u32, offset: u32] × signal_count        │
-├────────────────────────────────────────────────────────┤
-│ Data Area                                              │
-├────────────────────────────────────────────────────────┤
-│  Signal 0:                                             │
-│    [transition_count: u32]                             │
-│    [time: u64, value_len: u8, value: bytes] × count    │
-│  Signal 1: [...]                                       │
-│  ...                                                   │
-└────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│ GroupBinHeaderV2 (16 bytes)                                 │
+├─────────────────────────────────────────────────────────────┤
+│ SignalDirectory (1024 bytes = 256 slots × 4 bytes)          │
+├─────────────────────────────────────────────────────────────┤
+│ Data Area (variable size)                                   │
+│  ├── SignalData 0                                           │
+│  ├── SignalData 1                                           │
+│  └── ...                                                    │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### Value 格式
+### 5.2 GroupBinHeaderV2 (16 bytes)
+
+```rust
+pub struct GroupBinHeaderV2 {
+    pub magic: u32,           // 0x47524F55 ("GROU")
+    pub version: u8,          // 2
+    pub reserved: u8,         // 0
+    pub signal_count: u16,    // 实际信号数量
+    pub data_area_offset: u32, // 数据区域偏移 (16 + 1024 = 1040)
+    pub reserved2: [u8; 4],   // 0
+}
+```
+
+### 5.3 SignalDirectory (1024 bytes)
+
+- 256 个固定 slots，每个 slot 4 bytes
+- **索引方式**: `index = draw_sig_id % 256`
+- **Entry 格式**: `[exists: 1 bit][offset: 31 bits]`
+  - Bit 31 (MSB): 1 = signal 存在, 0 = 空 slot
+  - Bits 0-30: signal data 在 data area 中的偏移
+
+```rust
+pub struct SignalDirectory {
+    pub entries: [u32; 256],  // 256 slots
+}
+
+pub struct SignalDirectoryEntry {
+    pub exists: bool,         // Bit 31
+    pub offset: u32,          // Bits 0-30 (max 2GB offset)
+}
+```
+
+### 5.4 SignalData 格式
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ draw_sig_id: u32 (4 bytes)                                  │
+├─────────────────────────────────────────────────────────────┤
+│ transition_count: u32 (4 bytes)                             │
+├─────────────────────────────────────────────────────────────┤
+│ Transition 0                                                │
+│ ├── time: u64 (8 bytes)        // bucket offset (0-255)     │
+│ ├── value_len: u8 (1 byte)                                  │
+│ └── value: [u8; value_len]    // 二进制值                   │
+├─────────────────────────────────────────────────────────────┤
+│ Transition 1                                                │
+│ ├── time: u64 (8 bytes)                                     │
+│ ├── value_len: u8 (1 byte)                                  │
+│ └── value: [u8; value_len]                                  │
+├─────────────────────────────────────────────────────────────┤
+│ ...                                                         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 5.5 Value 格式
 
 ```
 单 bit 信号:
@@ -244,6 +292,17 @@ function buildWasmSignals(
   value_len = 4
   value = [0x78, 0x56, 0x34, 0x12]
 ```
+
+### 5.6 Group 分片策略
+
+每个 group 文件最多存储 256 个 signals（draw_sig_id 0-255）。
+
+**冲突处理**：
+- Signal A: draw_sig_id = 0 → group_0.bin, index = 0
+- Signal B: draw_sig_id = 1 → group_0.bin, index = 1
+- Signal C: draw_sig_id = 257 → group_1.bin, index = 1
+
+不同的 group 文件避免冲突。
 
 ## 6. WASM 接口设计
 
@@ -290,39 +349,18 @@ impl WaveformDataProvider {
 ```rust
 #[wasm_bindgen]
 impl WaveformDataProvider {
-    /// 准备数据（内部处理三级缓存）
+    /// 批量获取信号数据（内部处理三级缓存）
     /// 
     /// 这是 JS 调用的主入口。WASM 内部：
-    /// 1. 计算需要哪些 (lod, tile, group)
-    /// 2. 检查 Memory LRU 缓存
-    /// 3. 如启用 OPFS，尝试从 OPFS 读取
-    /// 4. 返回缺失的 blocks（需要 JS 从服务器获取）
-    /// 
-    /// # Returns
-    /// * `missing_blocks` - 需要从服务器获取的 block 列表
-    /// * `cache_stats` - 缓存统计（命中数、缺失数）
-    #[wasm_bindgen]
-    pub async fn prepare_data(&mut self) -> Result<JsValue, JsValue>;
-    // 返回: { 
-    //   missing_blocks: [{ lod, tile, group, draw_sig_ids: [] }, ...],
-    //   cache_stats: { memory_hits, opfs_hits, misses }
-    // }
-    
-    /// 从服务器获取数据后，补充到缓存
-    /// 
-    /// WASM 直接处理服务器返回的原始数据：
-    /// 1. 解析服务器 chunk 数据（复用现有 parse_chunk_data_for_batch 逻辑）
-    /// 2. 按 (lod, tile, group) 重新组织数据为 Group Bin 格式
-    /// 3. 如启用 OPFS，直接写入 OPFS（WASM 通过 JS 回调）
-    /// 4. 存入 Memory LRU
-    /// 
-    /// 注意：OPFS 的读写由 WASM 控制，JS 只提供访问回调
+    /// 1. 计算需要哪些 tiles
+    /// 2. 检查 cache per signal per tile
+    /// 3. cache hit: 读取 group 文件，解析为 bucket_data
+    /// 4. cache miss: 从服务器获取，解析 chunk 数据，存储为 bucket_data
     /// 
     /// # Arguments
-    /// * `server_data_js` - 服务器返回的原始 chunk 数据（ArrayBuffer）
-    ///                      格式与现有 /api/wave/{wave}/lod/{l}/time/{start}/{end}/... 相同
+    /// * `signal_names` - 信号名称列表
     #[wasm_bindgen]
-    pub fn supplement_data(&mut self, server_data_js: JsValue) -> Result<(), JsValue>;
+    pub async fn fetch_signals_data_batch(&mut self, signal_names: Vec<String>) -> Result<(), JsValue>;
     
     /// 生成渲染用的 segments
     #[wasm_bindgen]
@@ -351,12 +389,6 @@ impl WaveformDataProvider {
     /// - 小数据量快速渲染
     #[wasm_bindgen]
     pub fn set_signal_data_direct(&mut self, data_js: JsValue) -> Result<(), JsValue>;
-    
-    /// 【兼容老版本】从服务器批量获取信号数据
-    /// 
-    /// 保持与现有代码兼容，内部会调用新的缓存逻辑
-    #[wasm_bindgen]
-    pub async fn fetch_signals_data_batch(&mut self, signal_names: Vec<String>) -> Result<(), JsValue>;
 }
 ```
 
@@ -376,141 +408,109 @@ JS: renderWaveform()
   │     ├── wasm.set_viewport()
   │     └── wasm.set_canvas()
   │
-  ├── 3. WASM 准备数据
-  │     └── wasm.prepare_data()
+  ├── 3. WASM 获取数据
+  │     └── wasm.fetch_signals_data_batch(signal_names)
   │         │
-  │         ├── 计算所需 blocks (lod, tile, group)
-  │         ├── 检查 Memory LRU ──命中──┐
-  │         │                           │
-  │         ├── 调用 JS OPFS 读取 ──命中──┤
-  │         │                           │
-  │         └── 返回缺失 blocks ◄───────┘
+  │         ├── 计算所需 tiles
+  │         ├── 对每个 tile 的每个 signal:
+  │         │   ├── 检查 cache
+  │         │   │   ├── cache hit: 读取 group 文件
+  │         │   │   │   └── 解析为 bucket_data
+  │         │   │   └── cache miss: 标记为 missing
+  │         │   └── 合并到 signal_data.bucket_data
+  │         │
+  │         ├── 如有 missing signals:
+  │         │   └── 从服务器获取 chunk 数据
+  │         │       ├── 解析 chunk 为 transitions
+  │         │       ├── 转换为 bucket_data
+  ��         │       └── 写入 cache (group bin 格式)
+  │         │
+  │         └── 所有数据存入 signal_data
   │
-  ├── 4. 如有缺失，JS 从服务器获取
-  │     └── if (missing_blocks.length > 0)
-  │         ├── fetchFromServer(missing_blocks) -> ArrayBuffer
-  │         └── wasm.supplement_data(serverData)  // WASM 直接解析并写入 OPFS
-  │             ├── WASM 解析 chunk 数据
-  │             ├── 按 (lod, tile, group) 重组为 Group Bin
-  │             ├── 写入 OPFS（通过 JS 回调）
-  │             └── 存入 Memory LRU
-  │
-  └── 5. 获取 segments 并渲染
+  └── 4. 获取 segments 并渲染
       ├── segments = wasm.get_segments()
+      │   └── 遍历 bucket_data，生成 RenderSegment
       └── renderer.render(segments)
 ```
 
-### 7.2 Fallback 流程（禁用 OPFS）
-
-```
-JS: renderWaveform()
-  │
-  ├── 1. 构建 draw list（不分配 draw_sig_id，使用 global_id）
-  │
-  ├── 2. 初始化 WASM
-  │     └── wasm.init_with_opfs(null, null, null, enable_opfs=false)
-  │         └── WASM 内部跳过所有 OPFS 逻辑
-  │
-  ├── 3. 【兼容模式】直接服务器获取
-  │     └── wasm.fetch_signals_data_batch(signalNames)
-  │         └── 内部：Memory 缓存 → 服务器获取
-  │
-  └── 4. 获取 segments 并渲染
-      └── 与正常流程相同
-```
-
-### 7.3 计算所需数据块
+### 7.2 Cache Hit 处理流程
 
 ```rust
-fn compute_required_blocks(&self) -> Vec<DataBlock> {
-    let lod = self.select_lod();
-    let tiles = self.compute_tiles(lod);
-    let groups = self.compute_groups();
-    
-    // 笛卡尔积生成 blocks
-    let mut blocks = Vec::new();
-    for tile in tiles {
-        for group in groups {
-            // 找出这个 group 中需要哪些 draw_sig_ids
-            let draw_sig_ids: Vec<u32> = self.draw_list.iter()
-                .filter(|s| self.get_group_id(s.draw_sig_id) == group)
-                .map(|s| s.draw_sig_id)
-                .collect();
-            
-            if !draw_sig_ids.is_empty() {
-                blocks.push(DataBlock {
-                    lod,
-                    tile,
-                    group,
-                    draw_sig_ids,
-                });
-            }
-        }
+// 1. 构建 cache key
+let block = DataBlock::new(lod, tile_id, group_id);
+let path = block.to_path(&self.waveform_name);  // "lod25/tile_0000/group_0.bin"
+
+// 2. 从 OPFS 读取
+match self.opfs_cache.read_signal_from_group(&path, draw_sig_id).await {
+    Ok(Some(signal_data)) => {
+        // 3. 转换为 transitions
+        let transitions: Vec<Transition> = signal_data.transitions
+            .into_iter()
+            .map(|t| Transition { time: t.time, value })
+            .collect();
+        
+        // 4. 解析为 bucket_data
+        let (start_value, buckets) = self.parse_buckets_from_transitions(&transitions);
+        
+        // 5. 存储到 signal_data
+        existing.bucket_data.push((tile_start, buckets));
     }
-    blocks
+    Ok(None) => { /* cache miss */ }
+    Err(e) => { /* error */ }
 }
 ```
 
-### 7.4 处理 Group 中信号缺失
+### 7.3 Server Fetch 处理流程
 
 ```rust
-/// 加载单个 block 的数据
-async fn load_block(&mut self, block: &DataBlock) -> Result<Option<Vec<u8>>, JsValue> {
-    let key = format!("lod{}/tile_{:04}/group_{}.bin", 
-        block.lod, block.tile, block.group);
+// 1. 构建 URL
+let url = format!("{}/api/wave/{}/lod/{}/tile/{}/{}/{}/...",
+    server_url, waveform_name, lod, start_time, tile_span, num_tiles);
+
+// 2. 获取 chunk 数据
+let chunk_data = fetch(&url).await?;
+
+// 3. 解析 chunk
+let chunk_signals = self.parse_server_chunk(&chunk_data)?;
+
+// 4. 对每个 signal:
+for signal in chunk_signals {
+    // 4.1 转换为 transitions
+    let transitions = signal.transitions;
     
-    // 1. 检查 Memory
-    if let Some(data) = self.memory_cache.get(&key) {
-        return Ok(Some(data.clone()));
+    // 4.2 解析为 bucket_data
+    let (start_value, buckets) = self.parse_buckets_from_transitions(&transitions);
+    
+    // 4.3 存储到 signal_data
+    existing.bucket_data.push((tile_start, buckets));
+    
+    // 4.4 写入 cache (如果启用)
+    if enable_opfs {
+        let group_data = GroupData { signals: vec![signal] };
+        let bin_data = serialize_group_data_v2(&group_data);
+        self.opfs_cache.write(&path, &bin_data).await?;
     }
+}
+```
+
+### 7.4 计算所需数据块
+
+```rust
+fn compute_required_tiles(&self, lod: u32) -> Vec<u64> {
+    let tile_span = get_tile_span(lod);
+    let start_tile = self.viewport.time_start as u64 / tile_span;
+    let end_tile = self.viewport.time_end as u64 / tile_span;
     
-    // 2. 如启用 OPFS，尝试读取
-    if self.enable_opfs {
-        if let Some(data) = self.js_opfs_read(&key).await? {
-            // 存入 Memory
-            self.memory_cache.set(key, data.clone());
-            return Ok(Some(data));
-        }
-    }
-    
-    // 未命中，需要服务器获取
-    Ok(None)
+    (start_tile..=end_tile).collect()
 }
 
-/// 处理缺失的 block（从服务器获取后）
-/// 
-/// WASM 内部处理流程：
-/// 1. 解析服务器 chunk 数据（复用 parse_chunk_data_for_batch）
-/// 2. 提取本 block 相关的信号数据
-/// 3. 序列化为 Group Bin 格式
-/// 4. 写入 OPFS（通过 JS 回调）
-/// 5. 存入 Memory LRU
-fn handle_missing_block(&mut self, block: DataBlock, server_chunk_data: Vec<u8>) -> Result<(), JsValue> {
-    // 1. 解析服务器 chunk 数据
-    let chunk_signals = self.parse_server_chunk(&server_chunk_data)?;
-    
-    // 2. 提取本 block 的信号（按 group 过滤）
-    let block_signals: Vec<SignalData> = chunk_signals.into_iter()
-        .filter(|s| self.get_group_id(s.draw_sig_id) == block.group)
-        .collect();
-    
-    // 3. 序列化为 Group Bin
-    let group_data = GroupData { signals: block_signals };
-    let bin_data = serialize_group_data(&group_data);
-    
-    // 4. 构建 OPFS 路径
-    let key = format!("lod{}/tile_{:04}/group_{}.bin", 
-        block.lod, block.tile, block.group);
-    
-    // 5. 保存到 OPFS（如果启用）
-    if self.enable_opfs {
-        self.js_opfs_write(&key, &bin_data).await?;
+fn compute_groups(&self) -> Vec<u32> {
+    let mut groups = HashSet::new();
+    for signal in &self.signals {
+        let group_id = signal.draw_sig_id / CONFIG.GROUP_SIZE;
+        groups.insert(group_id);
     }
-    
-    // 6. 存入 Memory
-    self.memory_cache.set(key, bin_data);
-    
-    Ok(())
+    groups.into_iter().collect()
 }
 ```
 
@@ -540,7 +540,7 @@ Server (Binary Chunk)
 JS: fetch() -> ArrayBuffer
     │
     ▼
-WASM: supplement_data(ArrayBuffer)
+WASM: fetch_signals_data_batch()
     │
     ├── 解析 chunk（复用现有逻辑）
     ├── 按 (lod, tile, group) 重组
@@ -559,9 +559,66 @@ WASM: supplement_data(ArrayBuffer)
 3. **简化 JS**：JS 代码更简单，只关注网络请求和 UI
 4. **可移植性**：WASM 逻辑可以在不同环境中复用（如原生应用）
 
-## 9. OPFS GC 回收策略
+## 9. 数据一致性保证
 
-### 9.1 IndexedDB 索引
+### 9.1 First/Last Pair 处理
+
+**Server 返回**：
+- 每个 bucket 可能有 1 或 2 个 transitions
+- 2 个 transitions = first/last pair（相同 offset）
+
+**Cache 存储**：
+- 保持原始 transitions 格式（不合并）
+- 相同 offset 的两个 transitions 都存储
+
+**Memory 解析**：
+- `parse_buckets_from_transitions` 识别 first/last pair
+- 生成 `BucketData { first, last: Some(last) }`
+
+### 9.2 跨 Tile 连续性
+
+**问题**：tile 1 的 start value 应该是 tile 0 的 last value
+
+**解决方案**：
+```rust
+// generate_lod_segments_from_buckets 中
+let mut cross_tile_value: Option<String> = None;
+
+for (tile_idx, (tile_start, buckets)) in bucket_data.iter().enumerate() {
+    let start_value = if tile_idx == 0 {
+        // First tile: use tile's start value
+        get_start_value_from_tile_info()
+    } else {
+        // Subsequent tiles: use last value from previous tile
+        cross_tile_value.clone().unwrap_or_else(|| "0".to_string())
+    };
+    
+    // ... process buckets ...
+    
+    // Update cross_tile_value for next tile
+    cross_tile_value = Some(current_value.clone());
+}
+```
+
+### 9.3 Tile 顺序保证
+
+**问题**：HashMap 的迭代顺序不确定
+
+**解决方案**：
+```rust
+// Server fetch: sort tile_ids
+let mut tile_ids: Vec<u64> = tile_missing_signals.keys().cloned().collect();
+tile_ids.sort();
+
+// Cache hit: tiles processed in order of tiles_to_fetch
+for (tile_idx, tile_id) in tiles_to_fetch.iter().enumerate() {
+    // ...
+}
+```
+
+## 10. OPFS GC 回收策略
+
+### 10.1 IndexedDB 索引
 
 ```typescript
 // IndexedDB: tile_cache_index
@@ -577,7 +634,7 @@ interface TileIndexEntry {
 }
 ```
 
-### 9.2 GC 策略
+### 10.2 GC 策略
 
 ```rust
 impl WaveformCache {
@@ -627,9 +684,9 @@ impl WaveformCache {
 }
 ```
 
-## 10. JS 端调用示例
+## 11. JS 端调用示例
 
-### 10.1 正常模式（启用 OPFS）
+### 11.1 正常模式（启用 OPFS）
 
 ```typescript
 class WaveformController {
@@ -669,18 +726,11 @@ class WaveformController {
     this.wasm.set_viewport(viewport.timeStart, viewport.timeEnd);
     this.wasm.set_canvas(width, height, 24);
     
-    // 3. WASM 准备数据
-    const result = await this.wasm.prepare_data();
+    // 3. WASM 获取数据（内部处理 cache/server）
+    const signalNames = wasmSignals.map(s => s.name);
+    await this.wasm.fetch_signals_data_batch(signalNames);
     
-    // 4. 如有缺失，从服务器获取
-    if (result.missing_blocks.length > 0) {
-      console.log(`[Waveform] ${result.missing_blocks.length} blocks missing, fetching from server`);
-      
-      const serverData = await fetchFromServer(result.missing_blocks);
-      this.wasm.supplement_data(serverData);
-    }
-    
-    // 5. 渲染
+    // 4. 渲染
     const segments = this.wasm.get_segments();
     renderer.render(segments);
   }
@@ -713,7 +763,7 @@ class WaveformController {
 }
 ```
 
-### 10.2 Fallback 模式（禁用 OPFS）
+### 11.2 Fallback 模式（禁用 OPFS）
 
 ```typescript
 async renderFallback(viewport: Viewport, signalList: UISignal[]) {
@@ -729,7 +779,7 @@ async renderFallback(viewport: Viewport, signalList: UISignal[]) {
 }
 ```
 
-## 10. 性能指标
+## 12. 性能指标
 
 | 指标 | 目标值 | 说明 |
 |------|--------|------|
@@ -742,10 +792,10 @@ async renderFallback(viewport: Viewport, signalList: UISignal[]) {
 | 最大时间点 | 10B+ | 64-bit time |
 | Fallback 切换 | < 50ms | 检测到 OPFS 失败时 |
 
-## 11. 实现优先级
+## 13. 实现优先级
 
 1. **P0**: WASM 接口改造（支持 fallback）
-2. **P0**: Group bin 文件格式
+2. **P0**: Group bin 文件格式 V2
 3. **P0**: Signal ID 管理（JS 端）
 4. **P1**: Memory LRU 缓存
 5. **P1**: OPFS 读写接口
@@ -753,9 +803,9 @@ async renderFallback(viewport: Viewport, signalList: UISignal[]) {
 7. **P2**: 预取策略
 8. **P2**: 性能监控
 
-## 12. 向后兼容说明
+## 14. 向后兼容说明
 
-### 12.1 检测 OPFS 支持
+### 14.1 检测 OPFS 支持
 
 ```typescript
 function checkOpfsSupport(): boolean {
@@ -765,7 +815,7 @@ function checkOpfsSupport(): boolean {
 }
 ```
 
-### 12.2 渐进式启用
+### 14.2 渐进式启用
 
 ```typescript
 // 第一阶段：默认禁用，手动开启
@@ -778,7 +828,7 @@ const ENABLE_OPFS = checkOpfsSupport();
 const ENABLE_OPFS = localStorage.getItem('disable_opfs') !== 'true';
 ```
 
-### 12.3 调试开关
+### 14.3 调试开关
 
 ```typescript
 // URL 参数控制
@@ -795,10 +845,12 @@ const enableOpfs = opfsMode === 'on' ||
 
 ---
 
-**版本**: 1.2
-**日期**: 2026-03-06
+**版本**: 1.3
+**日期**: 2026-03-08
 **更新**: 
-- 明确 WASM 控制 OPFS 读写，JS 只提供访问回调
-- 补充 WASM/JS 职责分工章节
-- 更新 supplement_data 设计，WASM 直接处理服务器原始数据
+- 更新 Group Bin 文件格式为 V2（16 bytes header + 256 slots directory）
+- 补充 SignalData 包含 draw_sig_id 的说明
+- 更新数据加载流程，匹配实际实现
+- 补充数据一致性保证章节（first/last pair、跨 tile 连续性）
+- 补充 tile 顺序保证说明
 **作者**: AI Assistant
