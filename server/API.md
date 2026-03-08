@@ -983,31 +983,35 @@ LoD 是基于**时间**的降采样，每个 bucket 覆盖固定的时间范围�
 
 **重要说明：**
 - **LoD 0** 使用 FST 文件的**原始数据**，不做任何降采样
-- **LoD 1+** 使用 **Min/Max Bucket** 算法进行降采样
+- **LoD 1+** 使用 **First/Last Bucket** 算法进行降采样
 - 每个 bucket 覆盖固定的时间范围 `[bucket_start, bucket_end]`
-- 每个 bucket 输出该时间范围内的最小值和最大值，确保波形特征不丢失
 - Bucket 大小计算公式: `2^level`
-- **Min/Max 输出规则**: 当 bucket 内 min = max 时，只输出 1 个记录；当 min ≠ max 或包含 X/Z 状态时，输出 2 个记录（min 和 max 都使用 bucket 结束时间），确保波形变化被正确表示
-- **Start/End Value 处理**:
+- **First/Last 输出规则**: 
+  - 当 bucket 内 first = last 时，只输出 1 个记录
+  - 当 bucket 内 first ≠ last 时，输出 2 个记录
+  - 时间戳使用 bucket offset（从 0 开始计数），表示 bucket 在 tile 中的位置
+- **Start Value 处理**:
   - **Start Value**: 请求时间范围起始点之前的最近一个值（向前搜索）
-  - **End Value**: 请求时间范围内最后一个 transition 的值（tile 内部的最后一个值）
-  - Start Value 和 End Value 都使用特殊时间戳 `0xFFFFFFFFFFFFFFFF` (BOUNDARY_TIME_START)
-  - 通过位置区分：第一个是 Start Value，第二个是 End Value
-  - **保证每个返回的 chunk 都有 Start Value 和 End Value**：即使请求时间范围在波形开始点（如 time=0），也会返回默认值 'X'
+  - Start Value 使用特殊时间戳 `0xFFFFFFFFFFFFFFFF` (BOUNDARY_TIME_START)
+  - **保证每个返回的 chunk 都有 Start Value**：即使请求时间范围在波形开始点（如 time=0），也会返回默认值 'X'
   - **默认值 'X'**：1-bit 信号返回 `"X"`，n-bit 信号返回 `"bXXX...X"` (n 个 X)
 - **数据格式**:
   ```
   [Start Value] (time=BOUNDARY_TIME_START, value=tile_start之前的最近值)
-  [End Value] (time=BOUNDARY_TIME_START, value=tile内最后一个transition的值)
   
-  每个 normal transition (LoD bucket):
-    [min] (time=bucket_end)
-    [max] (time=bucket_end, 如果 min!=max)
+  每个 bucket (LoD 1+):
+    [first] (time=bucket_offset, value=bucket内第一个transition的值)
+    [last] (time=bucket_offset, value=bucket内最后一个transition的值, 如果 first!=last)
   ```
-- **空时间范围处理**：当请求的时间范围或 tile 内没有任何 transitions 时：
-  - 返回 Start Value 和 End Value（值相同）
-  - transition_count = 2
-- **Start/End Value 搜索算法**:
+- **空 bucket 处理**：
+  - 如果 bucket 内没有任何 transitions，不输出任何记录
+  - 客户端应使用上一个有数据的 bucket 的 last 值绘制
+  - 如果没有上一个 bucket，使用 Start Value
+- **客户端绘制建议**:
+  - first == last：画稳定值
+  - first != last：画 toggling 图案（如斜线填充）
+  - 空 bucket：延续上一个 bucket 的 last 值（或 Start Value）
+- **Start Value 搜索算法**:
   - 使用二分法查找最小有记录的区域
   - 为每个信号单独搜索最小区域
   - 找到所有信号的公有最小区域（取并集）
