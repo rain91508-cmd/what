@@ -1890,7 +1890,8 @@ if tile_missing_signals.is_empty() {
                         let mut tile_buckets: std::collections::HashMap<u64, HashMap<u32, BucketData>> = std::collections::HashMap::new();
                         
                         // Group transitions by tile_start (from tile_info)
-                        for (tile_start, tile_end, _, _) in &data.tile_info {
+                        console_log!("[WASM] Grouping {} transitions by tile", data.transitions.len());
+                        for (tile_idx, (tile_start, tile_end, _, _)) in data.tile_info.iter().enumerate() {
                             // Get transitions for this tile (time < tile_end)
                             let tile_transitions: Vec<Transition> = data.transitions
                                 .iter()
@@ -1898,8 +1899,17 @@ if tile_missing_signals.is_empty() {
                                 .cloned()
                                 .collect();
                             
+                            console_log!("[WASM]   Tile {}: start={}, end={}, {} transitions", 
+                                tile_idx, tile_start, tile_end, tile_transitions.len());
+                            
+                            // Debug: print first few transitions
+                            for (i, t) in tile_transitions.iter().take(5).enumerate() {
+                                console_log!("[WASM]     Trans[{}]: time={}, value={}", i, t.time, t.value);
+                            }
+                            
                             if !tile_transitions.is_empty() {
                                 let (_, buckets) = self.parse_buckets_from_transitions(&tile_transitions);
+                                console_log!("[WASM]   Tile {}: {} buckets parsed", tile_idx, buckets.len());
                                 tile_buckets.insert(*tile_start, buckets);
                             }
                         }
@@ -1911,6 +1921,25 @@ if tile_missing_signals.is_empty() {
                         
                         console_log!("[WASM] Cache data: {} tiles from tile_info, {} bucket entries (sorted)", 
                             data.tile_info.len(), bucket_data.len());
+                        
+                        // Debug: print bucket details for each tile
+                        for (tile_idx, (tile_start, buckets)) in bucket_data.iter().enumerate() {
+                            console_log!("[WASM]   Bucket entry {}: start={}, {} buckets", 
+                                tile_idx, tile_start, buckets.len());
+                            // Print first few bucket offsets
+                            let mut offsets: Vec<u32> = buckets.keys().cloned().collect();
+                            offsets.sort();
+                            for (i, offset) in offsets.iter().take(5).enumerate() {
+                                if let Some(bucket) = buckets.get(offset) {
+                                    let last_str = match &bucket.last {
+                                        Some(l) => format!(", last={}", l.value),
+                                        None => "".to_string(),
+                                    };
+                                    console_log!("[WASM]     Bucket[{}]: offset={}, first={}{}", 
+                                        i, offset, bucket.first.value, last_str);
+                                }
+                            }
+                        }
                         
                         self.generate_lod_segments_from_buckets(
                             &bucket_data,
