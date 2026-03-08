@@ -234,6 +234,177 @@ pub fn search_boundary_values_optimized(
     results
 }
 
+/// 使用 fstapi reader 搜索 bucket 内的 first 和 last 值（优化版本）
+/// 
+/// 用于 LoD > 15 的情况，减少 FST 读取次数
+/// 直接使用 fstapi 的 set_time_range_limit 和 for_each_block，不需要预先读取全部数据
+/// 
+/// # Arguments
+/// * `reader` - fstapi Reader
+/// * `handles` - 信号 handle 列表
+/// * `bucket_start` - bucket 起始时间
+/// * `bucket_end` - bucket 结束时间
+/// 
+/// # Returns
+/// * 每个信号的 (first, last) 值，如果 bucket 内没有 transition 则为 None
+pub fn search_bucket_first_last_from_fst(
+    reader: &mut fstapi::Reader,
+    handles: &[Handle],
+    bucket_start: u64,
+    bucket_end: u64,
+) -> std::collections::HashMap<Handle, (Option<SignalValue>, Option<SignalValue>)> {
+    let mut results: std::collections::HashMap<Handle, (Option<SignalValue>, Option<SignalValue>)> = 
+        handles.iter().map(|h| (*h, (None, None))).collect();
+    
+    // 用于存储每个信号的 first 和 last 值
+    let mut first_values: std::collections::HashMap<Handle, SignalValue> = std::collections::HashMap::new();
+    let mut last_values: std::collections::HashMap<Handle, SignalValue> = std::collections::HashMap::new();
+    
+    // 设置时间范围限制
+    reader.set_time_range_limit(bucket_start, bucket_end);
+    
+    // 迭代读取数据
+    reader.for_each_block(|time, handle, value, _var_len| {
+        if handles.contains(&handle) {
+            let signal_value = SignalValue::Numeric(String::from_utf8_lossy(value).to_string());
+            
+            // 记录 first（第一个遇到的值）
+            if !first_values.contains_key(&handle) {
+                first_values.insert(handle, signal_value.clone());
+            }
+            
+            // 更新 last（最后一个遇到的值）
+            last_values.insert(handle, signal_value);
+        }
+    }).ok();
+    
+    // 重置时间范围限制
+    reader.reset_time_range_limit();
+    
+    // 组装结果
+    for handle in handles {
+        let first = first_values.get(handle).cloned();
+        let last = last_values.get(handle).cloned();
+        results.insert(*handle, (first, last));
+    }
+    
+    results
+}
+
+/// 为多个信号搜索 bucket 内的 first 和 last 值（优化版本）
+/// 
+/// 用于 LoD > 15 的情况，减少 FST 读取次数
+/// 
+/// # Arguments
+/// * `signal_data_map` - 信号数据映射
+/// * `bucket_start` - bucket 起始时间
+/// * `bucket_end` - bucket 结束时间
+/// * `widths` - 信号宽度映射
+/// 
+/// # Returns
+/// * 每个信号的 (first, last) 值，如果 bucket 内没有 transition 则为 None
+pub fn search_bucket_first_last_optimized(
+    signal_data_map: &std::collections::HashMap<Handle, &SignalWaveData>,
+    bucket_start: u64,
+    bucket_end: u64,
+    widths: &std::collections::HashMap<Handle, u16>,
+) -> std::collections::HashMap<Handle, (Option<SignalValue>, Option<SignalValue>)> {
+    let mut results: std::collections::HashMap<Handle, (Option<SignalValue>, Option<SignalValue>)> = std::collections::HashMap::new();
+
+    // Step 1: 为每个信号找到 bucket 范围内的最小搜索区间
+    let mut search_regions: Vec<SearchRegion> = Vec::new();
+    
+    for (handle, signal_data) in signal_data_map {
+        // 检查 bucket 范围内是否有 transition
+        let has_transition = signal_data.transitions.iter()
+            .any(|t| t.time >= bucket_start && t.time < bucket_end);
+        
+        if has_transition {
+            // 使用二分法找到最小搜索区间
+            if let Some((start, end)) = find_min_region_binary(
+                signal_data, 
+                bucket_start, 
+                bucket_end, 
+                SearchDirection::Forward  // 方向不重要，只是为了找到区间
+            ) {
+                search_regions.push(SearchRegion {
+                    handle: *handle,
+                    start: start.max(bucket_start),
+                    end: end.min(bucket_end),
+                });
+            }
+        } else {
+            // bucket 内没有 transition
+            results.insert(*handle, (None, None));
+        }
+    }
+
+    // 如果所有信号都没有找到区间，直接返回
+    if search_regions.is_empty() {
+        return results;
+    }
+
+    // Step 2: 合并排序区间边界
+    let mut boundaries: Vec<(u64, Handle, bool)> = Vec::new();
+    for region in &search_regions {
+        boundaries.push((region.start, region.handle, true));
+        boundaries.push((region.end, region.handle, false));
+    }
+    
+    // 按时间排序
+    boundaries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Step 3: 多信号一起搜索 first 和 last
+    let mut found_first: std::collections::HashMap<Handle, SignalValue> = std::collections::HashMap::new();
+    let mut found_last: std::collections::HashMap<Handle, SignalValue> = std::collections::HashMap::new();
+    let mut pending_handles: std::collections::HashSet<Handle> = search_regions.iter()
+        .map(|r| r.handle)
+        .collect();
+
+    // 在每个搜索区间内查找 first 和 last
+    for region in &search_regions {
+        if !pending_handles.contains(&region.handle) {
+            continue;
+        }
+
+        if let Some(signal_data) = signal_data_map.get(&region.handle) {
+            // 查找 first: 第一个 time >= bucket_start && time < bucket_end 的 transition
+            let first = signal_data.transitions.iter()
+                .find(|t| t.time >= bucket_start && t.time < bucket_end)
+                .map(|t| t.value.clone());
+            
+            // 查找 last: 最后一个 time >= bucket_start && time < bucket_end 的 transition
+            let last = signal_data.transitions.iter()
+                .rev()
+                .find(|t| t.time >= bucket_start && t.time < bucket_end)
+                .map(|t| t.value.clone());
+
+            if let Some(f) = first {
+                found_first.insert(region.handle, f);
+            }
+            if let Some(l) = last {
+                found_last.insert(region.handle, l);
+            }
+            
+            pending_handles.remove(&region.handle);
+        }
+    }
+
+    // Step 4: 组装结果
+    for (handle, _) in signal_data_map {
+        let first = found_first.get(handle).cloned();
+        let last = found_last.get(handle).cloned();
+        
+        if first.is_some() || last.is_some() {
+            results.insert(*handle, (first, last));
+        } else {
+            results.insert(*handle, (None, None));
+        }
+    }
+
+    results
+}
+
 /// 波形文件基本信息
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct WaveFileInfo {
