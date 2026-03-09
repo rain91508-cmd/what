@@ -78,6 +78,8 @@ interface KDBCompleteMessage {
   moduleCount: number;
   signalCount: number;
   fileCount: number;
+  pendingFiles?: Array<{ fileId: number; content: Uint8Array }>; // For OPFS fallback
+  kdbId?: string; // For OPFS fallback
 }
 
 interface KDBErrorMessage {
@@ -305,14 +307,35 @@ class OPFSWriter {
   private kdbDir: FileSystemDirectoryHandle | null = null;
   private writeQueue: (() => Promise<void>)[] = [];
   private activeWrites = 0;
-
+  private usePostMessageFallback = false;
+  private pendingFiles: Map<number, Uint8Array> = new Map();
   async init(kdbId: string): Promise<void> {
-    const root = await navigator.storage.getDirectory();
-    this.kdbDir = await root.getDirectoryHandle(kdbId, { create: true });
-    console.log('[KDBWorker] OPFS directory ready:', kdbId);
+    
+    try {
+      // Check if OPFS is available in this context
+      if (typeof navigator.storage === 'undefined' || !navigator.storage.getDirectory) {
+        console.warn('[KDBWorker] OPFS not available in Worker, will use postMessage fallback');
+        this.usePostMessageFallback = true;
+        return;
+      }
+      
+      const root = await navigator.storage.getDirectory();
+      this.kdbDir = await root.getDirectoryHandle(kdbId, { create: true });
+      console.log('[KDBWorker] OPFS directory ready:', kdbId);
+    } catch (error) {
+      console.warn('[KDBWorker] OPFS initialization failed, will use postMessage fallback:', error);
+      this.usePostMessageFallback = true;
+    }
   }
 
   async writeFile(fileId: number, content: Uint8Array): Promise<void> {
+    // Use postMessage fallback if OPFS is not available
+    if (this.usePostMessageFallback) {
+      // Store file content temporarily, will send to main thread at the end
+      this.pendingFiles.set(fileId, new Uint8Array(content));
+      return;
+    }
+
     if (!this.kdbDir) throw new Error('OPFS not initialized');
 
     // Create write task
@@ -332,6 +355,21 @@ class OPFSWriter {
 
     // Add to queue with concurrency control
     await this.enqueueWrite(writeTask);
+  }
+  
+  /**
+   * Get all pending files for postMessage fallback
+   * Called at the end of download to send files to main thread
+   */
+  getPendingFiles(): Map<number, Uint8Array> {
+    return this.pendingFiles;
+  }
+  
+  /**
+   * Check if using postMessage fallback
+   */
+  isUsingFallback(): boolean {
+    return this.usePostMessageFallback;
   }
 
   private async enqueueWrite(task: () => Promise<void>): Promise<void> {
@@ -691,12 +729,23 @@ async function downloadAndStoreKDB(
     
     stopHeartbeat();
     
+    // Check if we need to send files to main thread (OPFS fallback)
+    const pendingFiles = opfsWriter.isUsingFallback() 
+      ? Array.from(opfsWriter.getPendingFiles().entries()).map(([fileId, content]) => ({ fileId, content }))
+      : undefined;
+    
+    if (pendingFiles && pendingFiles.length > 0) {
+      console.log(`[KDBWorker] Sending ${pendingFiles.length} files to main thread for storage`);
+    }
+    
     postMessage({
       type: 'complete',
       designName,
       moduleCount: 0, // TODO: Get actual counts from WASM
       signalCount: 0,
       fileCount: 0,
+      pendingFiles,
+      kdbId: opfsWriter.isUsingFallback() ? kdbId : undefined,
     } as KDBCompleteMessage);
     
   } catch (error) {
