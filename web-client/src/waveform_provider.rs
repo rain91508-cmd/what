@@ -2500,36 +2500,52 @@ if tile_missing_signals.is_empty() {
             // Calculate bucket size from tile span
             let lod = self.current_lod.unwrap_or(25);
             let bucket_size = 1u64 << lod;
+            let tile_span = bucket_size * TILE_SPAN_MULTIPLIER as u64;
             
-            console_log!("[WASM]   Processing tile {}: start={}, {} buckets, bucket_size={}",
-                tile_idx, tile_start, buckets.len(), bucket_size);
+            console_log!("[WASM]   Processing tile {}: start={}, {} buckets, bucket_size={}, tile_span={}",
+                tile_idx, tile_start, buckets.len(), bucket_size, tile_span);
             
-            // Get start value for this tile
-            // For first tile: use tile's start value
+            // Get initial value for this tile
+            // For first tile: need to find value at viewport_start according to spec Rule 2
             // For subsequent tiles: use last value from previous tile (cross-tile continuity)
-            let start_value = if tile_idx == 0 {
-                // First tile: get start value from tile_info
-                self.signal_data.get(signal_name)
-                    .and_then(|data| data.tile_info.iter()
-                        .find(|(start, _, _, _)| start == tile_start)
-                        .map(|(_, _, _, value)| value.clone()))
-                    .unwrap_or_else(|| "0".to_string())
+            let initial_value = if tile_idx == 0 {
+                // First tile: find value at viewport_start
+                let viewport_start_u64 = self.viewport.time_start as u64;
+                self.find_value_at_time(signal_name, *tile_start, buckets, viewport_start_u64, lod)
             } else {
                 // Subsequent tiles: use value from previous tile's last bucket
                 cross_tile_value.clone().unwrap_or_else(|| "0".to_string())
             };
             
-            let mut current_value = start_value.clone();
+            let mut current_value = initial_value.clone();
             let mut segments_in_tile = 0;
+            let viewport_start_u64 = self.viewport.time_start as u64;
+            let viewport_end_u64 = self.viewport.time_end as u64;
             
-            // Process each bucket in the tile
-            for bucket_idx in 0..TILE_SPAN_MULTIPLIER {
+            // Calculate first bucket index that intersects with viewport
+            let first_bucket_idx = if viewport_start_u64 > *tile_start {
+                ((viewport_start_u64 - tile_start) / bucket_size) as u32
+            } else {
+                0
+            };
+            
+            // Calculate last bucket index that intersects with viewport
+            let last_bucket_idx = if viewport_end_u64 < tile_start + tile_span {
+                ((viewport_end_u64 - tile_start) / bucket_size) as u32
+            } else {
+                TILE_SPAN_MULTIPLIER - 1
+            };
+            
+            console_log!("[WASM]   Bucket range: {} to {} (viewport: {}-{})",
+                first_bucket_idx, last_bucket_idx, viewport_start_u64, viewport_end_u64);
+            
+            // Process each bucket in the tile that intersects with viewport
+            for bucket_idx in first_bucket_idx..=last_bucket_idx {
                 let bucket_start_time = tile_start + (bucket_idx as u64) * bucket_size;
                 let bucket_end_time = bucket_start_time + bucket_size;
                 
-                // Skip if outside viewport
-                if bucket_end_time < self.viewport.time_start as u64 || 
-                   bucket_start_time > self.viewport.time_end as u64 {
+                // Skip if completely outside viewport (shouldn't happen with our range calculation)
+                if bucket_end_time < viewport_start_u64 || bucket_start_time > viewport_end_u64 {
                     continue;
                 }
                 
@@ -2644,6 +2660,87 @@ if tile_missing_signals.is_empty() {
         }
         
         console_log!("[WASM] generate_lod_segments_from_buckets complete: total {} segments", segments.len());
+    }
+    
+    /// Find the value at a specific time within a tile according to Rule 2
+    /// This handles the case where viewport_start falls within a bucket
+    fn find_value_at_time(
+        &self,
+        signal_name: &str,
+        tile_start: u64,
+        buckets: &HashMap<u32, BucketData>,
+        target_time: u64,
+        lod: u32,
+    ) -> String {
+        let bucket_size = 1u64 << lod;
+        
+        // Calculate which bucket contains target_time
+        let bucket_idx = ((target_time - tile_start) / bucket_size) as u32;
+        let bucket_start = tile_start + (bucket_idx as u64) * bucket_size;
+        
+        console_log!("[WASM] find_value_at_time: target={}, bucket_idx={}, bucket_start={}",
+            target_time, bucket_idx, bucket_start);
+        
+        // Check if target_time falls within a bucket (not at boundary)
+        if target_time > bucket_start {
+            // Target is within a bucket
+            // Check if this bucket has data
+            if let Some(bucket) = buckets.get(&bucket_idx) {
+                // Bucket has transitions, determine which value to use
+                // For now, we use the first value (since we don't have per-transition timestamps in LoD 1+)
+                // In a more detailed implementation, we would check if target_time is before or after the transition
+                let value = if bucket.has_toggle() {
+                    bucket.last.as_ref().unwrap().value.clone()
+                } else {
+                    bucket.first.value.clone()
+                };
+                console_log!("[WASM]   Found value in bucket {}: {}", bucket_idx, value);
+                return value;
+            }
+            
+            // Bucket is empty, search backward for last transition
+            for idx in (0..bucket_idx).rev() {
+                if let Some(bucket) = buckets.get(&idx) {
+                    let value = if bucket.has_toggle() {
+                        bucket.last.as_ref().unwrap().value.clone()
+                    } else {
+                        bucket.first.value.clone()
+                    };
+                    console_log!("[WASM]   Found value in earlier bucket {}: {}", idx, value);
+                    return value;
+                }
+            }
+        } else {
+            // Target is exactly at bucket boundary
+            if let Some(bucket) = buckets.get(&bucket_idx) {
+                let value = bucket.first.value.clone();
+                console_log!("[WASM]   Found value at bucket boundary {}: {}", bucket_idx, value);
+                return value;
+            }
+            
+            // Empty bucket at boundary, search backward
+            for idx in (0..bucket_idx).rev() {
+                if let Some(bucket) = buckets.get(&idx) {
+                    let value = if bucket.has_toggle() {
+                        bucket.last.as_ref().unwrap().value.clone()
+                    } else {
+                        bucket.first.value.clone()
+                    };
+                    console_log!("[WASM]   Found value in earlier bucket {}: {}", idx, value);
+                    return value;
+                }
+            }
+        }
+        
+        // No transitions found before target_time, use tile's start_value
+        let start_value = self.signal_data.get(signal_name)
+            .and_then(|data| data.tile_info.iter()
+                .find(|(start, _, _, _)| *start == tile_start)
+                .map(|(_, _, _, value)| value.clone()))
+            .unwrap_or_else(|| "0".to_string());
+        
+        console_log!("[WASM]   Using tile start_value: {}", start_value);
+        start_value
     }
 
     /// Classify value for rendering
