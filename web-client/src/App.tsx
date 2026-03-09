@@ -1672,18 +1672,22 @@ function App() {
               success: true
             })
             setShowSignalNotFoundDialog(true)
-
-            // Save prefix and space setting globally for this waveform
-            // Only update spaceBeforeBracket if this signal has bit width (has '[')
-            const newSignalHasBitWidth = signal.fullName.includes('[')
-            const detectedSpaceBeforeBracket = newSignalHasBitWidth ? (result.spaceBeforeBracket ?? false) : currentWaveSignalSpaceBeforeBracket
-            
-            setCurrentWaveSignalPrefix(result.prefix!)
-            setCurrentWaveSignalSpaceBeforeBracket(detectedSpaceBeforeBracket)
-
-            // Update WASM provider settings
-            updateProviderSettings(result.prefix!, detectedSpaceBeforeBracket)
           }
+
+          // Always save prefix and space setting globally for this waveform
+          // Even if no prefix adjustment is needed, we still need to detect spaceBeforeBracket
+          // Only update spaceBeforeBracket if this signal has bit width (has '[')
+          const newSignalHasBitWidth = signal.fullName.includes('[')
+          const detectedSpaceBeforeBracket = newSignalHasBitWidth ? (result.spaceBeforeBracket ?? false) : currentWaveSignalSpaceBeforeBracket
+          const detectedPrefix = result.prefix ?? ''
+          
+          console.log(`[Signal Search] Setting prefix="${detectedPrefix}", spaceBeforeBracket=${detectedSpaceBeforeBracket} (signalHasBitWidth=${newSignalHasBitWidth})`)
+          
+          setCurrentWaveSignalPrefix(detectedPrefix)
+          setCurrentWaveSignalSpaceBeforeBracket(detectedSpaceBeforeBracket)
+
+          // Update WASM provider settings
+          updateProviderSettings(detectedPrefix, detectedSpaceBeforeBracket)
 
           // Add signal to waveform (still using mock data for now)
           addSignalToWaveform(signal)
