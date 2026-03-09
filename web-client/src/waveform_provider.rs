@@ -701,6 +701,15 @@ impl WaveformDataProvider {
     }
 
     /// Parse transitions from a signal block for cache storage
+    /// 
+    /// Data format according to API:
+    /// - Time array: [start_time, t0, t1, t2, ...] (u64 array)
+    ///   - start_time: 0xFFFFFFFFFFFFFFFF (special marker for start value)
+    ///   - t0, t1, t2, ...: actual transition timestamps
+    /// - Value array: [start_value, value0, value1, ...]
+    ///   - start_value: value at tile start
+    ///   - value0, value1, ...: values at transitions
+    /// - transition_count: number of actual transitions (NOT including start value)
     fn parse_transitions_for_cache(
         &self,
         data: &[u8],
@@ -712,9 +721,72 @@ impl WaveformDataProvider {
         let time_array_start = block_header.time_array_offset as usize;
         let value_array_start = block_header.value_array_offset as usize;
 
+        // First, read the start value (time = 0xFFFFFFFFFFFFFFFF)
+        // Start value is always present and comes first in the arrays
+        if time_array_start + 8 <= data.len() {
+            let start_time = u64::from_le_bytes([
+                data[time_array_start], data[time_array_start + 1], 
+                data[time_array_start + 2], data[time_array_start + 3],
+                data[time_array_start + 4], data[time_array_start + 5], 
+                data[time_array_start + 6], data[time_array_start + 7],
+            ]);
+
+            // Verify this is the start value marker
+            if start_time == BOUNDARY_TIME_START {
+                // Parse start value from value array
+                let mut value_idx = value_array_start;
+                if value_idx + 3 <= data.len() {
+                    let value_type = data[value_idx];
+                    let value_len = u16::from_le_bytes([data[value_idx + 1], data[value_idx + 2]]) as usize;
+                    value_idx += 3;
+
+                    if value_idx + value_len <= data.len() {
+                        let start_value = match value_type {
+                            0 => String::from_utf8_lossy(&data[value_idx..value_idx + value_len]).trim().to_string(),
+                            1 => String::from_utf8_lossy(&data[value_idx..value_idx + value_len])
+                                .trim_end_matches('\0').to_string(),
+                            2 => {
+                                if value_len == 8 {
+                                    let bytes = &data[value_idx..value_idx + 8];
+                                    let f = f64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3],
+                                                                bytes[4], bytes[5], bytes[6], bytes[7]]);
+                                    format!("{:.6}", f)
+                                } else {
+                                    format!("Real({}bytes)", value_len)
+                                }
+                            }
+                            3 => {
+                                data[value_idx..value_idx + value_len]
+                                    .iter()
+                                    .map(|b| format!("{:02X}", b))
+                                    .collect()
+                            }
+                            _ => format!("Type{}:{:?}", value_type, &data[value_idx..value_idx + value_len.min(8)]),
+                        };
+
+                        // Add start value transition with special time marker
+                        transitions.push(Transition { 
+                            time: BOUNDARY_TIME_START, 
+                            value: start_value 
+                        });
+                    }
+                }
+            }
+        }
+
+        // Then, read the actual transitions (transition_count of them)
+        // They start at index 1 in the time array (after start value)
         let mut value_idx = value_array_start;
+        // Skip start value in value array
+        if value_idx + 3 <= data.len() {
+            let value_type = data[value_idx];
+            let value_len = u16::from_le_bytes([data[value_idx + 1], data[value_idx + 2]]) as usize;
+            value_idx += 3 + value_len;
+        }
+
         for i in 0..block_header.transition_count {
-            let time_idx = time_array_start + (i as usize * 8);
+            // Time array index: skip start value (index 0), so actual transitions start at index 1
+            let time_idx = time_array_start + ((i + 1) as usize * 8);
 
             if time_idx + 8 > data.len() {
                 break;
@@ -1642,8 +1714,9 @@ if tile_missing_signals.is_empty() {
 
     /// Parse transitions from a signal block
     /// Data format from server:
-    /// - Time array: [time0(u64), time1(u64), ...] (compressed)
-    /// - Value array: [type(u8), len(u16), value_bytes...] × transition_count
+    /// - Time array: [start_time, t0(u64), t1(u64), ...] (start_time = 0xFFFFFFFFFFFFFFFF)
+    /// - Value array: [start_value, value0, value1, ...]
+    /// - transition_count only counts actual transitions, not including start value
     fn parse_transitions_from_block(
         &self,
         data: &[u8],
@@ -1651,6 +1724,7 @@ if tile_missing_signals.is_empty() {
         chunk_header: &ChunkHeader,
         signal_index: usize,
     ) -> Result<Vec<Transition>, JsValue> {
+        const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
         let mut transitions = Vec::new();
 
         // Calculate offsets based on SignalBlockHeader
@@ -1662,8 +1736,61 @@ if tile_missing_signals.is_empty() {
         console_log!("[WASM] Parsing transitions for signal {}: time_start={}, value_start={}, transitions={}",
             signal_index, time_array_start, value_array_start, block_header.transition_count);
         
+        // First, read the start value (time = 0xFFFFFFFFFFFFFFFF)
+        // Start value is always present and comes first in the arrays
+        if time_array_start + 8 <= data.len() {
+            let start_time = u64::from_le_bytes([
+                data[time_array_start], data[time_array_start + 1], 
+                data[time_array_start + 2], data[time_array_start + 3],
+                data[time_array_start + 4], data[time_array_start + 5], 
+                data[time_array_start + 6], data[time_array_start + 7],
+            ]);
+
+            // Verify this is the start value marker
+            if start_time == BOUNDARY_TIME_START {
+                // Parse start value from value array
+                let mut value_idx = value_array_start;
+                if value_idx + 3 <= data.len() {
+                    let value_type = data[value_idx];
+                    let value_len = u16::from_le_bytes([data[value_idx + 1], data[value_idx + 2]]) as usize;
+                    value_idx += 3;
+
+                    if value_idx + value_len <= data.len() {
+                        let start_value = match value_type {
+                            0 => String::from_utf8_lossy(&data[value_idx..value_idx + value_len]).trim().to_string(),
+                            1 => String::from_utf8_lossy(&data[value_idx..value_idx + value_len])
+                                .trim_end_matches('\0').to_string(),
+                            2 => {
+                                if value_len == 8 {
+                                    let bytes = &data[value_idx..value_idx + 8];
+                                    let f = f64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3],
+                                                                bytes[4], bytes[5], bytes[6], bytes[7]]);
+                                    format!("{:.6}", f)
+                                } else {
+                                    format!("Real({}bytes)", value_len)
+                                }
+                            }
+                            3 => {
+                                data[value_idx..value_idx + value_len]
+                                    .iter()
+                                    .map(|b| format!("{:02X}", b))
+                                    .collect()
+                            }
+                            _ => format!("Type{}:{:?}", value_type, &data[value_idx..value_idx + value_len.min(8)]),
+                        };
+
+                        // Add start value transition with special time marker
+                        transitions.push(Transition { 
+                            time: BOUNDARY_TIME_START, 
+                            value: start_value 
+                        });
+                    }
+                }
+            }
+        }
+
         // Debug: print first 64 bytes of time and value arrays
-        let time_preview_len = (block_header.transition_count as usize * 8).min(64);
+        let time_preview_len = ((block_header.transition_count + 1) as usize * 8).min(64);
         let value_preview_len = (data.len() - value_array_start).min(64);
         console_log!("[WASM] Time array (first {} bytes): {:?}", 
             time_preview_len,
@@ -1680,10 +1807,19 @@ if tile_missing_signals.is_empty() {
                 .collect::<Vec<_>>()
                 .join(" "));
 
-        // Parse each transition
+        // Then, read the actual transitions (transition_count of them)
+        // They start at index 1 in the time array (after start value)
         let mut value_idx = value_array_start;
+        // Skip start value in value array
+        if value_idx + 3 <= data.len() {
+            let value_type = data[value_idx];
+            let value_len = u16::from_le_bytes([data[value_idx + 1], data[value_idx + 2]]) as usize;
+            value_idx += 3 + value_len;
+        }
+
         for i in 0..block_header.transition_count {
-            let time_idx = time_array_start + (i as usize * 8);
+            // Time array index: skip start value (index 0), so actual transitions start at index 1
+            let time_idx = time_array_start + ((i + 1) as usize * 8);
 
             // Check bounds for time
             if time_idx + 8 > data.len() {
@@ -2510,8 +2646,9 @@ if tile_missing_signals.is_empty() {
             // For subsequent tiles: use last value from previous tile (cross-tile continuity)
             let initial_value = if tile_idx == 0 {
                 // First tile: find value at viewport_start
+                // Pass all tiles data to allow searching backward into previous tiles if needed
                 let viewport_start_u64 = self.viewport.time_start as u64;
-                self.find_value_at_time(signal_name, *tile_start, buckets, viewport_start_u64, lod)
+                self.find_value_at_time(signal_name, *tile_start, buckets, viewport_start_u64, lod, tile_idx, bucket_data)
             } else {
                 // Subsequent tiles: use value from previous tile's last bucket
                 cross_tile_value.clone().unwrap_or_else(|| "0".to_string())
@@ -2662,8 +2799,9 @@ if tile_missing_signals.is_empty() {
         console_log!("[WASM] generate_lod_segments_from_buckets complete: total {} segments", segments.len());
     }
     
-    /// Find the value at a specific time within a tile according to Rule 2
+    /// Find the value at a specific time according to Rule 2
     /// This handles the case where viewport_start falls within a bucket
+    /// Can search backward into previous tiles if needed
     fn find_value_at_time(
         &self,
         signal_name: &str,
@@ -2671,8 +2809,11 @@ if tile_missing_signals.is_empty() {
         buckets: &HashMap<u32, BucketData>,
         target_time: u64,
         lod: u32,
+        tile_idx: usize,
+        all_bucket_data: &[(u64, HashMap<u32, BucketData>)],
     ) -> String {
         let bucket_size = 1u64 << lod;
+        const TILE_SPAN_MULTIPLIER: u32 = 256;
         
         // Calculate which bucket contains target_time
         let bucket_idx = ((target_time - tile_start) / bucket_size) as u32;
@@ -2698,7 +2839,7 @@ if tile_missing_signals.is_empty() {
                 return value;
             }
             
-            // Bucket is empty, search backward for last transition
+            // Bucket is empty, search backward for last transition in current tile
             for idx in (0..bucket_idx).rev() {
                 if let Some(bucket) = buckets.get(&idx) {
                     let value = if bucket.has_toggle() {
@@ -2718,7 +2859,7 @@ if tile_missing_signals.is_empty() {
                 return value;
             }
             
-            // Empty bucket at boundary, search backward
+            // Empty bucket at boundary, search backward in current tile
             for idx in (0..bucket_idx).rev() {
                 if let Some(bucket) = buckets.get(&idx) {
                     let value = if bucket.has_toggle() {
@@ -2732,7 +2873,33 @@ if tile_missing_signals.is_empty() {
             }
         }
         
-        // No transitions found before target_time, use tile's start_value
+        // No transitions found in current tile before target_time
+        // Search backward into previous tiles
+        console_log!("[WASM]   No transition found in current tile, searching previous tiles...");
+        
+        for prev_tile_idx in (0..tile_idx).rev() {
+            let (prev_tile_start, prev_buckets) = &all_bucket_data[prev_tile_idx];
+            let prev_tile_span = bucket_size * TILE_SPAN_MULTIPLIER as u64;
+            
+            console_log!("[WASM]   Checking previous tile {}: start={}, buckets={}",
+                prev_tile_idx, prev_tile_start, prev_buckets.len());
+            
+            // Search from last bucket to first bucket in previous tile
+            for bucket_idx in (0..TILE_SPAN_MULTIPLIER).rev() {
+                if let Some(bucket) = prev_buckets.get(&bucket_idx) {
+                    let value = if bucket.has_toggle() {
+                        bucket.last.as_ref().unwrap().value.clone()
+                    } else {
+                        bucket.first.value.clone()
+                    };
+                    console_log!("[WASM]   Found value in previous tile {} bucket {}: {}",
+                        prev_tile_idx, bucket_idx, value);
+                    return value;
+                }
+            }
+        }
+        
+        // No transitions found in any previous tiles, use tile's start_value
         let start_value = self.signal_data.get(signal_name)
             .and_then(|data| data.tile_info.iter()
                 .find(|(start, _, _, _)| *start == tile_start)
