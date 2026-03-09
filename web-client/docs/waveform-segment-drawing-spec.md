@@ -71,19 +71,55 @@ FOR bucket_index from 0 to 255:
 
 For the **first tile** in the viewport:
 
+**Note**: Fetched tiles should cover the entire viewport, meaning `tile[0].start <= viewport_start`. The value at `viewport_start` is determined as follows:
+
 ```
-IF viewport_start < first_bucket_start_time:
+IF viewport_start falls within a bucket (not at bucket boundary):
+    // Find the transition just before or at viewport_start
+    IF there is a transition in the tile at or before viewport_start:
+        draw from viewport_start using the value of that transition
+    ELSE:
+        // No transition before viewport_start in this tile
+        draw from viewport_start using tile[0].start_value
+ELSE IF viewport_start == first_bucket_start_time:
+    // Viewport starts exactly at bucket boundary
+    draw from viewport_start using first_bucket.first_value
+ELSE:
+    // Viewport starts before first bucket (should not happen with proper tile fetching)
     draw start_value from viewport_start to first_bucket_start_time
 ```
+
+**Key Points**:
+- The value at `viewport_start` is either:
+  - `tile[0].start_value` if no transition exists before `viewport_start`
+  - The `last` value of the last transition before/at `viewport_start` if such transition exists
+- The tile's `start_value` represents the value before `tile[0].start`, not necessarily before `viewport_start`
 
 ### Rule 3: Last Tile Final Segment
 
 For the **last tile** in the viewport:
 
+**Note**: Fetched tiles should cover the entire viewport, meaning `tile[last].end >= viewport_end`.
+
 ```
-IF last_bucket_end_time < viewport_end:
+IF viewport_end falls within a bucket (not at bucket boundary):
+    // The value at viewport_end is determined by the last transition before/at viewport_end
+    // This is already handled by Rule 1's bucket drawing
+    // No additional segment needed
+ELSE IF viewport_end > last_bucket_end_time:
+    // Viewport extends beyond last bucket with data
+    // Draw from last_bucket_end_time to viewport_end using the last known value
     draw last_Value from last_bucket_end_time to viewport_end
+ELSE IF viewport_end == last_bucket_end_time:
+    // Viewport ends exactly at bucket boundary
+    // Already handled by Rule 1
+    // No additional segment needed
 ```
+
+**Key Points**:
+- The `last_Value` is the value after processing all buckets in the last tile
+- If the last bucket has a `last` value, use that; otherwise use the `first` value
+- The tile's data covers up to `tile[last].end`, which should be >= `viewport_end`
 
 ### Rule 4: Cross-Tile Continuity
 
