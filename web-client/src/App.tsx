@@ -200,12 +200,16 @@ function App() {
   const [signalWidth, setSignalWidth] = useState(200)
   const [messageHeight, setMessageHeight] = useState(100)
 
+  // Track if OPFS warning has been shown (to prevent double alert in StrictMode)
+  const opfsWarningShown = useRef(false)
+
   // Initialize application
   useEffect(() => {
     const init = async () => {
       try {
-        // Check OPFS availability first
-        if (!isOpfsAvailable()) {
+        // Check OPFS availability first (only show warning once)
+        if (!isOpfsAvailable() && !opfsWarningShown.current) {
+          opfsWarningShown.current = true
           console.warn('[App] OPFS not available - performance will be limited')
           // Show warning to user
           const useHttps = window.confirm(
