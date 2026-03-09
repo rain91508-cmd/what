@@ -735,8 +735,6 @@ impl LodPyramidGenerator {
         range_start: u64,
         range_end: u64,
     ) -> SignalWaveData {
-        info!("generate_level_with_range called: level={}, range_start={}, range_end={}", level.0, range_start, range_end);
-        
         if level.0 == 0 || source.transitions.is_empty() {
             return source.clone();
         }
@@ -765,28 +763,11 @@ impl LodPyramidGenerator {
             return result;
         }
 
-        // 使用指定的时间范围计算 bucket 数量
-        let total_buckets = ((range_end - range_start) / bucket_size) as usize;
-        info!("LoD {} 生成: range_start={}, range_end={}, bucket_size={}, total_buckets={}, source.transitions.len={}", 
-            level.0, range_start, range_end, bucket_size, total_buckets, source.transitions.len());
-        
-        // 打印前10个 transitions 用于调试
-        for (i, trans) in source.transitions.iter().take(10).enumerate() {
-            let bucket_idx = if trans.time >= range_start && trans.time < range_end {
-                ((trans.time - range_start) / bucket_size) as usize
-            } else if trans.time >= range_end {
-                total_buckets
-            } else {
-                0
-            };
-            let value_str = match &trans.value {
-                SignalValue::Numeric(s) => s.clone(),
-                SignalValue::String(s) => s.clone(),
-                SignalValue::Real(f) => f.to_string(),
-                SignalValue::Binary { .. } => "<binary>".to_string(),
-            };
-            info!("  source.transitions[{}]: time={}, bucket={}, value={}", i, trans.time, bucket_idx, value_str);
-        }
+        // Align range_start to bucket size
+        let aligned_start = (range_start / bucket_size) * bucket_size;
+
+        // 使用对齐后的时间范围计算 bucket 数量，向上取整确保至少有1个bucket
+        let total_buckets = ((range_end - aligned_start + bucket_size - 1) / bucket_size) as usize;
 
         // 初始化第一个 bucket 的状态
         let first_trans = &source.transitions[0];
@@ -799,24 +780,24 @@ impl LodPyramidGenerator {
         let mut bucket_has_multiple = false;  // 跟踪 bucket 内是否有多个 transitions
         
         // 计算第一个 transition 的 bucket 索引
-        let first_bucket_idx = if first_trans.time >= range_start && first_trans.time < range_end {
-            ((first_trans.time - range_start) / bucket_size) as usize
+        let first_bucket_idx = if first_trans.time >= aligned_start && first_trans.time < range_end {
+            ((first_trans.time - aligned_start) / bucket_size) as usize
         } else if first_trans.time >= range_end {
             total_buckets
         } else {
-            0  // 小于 range_start 的放入 bucket 0
+            0  // 小于 aligned_start 的放入 bucket 0
         };
         let mut current_bucket_idx: usize = first_bucket_idx;
 
         // 遍历所有 transitions（从第二个开始，第一个已经用于初始化）
         for trans in source.transitions.iter().skip(1) {
-            // 计算当前 transition 属于哪个 bucket（基于时间范围）
-            let trans_bucket_idx = if trans.time >= range_start && trans.time < range_end {
-                ((trans.time - range_start) / bucket_size) as usize
+            // 计算当前 transition 属于哪个 bucket（基于对齐后的时间范围）
+            let trans_bucket_idx = if trans.time >= aligned_start && trans.time < range_end {
+                ((trans.time - aligned_start) / bucket_size) as usize
             } else if trans.time >= range_end {
                 total_buckets  // 超出范围的放入最后一个 bucket
             } else {
-                continue;  // 小于 range_start 的跳过
+                continue;  // 小于 aligned_start 的跳过
             };
 
             // 获取当前转换点的四态值
@@ -860,7 +841,6 @@ impl LodPyramidGenerator {
             result.add_transition(Transition::from_numeric(current_bucket_idx as u64, &last_str));
         }
 
-        info!("LoD {} 生成完成: {} transitions", level.0, result.transitions.len());
         result
     }
 
@@ -1320,8 +1300,6 @@ impl ChunkSerializer {
             
             let time_array_size = compressed_time.len() as u32;
             let value_array_size = compressed_value.len() as u32;
-
-            info!("Creating SignalBlockHeader: handle={}, transition_count={}", signal.handle, transition_count);
             
             let block_header = SignalBlockHeader {
                 signal_handle: signal.handle,
