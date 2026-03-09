@@ -1067,9 +1067,10 @@ function App() {
 
     // Create WASM provider for the new waveform with initial viewport and time stamp
     // Pass the current OPFS cache enabled state
+    // Note: spaceBeforeBracket defaults to false, will be updated after signal search
     try {
-      createProvider(serverUrl, waveName, 'work@', true, waveTimeStamp, opfsCacheEnabled)
-      console.log('[App] Created WASM provider for waveform:', waveName, 'timeStamp:', waveTimeStamp, 'OPFS:', opfsCacheEnabled)
+      createProvider(serverUrl, waveName, 'work@', currentWaveSignalSpaceBeforeBracket, waveTimeStamp, opfsCacheEnabled)
+      console.log('[App] Created WASM provider for waveform:', waveName, 'timeStamp:', waveTimeStamp, 'OPFS:', opfsCacheEnabled, 'spaceBeforeBracket:', currentWaveSignalSpaceBeforeBracket)
     } catch (error) {
       console.error('[App] Failed to create WASM provider:', error)
     }
