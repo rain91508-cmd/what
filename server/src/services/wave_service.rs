@@ -494,6 +494,8 @@ pub enum FstBackend {
     FstApi,
     /// 使用 wavefst (纯 Rust)
     WaveFst,
+    /// 使用 fst-reader (纯 Rust，支持 read_range_boundary_values)
+    FstReader,
 }
 
 impl Default for FstBackend {
@@ -686,7 +688,31 @@ impl WaveService {
         match self.backend {
             FstBackend::FstApi => self.get_wave_info_fstapi(&wave_path, wave_name).await,
             FstBackend::WaveFst => self.get_wave_info_wavefst(&wave_path, wave_name).await,
+            FstBackend::FstReader => self.get_wave_info_fst_reader(&wave_path, wave_name).await,
         }
+    }
+
+    /// 使用 fst-reader 获取波形文件信息
+    async fn get_wave_info_fst_reader(&self, wave_path: &PathBuf, wave_name: &str) -> Result<WaveInfo> {
+        use crate::services::fst_backend::{FstReader, create_reader_backend};
+        
+        let backend = create_reader_backend("fst-reader");
+        let file_info = backend.get_file_info(wave_path).await?;
+        
+        // 获取文件大小
+        let file_size = tokio::fs::metadata(wave_path).await.map(|m| m.len()).unwrap_or(0);
+        
+        Ok(WaveInfo {
+            name: wave_name.to_string(),
+            file_size,
+            time_unit: "ps".to_string(),  // fst-reader 默认使用 ps
+            time_precision: "1ps".to_string(),
+            start_time: file_info.start_time,
+            end_time: file_info.end_time,
+            signal_count: file_info.signal_count,
+            version: "FST".to_string(),
+            date: String::new(),
+        })
     }
 
     /// 使用 fstapi 获取波形文件信息
@@ -866,7 +892,61 @@ impl WaveService {
         match self.backend {
             FstBackend::FstApi => self.list_signals_fstapi(&wave_path, wave_name).await,
             FstBackend::WaveFst => self.list_signals_wavefst(&wave_path, wave_name).await,
+            FstBackend::FstReader => self.list_signals_fst_reader(&wave_path, wave_name).await,
         }
+    }
+
+    /// 使用 fst-reader 获取信号列表
+    async fn list_signals_fst_reader(&self, wave_path: &PathBuf, _wave_name: &str) -> Result<Vec<SignalInfo>> {
+        use fst_reader::{FstReader, FstHierarchyEntry};
+        use std::fs::File;
+        use std::io::BufReader;
+
+        let path = wave_path.clone();
+
+        let signals = tokio::task::spawn_blocking(move || {
+            let file = File::open(&path)
+                .map_err(|e| ServerError::Internal(format!("无法打开 FST 文件: {}", e)))?;
+            let buf_reader = BufReader::new(file);
+            let mut reader = FstReader::open(buf_reader)
+                .map_err(|e| ServerError::Internal(format!("无法读取 FST 文件: {:?}", e)))?;
+
+            let mut signals = Vec::new();
+            let mut scope_stack: Vec<String> = Vec::new();
+
+            reader.read_hierarchy(|entry| {
+                match entry {
+                    FstHierarchyEntry::Scope { name, .. } => {
+                        scope_stack.push(name.to_string());
+                    }
+                    FstHierarchyEntry::UpScope => {
+                        scope_stack.pop();
+                    }
+                    FstHierarchyEntry::Var { name, handle, length, .. } => {
+                        let full_path = if scope_stack.is_empty() {
+                            name.to_string()
+                        } else {
+                            format!("{}.{}", scope_stack.join("."), name)
+                        };
+
+                        signals.push(SignalInfo {
+                            handle: handle.get_index() as u32,
+                            name: full_path,
+                            signal_type: "logic".to_string(),  // fst-reader 不提供类型信息
+                            width: length.to_owned(),
+                            direction: "internal".to_string(),
+                        });
+                    }
+                    _ => {}
+                }
+            }).ok();
+
+            Ok::<_, ServerError>(signals)
+        })
+        .await
+        .map_err(|e| ServerError::Internal(format!("任务执行失败: {}", e)))??;
+
+        Ok(signals)
     }
 
     /// 使用 fstapi 获取信号列表
@@ -1073,6 +1153,10 @@ impl WaveService {
                 self.read_signal_data_wavefst(&wave_path, signal_name, lod_level, time_start, time_end)
                     .await?
             }
+            FstBackend::FstReader => {
+                self.read_signal_data_fst_reader(&wave_path, signal_name, lod_level, time_start, time_end)
+                    .await?
+            }
         };
         
         // 序列化为 chunk
@@ -1168,6 +1252,15 @@ impl WaveService {
                 let mut list = Vec::new();
                 for signal_name in signal_names {
                     let signal_data = self.read_signal_data_wavefst(&wave_path, signal_name, lod_level, time_start, time_end).await?;
+                    list.push(signal_data);
+                }
+                list
+            }
+            FstBackend::FstReader => {
+                // fst-reader 后端使用逐个读取
+                let mut list = Vec::new();
+                for signal_name in signal_names {
+                    let signal_data = self.read_signal_data_fst_reader(&wave_path, signal_name, lod_level, time_start, time_end).await?;
                     list.push(signal_data);
                 }
                 list
@@ -1287,6 +1380,24 @@ impl WaveService {
                     let mut tile_signals = Vec::with_capacity(signal_names.len());
                     for signal_name in signal_names {
                         let signal_data = self.read_signal_data_wavefst(
+                            &wave_path, signal_name, lod_level, tile_start, tile_end
+                        ).await?;
+                        tile_signals.push(signal_data);
+                    }
+                    tiles.push(tile_signals);
+                }
+                tiles
+            }
+            FstBackend::FstReader => {
+                // fst-reader 后端：逐个读取每个 tile
+                let mut tiles = Vec::with_capacity(num_tiles);
+                for tile_idx in 0..num_tiles {
+                    let tile_start = start_time + tile_span * tile_idx as u64;
+                    let tile_end = tile_start + tile_span;
+                    
+                    let mut tile_signals = Vec::with_capacity(signal_names.len());
+                    for signal_name in signal_names {
+                        let signal_data = self.read_signal_data_fst_reader(
                             &wave_path, signal_name, lod_level, tile_start, tile_end
                         ).await?;
                         tile_signals.push(signal_data);
@@ -2031,6 +2142,29 @@ impl WaveService {
         Ok(SignalWaveData::new(0, 1, SignalValueType::Numeric))
     }
 
+    /// 使用 fst-reader 读取信号数据（返回 SignalWaveData）
+    async fn read_signal_data_fst_reader(
+        &self,
+        wave_path: &PathBuf,
+        signal_name: &str,
+        lod: LodLevel,
+        time_start: u64,
+        time_end: u64,
+    ) -> Result<SignalWaveData> {
+        use crate::services::fst_backend::{FstReader, create_reader_backend};
+        
+        let backend = create_reader_backend("fst-reader");
+        let signal_data = backend.read_signal_data(
+            wave_path,
+            signal_name,
+            lod,
+            time_start,
+            time_end,
+        ).await?;
+        
+        Ok(signal_data)
+    }
+
     /// 获取波形文件的结束时间
     async fn get_wave_end_time(&self, wave_path: &PathBuf) -> Option<u64> {
         match self.backend {
@@ -2048,6 +2182,12 @@ impl WaveService {
             FstBackend::WaveFst => {
                 // wavefst 实现
                 None
+            }
+            FstBackend::FstReader => {
+                use crate::services::fst_backend::{FstReader, create_reader_backend};
+                
+                let backend = create_reader_backend("fst-reader");
+                backend.get_file_info(wave_path).await.ok().map(|info| info.end_time)
             }
         }
     }
