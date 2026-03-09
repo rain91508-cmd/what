@@ -15,7 +15,6 @@ use tracing::info;
 /// 根据配置创建 WaveService
 fn create_wave_service(state: &ServerState) -> WaveService {
     let backend = match state.config.fst_backend.as_str() {
-        "wavefst" => FstBackend::WaveFst,
         "fst-reader" => FstBackend::FstReader,
         _ => FstBackend::FstApi,
     };

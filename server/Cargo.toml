@@ -26,7 +26,6 @@ serde_json = "1.0"
 prost = "0.12"
 
 # Waveform processing
-wavefst = { version = "0.1", features = ["gzip", "lz4", "mmap", "simd"] }
 fstapi = { path = "../third_party/fst-tools/fstapi" }
 fst-reader = { path = "../third_party/fst-reader" }
 
@@ -93,4 +92,4 @@ tempfile = "3.8"
 
 [features]
 default = []
-perf = ["wavefst/parallel"]
+perf = []

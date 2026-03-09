@@ -744,13 +744,18 @@ URL: /api/wave/riscv2/lod/0/signals/trie:base64encodedstring/data
 | 0 | 4B | signal_handle | 信号句柄 |
 | 4 | 4B | time_array_offset | 时间数组偏移 |
 | 8 | 4B | value_array_offset | 值数组偏移 |
-| 12 | 4B | transition_count | 转换点数量 |
+| 12 | 4B | transition_count | 转换点数量（不包含 start value）|
 | 16 | 1B | compression | 压缩类型 (0=无, 1=zstd, 2=lz4) |
 
 **数据区格式（仿 FST 格式）**：
 
-- **时间数组**: `[t0, t1, t2, ...]` (u64 数组，小端序)
-- **值数组**: `[type0, len0, value0..., type1, len1, value1..., ...]` (变长格式)
+- **时间数组**: `[start_time, t0, t1, t2, ...]` (u64 数组，小端序)
+  - 第一个元素 `start_time` 是特殊的 start value 时间戳（值为 0xFFFFFFFFFFFFFFFF）
+  - 后续元素是实际的转换点时间戳
+  - `transition_count` 只统计实际转换点数量，不包含 start value
+- **值数组**: `[start_type, start_len, start_value..., type0, len0, value0..., ...]` (变长格式)
+  - 第一个值是 start value（tile 起始时刻的信号值）
+  - 后续值是实际转换点的值
   - `type`: u8，值类型 (0=Numeric, 1=String, 2=Real, 3=BinaryCompressed)
   - `len`: u16，值字节长度
   - `value`: 值字节数组

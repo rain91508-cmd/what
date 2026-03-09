@@ -492,8 +492,6 @@ pub struct SignalInfo {
 pub enum FstBackend {
     /// 使用 fstapi (GTKWave C API)
     FstApi,
-    /// 使用 wavefst (纯 Rust)
-    WaveFst,
     /// 使用 fst-reader (纯 Rust，支持 read_range_boundary_values)
     FstReader,
 }
@@ -687,7 +685,6 @@ impl WaveService {
         // 根据后端选择不同的读取方式
         match self.backend {
             FstBackend::FstApi => self.get_wave_info_fstapi(&wave_path, wave_name).await,
-            FstBackend::WaveFst => self.get_wave_info_wavefst(&wave_path, wave_name).await,
             FstBackend::FstReader => self.get_wave_info_fst_reader(&wave_path, wave_name).await,
         }
     }
@@ -854,36 +851,6 @@ impl WaveService {
         }
     }
 
-    /// 使用 wavefst 获取波形文件信息
-    async fn get_wave_info_wavefst(&self, wave_path: &PathBuf, wave_name: &str) -> Result<WaveInfo> {
-        let file = std::fs::File::open(wave_path)?;
-        let reader = wavefst::ReaderBuilder::new(file).build()
-            .map_err(|e| ServerError::Internal(format!("无法读取 FST 文件: {}", e)))?;
-
-        let header = reader.header();
-        let metadata = fs::metadata(wave_path).await?;
-        let file_size = metadata.len();
-
-        // 解析时间单位字符串
-        let time_unit = Self::exponent_to_time_unit(header.timescale_exponent);
-
-        // 使用 FST 原始时间单位（不转换为 fs）
-        let start_time = header.start_time;
-        let end_time = header.end_time;
-
-        Ok(WaveInfo {
-            name: wave_name.to_string(),
-            file_size,
-            time_unit: time_unit.clone(),
-            time_precision: time_unit,
-            start_time,
-            end_time,
-            signal_count: header.var_count as usize,
-            version: header.version.clone(),
-            date: header.date.clone(),
-        })
-    }
-
     /// 获取波形文件中所有信号列表
     pub async fn list_signals(&self, wave_name: &str) -> Result<Vec<SignalInfo>> {
         let wave_path = self.get_wave_path(wave_name)?;
@@ -891,7 +858,6 @@ impl WaveService {
         // 根据后端选择不同的读取方式
         match self.backend {
             FstBackend::FstApi => self.list_signals_fstapi(&wave_path, wave_name).await,
-            FstBackend::WaveFst => self.list_signals_wavefst(&wave_path, wave_name).await,
             FstBackend::FstReader => self.list_signals_fst_reader(&wave_path, wave_name).await,
         }
     }
@@ -1047,47 +1013,6 @@ impl WaveService {
         Ok(signals)
     }
 
-    /// 使用 wavefst 获取信号列表
-    async fn list_signals_wavefst(&self, wave_path: &PathBuf, wave_name: &str) -> Result<Vec<SignalInfo>> {
-        let file = std::fs::File::open(wave_path)?;
-        let reader = wavefst::ReaderBuilder::new(file).build()
-            .map_err(|e| ServerError::Internal(format!("无法读取 FST 文件: {}", e)))?;
-
-        let mut signals = Vec::new();
-
-        // 遍历层次结构中的所有信号
-        match reader.hierarchy() {
-            Some(hierarchy) => {
-                for var in &hierarchy.variables {
-                    signals.push(SignalInfo {
-                        handle: var.handle,
-                        name: var.name.to_string(),
-                        signal_type: format!("{:?}", var.var_type),
-                        width: var.length.unwrap_or(1),
-                        direction: format!("{:?}", var.direction),
-                    });
-                }
-                info!("波形 {} 从 wavefst 读取了 {} 个信号", wave_name, signals.len());
-            }
-            None => {
-                // 如果层次结构不可用，尝试从 header 获取信号数量信息
-                let header = reader.header();
-                warn!("波形 {} 的层次结构块无法读取 (var_count={})", wave_name, header.var_count);
-
-                // 返回一个特殊的信号项，说明层次结构不可用
-                signals.push(SignalInfo {
-                    handle: 0,
-                    name: "__hierarchy_unavailable__".to_string(),
-                    signal_type: "N/A".to_string(),
-                    width: header.var_count as u32,
-                    direction: "N/A".to_string(),
-                });
-            }
-        }
-
-        Ok(signals)
-    }
-
     /// 获取单个信号的详细信息
     pub async fn get_signal_info(&self, wave_name: &str, signal_name: &str) -> Result<SignalInfo> {
         let signals = self.list_signals(wave_name).await?;
@@ -1147,10 +1072,6 @@ impl WaveService {
         let signal_data = match self.backend {
             FstBackend::FstApi => {
                 self.read_signal_data_fstapi(&wave_path, signal_name, lod_level, time_start, time_end)
-                    .await?
-            }
-            FstBackend::WaveFst => {
-                self.read_signal_data_wavefst(&wave_path, signal_name, lod_level, time_start, time_end)
                     .await?
             }
             FstBackend::FstReader => {
@@ -1246,15 +1167,6 @@ impl WaveService {
         let signal_data_list = match self.backend {
             FstBackend::FstApi => {
                 self.read_signals_data_fstapi(&wave_path, signal_names, lod_level, time_start, time_end).await?
-            }
-            FstBackend::WaveFst => {
-                // wavefst 后端仍使用逐个读取
-                let mut list = Vec::new();
-                for signal_name in signal_names {
-                    let signal_data = self.read_signal_data_wavefst(&wave_path, signal_name, lod_level, time_start, time_end).await?;
-                    list.push(signal_data);
-                }
-                list
             }
             FstBackend::FstReader => {
                 // fst-reader 后端使用逐个读取
@@ -1369,24 +1281,6 @@ impl WaveService {
                 self.read_signals_data_tiles_fstapi(
                     &wave_path, signal_names, lod_level, start_time, tile_span, num_tiles
                 ).await?
-            }
-            FstBackend::WaveFst => {
-                // wavefst 后端：逐个读取每个 tile
-                let mut tiles = Vec::with_capacity(num_tiles);
-                for tile_idx in 0..num_tiles {
-                    let tile_start = start_time + tile_span * tile_idx as u64;
-                    let tile_end = tile_start + tile_span;
-                    
-                    let mut tile_signals = Vec::with_capacity(signal_names.len());
-                    for signal_name in signal_names {
-                        let signal_data = self.read_signal_data_wavefst(
-                            &wave_path, signal_name, lod_level, tile_start, tile_end
-                        ).await?;
-                        tile_signals.push(signal_data);
-                    }
-                    tiles.push(tile_signals);
-                }
-                tiles
             }
             FstBackend::FstReader => {
                 // fst-reader 后端：逐个读取每个 tile
@@ -2126,22 +2020,6 @@ impl WaveService {
         Ok(signal_data)
     }
 
-    /// 使用 wavefst 读取信号数据（返回 SignalWaveData）
-    async fn read_signal_data_wavefst(
-        &self,
-        _wave_path: &PathBuf,
-        _signal_name: &str,
-        _lod: LodLevel,
-        _time_start: u64,
-        _time_end: u64,
-    ) -> Result<SignalWaveData> {
-        // wavefst 目前不支持读取实际波形数据
-        // 返回一个空的 SignalWaveData 作为占位符
-        info!("wavefst 后端暂不支持波形数据读取，返回空数据");
-
-        Ok(SignalWaveData::new(0, 1, SignalValueType::Numeric))
-    }
-
     /// 使用 fst-reader 读取信号数据（返回 SignalWaveData）
     async fn read_signal_data_fst_reader(
         &self,
@@ -2178,10 +2056,6 @@ impl WaveService {
                 .await
                 .ok()
                 .flatten()
-            }
-            FstBackend::WaveFst => {
-                // wavefst 实现
-                None
             }
             FstBackend::FstReader => {
                 use crate::services::fst_backend::{FstReader, create_reader_backend};
