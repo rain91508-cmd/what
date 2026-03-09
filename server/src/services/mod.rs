@@ -1,10 +1,12 @@
 pub mod kdb_service;
 pub mod wave_service;
 pub mod wave_data;
+pub mod fst_backend;
 
 pub use kdb_service::KdbService;
 pub use wave_service::{WaveService, FstBackend};
 pub use wave_data::{LodLevel, LodConfig, SignalWaveData, Transition, ChunkSerializer, CompressionAlgorithm};
+pub use fst_backend::{FstReader, create_reader_backend, FstFileInfo};
 
 use std::path::PathBuf;
 use tokio::fs;
