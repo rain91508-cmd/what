@@ -1628,11 +1628,16 @@ function App() {
 
           if (result.found) {
             console.log(`[Signal Search] Found with existing prefix! spaceBeforeBracket=${result.spaceBeforeBracket}`)
-            // Signal found with existing prefix, update spaceBeforeBracket if needed
-            if (result.spaceBeforeBracket !== undefined && result.spaceBeforeBracket !== currentWaveSignalSpaceBeforeBracket) {
+            // Signal found with existing prefix
+            // Only update spaceBeforeBracket if this signal has bit width (has '[')
+            // Single-bit signals don't provide information about space before bracket
+            const signalHasBitWidth = signal.fullName.includes('[')
+            if (signalHasBitWidth && result.spaceBeforeBracket !== undefined && result.spaceBeforeBracket !== currentWaveSignalSpaceBeforeBracket) {
               console.log(`[Signal Search] Updating spaceBeforeBracket: ${currentWaveSignalSpaceBeforeBracket} -> ${result.spaceBeforeBracket}`)
               setCurrentWaveSignalSpaceBeforeBracket(result.spaceBeforeBracket)
               updateProviderSettings(currentWaveSignalPrefix, result.spaceBeforeBracket)
+            } else if (!signalHasBitWidth) {
+              console.log(`[Signal Search] Single-bit signal, not updating spaceBeforeBracket (keep: ${currentWaveSignalSpaceBeforeBracket})`)
             }
             addSignalToWaveform(signal)
             return
@@ -1669,11 +1674,15 @@ function App() {
             setShowSignalNotFoundDialog(true)
 
             // Save prefix and space setting globally for this waveform
+            // Only update spaceBeforeBracket if this signal has bit width (has '[')
+            const newSignalHasBitWidth = signal.fullName.includes('[')
+            const detectedSpaceBeforeBracket = newSignalHasBitWidth ? (result.spaceBeforeBracket ?? false) : currentWaveSignalSpaceBeforeBracket
+            
             setCurrentWaveSignalPrefix(result.prefix!)
-            setCurrentWaveSignalSpaceBeforeBracket(result.spaceBeforeBracket ?? false)
+            setCurrentWaveSignalSpaceBeforeBracket(detectedSpaceBeforeBracket)
 
             // Update WASM provider settings
-            updateProviderSettings(result.prefix!, result.spaceBeforeBracket ?? false)
+            updateProviderSettings(result.prefix!, detectedSpaceBeforeBracket)
           }
 
           // Add signal to waveform (still using mock data for now)
