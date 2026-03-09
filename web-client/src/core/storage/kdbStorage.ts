@@ -169,11 +169,11 @@ async function store_source_file_info(
  * Falls back to memory storage if OPFS is not available
  */
 async function store_source_file_content_opfs(id: number, content: Uint8Array, kdbId: string): Promise<void> {
-  console.log('[KdbStorage] Storing source file content:', id, 'content length:', content?.length || 0);
+  console.log('[KdbStorage] Storing source file content: fileId=', id, 'kdbId=', kdbId, 'content length:', content?.length || 0);
   
   // Check if OPFS is available
   if (!isOpfsAvailable()) {
-    console.warn('[KdbStorage] OPFS not available, storing in memory');
+    console.warn('[KdbStorage] OPFS not available, storing in memory, key=', `${kdbId}_${id}`);
     // Store in memory as fallback
     globalMemoryStorage.set(`${kdbId}_${id}`, content);
     return;
@@ -197,11 +197,11 @@ async function store_source_file_content_opfs(id: number, content: Uint8Array, k
     await writable.write(contentView as any);
     await writable.close();
     
-    console.log('[KdbStorage] Stored content to OPFS:', fileName);
+    console.log('[KdbStorage] Stored content to OPFS:', kdbId, '/', fileName);
   } catch (e) {
     console.error('[KdbStorage] Failed to store content to OPFS:', e);
     // Fallback to memory storage
-    console.warn('[KdbStorage] Falling back to memory storage');
+    console.warn('[KdbStorage] Falling back to memory storage, key=', `${kdbId}_${id}`);
     globalMemoryStorage.set(`${kdbId}_${id}`, content);
   }
 }
@@ -211,19 +211,19 @@ async function store_source_file_content_opfs(id: number, content: Uint8Array, k
  * Returns: string (UTF-8 decoded)
  */
 async function get_source_file_content(fileId: number, kdbId: string): Promise<string | null> {
-  console.log('[KdbStorage] Getting full content:', fileId);
+  console.log('[KdbStorage] Getting full content: fileId=', fileId, 'kdbId=', kdbId);
   
   // Check memory fallback first
   const memoryKey = `${kdbId}_${fileId}`;
   if (globalMemoryStorage.has(memoryKey)) {
-    console.log('[KdbStorage] Reading from memory fallback');
+    console.log('[KdbStorage] Reading from memory fallback, key=', memoryKey);
     const content = globalMemoryStorage.get(memoryKey)!;
     return new TextDecoder().decode(content);
   }
   
   // Check if OPFS is available
   if (!isOpfsAvailable()) {
-    console.warn('[KdbStorage] OPFS not available and no memory fallback');
+    console.warn('[KdbStorage] OPFS not available and no memory fallback for key=', memoryKey);
     return null;
   }
   
@@ -232,11 +232,23 @@ async function get_source_file_content(fileId: number, kdbId: string): Promise<s
     const root = await navigator.storage.getDirectory();
     
     // Get KDB-specific directory
-    const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
+    let kdbDir: FileSystemDirectoryHandle;
+    try {
+      kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
+    } catch (e) {
+      console.error(`[KdbStorage] KDB directory not found: ${kdbId}`, e);
+      return null;
+    }
     
     // Get file handle
     const fileName = `file_${fileId}.content`;
-    const fileHandle = await kdbDir.getFileHandle(fileName, { create: false });
+    let fileHandle: FileSystemFileHandle;
+    try {
+      fileHandle = await kdbDir.getFileHandle(fileName, { create: false });
+    } catch (e) {
+      console.error(`[KdbStorage] File not found: ${kdbId}/${fileName}`, e);
+      return null;
+    }
     
     // Get file and read all content
     const file = await fileHandle.getFile();
@@ -245,7 +257,7 @@ async function get_source_file_content(fileId: number, kdbId: string): Promise<s
     // Decode UTF-8 bytes to string
     const content = new TextDecoder().decode(arrayBuffer);
     
-    console.log('[KdbStorage] Read', content.length, 'chars from OPFS');
+    console.log('[KdbStorage] Read', content.length, 'chars from OPFS:', fileName);
     return content;
   } catch (e) {
     console.error('[KdbStorage] Failed to get content from OPFS:', e);
