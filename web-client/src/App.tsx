@@ -222,10 +222,29 @@ function App() {
         // User can manually connect via Connect button
 
         setInitialized(true)
+        
+        // Hide initial loader after React is ready
+        const loader = document.getElementById('initial-loader')
+        if (loader) {
+          loader.classList.add('hidden')
+          // Remove from DOM after transition
+          setTimeout(() => {
+            loader.remove()
+          }, 500)
+        }
       } catch (error) {
         console.error('Initialization error:', error)
         addMessage(`Initialization error: ${error}`)
         setInitialized(true)
+        
+        // Hide loader even on error
+        const loader = document.getElementById('initial-loader')
+        if (loader) {
+          loader.classList.add('hidden')
+          setTimeout(() => {
+            loader.remove()
+          }, 500)
+        }
       }
     }
 
