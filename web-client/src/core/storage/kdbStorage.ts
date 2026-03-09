@@ -465,14 +465,9 @@ async function clear_kdb_data(kdbId: string): Promise<void> {
       }
     }
     
-    // Try to remove the directory itself
-    try {
-      await root.removeEntry(kdbId);
-      console.log(`[KdbStorage] Removed OPFS directory: ${kdbId}`);
-    } catch (e) {
-      // Directory might not be empty or might not exist
-      console.log(`[KdbStorage] Could not remove OPFS directory (may not be empty): ${kdbId}`);
-    }
+    // Note: We don't remove the directory itself, only its contents
+    // The directory will be reused when storing new file contents
+    console.log(`[KdbStorage] Cleared OPFS directory contents: ${kdbId}`);
   } catch (e) {
     // Directory might not exist
     console.log(`[KdbStorage] OPFS directory not found for KDB: ${kdbId}`);
