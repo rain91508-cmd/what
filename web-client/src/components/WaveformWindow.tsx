@@ -691,7 +691,7 @@ export function WaveformWindow({
       // 获取可见信号列表进行吸附
       let finalTime = clickTime;
       const timeRange = viewport.timeEnd - viewport.timeStart;
-      const snapThreshold = Math.max(timeRange * 0.02, 10);
+      const snapThreshold = Math.max(timeRange * 0.04, 10);
 
       if (useMockData) {
         // Mock 数据模式：使用 mockDataProvider
