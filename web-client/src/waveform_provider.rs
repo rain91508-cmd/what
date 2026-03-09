@@ -2734,6 +2734,12 @@ if tile_missing_signals.is_empty() {
         console_log!("[WASM] find_transitions_around: signal='{}', time={}", signal_name, time);
 
         if let Some(data) = self.signal_data.get(signal_name) {
+            // Check if we have bucket_data (new LoD 1+ format)
+            if !data.bucket_data.is_empty() {
+                return self.find_transitions_around_from_buckets(data, time);
+            }
+            
+            // Fall back to transitions (LoD 0 or old format)
             console_log!("[WASM]   Found signal data, transitions count: {}", data.transitions.len());
 
             let mut prev: Option<u64> = None;
@@ -2762,6 +2768,70 @@ if tile_missing_signals.is_empty() {
             console_log!("[WASM]   Signal data not found in cache!");
             JsValue::NULL
         }
+    }
+    
+    /// Find transitions around time from bucket_data (LoD 1+ format)
+    fn find_transitions_around_from_buckets(&self, data: &SignalWaveData, time: f64) -> JsValue {
+        let lod = self.current_lod.unwrap_or(25);
+        let bucket_size = 1u64 << lod;
+        let time_u64 = time as u64;
+        
+        console_log!("[WASM]   Using bucket_data, lod={}, bucket_size={}", lod, bucket_size);
+        
+        // Sort bucket_data by tile_start
+        let mut sorted_bucket_data: Vec<(u64, &HashMap<u32, BucketData>)> = data.bucket_data
+            .iter()
+            .map(|(start, buckets)| (*start, buckets))
+            .collect();
+        sorted_bucket_data.sort_by_key(|(start, _)| *start);
+        
+        let mut all_transition_times: Vec<u64> = Vec::new();
+        
+        // Collect all transition times from all buckets
+        for (tile_start, buckets) in &sorted_bucket_data {
+            let tile_span = OpfsCacheManager::get_tile_span(lod);
+            
+            for bucket_idx in 0..256u32 {
+                if let Some(bucket) = buckets.get(&bucket_idx) {
+                    // Calculate absolute time for this bucket
+                    let bucket_time = *tile_start + (bucket_idx as u64) * bucket_size;
+                    
+                    // Add first transition time
+                    all_transition_times.push(bucket_time);
+                    
+                    // If toggle bucket, also add the toggle point (approximate as bucket end)
+                    if bucket.has_toggle() {
+                        let bucket_end_time = bucket_time + bucket_size - 1;
+                        all_transition_times.push(bucket_end_time);
+                    }
+                }
+            }
+        }
+        
+        // Sort and deduplicate
+        all_transition_times.sort();
+        all_transition_times.dedup();
+        
+        console_log!("[WASM]   Total transition times: {}", all_transition_times.len());
+        
+        // Find prev and next
+        let mut prev: Option<u64> = None;
+        let mut next: Option<u64> = None;
+        
+        for t in &all_transition_times {
+            let t_f64 = *t as f64;
+            if t_f64 < time {
+                prev = Some(*t);
+            } else if t_f64 > time && next.is_none() {
+                next = Some(*t);
+                break;
+            }
+        }
+        
+        console_log!("[WASM]   Result from buckets: prev={:?}, next={:?}", prev, next);
+        
+        let result = vec![prev, next];
+        serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
     }
 
     /// Get signal value at a specific time
