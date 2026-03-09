@@ -162,12 +162,30 @@ async function store_source_file_info(
 }
 
 /**
+ * Check if OPFS is available in current context
+ */
+function isOpfsAvailable(): boolean {
+  return typeof navigator !== 'undefined' && 
+         typeof navigator.storage !== 'undefined' && 
+         typeof navigator.storage.getDirectory === 'function';
+}
+
+/**
  * Store source file content (large data) to OPFS (Origin Private File System)
  * WASM calls: store_source_file_content_opfs(id, content, kdbId)
  * Uses OPFS for better performance with large files
+ * Falls back to memory storage if OPFS is not available
  */
 async function store_source_file_content_opfs(id: number, content: Uint8Array, kdbId: string): Promise<void> {
-  console.log('[KdbStorage] Storing source file content to OPFS:', id, 'content length:', content?.length || 0);
+  console.log('[KdbStorage] Storing source file content:', id, 'content length:', content?.length || 0);
+  
+  // Check if OPFS is available
+  if (!isOpfsAvailable()) {
+    console.warn('[KdbStorage] OPFS not available, storing in memory');
+    // Store in memory as fallback
+    memoryFileStorage.set(`${kdbId}_${id}`, new Uint8Array(content));
+    return;
+  }
   
   try {
     // Get OPFS root directory
@@ -190,16 +208,35 @@ async function store_source_file_content_opfs(id: number, content: Uint8Array, k
     console.log('[KdbStorage] Stored content to OPFS:', fileName);
   } catch (e) {
     console.error('[KdbStorage] Failed to store content to OPFS:', e);
-    throw e;
+    // Fallback to memory storage
+    console.warn('[KdbStorage] Falling back to memory storage');
+    memoryFileStorage.set(`${kdbId}_${id}`, new Uint8Array(content));
   }
 }
 
+// In-memory fallback storage for when OPFS is not available
+const memoryFileStorage: Map<string, Uint8Array> = new Map();
+
 /**
- * Get full source file content from OPFS
+ * Get full source file content from OPFS or memory fallback
  * Returns: string (UTF-8 decoded)
  */
 async function get_source_file_content(fileId: number, kdbId: string): Promise<string | null> {
-  console.log('[KdbStorage] Getting full content from OPFS:', fileId);
+  console.log('[KdbStorage] Getting full content:', fileId);
+  
+  // Check memory fallback first
+  const memoryKey = `${kdbId}_${fileId}`;
+  if (memoryFileStorage.has(memoryKey)) {
+    console.log('[KdbStorage] Reading from memory fallback');
+    const content = memoryFileStorage.get(memoryKey)!;
+    return new TextDecoder().decode(content);
+  }
+  
+  // Check if OPFS is available
+  if (!isOpfsAvailable()) {
+    console.warn('[KdbStorage] OPFS not available and no memory fallback');
+    return null;
+  }
   
   try {
     // Get OPFS root directory
@@ -228,7 +265,7 @@ async function get_source_file_content(fileId: number, kdbId: string): Promise<s
 }
 
 /**
- * Get source file content by byte range from OPFS
+ * Get source file content by byte range from OPFS or memory fallback
  * Uses index offset for efficient seeking
  * WASM calls: get_source_file_content_by_range(fileId, startByte, endByte, kdbId)
  * Returns: Uint8Array of the requested range
@@ -239,7 +276,20 @@ async function get_source_file_content_by_range(
   endByte: number, 
   kdbId: string
 ): Promise<Uint8Array> {
-  console.log('[KdbStorage] Getting content by range from OPFS:', fileId, 'bytes', startByte, '-', endByte);
+  console.log('[KdbStorage] Getting content by range:', fileId, 'bytes', startByte, '-', endByte);
+  
+  // Check memory fallback first
+  const memoryKey = `${kdbId}_${fileId}`;
+  if (memoryFileStorage.has(memoryKey)) {
+    console.log('[KdbStorage] Reading from memory fallback');
+    const content = memoryFileStorage.get(memoryKey)!;
+    return content.slice(startByte, endByte);
+  }
+  
+  // Check if OPFS is available
+  if (!isOpfsAvailable()) {
+    throw new Error('OPFS not available and no memory fallback');
+  }
   
   try {
     // Get OPFS root directory
