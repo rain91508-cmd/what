@@ -27,6 +27,7 @@ import './App.css'
 import { indexedDBManager } from './core/storage/indexedDB'
 import { opfsManager } from './core/storage/opfs'
 import { apiService } from './services/api'
+import { isOpfsAvailable } from './utils/opfsUtils'
 
 // Modules
 import { kdbManager } from './modules/knowledge/kdbManager'
@@ -203,6 +204,23 @@ function App() {
   useEffect(() => {
     const init = async () => {
       try {
+        // Check OPFS availability first
+        if (!isOpfsAvailable()) {
+          console.warn('[App] OPFS not available - performance will be limited')
+          // Show warning to user
+          const useHttps = window.confirm(
+            '⚠️ 本地存储(OPFS)不可用\n\n' +
+            '当前访问方式无法使用本地缓存功能，性能将受到限制。\n\n' +
+            '建议：\n' +
+            '• 使用 https:// 协议访问\n' +
+            '• 或使用 localhost 访问\n\n' +
+            '点击"确定"继续使用，点击"取消"查看帮助。'
+          )
+          if (!useHttps) {
+            window.open('https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system', '_blank')
+          }
+        }
+
         // Initialize WASM module
         await initWasm()
         console.log('[App] WASM initialized')
