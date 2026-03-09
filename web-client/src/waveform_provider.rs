@@ -1105,8 +1105,17 @@ impl WaveformDataProvider {
                                     // For LoD 1+, directly parse into bucket_data (like server fetch)
                                     let lod = self.current_lod.unwrap_or(25);
                                     
-                                    // Debug: print raw cache transitions
-                                    console_log!("[WASM] Cache raw data for tile {}: {} transitions", tile_id, signal_data.transitions.len());
+                                    // Debug: print raw cache transitions with bucket info
+                                    let bucket_size = 1u64 << lod;
+                                    let tile_span = OpfsCacheManager::get_tile_span(lod);
+                                    let canvas_width = self.canvas_width;
+                                    let time_range = self.viewport.time_end - self.viewport.time_start;
+                                    let view_start = self.viewport.time_start as u64;
+                                    let view_end = self.viewport.time_end as u64;
+                                    
+                                    console_log!("[WASM] Cache raw data for tile {}: {} transitions, tile_start={}, bucket_size={}, canvas_width={}", 
+                                        tile_id, signal_data.transitions.len(), tile_start, bucket_size, canvas_width);
+                                    
                                     for (i, t) in signal_data.transitions.iter().take(10).enumerate() {
                                         let value_str = if t.value.len() <= 8 {
                                             let mut bytes = [0u8; 8];
@@ -1115,7 +1124,26 @@ impl WaveformDataProvider {
                                         } else {
                                             format!("0x{}", t.value.iter().map(|b| format!("{:02X}", b)).collect::<String>())
                                         };
-                                        console_log!("[WASM]   Raw[{}]: time={}, value={}", i, t.time, value_str);
+                                        
+                                        // Calculate bucket start time and view x position
+                                        let bucket_start_time = if t.time == u64::MAX {
+                                            // BOUNDARY_TIME_START - use tile start
+                                            tile_start
+                                        } else {
+                                            tile_start + t.time * bucket_size
+                                        };
+                                        
+                                        // Calculate x position in viewport (if within view)
+                                        let view_x = if bucket_start_time >= view_start && bucket_start_time <= view_end {
+                                            let relative_time = (bucket_start_time - view_start) as f64;
+                                            let x_pixel = (relative_time / time_range) * canvas_width;
+                                            format!("{:.1}px", x_pixel)
+                                        } else {
+                                            "out-of-view".to_string()
+                                        };
+                                        
+                                        console_log!("[WASM]   Raw[{}]: time={}, bucket_start={}, value={}, view_x={}", 
+                                            i, t.time, bucket_start_time, value_str, view_x);
                                     }
                                     
                                     // Convert cache transitions to our Transition format
