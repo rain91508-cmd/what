@@ -5,6 +5,8 @@
  * This is stored per waveform in OPFS as signals.json.
  */
 
+import { isOpfsAvailable } from '../../utils/opfsUtils';
+
 // Signal metadata structure (simplified - only ID mapping)
 interface SignalMetadata {
   version: number;
@@ -34,21 +36,12 @@ export class SignalIdManager {
   }
 
   /**
-   * Check if OPFS is available in current context
-   */
-  private isOpfsAvailable(): boolean {
-    return typeof navigator !== 'undefined' && 
-           typeof navigator.storage !== 'undefined' && 
-           typeof navigator.storage.getDirectory === 'function';
-  }
-
-  /**
    * Initialize the manager
    * Loads existing metadata from OPFS if available
    */
   async init(): Promise<void> {
     // Check if OPFS is available
-    if (!this.isOpfsAvailable()) {
+    if (!isOpfsAvailable()) {
       console.warn(`[SignalIdManager] OPFS not available, using memory only`);
       this.opfsRoot = null;
       return;
