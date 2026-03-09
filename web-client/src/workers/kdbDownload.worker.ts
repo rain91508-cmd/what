@@ -325,11 +325,13 @@ class MetadataBatcher {
 
 class OPFSWriter {
   private kdbDir: FileSystemDirectoryHandle | null = null;
+  private kdbId: string = '';
   private writeQueue: (() => Promise<void>)[] = [];
   private activeWrites = 0;
   private usePostMessageFallback = false;
   private pendingFiles: Map<number, Uint8Array> = new Map();
   async init(kdbId: string): Promise<void> {
+    this.kdbId = kdbId;
     
     try {
       // Check if OPFS is available in this context
@@ -356,12 +358,26 @@ class OPFSWriter {
       return;
     }
 
-    if (!this.kdbDir) throw new Error('OPFS not initialized');
-
     // Create write task
     const writeTask = async () => {
+      // Check if kdbDir is still valid (directory might have been deleted externally)
+      if (!this.kdbDir) {
+        throw new Error('OPFS not initialized');
+      }
+      
       const fileName = `file_${fileId}.content`;
-      const fileHandle = await this.kdbDir!.getFileHandle(fileName, { create: true });
+      let fileHandle: FileSystemFileHandle;
+      
+      try {
+        fileHandle = await this.kdbDir.getFileHandle(fileName, { create: true });
+      } catch (e) {
+        // Directory might have been deleted, try to recreate it
+        console.warn('[KDBWorker] Directory handle invalid, recreating:', e);
+        const root = await navigator.storage.getDirectory();
+        this.kdbDir = await root.getDirectoryHandle(this.kdbId, { create: true });
+        fileHandle = await this.kdbDir.getFileHandle(fileName, { create: true });
+      }
+      
       const writable = await fileHandle.createWritable();
       
       try {
