@@ -4,6 +4,15 @@
 
 ## 更新日志
 
+### 2026-03-10
+
+#### LoD Tile 对齐规则优化
+- **重要**: LoD 1+ 生成时，tile 起始时间必须对齐到 bucket 大小
+- **对齐规则**: `aligned_start = (tile_start / bucket_size) * bucket_size`
+- **范围**: 使用 `[aligned_start, tile_end]` 而不是 `[tile_start, tile_end]` 来计算 buckets
+- **Bucket 数量**: 使用向上取整确保至少有 1 个 bucket：`total_buckets = ceil((tile_end - aligned_start) / bucket_size)`
+- **修复**: 服务器和 fst-tile-reader 都必须遵循相同的对齐规则
+
 ### 2026-03-09
 
 #### LoD 算法优化
@@ -1087,6 +1096,12 @@ LoD 是基于**时间**的降采样，每个 bucket 覆盖固定的时间范围�
 - **LoD 1+** 使用 **First/Last Bucket** 算法进行降采样
 - 每个 bucket 覆盖固定的时间范围 `[bucket_start, bucket_end]`
 - Bucket 大小计算公式: `2^level`
+- **Tile 起始对齐规则**（重要！）：
+  - LoD 1+ 生成时，tile 起始时间必须对齐到 bucket 大小
+  - 对齐公式：`aligned_start = (tile_start / bucket_size) * bucket_size`
+  - 使用对齐后的范围 `[aligned_start, tile_end]` 来计算 buckets
+  - Bucket 数量使用向上取整：`total_buckets = ceil((tile_end - aligned_start) / bucket_size)`
+  - 这样确保即使 tile 完全在单个 bucket 内，也能正确计算
 - **First/Last 输出规则**: 
   - 当 bucket 内只有一个 transition 时，只输出 1 个记录（first = last）
   - 当 bucket 内有多个 transitions 时，输出 2 个记录：first 和 last

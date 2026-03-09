@@ -1536,6 +1536,11 @@ impl WaveService {
                 .map(|t| t.time)
                 .max()
                 .unwrap_or(time_end);
+
+            // 计算对齐后的起始地址（按 LoD bucket size 对齐）
+            let bucket_size = lod.bucket_size() as u64;
+            let aligned_start = (time_start / bucket_size) * bucket_size;
+            info!("原始起始={}, 对齐后起始={}, bucket_size={}", time_start, aligned_start, bucket_size);
             
             // 批量搜索 Start Value
             let start_values = search_boundary_values_optimized(
@@ -1550,9 +1555,9 @@ impl WaveService {
                 let full_data = full_signals_data.get(&handle).unwrap();
                 let mut signal_data = SignalWaveData::new(handle.into(), full_data.width, full_data.value_type);
 
-                // 过滤时间范围内的 transitions
+                // 过滤时间范围内的 transitions（从对齐后的起始地址开始）
                 for trans in &full_data.transitions {
-                    if trans.time >= time_start && trans.time <= time_end {
+                    if trans.time >= aligned_start && trans.time <= time_end {
                         signal_data.add_transition(trans.clone());
                     }
                 }
@@ -1572,18 +1577,18 @@ impl WaveService {
                 info!("信号 {} 时间范围内数据: {} transitions, start={:?}", 
                     name, signal_data.transitions.len(), start_value);
 
-                // 在 signal_data 开头添加 start_value（使用 time_start 时间）
+                // 在 signal_data 开头添加 start_value（使用 aligned_start 时间）
                 // 这样 LoD 生成器可以正确计算第一个 bucket 的 min
                 if !signal_data.transitions.is_empty() {
                     signal_data.transitions.insert(0, Transition {
-                        time: time_start,
+                        time: aligned_start,
                         value: start_value.clone(),
                     });
                 }
 
-                // 生成 LoD 数据（使用请求的时间范围）
+                // 生成 LoD 数据（使用对齐后的时间范围）
                 let mut lod_data = LodPyramidGenerator::new(config.clone())
-                    .generate_level_with_range(&signal_data, lod, time_start, time_end);
+                    .generate_level_with_range(&signal_data, lod, aligned_start, time_end);
                 info!("信号 {} 生成 LoD {} 数据: {} transitions", name, lod.0, lod_data.transitions.len());
                 
                 // 在 LoD 数据开头添加 Start Value（始终添加）
@@ -1840,6 +1845,11 @@ impl WaveService {
                     
                     info!("处理 Tile {}: time={}-{}", tile_idx, tile_start, tile_end);
 
+                    // 计算对齐后的起始地址（按 LoD bucket size 对齐）
+                    let bucket_size = lod.bucket_size() as u64;
+                    let aligned_start = (tile_start / bucket_size) * bucket_size;
+                    info!("Tile {}: 原始起始={}, 对齐后起始={}, bucket_size={}", tile_idx, tile_start, aligned_start, bucket_size);
+
                     // 批量搜索 Start Value
                     let start_values = search_boundary_values_optimized(
                         &signal_data_map,
@@ -1854,12 +1864,12 @@ impl WaveService {
                     for (name, handle, width) in &signal_handles {
                         let full_data = full_signals_data.get(handle).unwrap();
                         
-                        // 提取时间范围内的 transitions
+                        // 提取时间范围内的 transitions（从对齐后的起始地址开始）
                         let mut tile_signal = SignalWaveData::new((*handle).into(), *width, SignalValueType::Numeric);
                         
                         let mut count = 0;
                         for trans in &full_data.transitions {
-                            if trans.time >= tile_start && trans.time <= tile_end {
+                            if trans.time >= aligned_start && trans.time <= tile_end {
                                 tile_signal.add_transition(trans.clone());
                                 count += 1;
                             }
@@ -1878,10 +1888,10 @@ impl WaveService {
                                 }
                             });
 
-                        // 生成 LoD 数据（使用 tile 时间范围）
+                        // 生成 LoD 数据（使用对齐后的时间范围）
                         // 注意：start_value 不参与 bucket 计算，只在最后作为 BOUNDARY_TIME_START 输出
                         let mut lod_data = LodPyramidGenerator::new(config.clone())
-                            .generate_level_with_range(&tile_signal, lod, tile_start, tile_end);
+                            .generate_level_with_range(&tile_signal, lod, aligned_start, tile_end);
                         info!("Tile {} 信号 {}: 生成 LoD {} 数据: {} transitions", tile_idx, name, lod.0, lod_data.transitions.len());
                         
                         // 在 LoD 数据开头添加 Start Value（始终添加，时间为 BOUNDARY_TIME_START）
