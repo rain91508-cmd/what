@@ -736,17 +736,34 @@ async function downloadAndStoreKDB(
     
     if (pendingFiles && pendingFiles.length > 0) {
       console.log(`[KDBWorker] Sending ${pendingFiles.length} files to main thread for storage`);
+      
+      // Use Transferable Objects to avoid copying large data
+      // Extract Uint8Arrays for transfer
+      const transferableArrays: Transferable[] = [];
+      for (const file of pendingFiles) {
+        if (file.content.buffer) {
+          transferableArrays.push(file.content.buffer as ArrayBuffer);
+        }
+      }
+      
+      (self as any).postMessage({
+        type: 'complete',
+        designName,
+        moduleCount: 0, // TODO: Get actual counts from WASM
+        signalCount: 0,
+        fileCount: 0,
+        pendingFiles,
+        kdbId,
+      } as KDBCompleteMessage, transferableArrays);
+    } else {
+      postMessage({
+        type: 'complete',
+        designName,
+        moduleCount: 0, // TODO: Get actual counts from WASM
+        signalCount: 0,
+        fileCount: 0,
+      } as KDBCompleteMessage);
     }
-    
-    postMessage({
-      type: 'complete',
-      designName,
-      moduleCount: 0, // TODO: Get actual counts from WASM
-      signalCount: 0,
-      fileCount: 0,
-      pendingFiles,
-      kdbId: opfsWriter.isUsingFallback() ? kdbId : undefined,
-    } as KDBCompleteMessage);
     
   } catch (error) {
     stopHeartbeat();

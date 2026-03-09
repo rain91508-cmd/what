@@ -264,6 +264,7 @@ class KDBDownloadManager {
   /**
    * Store pending files from Worker (OPFS fallback)
    * Called when Worker cannot access OPFS directly
+   * Uses batch processing and yielding to avoid blocking UI
    */
   private async storePendingFiles(
     pendingFiles: Array<{ fileId: number; content: Uint8Array }>,
@@ -272,14 +273,34 @@ class KDBDownloadManager {
     // Import storage function dynamically
     const { store_source_file_content_opfs } = await import('../core/storage/kdbStorage');
     
-    for (const { fileId, content } of pendingFiles) {
-      try {
-        await store_source_file_content_opfs(fileId, content, kdbId);
-      } catch (error) {
-        console.error(`[KDBDownloadManager] Failed to store file ${fileId}:`, error);
-        throw error;
+    console.log(`[KDBDownloadManager] Storing ${pendingFiles.length} files with batch processing`);
+    
+    // Process files in batches to avoid blocking UI
+    const BATCH_SIZE = 5; // Process 5 files at a time
+    const YIELD_INTERVAL = 10; // Yield every 10 files
+    
+    for (let i = 0; i < pendingFiles.length; i += BATCH_SIZE) {
+      const batch = pendingFiles.slice(i, i + BATCH_SIZE);
+      
+      // Process batch concurrently
+      await Promise.all(
+        batch.map(async ({ fileId, content }) => {
+          try {
+            await store_source_file_content_opfs(fileId, content, kdbId);
+          } catch (error) {
+            console.error(`[KDBDownloadManager] Failed to store file ${fileId}:`, error);
+            throw error;
+          }
+        })
+      );
+      
+      // Yield to main thread every YIELD_INTERVAL files
+      if ((i + BATCH_SIZE) % YIELD_INTERVAL === 0 && i + BATCH_SIZE < pendingFiles.length) {
+        console.log(`[KDBDownloadManager] Processed ${i + batch.length}/${pendingFiles.length} files, yielding...`);
+        await new Promise(resolve => setTimeout(resolve, 0));
       }
     }
+    
     console.log(`[KDBDownloadManager] Successfully stored ${pendingFiles.length} files`);
   }
 
