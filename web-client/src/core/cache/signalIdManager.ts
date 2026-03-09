@@ -34,10 +34,26 @@ export class SignalIdManager {
   }
 
   /**
+   * Check if OPFS is available in current context
+   */
+  private isOpfsAvailable(): boolean {
+    return typeof navigator !== 'undefined' && 
+           typeof navigator.storage !== 'undefined' && 
+           typeof navigator.storage.getDirectory === 'function';
+  }
+
+  /**
    * Initialize the manager
    * Loads existing metadata from OPFS if available
    */
   async init(): Promise<void> {
+    // Check if OPFS is available
+    if (!this.isOpfsAvailable()) {
+      console.warn(`[SignalIdManager] OPFS not available, using memory only`);
+      this.opfsRoot = null;
+      return;
+    }
+
     try {
       this.opfsRoot = await navigator.storage.getDirectory();
       await this.loadMetadata();
