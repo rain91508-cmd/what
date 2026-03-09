@@ -330,24 +330,20 @@ class OPFSWriter {
   private activeWrites = 0;
   private usePostMessageFallback = false;
   private pendingFiles: Map<number, Uint8Array> = new Map();
+  
   async init(kdbId: string): Promise<void> {
     this.kdbId = kdbId;
     
-    try {
-      // Check if OPFS is available in this context
-      if (typeof navigator.storage === 'undefined' || !navigator.storage.getDirectory) {
-        console.warn('[KDBWorker] OPFS not available in Worker, will use postMessage fallback');
-        this.usePostMessageFallback = true;
-        return;
-      }
-      
-      const root = await navigator.storage.getDirectory();
-      this.kdbDir = await root.getDirectoryHandle(kdbId, { create: true });
-      console.log('[KDBWorker] OPFS directory ready:', kdbId);
-    } catch (error) {
-      console.warn('[KDBWorker] OPFS initialization failed, will use postMessage fallback:', error);
+    // Check if OPFS is available in this context
+    if (typeof navigator.storage === 'undefined' || !navigator.storage.getDirectory) {
+      console.warn('[KDBWorker] OPFS not available in Worker, will use postMessage fallback');
       this.usePostMessageFallback = true;
+      return;
     }
+    
+    // Don't create directory here - it will be created on first write
+    // This avoids the race condition with clear_kdb_data
+    console.log('[KDBWorker] OPFS available, directory will be created on first write:', kdbId);
   }
 
   async writeFile(fileId: number, content: Uint8Array): Promise<void> {
@@ -360,18 +356,27 @@ class OPFSWriter {
 
     // Create write task
     const writeTask = async () => {
-      // Check if kdbDir is still valid (directory might have been deleted externally)
+      const fileName = `file_${fileId}.content`;
+      
+      // Lazy initialization: create directory on first write
+      // This ensures directory exists even if clear_kdb_data deleted it
       if (!this.kdbDir) {
-        throw new Error('OPFS not initialized');
+        try {
+          const root = await navigator.storage.getDirectory();
+          this.kdbDir = await root.getDirectoryHandle(this.kdbId, { create: true });
+          console.log('[KDBWorker] Created OPFS directory on first write:', this.kdbId);
+        } catch (e) {
+          console.error('[KDBWorker] Failed to create directory:', e);
+          throw new Error('Failed to create OPFS directory');
+        }
       }
       
-      const fileName = `file_${fileId}.content`;
       let fileHandle: FileSystemFileHandle;
       
       try {
         fileHandle = await this.kdbDir.getFileHandle(fileName, { create: true });
       } catch (e) {
-        // Directory might have been deleted, try to recreate it
+        // Directory might have been deleted by clear_kdb_data, recreate it
         console.warn('[KDBWorker] Directory handle invalid, recreating:', e);
         const root = await navigator.storage.getDirectory();
         this.kdbDir = await root.getDirectoryHandle(this.kdbId, { create: true });
