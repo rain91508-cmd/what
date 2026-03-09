@@ -5,8 +5,14 @@ interface ConnectionDialogProps {
   onClose: () => void;
 }
 
+function getCurrentHost(): string {
+  // Get current hostname from browser URL, remove port if present
+  const hostname = window.location.hostname;
+  return hostname || 'localhost';
+}
+
 export function ConnectionDialog({ onConnect, onClose }: ConnectionDialogProps) {
-  const [host, setHost] = useState('localhost');
+  const [host, setHost] = useState(getCurrentHost);
   const [port, setPort] = useState('8080');
 
   const handleSubmit = (e: React.FormEvent) => {
