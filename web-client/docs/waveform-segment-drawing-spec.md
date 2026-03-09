@@ -6,6 +6,15 @@ This document defines the rules for drawing waveform segments from tile-based da
 
 ## Data Format
 
+### Tile Structure
+
+- **Buckets per tile**: Fixed at 256 buckets (indices 0-255)
+- **Tile span**: `tile_span = 256 * (2^lod)` time units
+- **Tile alignment**: `tile_start` is always aligned to `tile_span` boundaries
+  ```
+  tile_start = n * tile_span  (where n is an integer)
+  ```
+
 ### Server Response Format (Updated)
 
 Each tile returns for LoD 1+:
@@ -40,6 +49,11 @@ Each tile returns for LoD 1+:
    bucket_absolute_time = tile_start + bucket_offset * (2^lod)
    ```
 
+5. **Viewport and Tile Relationship**:
+   - Viewport can start at any time, not necessarily at tile boundary
+   - First tile fetched: `tile_start <= viewport_start < tile_start + tile_span`
+   - Last tile fetched: `tile_end >= viewport_end` (where `tile_end = tile_start + tile_span`)
+
 ## Drawing Rules
 
 ### Rule 1: LoD 1+ Tile Drawing (Per Bucket)
@@ -71,29 +85,50 @@ FOR bucket_index from 0 to 255:
 
 For the **first tile** in the viewport:
 
-**Note**: Fetched tiles should cover the entire viewport, meaning `tile[0].start <= viewport_start`. The value at `viewport_start` is determined as follows:
+**Prerequisites**:
+- `tile[0].start <= viewport_start < tile[0].start + tile_span` (tile covers viewport start)
+- `tile[0].start` is aligned to `tile_span` boundary
+
+**Algorithm**:
 
 ```
-IF viewport_start falls within a bucket (not at bucket boundary):
-    // Find the transition just before or at viewport_start
-    IF there is a transition in the tile at or before viewport_start:
-        draw from viewport_start using the value of that transition
+// Calculate which bucket contains viewport_start
+first_bucket_index = (viewport_start - tile[0].start) / (2^lod)
+first_bucket_start = tile[0].start + first_bucket_index * (2^lod)
+
+IF viewport_start > first_bucket_start:
+    // Viewport starts within a bucket (not at boundary)
+    // Find the last transition at or before viewport_start
+    IF bucket[first_bucket_index] exists AND bucket[first_bucket_index].first.time <= viewport_start:
+        // Use the value at viewport_start
+        IF bucket[first_bucket_index] has last AND bucket[first_bucket_index].last.time <= viewport_start:
+            value = bucket[first_bucket_index].last.value
+        ELSE:
+            value = bucket[first_bucket_index].first.value
+        draw from viewport_start to bucket_end using value
+    ELSE IF there is a transition in earlier buckets:
+        // Find the last transition before first_bucket_index
+        value = last transition value from buckets before first_bucket_index
+        draw from viewport_start to bucket_end using value
     ELSE:
         // No transition before viewport_start in this tile
-        draw from viewport_start using tile[0].start_value
-ELSE IF viewport_start == first_bucket_start_time:
+        value = tile[0].start_value
+        draw from viewport_start to bucket_end using value
+ELSE IF viewport_start == first_bucket_start:
     // Viewport starts exactly at bucket boundary
-    draw from viewport_start using first_bucket.first_value
-ELSE:
-    // Viewport starts before first bucket (should not happen with proper tile fetching)
-    draw start_value from viewport_start to first_bucket_start_time
+    IF bucket[first_bucket_index] exists:
+        value = bucket[first_bucket_index].first.value
+    ELSE:
+        // Empty bucket, need to find value from previous buckets or start_value
+        value = last transition value from buckets before first_bucket_index, or tile[0].start_value
+    draw from viewport_start to bucket_end using value
 ```
 
 **Key Points**:
-- The value at `viewport_start` is either:
-  - `tile[0].start_value` if no transition exists before `viewport_start`
-  - The `last` value of the last transition before/at `viewport_start` if such transition exists
-- The tile's `start_value` represents the value before `tile[0].start`, not necessarily before `viewport_start`
+- The value at `viewport_start` depends on the last transition at or before `viewport_start`
+- If `viewport_start` falls within a bucket with transitions, use the transition value at/before `viewport_start`
+- If `viewport_start` falls in an empty bucket, search backward for the last transition
+- The tile's `start_value` is only used if no transitions exist before `viewport_start` in the tile
 
 ### Rule 3: Last Tile Final Segment
 
