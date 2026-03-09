@@ -49,10 +49,18 @@ third_party/**/CMakeCache.txt
 third_party/**/CMakeFiles/
 
 # Directories to ignore (not committing)
-third_party/
+# third_party/  # 不再忽略整个目录，改为忽略特定子目录
 slpp_all/
 build/
 build_new/
+
+# 忽略 third_party 下的非 submodule 目录（fst-reader 作为 submodule 需要被跟踪）
+# 注意：fst-reader 作为 git submodule 会被跟踪
+third_party/Surelog/build/
+third_party/Surelog/third_party/**/build/
+third_party/vcpkg_new/
+third_party/fst-tools/
+third_party/build/
 
 # Rust build artifacts
 target/
