@@ -145,6 +145,8 @@ class KDBDownloadManager {
       fileCount?: number;
       error?: string;
       canRetry?: boolean;
+      pendingFiles?: Array<{ fileId: number; content: Uint8Array }>;
+      kdbId?: string;
     };
 
     switch (message.type) {
@@ -187,14 +189,37 @@ class KDBDownloadManager {
       case 'complete':
         if (this.currentDownload) {
           const resolve = this.currentDownload.resolve;
-          this.cleanup();
-          resolve({
-            success: true,
-            designName: message.designName,
-            moduleCount: message.moduleCount,
-            signalCount: message.signalCount,
-            fileCount: message.fileCount,
-          });
+          
+          // Handle pending files from Worker (OPFS fallback)
+          if (message.pendingFiles && message.pendingFiles.length > 0 && message.kdbId) {
+            console.log(`[KDBDownloadManager] Storing ${message.pendingFiles.length} files from Worker fallback`);
+            this.storePendingFiles(message.pendingFiles, message.kdbId).then(() => {
+              this.cleanup();
+              resolve({
+                success: true,
+                designName: message.designName,
+                moduleCount: message.moduleCount,
+                signalCount: message.signalCount,
+                fileCount: message.fileCount,
+              });
+            }).catch((error) => {
+              console.error('[KDBDownloadManager] Failed to store pending files:', error);
+              this.cleanup();
+              resolve({
+                success: false,
+                error: `Failed to store files: ${error instanceof Error ? error.message : 'Unknown error'}`,
+              });
+            });
+          } else {
+            this.cleanup();
+            resolve({
+              success: true,
+              designName: message.designName,
+              moduleCount: message.moduleCount,
+              signalCount: message.signalCount,
+              fileCount: message.fileCount,
+            });
+          }
         }
         break;
 
@@ -234,6 +259,28 @@ class KDBDownloadManager {
         }
       }, 1000);
     }
+  }
+
+  /**
+   * Store pending files from Worker (OPFS fallback)
+   * Called when Worker cannot access OPFS directly
+   */
+  private async storePendingFiles(
+    pendingFiles: Array<{ fileId: number; content: Uint8Array }>,
+    kdbId: string
+  ): Promise<void> {
+    // Import storage function dynamically
+    const { store_source_file_content_opfs } = await import('../core/storage/kdbStorage');
+    
+    for (const { fileId, content } of pendingFiles) {
+      try {
+        await store_source_file_content_opfs(fileId, content, kdbId);
+      } catch (error) {
+        console.error(`[KDBDownloadManager] Failed to store file ${fileId}:`, error);
+        throw error;
+      }
+    }
+    console.log(`[KDBDownloadManager] Successfully stored ${pendingFiles.length} files`);
   }
 
   /**
