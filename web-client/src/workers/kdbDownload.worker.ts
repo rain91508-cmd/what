@@ -24,10 +24,16 @@ import {
   store_module,
   store_signal_inst,
   store_source_file_info,
-  store_source_file_content_opfs,
   get_source_file_content_by_range,
   clear_kdb_data,
 } from '../core/storage/kdbStorage';
+
+// Create window alias for self (Worker global scope)
+// This is needed because wasm-bindgen generates code that uses window.*
+(self as any).window = self;
+
+// Storage functions will be set up after OPFSWriter initialization
+// This allows us to use OPFSWriter for file storage when OPFS is not available
 
 // Expose storage functions to Worker global scope (self)
 // WASM will access these via window.* (which we alias to self)
@@ -35,13 +41,27 @@ import {
 (self as any).store_module = store_module;
 (self as any).store_signal_inst = store_signal_inst;
 (self as any).store_source_file_info = store_source_file_info;
-(self as any).store_source_file_content_opfs = store_source_file_content_opfs;
+// store_source_file_content_opfs will be set after OPFSWriter init
 (self as any).get_source_file_content_by_range = get_source_file_content_by_range;
 (self as any).clear_kdb_data = clear_kdb_data;
 
-// Create window alias for self (Worker global scope)
-// This is needed because wasm-bindgen generates code that uses window.*
-(self as any).window = self;
+/**
+ * Setup storage functions with OPFSWriter integration
+ * This is called after OPFSWriter is initialized
+ */
+function setupStorageFunctions(writer: OPFSWriter) {
+  // Override store_source_file_content_opfs to use OPFSWriter
+  // This ensures files are properly queued for postMessage fallback if needed
+  (self as any).store_source_file_content_opfs = async (id: number, content: Uint8Array, _kdbId: string) => {
+    console.log('[KDBWorker] store_source_file_content_opfs called:', id, 'length:', content?.length || 0);
+    
+    // Always use OPFSWriter to handle file storage
+    // OPFSWriter will handle the fallback logic internally
+    await writer.writeFile(id, content);
+  };
+  
+  console.log('[KDBWorker] Storage functions setup complete');
+}
 
 // ============================================
 // Types
@@ -684,6 +704,10 @@ async function downloadAndStoreKDB(
     // Initialize storage
     await batcher.init();
     await opfsWriter.init(kdbId);
+    
+    // Setup storage functions with OPFSWriter integration
+    // This ensures store_source_file_content_opfs uses OPFSWriter for proper fallback handling
+    setupStorageFunctions(opfsWriter);
     
     // Get file info first
     const infoResponse = await fetch(`${baseUrl}/api/kdb/${kdbName}`);
