@@ -210,16 +210,28 @@ function App() {
         // Check OPFS availability first (only show warning once)
         if (!isOpfsAvailable() && !opfsWarningShown.current) {
           opfsWarningShown.current = true
-          console.warn('[App] OPFS not available - performance will be limited')
-          // Show warning to user
-          const useHttps = window.confirm(
-            '⚠️ 本地存储(OPFS)不可用\n\n' +
-            '当前访问方式无法使用本地缓存功能，性能将受到限制。\n\n' +
-            '建议：\n' +
-            '• 使用 https:// 协议访问\n' +
-            '• 或使用 localhost 访问\n\n' +
-            '点击"确定"继续使用，点击"取消"查看帮助。'
-          )
+          console.warn('[App] OPFS not available - using memory fallback')
+          
+          // Detect browser language
+          const userLang = navigator.language || navigator.languages[0] || 'en'
+          const isChinese = userLang.startsWith('zh')
+          
+          // Show warning to user based on language
+          const message = isChinese
+            ? '⚠️ 本地存储(OPFS)不可用\n\n' +
+              '当前访问方式无法使用本地缓存功能，大量数据将存储在内存中。\n\n' +
+              '建议：\n' +
+              '• 使用 https:// 协议访问\n' +
+              '• 或使用 localhost 访问\n\n' +
+              '点击"确定"继续使用，点击"取消"查看帮助。'
+            : '⚠️ Local Storage (OPFS) Unavailable\n\n' +
+              'Your current access method cannot use local cache. Large amounts of data will be stored in memory.\n\n' +
+              'Recommendations:\n' +
+              '• Use https:// protocol\n' +
+              '• Or use localhost\n\n' +
+              'Click "OK" to continue, or "Cancel" for help.'
+          
+          const useHttps = window.confirm(message)
           if (!useHttps) {
             window.open('https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system', '_blank')
           }
