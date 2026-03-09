@@ -57,7 +57,7 @@ pub struct ServerConfig {
     #[arg(long, default_value = "100")]
     pub rate_limit: u64,
 
-    /// FST 读取后端 (fstapi, wavefst)
+    /// FST 读取后端 (fstapi, fst-reader)
     #[arg(long, default_value = "fstapi")]
     pub fst_backend: String,
 

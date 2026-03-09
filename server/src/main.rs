@@ -33,7 +33,19 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("所有缓存已清除");
     }
 
-    // 记录启动信息
+    // 记录启动信息（使用 println 确保在控制台可见）
+    println!("");
+    println!("========================================");
+    println!("  硬件设计分析器数据服务器 (HWDA Server)");
+    println!("========================================");
+    println!("");
+    println!("【服务器配置】");
+    println!("  绑定地址：{}", config.bind_address());
+    println!("  日志级别：{}", config.log_level);
+    println!("  CORS 启用：{}", config.enable_cors);
+    println!("  FST 后端：{}", config.fst_backend);
+    
+    // 同时记录到 tracing
     tracing::info!("========================================");
     tracing::info!("  硬件设计分析器数据服务器 (HWDA Server)");
     tracing::info!("========================================");
@@ -43,10 +55,10 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("  日志级别：{}", config.log_level);
     tracing::info!("  CORS 启用：{}", config.enable_cors);
     tracing::info!("  FST 后端：{}", config.fst_backend);
-    tracing::info!("");
-    tracing::info!("【数据目录】");
-    tracing::info!("  知识库目录：{:?}", config.kdb_dir);
-    tracing::info!("  波形文件目录：{:?}", config.wave_dir);
+    println!("");
+    println!("【数据目录】");
+    println!("  知识库目录：{:?}", config.kdb_dir);
+    println!("  波形文件目录：{:?}", config.wave_dir);
     
     // 检查目录是否存在
     if config.kdb_dir.exists() {
@@ -57,9 +69,9 @@ async fn main() -> anyhow::Result<()> {
                 }).unwrap_or(false)
             }).count())
             .unwrap_or(0);
-        tracing::info!("    - 发现 {} 个 KDB 文件", kdb_count);
+        println!("    - 发现 {} 个 KDB 文件", kdb_count);
     } else {
-        tracing::warn!("    - 知识库目录不存在！");
+        println!("    - 知识库目录不存在！");
     }
     
     if config.wave_dir.exists() {
@@ -70,27 +82,30 @@ async fn main() -> anyhow::Result<()> {
                 }).unwrap_or(false)
             }).count())
             .unwrap_or(0);
-        tracing::info!("    - 发现 {} 个 FST 文件", wave_count);
+        println!("    - 发现 {} 个 FST 文件", wave_count);
     } else {
-        tracing::warn!("    - 波形文件目录不存在！");
+        println!("    - 波形文件目录不存在！");
     }
     
     // 如果配置了 web 目录，记录信息
     if let Some(ref web_dir) = config.web_dir {
-        tracing::info!("  Web 客户端目录：{:?}", web_dir);
+        println!("  Web 客户端目录：{:?}", web_dir);
         if web_dir.exists() {
-            tracing::info!("    - 目录存在");
+            println!("    - 目录存在");
         } else {
-            tracing::warn!("    - 目录不存在！");
+            println!("    - 目录不存在！");
         }
     }
     
-    tracing::info!("");
-    tracing::info!("【缓存配置】");
-    tracing::info!("  缓存容量：{} MB", config.cache_capacity_mb);
-    tracing::info!("  数据块大小：{} KB", config.chunk_size_kb);
-    tracing::info!("");
-    tracing::info!("========================================");
+    println!("");
+    println!("【缓存配置】");
+    println!("  缓存容量：{} MB", config.cache_capacity_mb);
+    println!("  数据块大小：{} KB", config.chunk_size_kb);
+    println!("");
+    println!("========================================");
+    println!("  服务器启动中...");
+    println!("========================================");
+    println!("");
 
     // 创建 CORS 层
     let cors = if config.enable_cors {
