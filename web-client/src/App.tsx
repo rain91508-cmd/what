@@ -58,6 +58,9 @@ import { Splitter } from './components/ResizablePanel'
 import { SessionDialog } from './components/SessionDialog'
 import { SessionLoadingOverlay } from './components/SessionLoadingOverlay'
 
+// Contexts
+import { WaveformProviderProvider } from './contexts/WaveformProviderContext'
+
 // Bookmark
 import { bookmarkManager, type Bookmark } from './types/bookmark'
 
@@ -2367,6 +2370,14 @@ function App() {
   }
 
   return (
+    <WaveformProviderProvider
+      serverUrl={serverUrl}
+      waveformName={currentWaveName || ''}
+      signalPrefix={currentWaveSignalPrefix}
+      spaceBeforeBracket={currentWaveSignalSpaceBeforeBracket}
+      enableOpfs={opfsCacheEnabled}
+      enableMemoryCache={memoryCacheEnabled}
+    >
     <div className="app">
       {/* Menu Bar */}
       <MenuBar
@@ -2659,6 +2670,7 @@ function App() {
         message={sessionLoadingMessage}
       />
     </div>
+    </WaveformProviderProvider>
   )
 }
 
