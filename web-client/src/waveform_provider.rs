@@ -24,6 +24,57 @@ macro_rules! console_log {
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
 }
 
+/// Get the global object (window in main thread, WorkerGlobalScope in worker)
+/// This function is compatible with both main thread and Web Worker environments
+fn get_global() -> Result<js_sys::Object, JsValue> {
+    // Try to get window (main thread)
+    if let Ok(window) = web_sys::window().ok_or(JsValue::UNDEFINED) {
+        return Ok(window.into());
+    }
+    
+    // Try to get WorkerGlobalScope (worker thread)
+    js_sys::global().dyn_into::<js_sys::Object>()
+        .map_err(|_| JsValue::from_str("No global object available"))
+}
+
+/// Fetch data from URL, compatible with both main thread and Web Worker
+async fn fetch_data(url: &str) -> Result<js_sys::ArrayBuffer, JsValue> {
+    let global = get_global()?;
+    
+    // Get the fetch function from global object
+    let fetch_fn = js_sys::Reflect::get(&global, &JsValue::from_str("fetch"))
+        .map_err(|_| JsValue::from_str("fetch not available"))?;
+    
+    // Call fetch
+    let promise = js_sys::Reflect::apply(
+        &fetch_fn.dyn_into::<js_sys::Function>()?,
+        &global,
+        &js_sys::Array::of1(&JsValue::from_str(url)),
+    )?;
+    
+    // Convert to Promise
+    let promise: js_sys::Promise = promise.dyn_into()
+        .map_err(|_| JsValue::from_str("fetch did not return a Promise"))?;
+    
+    // Await the fetch promise
+    let resp_value: JsValue = wasm_bindgen_futures::JsFuture::from(promise).await?;
+    
+    let resp: web_sys::Response = resp_value.dyn_into()
+        .map_err(|_| JsValue::from_str("Invalid response"))?;
+    
+    if !resp.ok() {
+        return Err(JsValue::from_str(&format!("HTTP error: {}", resp.status())));
+    }
+    
+    // Get array buffer
+    let data: JsValue = wasm_bindgen_futures::JsFuture::from(
+        resp.array_buffer()?
+    ).await?;
+    
+    data.dyn_into()
+        .map_err(|_| JsValue::from_str("Invalid array buffer"))
+}
+
 /// Signal information for waveform rendering
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignalInfo {
@@ -1246,26 +1297,8 @@ if tile_missing_signals.is_empty() {
                     encoded_batch,
                     self.time_stamp);
                 
-                // Fetch batch data
-                let window = web_sys::window().ok_or(JsValue::from_str("No window"))?;
-                let resp_value: JsValue = wasm_bindgen_futures::JsFuture::from(
-                    window.fetch_with_str(&url)
-                ).await?;
-                
-                let resp: web_sys::Response = resp_value.dyn_into()
-                    .map_err(|_| JsValue::from_str("Invalid response"))?;
-                
-                if !resp.ok() {
-                    return Err(JsValue::from_str(&format!("HTTP error: {}", resp.status())));
-                }
-                
-                // Get array buffer
-                let data: JsValue = wasm_bindgen_futures::JsFuture::from(
-                    resp.array_buffer()?
-                ).await?;
-                
-                let array_buffer: js_sys::ArrayBuffer = data.dyn_into()
-                    .map_err(|_| JsValue::from_str("Invalid array buffer"))?;
+                // Fetch batch data (compatible with both main thread and Worker)
+                let array_buffer = fetch_data(&url).await?;
                 
                 let uint8_array = js_sys::Uint8Array::new(&array_buffer);
                 let mut bytes = vec![0u8; uint8_array.length() as usize];
