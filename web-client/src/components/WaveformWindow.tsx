@@ -565,15 +565,6 @@ export function WaveformWindow({
       const hasCanvasSizeChanged = Math.abs(lastWasmSettings.canvasWidth - width) > 0.5 ||
                                     Math.abs(lastWasmSettings.canvasHeight - height) > 0.5;
 
-      // 检查 segments 参数是否变化
-      const lastSegParams = lastSegmentsParamsRef.current;
-      const hasSegParamsChanged = 
-        lastSegParams.signalListHash !== signalListHash ||
-        Math.abs(lastSegParams.viewportTimeStart - viewport.timeStart) > 0.1 ||
-        Math.abs(lastSegParams.viewportTimeEnd - viewport.timeEnd) > 0.1 ||
-        Math.abs(lastSegParams.canvasWidth - width) > 0.5 ||
-        Math.abs(lastSegParams.canvasHeight - height) > 0.5;
-
       // 拖动时只做最必要的操作，避免耗时的 WASM 调用
       if (isPanningRef.current) {
         // 拖动时：只更新 viewport 和获取 segments，跳过其他操作
@@ -591,9 +582,9 @@ export function WaveformWindow({
         
         const shouldRecalculateSegments = 
           // 如果 canvas 尺寸或信号列表变化，必须重新计算
-          lastSegParams.signalListHash !== signalListHash ||
-          Math.abs(lastSegParams.canvasWidth - width) > 0.5 ||
-          Math.abs(lastSegParams.canvasHeight - height) > 0.5 ||
+          lastSegmentsParamsRef.current.signalListHash !== signalListHash ||
+          Math.abs(lastSegmentsParamsRef.current.canvasWidth - width) > 0.5 ||
+          Math.abs(lastSegmentsParamsRef.current.canvasHeight - height) > 0.5 ||
           // 如果 viewport 变化超过阈值
           viewportDelta > viewportChangeThreshold;
         
@@ -673,25 +664,19 @@ export function WaveformWindow({
           const signalNames = signalList.map(s => s.name);
           await wasmProvider.fetch_signals_data_batch(signalNames);
           
-          // 只有在 segments 参数变化时才调用 get_segments
-          if (hasSegParamsChanged) {
-            // Get segments from WASM provider
-            const segmentsJs = wasmProvider.get_segments();
-            segments = segmentsJs;
-            cachedSegmentsRef.current = segments;
-            
-            // 更新 segments 缓存参数
-            lastSegmentsParamsRef.current = {
-              signalListHash: signalListHash,
-              viewportTimeStart: viewport.timeStart,
-              viewportTimeEnd: viewport.timeEnd,
-              canvasWidth: width,
-              canvasHeight: height,
-            };
-          } else {
-            // 使用缓存的 segments
-            segments = cachedSegmentsRef.current;
-          }
+          // Get segments from WASM provider
+          const segmentsJs = wasmProvider.get_segments();
+          segments = segmentsJs;
+          cachedSegmentsRef.current = segments;
+          
+          // 更新 segments 缓存参数
+          lastSegmentsParamsRef.current = {
+            signalListHash: signalListHash,
+            viewportTimeStart: viewport.timeStart,
+            viewportTimeEnd: viewport.timeEnd,
+            canvasWidth: width,
+            canvasHeight: height,
+          };
 
           // 更新 lastWasmSettingsRef
           lastWasmSettingsRef.current = {
