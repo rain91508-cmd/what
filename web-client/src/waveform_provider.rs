@@ -2825,6 +2825,47 @@ if tile_missing_signals.is_empty() {
             //     tile_idx, segments_in_tile, current_value);
         }
         
+        // Rule 3: If viewport extends beyond last bucket, draw to viewport_end
+        if let Some(last_tile) = bucket_data.last() {
+            let tile_start = last_tile.0;
+            let lod = self.current_lod.unwrap_or(25);
+            let bucket_size = 1u64 << lod;
+            let tile_span = bucket_size * TILE_SPAN_MULTIPLIER as u64;
+            let tile_end = tile_start + tile_span;
+            
+            if (tile_end as f64) < self.viewport.time_end {
+                // Viewport extends beyond last tile, need to draw to viewport_end
+                let last_value = cross_tile_value.unwrap_or_else(|| "0".to_string());
+                let x0 = ((tile_end as f64 - self.viewport.time_start) / time_range) * self.canvas_width;
+                let x1 = ((self.viewport.time_end - self.viewport.time_start) / time_range) * self.canvas_width;
+                
+                if x1 > x0 {
+                    let (value_type, has_xz) = Self::classify_value(&last_value, width);
+                    let display_str = if width > 1 {
+                        self.format_multi_bit_value(&last_value, width)
+                    } else {
+                        last_value.clone()
+                    };
+                    
+                    segments.push(RenderSegment {
+                        x0,
+                        x1,
+                        y,
+                        value: ValueInfo {
+                            value_type,
+                            display_str,
+                            width,
+                            has_xz,
+                            min_value: Some(last_value.clone()),
+                            max_value: Some(last_value),
+                            is_min_max: false,
+                        },
+                        signal_name: signal_name.to_string(),
+                    });
+                }
+            }
+        }
+        
         // Merge adjacent segments with same value (Rule 1: value unchanged, no vertical line)
         self.merge_adjacent_segments(segments);
         
