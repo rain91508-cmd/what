@@ -2744,9 +2744,42 @@ if tile_missing_signals.is_empty() {
         let bucket_size = 1u64 << lod;
         const TILE_SPAN_MULTIPLIER: u32 = 256;
         
+        // Debug log
+        console_log!("[WASM] find_value_at_time: signal={}, tile_start={}, target_time={}, lod={}", 
+            signal_name, tile_start, target_time, lod);
+        
+        // Check for potential underflow
+        if target_time < tile_start {
+            console_log!("[WASM] WARNING: target_time < tile_start, searching backward in previous tiles");
+            // Search backward into previous tiles
+            for prev_tile_idx in (0..tile_idx).rev() {
+                let (prev_tile_start, prev_buckets) = &all_bucket_data[prev_tile_idx];
+                
+                // Search from last bucket to first bucket in previous tile
+                for bucket_idx in (0..TILE_SPAN_MULTIPLIER).rev() {
+                    if let Some(bucket) = prev_buckets.get(&bucket_idx) {
+                        let value = if bucket.has_toggle() {
+                            bucket.last.as_ref().unwrap().value.clone()
+                        } else {
+                            bucket.first.value.clone()
+                        };
+                        console_log!("[WASM]   Found value in previous tile {} bucket {}: {}",
+                            prev_tile_idx, bucket_idx, value);
+                        return value;
+                    }
+                }
+            }
+            
+            // No transitions found, use default
+            console_log!("[WASM]   No value found, returning default '0'");
+            return "0".to_string();
+        }
+        
         // Calculate which bucket contains target_time
         let bucket_idx = ((target_time - tile_start) / bucket_size) as u32;
         let bucket_start = tile_start + (bucket_idx as u64) * bucket_size;
+        
+        console_log!("[WASM]   bucket_idx={}, bucket_start={}", bucket_idx, bucket_start);
         
         // console_log!("[WASM] find_value_at_time: target={}, bucket_idx={}, bucket_start={}",
         //     target_time, bucket_idx, bucket_start);
