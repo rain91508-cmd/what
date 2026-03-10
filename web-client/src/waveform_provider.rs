@@ -1948,20 +1948,37 @@ if tile_missing_signals.is_empty() {
             if let Some((ref parent_name, (msb, lsb))) = signal.bit_extract {
                 // Get parent signal data
                 if let Some(parent_data) = self.signal_data.get(parent_name) {
-                    // Extract bits from parent signal
-                    let extracted_transitions = self.extract_bits_from_transitions(
-                        &parent_data.transitions, parent_data.width, msb, lsb);
-                    
                     let width = if msb == lsb { 1 } else { msb - lsb + 1 };
                     
-                    // Generate segments from extracted data
-                    let is_lod_min_max = self.detect_min_max_format(&extracted_transitions);
-                    if is_lod_min_max {
-                        self.generate_min_max_segments(&extracted_transitions, width, y, &signal.name,
-                            time_range, &mut segments);
-                    } else {
-                        self.generate_normal_segments(&extracted_transitions, width, y, &signal.name,
-                            time_range, &mut segments);
+                    // Check if we have bucket data (LoD 1+ format)
+                    if !parent_data.bucket_data.is_empty() {
+                        // Extract bits from bucket data
+                        let extracted_buckets = self.extract_bits_from_buckets(
+                            &parent_data.bucket_data, parent_data.width, msb, lsb);
+                        
+                        // Generate segments from extracted bucket data
+                        self.generate_lod_segments_from_buckets(
+                            &extracted_buckets,
+                            width,
+                            y,
+                            &signal.name,
+                            time_range,
+                            &mut segments,
+                        );
+                    } else if !parent_data.transitions.is_empty() {
+                        // Extract bits from transitions (LoD 0 format)
+                        let extracted_transitions = self.extract_bits_from_transitions(
+                            &parent_data.transitions, parent_data.width, msb, lsb);
+                        
+                        // Generate segments from extracted data
+                        let is_lod_min_max = self.detect_min_max_format(&extracted_transitions);
+                        if is_lod_min_max {
+                            self.generate_min_max_segments(&extracted_transitions, width, y, &signal.name,
+                                time_range, &mut segments);
+                        } else {
+                            self.generate_normal_segments(&extracted_transitions, width, y, &signal.name,
+                                time_range, &mut segments);
+                        }
                     }
                 }
                 continue;
@@ -2194,6 +2211,84 @@ if tile_missing_signals.is_empty() {
         }
         
         // console_log!("[WASM] extract_bits_from_transitions: {} transitions after dedup", result.len());
+        result
+    }
+
+    /// Extract bits from bucket data for bit-extraction signals
+    fn extract_bits_from_buckets(
+        &self,
+        bucket_data: &[(u64, HashMap<u32, BucketData>)],
+        _parent_width: u32,
+        msb: u32,
+        lsb: u32,
+    ) -> Vec<(u64, HashMap<u32, BucketData>)> {
+        // Handle edge case: if range is 64 bits, mask would overflow
+        let bit_count = msb - lsb + 1;
+        let mask = if bit_count >= 64 {
+            u64::MAX
+        } else {
+            ((1u64 << bit_count) - 1) << lsb
+        };
+        
+        let mut result = Vec::new();
+        
+        for (tile_start, buckets) in bucket_data.iter() {
+            let mut extracted_buckets: HashMap<u32, BucketData> = HashMap::new();
+            
+            for (bucket_idx, bucket) in buckets.iter() {
+                // Extract bits from first value
+                let first_value_u64 = if bucket.first.value.starts_with("0x") || bucket.first.value.starts_with("0X") {
+                    match u64::from_str_radix(bucket.first.value.trim_start_matches("0x").trim_start_matches("0X"), 16) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    }
+                } else {
+                    match bucket.first.value.parse::<u64>() {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    }
+                };
+                let extracted_first = (first_value_u64 & mask) >> lsb;
+                let extracted_first_str = format!("{}", extracted_first);
+                
+                // Extract bits from last value if present
+                let extracted_last = bucket.last.as_ref().map(|last| {
+                    let last_value_u64 = if last.value.starts_with("0x") || last.value.starts_with("0X") {
+                        match u64::from_str_radix(last.value.trim_start_matches("0x").trim_start_matches("0X"), 16) {
+                            Ok(v) => v,
+                            Err(_) => return None,
+                        }
+                    } else {
+                        match last.value.parse::<u64>() {
+                            Ok(v) => v,
+                            Err(_) => return None,
+                        }
+                    };
+                    let extracted = (last_value_u64 & mask) >> lsb;
+                    Some(format!("{}", extracted))
+                }).flatten();
+                
+                // Create new bucket with extracted values
+                let extracted_bucket = BucketData {
+                    offset: bucket.offset,
+                    first: Transition {
+                        time: bucket.first.time,
+                        value: extracted_first_str,
+                    },
+                    last: extracted_last.map(|v| Transition {
+                        time: bucket.last.as_ref().unwrap().time,
+                        value: v,
+                    }),
+                };
+                
+                extracted_buckets.insert(*bucket_idx, extracted_bucket);
+            }
+            
+            if !extracted_buckets.is_empty() {
+                result.push((*tile_start, extracted_buckets));
+            }
+        }
+        
         result
     }
 
