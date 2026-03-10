@@ -589,7 +589,9 @@ export function WaveformWindow({
           viewportDelta > viewportChangeThreshold;
         
         if (shouldRecalculateSegments) {
-          const segmentsJs = wasmProvider.get_segments();
+          // 拖动时也需要获取数据并生成 segments
+          const signalNames = signalList.map(s => s.name);
+          const segmentsJs = await wasmProvider.fetch_and_get_segments(signalNames);
           segments = segmentsJs;
           cachedSegmentsRef.current = segments;
           

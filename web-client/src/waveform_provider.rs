@@ -1181,8 +1181,14 @@ impl WaveformDataProvider {
     total_cache_misses += tile_misses;
 }
 
+// Log OPFS lookup result
 if tile_missing_signals.is_empty() {
+    console_log!("[WASM] 2. OPFS lookup complete, all data cached, no fetch needed");
     return Ok(());
+} else {
+    let missing_tiles = tile_missing_signals.len();
+    let total_tiles = (end_tile - start_tile + 1) as usize;
+    console_log!("[WASM] 2. OPFS lookup complete, need fetch from server: {}/{} tiles missing", missing_tiles, total_tiles);
 }
         
         // Step 3: Fetch missing signals using tile-based API
@@ -1267,6 +1273,9 @@ if tile_missing_signals.is_empty() {
             }
         }
         
+        console_log!("[WASM] 3. finish fetching from server");
+        console_log!("[WASM] 4. finish store to OPFS");
+        
         Ok(())
     }
 
@@ -1282,11 +1291,17 @@ if tile_missing_signals.is_empty() {
     /// * Serialized RenderSegment array
     #[wasm_bindgen]
     pub async fn fetch_and_get_segments(&mut self, signal_names: Vec<String>) -> Result<JsValue, JsValue> {
+        console_log!("[WASM] 1. start fetch_and_get_segments, signals: {}", signal_names.len());
+        
         // Step 1: Fetch data using the existing internal function
         self.fetch_signals_data_batch(signal_names).await?;
         
         // Step 2: Generate segments using the existing get_segments logic
-        self.get_segments()
+        console_log!("[WASM] 5. start draw segments");
+        let result = self.get_segments();
+        console_log!("[WASM] 5. finish draw segments");
+        
+        result
     }
 
     /// Parse multi-tile response and process each tile
