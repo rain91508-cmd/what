@@ -1268,6 +1268,300 @@ if tile_missing_signals.is_empty() {
         Ok(())
     }
 
+    /// Fetch data and get segments in one call
+    /// 
+    /// This is a convenience function that combines fetch_signals_data_batch and get_segments
+    /// to reduce JS-Rust boundary crossings and simplify the calling code.
+    /// 
+    /// # Arguments
+    /// * `signal_names` - List of signal names to fetch and render
+    /// 
+    /// # Returns
+    /// * Serialized RenderSegment array
+    #[wasm_bindgen]
+    pub async fn fetch_and_get_segments(&mut self, signal_names: Vec<String>) -> Result<JsValue, JsValue> {
+        // Step 1: Fetch data (same as fetch_signals_data_batch)
+        self.fetch_signals_data_batch_internal(&signal_names).await?;
+        
+        // Step 2: Generate segments (same as get_segments)
+        self.get_segments_internal()
+    }
+
+    /// Internal implementation of fetch_signals_data_batch (without wasm_bindgen)
+    async fn fetch_signals_data_batch_internal(&mut self, signal_names: &[String]) -> Result<(), JsValue> {
+        // Clear signal_data cache for new viewport
+        self.signal_data.clear();
+
+        if signal_names.is_empty() {
+            return Ok(());
+        }
+
+        const MAX_BATCH_SIZE: usize = 256;
+        let lod = self.current_lod();
+        let time_start = self.viewport.time_start as u64;
+        let time_end = self.viewport.time_end as u64;
+        
+        // Get tile span for this LoD
+        let tile_span = OpfsCacheManager::get_tile_span(lod);
+        let start_tile = time_start / tile_span;
+        let end_tile = time_end / tile_span;
+
+        // Collect signals that need to be fetched
+        let mut signals_to_fetch: Vec<String> = Vec::new();
+        let mut tile_missing_signals: std::collections::HashMap<u64, Vec<String>> = std::collections::HashMap::new();
+        let mut total_cache_hits = 0u32;
+        let mut total_cache_misses = 0u32;
+
+        // Step 1 & 2: Check cache per signal per tile and collect missing combinations
+        for signal_name in signal_names.iter() {
+            // Find signal in draw list to get draw_sig_id
+            if let Some(signal) = self.signals_with_id.iter().find(|s| &s.name == signal_name) {
+                let draw_sig_id = signal.draw_sig_id;
+                let group_id = OpfsCacheManager::get_group_id(draw_sig_id);
+                
+                let mut signal_hits = 0u32;
+                let mut signal_misses = 0u32;
+                
+                // Check each tile in viewport
+                for tile_id in start_tile..=end_tile {
+                    let block = DataBlock { lod, tile: tile_id, group: group_id };
+                    
+                    match self.opfs_cache.read(&block).await {
+                        Ok(Some(group_data)) => {
+                            // Try to extract this signal from group data
+                            match crate::opfs_cache::extract_signal_from_group(&group_data, draw_sig_id) {
+                                Ok(Some(signal_data)) => {
+                                    // Cache hit - add to signal_data
+                                    let tile_start = tile_id * tile_span;
+                                    
+                                    if let Some(existing) = self.signal_data.get_mut(signal_name) {
+                                        // Merge with existing signal data
+                                        existing.bucket_data.push((tile_start, signal_data.buckets));
+                                        if let Some(ref info) = signal_data.tile_info {
+                                            existing.tile_info.push((tile_start, tile_start + tile_span, info.0, info.1.clone()));
+                                        }
+                                    } else {
+                                        // Insert new signal data
+                                        let width = self.get_signal_width(signal_name);
+                                        let mut new_data = SignalWaveData::new(signal_name.clone(), width);
+                                        new_data.bucket_data.push((tile_start, signal_data.buckets));
+                                        if let Some(ref info) = signal_data.tile_info {
+                                            new_data.tile_info.push((tile_start, tile_start + tile_span, info.0, info.1.clone()));
+                                        }
+                                        self.signal_data.insert(signal_name.clone(), new_data);
+                                    }
+                                    
+                                    signal_hits += 1;
+                                }
+                                Ok(None) => {
+                                    signal_misses += 1;
+                                    tile_missing_signals.entry(tile_id).or_insert_with(Vec::new).push(signal_name.clone());
+                                }
+                                Err(_e) => {
+                                    signal_misses += 1;
+                                    tile_missing_signals.entry(tile_id).or_insert_with(Vec::new).push(signal_name.clone());
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            signal_misses += 1;
+                            tile_missing_signals.entry(tile_id).or_insert_with(Vec::new).push(signal_name.clone());
+                        }
+                        Err(_e) => {
+                            signal_misses += 1;
+                            tile_missing_signals.entry(tile_id).or_insert_with(Vec::new).push(signal_name.clone());
+                        }
+                    }
+                }
+                
+                total_cache_hits += signal_hits;
+                total_cache_misses += signal_misses;
+                
+                if signal_misses > 0 {
+                    signals_to_fetch.push(signal_name.clone());
+                }
+            } else {
+                // Signal not found in draw list, add all tiles as missing
+                for tile_id in start_tile..=end_tile {
+                    tile_missing_signals.entry(tile_id).or_insert_with(Vec::new).push(signal_name.clone());
+                }
+            }
+        }
+
+        if tile_missing_signals.is_empty() {
+            return Ok(());
+        }
+        
+        // Step 3: Fetch missing signals using tile-based API
+        const MAX_TILES_PER_REQUEST: usize = 100;
+        let all_signal_names: Vec<String> = signals_to_fetch.clone();
+        
+        for batch in all_signal_names.chunks(MAX_BATCH_SIZE) {
+            let server_names: Vec<String> = batch.iter()
+                .map(|local_name| self.build_server_signal_name(local_name))
+                .collect();
+
+            let names_batch = server_names.join(",");
+            let encoded_batch = general_purpose::STANDARD.encode(&names_batch);
+
+            let mut tile_ids: Vec<u64> = tile_missing_signals.keys().cloned().collect();
+            tile_ids.sort();
+            let mut tile_idx = 0;
+            
+            while tile_idx < tile_ids.len() {
+                let start_tile = tile_ids[tile_idx];
+                let start_time = start_tile * tile_span;
+                
+                let mut num_tiles = 1;
+                while tile_idx + num_tiles < tile_ids.len() 
+                    && tile_ids[tile_idx + num_tiles] == start_tile + num_tiles as u64
+                    && num_tiles < MAX_TILES_PER_REQUEST {
+                    num_tiles += 1;
+                }
+                
+                let url = format!("{}/api/wave/{}/lod/{}/tile/{}/{}/{}/compress/none/signals/b64:{}/data?time_stamp={}",
+                    self.server_url,
+                    self.waveform_name,
+                    lod,
+                    start_time,
+                    tile_span,
+                    num_tiles,
+                    encoded_batch,
+                    self.time_stamp);
+                
+                let window = web_sys::window().ok_or(JsValue::from_str("No window"))?;
+                let resp_value: JsValue = wasm_bindgen_futures::JsFuture::from(
+                    window.fetch_with_str(&url)
+                ).await?;
+                
+                let resp: web_sys::Response = resp_value.dyn_into()
+                    .map_err(|_| JsValue::from_str("Invalid response"))?;
+                
+                if !resp.ok() {
+                    return Err(JsValue::from_str(&format!("HTTP error: {}", resp.status())));
+                }
+                
+                let data: JsValue = wasm_bindgen_futures::JsFuture::from(
+                    resp.array_buffer()?
+                ).await?;
+                
+                let array_buffer: js_sys::ArrayBuffer = data.dyn_into()
+                    .map_err(|_| JsValue::from_str("Invalid array buffer"))?;
+                
+                let uint8_array = js_sys::Uint8Array::new(&array_buffer);
+                let mut bytes = vec![0u8; uint8_array.length() as usize];
+                uint8_array.copy_to(&mut bytes);
+                
+                self.parse_multi_tile_response(&bytes, batch, time_start, time_end, tile_span).await?;
+                
+                tile_idx += num_tiles;
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Internal implementation of get_segments (without wasm_bindgen)
+    fn get_segments_internal(&self) -> Result<JsValue, JsValue> {
+        if self.signals.is_empty() {
+            return serde_wasm_bindgen::to_value(&Vec::<RenderSegment>::new())
+                .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)));
+        }
+
+        let mut segments = Vec::new();
+        let time_range = self.viewport.time_end - self.viewport.time_start;
+
+        for signal in self.signals.iter() {
+            let y = 20.0 + signal.row as f64 * self.row_height + self.row_height / 2.0;
+
+            if let Some((ref parent_name, (msb, lsb))) = signal.bit_extract {
+                if let Some(parent_data) = self.signal_data.get(parent_name) {
+                    let extracted_transitions = self.extract_bits_from_transitions(
+                        &parent_data.transitions, parent_data.width, msb, lsb);
+                    
+                    let width = if msb == lsb { 1 } else { msb - lsb + 1 };
+                    
+                    let is_lod_min_max = self.detect_min_max_format(&extracted_transitions);
+                    if is_lod_min_max {
+                        self.generate_min_max_segments(&extracted_transitions, width, y, &signal.name,
+                            time_range, &mut segments);
+                    } else {
+                        self.generate_normal_segments(&extracted_transitions, width, y, &signal.name,
+                            time_range, &mut segments);
+                    }
+                }
+                continue;
+            }
+
+            if let Some(data) = self.signal_data.get(&signal.name) {
+                if !data.bucket_data.is_empty() {
+                    self.generate_lod_segments_from_buckets(
+                        &data.bucket_data,
+                        data.width,
+                        y,
+                        &signal.name,
+                        time_range,
+                        &mut segments,
+                    );
+                } else if !data.transitions.is_empty() {
+                    let is_lod_format = self.detect_lod_bucket_format(&data.transitions);
+                    
+                    if is_lod_format {
+                        let lod = self.current_lod.unwrap_or(25);
+                        let bucket_size = 1u64 << lod;
+                        let tile_span = OpfsCacheManager::get_tile_span(lod);
+                        
+                        let mut tile_buckets: std::collections::HashMap<u64, HashMap<u32, BucketData>> = std::collections::HashMap::new();
+                        
+                        for (tile_idx, (tile_start, tile_end, _, _)) in data.tile_info.iter().enumerate() {
+                            let tile_transitions: Vec<Transition> = data.transitions
+                                .iter()
+                                .filter(|t| {
+                                    if t.time == BOUNDARY_TIME_START {
+                                        return false;
+                                    }
+                                    let abs_time = *tile_start + t.time * bucket_size;
+                                    abs_time >= *tile_start && abs_time < *tile_end
+                                })
+                                .cloned()
+                                .collect();
+                            
+                            if !tile_transitions.is_empty() {
+                                let (_, buckets) = self.parse_buckets_from_transitions(&tile_transitions);
+                                tile_buckets.insert(*tile_start, buckets);
+                            }
+                        }
+                        
+                        let mut bucket_data: Vec<(u64, HashMap<u32, BucketData>)> = tile_buckets.into_iter().collect();
+                        bucket_data.sort_by_key(|(start, _)| *start);
+                        
+                        self.generate_lod_segments_from_buckets(
+                            &bucket_data,
+                            data.width,
+                            y,
+                            &signal.name,
+                            time_range,
+                            &mut segments,
+                        );
+                    } else {
+                        let is_lod_min_max = self.detect_min_max_format(&data.transitions);
+
+                        if is_lod_min_max {
+                            self.generate_min_max_segments(&data.transitions, data.width, y, &signal.name, 
+                                time_range, &mut segments);
+                        } else {
+                            self.generate_normal_segments(&data.transitions, data.width, y, &signal.name,
+                                time_range, &mut segments);
+                        }
+                    }
+                }
+            }
+        }
+
+        serde_wasm_bindgen::to_value(&segments)
+            .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)))
+    }
+
     /// Parse multi-tile response and process each tile
     async fn parse_multi_tile_response(
         &mut self,
