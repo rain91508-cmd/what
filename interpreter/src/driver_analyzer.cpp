@@ -1,4 +1,5 @@
 #include "driver_analyzer.h"
+#include "types.h"
 
 #include <uhdm/uhdm.h>
 #include <uhdm/vpi_user.h>
@@ -45,21 +46,21 @@ void DriverAnalyzer::analyzeProceduralAssignments(const UHDM::module_inst* modul
     if (!module) return;
     
     std::string moduleName(module->VpiFullName());
-    std::cerr << "DEBUG: analyzeProceduralAssignments for module: " << moduleName << "\n";
+    VERBOSE_LOG("DEBUG: analyzeProceduralAssignments for module: " << moduleName << "\n");
     
     // Process all processes (always/initial blocks)
     // Note: UHDM uses Process() not Processes()
     auto* process = module->Process();
     if (process) {
-        std::cerr << "DEBUG: Found " << process->size() << " processes\n";
+        VERBOSE_LOG("DEBUG: Found " << process->size() << " processes\n");
         // Process is a VectorOfprocess_stmt
         for (auto* p : *process) {
             if (!p) continue;
-            std::cerr << "DEBUG: Processing process, type=" << p->VpiType() << "\n";
+            VERBOSE_LOG("DEBUG: Processing process, type=" << p->VpiType() << "\n");
             processProcessStmt(p);
         }
     } else {
-        std::cerr << "DEBUG: No processes found\n";
+        VERBOSE_LOG("DEBUG: No processes found\n");
     }
 }
 
@@ -70,8 +71,8 @@ void DriverAnalyzer::analyzePortConnections(const UHDM::module_inst* module) {
     std::string instName(module->VpiName());
     std::string defName(module->VpiDefName());
     
-    std::cerr << "DEBUG: analyzePortConnections for module: " << moduleName 
-              << " (instName='" << instName << "', defName='" << defName << "')\n";
+    VERBOSE_LOG("DEBUG: analyzePortConnections for module: " << moduleName 
+              << " (instName='" << instName << "', defName='" << defName << "')\n");
     
     // Process both module definitions and instances
     // For definitions (instName empty), we still want to analyze their port connections
@@ -80,11 +81,11 @@ void DriverAnalyzer::analyzePortConnections(const UHDM::module_inst* module) {
     // Get ports for this module
     auto ports = module->Ports();
     if (!ports) {
-        std::cerr << "DEBUG: No ports found for module\n";
+        VERBOSE_LOG("DEBUG: No ports found for module\n");
         return;
     }
     
-    std::cerr << "DEBUG: Found " << ports->size() << " ports\n";
+    VERBOSE_LOG("DEBUG: Found " << ports->size() << " ports\n");
     
     for (auto* port : *ports) {
         if (!port) continue;
@@ -92,7 +93,7 @@ void DriverAnalyzer::analyzePortConnections(const UHDM::module_inst* module) {
         std::string portName(port->VpiName());
         int portDirection = port->VpiDirection();
         
-        std::cerr << "DEBUG: Processing port: " << portName << " direction=" << portDirection << "\n";
+        VERBOSE_LOG("DEBUG: Processing port: " << portName << " direction=" << portDirection << "\n");
         
         // Get the high_conn (parent module side connection) and low_conn (sub-module side)
         UHDM::any* highConn = port->High_conn();
@@ -142,12 +143,12 @@ void DriverAnalyzer::analyzePortConnections(const UHDM::module_inst* module) {
         // Process output/inout ports: sub-module output drives parent module signal
         if (portDirection == vpiOutput || portDirection == vpiInout) {
             if (parentSignalName.empty()) {
-                std::cerr << "DEBUG: Empty parent signal name for output port " << portName << "\n";
+                VERBOSE_LOG("DEBUG: Empty parent signal name for output port " << portName << "\n");
                 continue;
             }
             
-            std::cerr << "DEBUG: Output port connection: " << subModuleSignalName << " -> " << parentSignalName 
-                      << " at module instance line " << portLoc.line << "\n";
+            VERBOSE_LOG("DEBUG: Output port connection: " << subModuleSignalName << " -> " << parentSignalName 
+                      << " at module instance line " << portLoc.line << "\n");
             
             // Record the driver relationship: sub-module output drives parent module signal
             signalToDriverNames_[parentSignalName].push_back({subModuleSignalName, portLoc});
@@ -161,12 +162,12 @@ void DriverAnalyzer::analyzePortConnections(const UHDM::module_inst* module) {
         // Process input ports: parent module signal drives sub-module input
         if (portDirection == vpiInput || portDirection == vpiInout) {
             if (parentSignalName.empty()) {
-                std::cerr << "DEBUG: Empty parent signal name for input port " << portName << "\n";
+                VERBOSE_LOG("DEBUG: Empty parent signal name for input port " << portName << "\n");
                 continue;
             }
             
-            std::cerr << "DEBUG: Input port connection: " << parentSignalName << " -> " << subModuleSignalName 
-                      << " at module instance line " << portLoc.line << "\n";
+            VERBOSE_LOG("DEBUG: Input port connection: " << parentSignalName << " -> " << subModuleSignalName 
+                      << " at module instance line " << portLoc.line << "\n");
             
             // Record the driver relationship: parent module signal drives sub-module input
             signalToDriverNames_[subModuleSignalName].push_back({parentSignalName, portLoc});
@@ -185,11 +186,11 @@ void DriverAnalyzer::processProcessStmt(const UHDM::process_stmt* process) {
     // Get the statement body of the process
     auto* stmt = process->Stmt();
     if (!stmt) {
-        std::cerr << "DEBUG: Process has no stmt\n";
+        VERBOSE_LOG("DEBUG: Process has no stmt\n");
         return;
     }
     
-    std::cerr << "DEBUG: Process stmt type=" << stmt->VpiType() << "\n";
+    VERBOSE_LOG("DEBUG: Process stmt type=" << stmt->VpiType() << "\n");
     
     // Recursively process any statement type
     processStmt(stmt);
@@ -198,14 +199,14 @@ void DriverAnalyzer::processProcessStmt(const UHDM::process_stmt* process) {
 void DriverAnalyzer::processStmt(const UHDM::BaseClass* stmt) {
     if (!stmt) return;
     
-    std::cerr << "DEBUG: processStmt type=" << stmt->VpiType() << "\n";
+    VERBOSE_LOG("DEBUG: processStmt type=" << stmt->VpiType() << "\n");
     
     // Process begin block
     if (auto* beginBlock = stmt->Cast<UHDM::begin>()) {
-        std::cerr << "DEBUG: Found begin block\n";
+        VERBOSE_LOG("DEBUG: Found begin block\n");
         auto stmts = beginBlock->Stmts();
         if (stmts) {
-            std::cerr << "DEBUG: Begin block has " << stmts->size() << " statements\n";
+            VERBOSE_LOG("DEBUG: Begin block has " << stmts->size() << " statements\n");
             for (auto* s : *stmts) {
                 processStmt(s);
             }
@@ -213,11 +214,11 @@ void DriverAnalyzer::processStmt(const UHDM::BaseClass* stmt) {
     }
     // Process if statement
     else if (auto* ifStmt = stmt->Cast<UHDM::if_stmt>()) {
-        std::cerr << "DEBUG: Found if statement\n";
+        VERBOSE_LOG("DEBUG: Found if statement\n");
         // Process then statement
         auto* thenStmt = ifStmt->VpiStmt();
         if (thenStmt) {
-            std::cerr << "DEBUG: Processing then branch\n";
+            VERBOSE_LOG("DEBUG: Processing then branch\n");
             processStmt(thenStmt);
         }
         
@@ -225,28 +226,28 @@ void DriverAnalyzer::processStmt(const UHDM::BaseClass* stmt) {
     }
     // Process if-else statement
     else if (auto* ifElseStmt = stmt->Cast<UHDM::if_else>()) {
-        std::cerr << "DEBUG: Found if-else statement\n";
+        VERBOSE_LOG("DEBUG: Found if-else statement\n");
         // Process then statement
         auto* thenStmt = ifElseStmt->VpiStmt();
         if (thenStmt) {
-            std::cerr << "DEBUG: Processing then branch\n";
+            VERBOSE_LOG("DEBUG: Processing then branch\n");
             processStmt(thenStmt);
         }
         // Process else statement
         auto* elseStmt = ifElseStmt->VpiElseStmt();
         if (elseStmt) {
-            std::cerr << "DEBUG: Processing else branch\n";
+            VERBOSE_LOG("DEBUG: Processing else branch\n");
             processStmt(elseStmt);
         }
     }
     // Process assignment
     else if (auto* assign = stmt->Cast<UHDM::assignment>()) {
-        std::cerr << "DEBUG: Found assignment\n";
+        VERBOSE_LOG("DEBUG: Found assignment\n");
         processAssignment(assign);
     }
     // Process event control (like @(posedge clk))
     else if (auto* eventCtrl = stmt->Cast<UHDM::event_control>()) {
-        std::cerr << "DEBUG: Found event_control, processing stmt\n";
+        VERBOSE_LOG("DEBUG: Found event_control, processing stmt\n");
         auto* eventStmt = eventCtrl->Stmt();
         if (eventStmt) {
             processStmt(eventStmt);
@@ -267,12 +268,12 @@ void DriverAnalyzer::processAssignment(const UHDM::assignment* assign) {
     }
     
     if (lhsName.empty()) {
-        std::cerr << "DEBUG: Assignment has empty LHS name\n";
+        VERBOSE_LOG("DEBUG: Assignment has empty LHS name\n");
         return;
     }
     
     uint32_t line = assign->VpiLineNo();
-    std::cerr << "DEBUG: Processing assignment to " << lhsName << " at line " << line << "\n";
+    VERBOSE_LOG("DEBUG: Processing assignment to " << lhsName << " at line " << line << "\n");
     
     // Always record driver line for this assignment (for signals without RHS)
     signalDriverLines_[lhsName].push_back(extractLocation(assign));
@@ -284,7 +285,7 @@ void DriverAnalyzer::processAssignment(const UHDM::assignment* assign) {
             extractRhsSignals(rhsExpr, lhsName, assign, line);
         }
     } else {
-        std::cerr << "DEBUG: Assignment has no RHS (constant assignment)\n";
+        VERBOSE_LOG("DEBUG: Assignment has no RHS (constant assignment)\n");
     }
 }
 
@@ -295,8 +296,8 @@ void DriverAnalyzer::extractRhsSignals(const UHDM::expr* expr, const std::string
     if (auto* refObj = expr->Cast<UHDM::ref_obj>()) {
         std::string rhsName = std::string(refObj->VpiFullName());
         if (!rhsName.empty()) {
-            std::cerr << "DEBUG: Found RHS signal: " << rhsName << " for LHS: " << lhsSignalName 
-                      << " at line " << line << "\n";
+            VERBOSE_LOG("DEBUG: Found RHS signal: " << rhsName << " for LHS: " << lhsSignalName 
+                      << " at line " << line << "\n");
             // Use new function to add both driver ID and line at once
             builder_.addDriverLocation(lhsSignalName, rhsName, line);
         }
@@ -321,11 +322,11 @@ void DriverAnalyzer::applyDriverRelationships() {
         for (auto& [driverSignalName, driverLocation] : driverInfos) {
             // Use addDriverLocation to add both driver ID and line at once
             if (builder_.addDriverLocation(drivenSignalName, driverSignalName, driverLocation.line)) {
-                std::cerr << "DEBUG: Added driver " << driverSignalName 
-                          << " to " << drivenSignalName << " at line " << driverLocation.line << "\n";
+                VERBOSE_LOG("DEBUG: Added driver " << driverSignalName 
+                          << " to " << drivenSignalName << " at line " << driverLocation.line << "\n");
             } else {
-                std::cerr << "DEBUG: Could not add driver " << driverSignalName 
-                          << " to " << drivenSignalName << "\n";
+                VERBOSE_LOG("DEBUG: Could not add driver " << driverSignalName 
+                          << " to " << drivenSignalName << "\n");
             }
         }
     }
