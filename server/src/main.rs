@@ -42,6 +42,7 @@ async fn main() -> anyhow::Result<()> {
     println!("【服务器配置】");
     println!("  绑定地址：{}", config.bind_address());
     println!("  日志级别：{}", config.log_level);
+    println!("  详细调试：{}", if config.verbose { "启用" } else { "禁用" });
     println!("  CORS 启用：{}", config.enable_cors);
     println!("  FST 后端：{}", config.fst_backend);
     
@@ -53,6 +54,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("【服务器配置】");
     tracing::info!("  绑定地址：{}", config.bind_address());
     tracing::info!("  日志级别：{}", config.log_level);
+    tracing::info!("  详细调试：{}", if config.verbose { "启用" } else { "禁用" });
     tracing::info!("  CORS 启用：{}", config.enable_cors);
     tracing::info!("  FST 后端：{}", config.fst_backend);
     println!("");
@@ -159,10 +161,19 @@ async fn main() -> anyhow::Result<()> {
 
 /// 初始化日志系统
 fn init_logging(config: &ServerConfig) {
+    // 根据 log_level 和 verbose 选项设置日志过滤器
+    let filter = if config.log_level == "debug" && config.verbose {
+        // verbose 模式：显示所有 debug 信息
+        format!("{}=debug,tower_http=debug", env!("CARGO_PKG_NAME"))
+    } else {
+        // 普通模式：只显示 info 及以上级别
+        format!("{}=info,tower_http=info", env!("CARGO_PKG_NAME"))
+    };
+    
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| format!("{}=info,tower_http=debug", config.log_level).into()),
+                .unwrap_or_else(|_| filter.into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
