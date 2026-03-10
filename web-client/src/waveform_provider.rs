@@ -1205,9 +1205,11 @@ if tile_missing_signals.is_empty() {
         let all_signal_names: Vec<String> = signals_to_fetch.clone();
         
         for batch in all_signal_names.chunks(MAX_BATCH_SIZE) {
-            // Convert all signal names to server names
+            // Convert all signal names to server names and remove duplicates
             let server_names: Vec<String> = batch.iter()
                 .map(|local_name| self.build_server_signal_name(local_name))
+                .collect::<std::collections::HashSet<String>>()  // Remove duplicates
+                .into_iter()
                 .collect();
 
             // Join server names with comma, then base64 encode
