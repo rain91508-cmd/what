@@ -4,9 +4,16 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <iostream>
 
 namespace hwda {
 namespace interpreter {
+
+// Global verbose flag for debug output
+extern bool g_verbose;
+
+// Helper macro for verbose output
+#define VERBOSE_LOG(msg) do { if (hwda::interpreter::g_verbose) { std::cerr << msg; } } while(0)
 
 enum class AstNodeType {
     Module,

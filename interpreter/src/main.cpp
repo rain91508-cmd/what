@@ -8,6 +8,13 @@
 
 using namespace hwda::interpreter;
 
+// Define global verbose flag
+namespace hwda {
+namespace interpreter {
+    bool g_verbose = false;
+}
+}
+
 void printUsage(const char* progName) {
     std::cout << "Usage: " << progName << " [options] <verilog_files...>\n"
               << "\nStandard Verilog Options:\n"
@@ -235,6 +242,7 @@ bool parseCommandLine(int argc, char* argv[], CommandLineOptions& opts) {
         }
         if (arg == "-V" || arg == "--verbose") {
             opts.verbose = true;
+            g_verbose = true;
             continue;
         }
         if (arg == "--help" || arg == "-h") {

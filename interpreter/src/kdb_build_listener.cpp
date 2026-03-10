@@ -1,6 +1,7 @@
 #include "kdb_build_listener.h"
 #include "bit_width_extractor.h"
 #include "driver_analyzer.h"
+#include "types.h"
 
 #include <Surelog/API/Surelog.h>
 #include <uhdm/VpiListener.h>
@@ -30,11 +31,11 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     std::string fullName(object->VpiFullName());
     int32_t objType = object->VpiType();
     
-    std::cerr << "DEBUG: enterModule_inst - instName='" << instName 
+    VERBOSE_LOG("DEBUG: enterModule_inst - instName='" << instName 
               << "', defName='" << defName 
               << "', fullName='" << fullName 
-              << "', vpiType=" << objType << "\n";
-    std::cerr << "DEBUG:   currentModuleStack_ size=" << currentModuleStack_.size() << "\n";
+              << "', vpiType=" << objType << "\n");
+    VERBOSE_LOG("DEBUG:   currentModuleStack_ size=" << currentModuleStack_.size() << "\n");
     
     driverAnalyzer_->clear();
     currentModuleSignalMap_.clear();
@@ -116,10 +117,10 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
         }
     }
 
-    std::cerr << "DEBUG:   parentModuleId=" << moduleInfo.parentModuleId << "\n";
+    VERBOSE_LOG("DEBUG:   parentModuleId=" << moduleInfo.parentModuleId << "\n");
 
     bool moduleExists = builder_.hasModule(fullName);
-    std::cerr << "DEBUG:   moduleExists=" << (moduleExists ? "true" : "false") << "\n";
+    VERBOSE_LOG("DEBUG:   moduleExists=" << (moduleExists ? "true" : "false") << "\n");
 
     if (moduleExists) {
         // Push false to indicate we didn't push to currentModuleStack_
@@ -131,10 +132,10 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     moduleStackMarkers_.push_back(true);
 
     uint32_t moduleId = builder_.addModule(moduleInfo, fullName);
-    std::cerr << "DEBUG:   Added module with id=" << moduleId << ", isInstance=" << (moduleInfo.isInstance ? "true" : "false") << "\n";
+    VERBOSE_LOG("DEBUG:   Added module with id=" << moduleId << ", isInstance=" << (moduleInfo.isInstance ? "true" : "false") << "\n");
     currentModuleStack_.push_back(moduleId);
     totalModules_++;
-    std::cerr << "DEBUG:   After push, currentModuleStack_ size=" << currentModuleStack_.size() << "\n";
+    VERBOSE_LOG("DEBUG:   After push, currentModuleStack_ size=" << currentModuleStack_.size() << "\n");
     
     // Store instance info for post-processing
     if (moduleInfo.isInstance && !defName.empty()) {
@@ -366,7 +367,7 @@ PortDirection KdbBuildListener::convertPortDirection(int direction) {
 }
 
 void KdbBuildListener::linkInstancesToDefinitions() {
-    std::cerr << "DEBUG: Linking instances to definitions, count=" << instanceDefNames_.size() << "\n";
+    VERBOSE_LOG("DEBUG: Linking instances to definitions, count=" << instanceDefNames_.size() << "\n");
     
     for (const auto& [defName, instanceId] : instanceDefNames_) {
         // defName may or may not have "work@" prefix, handle both cases
@@ -387,20 +388,20 @@ void KdbBuildListener::linkInstancesToDefinitions() {
             if (instanceModule) {
                 // Use getModuleId to get ID from pointer
                 instanceModule->defModuleId = builder_.getModuleId(defModule);
-                std::cerr << "DEBUG: Linked instance id=" << instanceId
+                VERBOSE_LOG("DEBUG: Linked instance id=" << instanceId
                           << " -> definition id=" << builder_.getModuleId(defModule)
-                          << " (" << defFullName << ")\n";
+                          << " (" << defFullName << ")\n");
                 // Note: Signal ID sync is now done in addModule
             }
         } else {
-            std::cerr << "DEBUG: Definition module not found: " << defFullName
-                      << " for instance id=" << instanceId << "\n";
+            VERBOSE_LOG("DEBUG: Definition module not found: " << defFullName
+                      << " for instance id=" << instanceId << "\n");
         }
     }
 }
 
 void KdbBuildListener::finishBuild() {
-    std::cerr << "DEBUG: Finishing build, committing signal instances...\n";
+    VERBOSE_LOG("DEBUG: Finishing build, committing signal instances...\n");
     
     // 1. Apply any remaining driver relationships
     driverAnalyzer_->applyDriverRelationships();
@@ -411,7 +412,7 @@ void KdbBuildListener::finishBuild() {
     // 3. Commit all signal instances to global array
     builder_.commitSignalInsts();
     
-    std::cerr << "DEBUG: Build finished, signal instances committed.\n";
+    VERBOSE_LOG("DEBUG: Build finished, signal instances committed.\n");
 }
 
 }
