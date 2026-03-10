@@ -1029,6 +1029,7 @@ export function WaveformWindow({
 
   // 鼠标按下：立即设置 cursor 并开始选择
   const RULER_HEIGHT = 30; // 标尺区域高度
+  const SIGNAL_ROW_HEIGHT = 24; // 信号行高度，与 CSS 中的 .waveform-signal-item 高度一致
 
   const handleCanvasMouseDown = useCallback(async (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current) return;
@@ -1066,11 +1067,17 @@ export function WaveformWindow({
       const timeRange = viewport.timeEnd - viewport.timeStart;
       const snapThreshold = Math.max(timeRange * 0.04, 10);
 
+      // 根据点击的 Y 坐标计算对应的 treeNode 索引（考虑 group 占位）
+      const signalY = y - RULER_HEIGHT;
+      const nodeIndex = Math.floor(signalY / SIGNAL_ROW_HEIGHT);
+
+      // 找到对应的 treeNode
+      const targetNode = treeNodes[nodeIndex];
+
       if (useMockData) {
         // Mock 数据模式：使用 mockDataProvider
-        const visibleSignals = mockDataProvider.getSignalNames();
-        if (visibleSignals.length > 0) {
-          const signalName = visibleSignals[0];
+        if (targetNode?.type === 'signal' && targetNode.signal) {
+          const signalName = targetNode.signal.fullName || targetNode.signal.name;
           const { prev, next } = mockDataProvider.findTransitionsAround(signalName, clickTime);
 
           if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
@@ -1079,12 +1086,12 @@ export function WaveformWindow({
             finalTime = next;
           }
         }
-      } else if (wasmProviderRef.current && displaySignals.length > 0) {
+      } else if (wasmProviderRef.current && targetNode?.type === 'signal' && targetNode.signal) {
         // WASM 模式：从已获取数据的信号中找 transition
         const wasmProvider = wasmProviderRef.current;
-        const signalName = displaySignals[0].fullName || displaySignals[0].name;
+        const signalName = targetNode.signal.fullName || targetNode.signal.name;
 
-        console.log(`[WaveformWindow] Cursor snap: signal=${signalName}, clickTime=${clickTime}, threshold=${snapThreshold}`);
+        console.log(`[WaveformWindow] Cursor snap: signal=${signalName}, clickTime=${clickTime}, threshold=${snapThreshold}, nodeIndex=${nodeIndex}`);
 
         try {
           const transitions = await wasmProvider.find_transitions_around(signalName, clickTime);
@@ -1108,6 +1115,8 @@ export function WaveformWindow({
         } catch (error) {
           console.error('[WaveformWindow] Failed to find transitions:', error);
         }
+      } else if (targetNode?.type === 'group') {
+        console.log(`[WaveformWindow] Cursor snap: clicked on group row, no snap`);
       }
 
       setCursor({ position: Math.round(finalTime), visible: true });
