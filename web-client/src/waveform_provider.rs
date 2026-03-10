@@ -2825,7 +2825,47 @@ if tile_missing_signals.is_empty() {
             //     tile_idx, segments_in_tile, current_value);
         }
         
+        // Merge adjacent segments with same value (Rule 1: value unchanged, no vertical line)
+        self.merge_adjacent_segments(segments);
+        
         // console_log!("[WASM] generate_lod_segments_from_buckets complete: total {} segments", segments.len());
+    }
+    
+    /// Merge adjacent segments with the same value to avoid vertical lines at tile boundaries
+    fn merge_adjacent_segments(&self, segments: &mut Vec<RenderSegment>) {
+        if segments.len() < 2 {
+            return;
+        }
+        
+        let mut merged: Vec<RenderSegment> = Vec::new();
+        let mut current = segments[0].clone();
+        
+        for i in 1..segments.len() {
+            let next = &segments[i];
+            
+            // Check if can merge: same y, same signal, same value, not toggle, adjacent x
+            let can_merge = current.y == next.y 
+                && current.signal_name == next.signal_name
+                && !current.value.is_min_max  // Not a toggle segment
+                && !next.value.is_min_max     // Not a toggle segment
+                && current.value.display_str == next.value.display_str  // Same value
+                && (current.x1 - next.x0).abs() < 0.001;  // Adjacent (within 1 pixel)
+            
+            if can_merge {
+                // Merge: extend current segment to next's end
+                current.x1 = next.x1;
+            } else {
+                // Cannot merge: push current and start new
+                merged.push(current);
+                current = next.clone();
+            }
+        }
+        
+        // Push final segment
+        merged.push(current);
+        
+        // Replace original segments with merged
+        *segments = merged;
     }
     
     /// Find the value at a specific time according to Rule 2
