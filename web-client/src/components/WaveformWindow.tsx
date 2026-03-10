@@ -9,7 +9,9 @@ import { FilterInput } from './FilterInput';
 import { wildcardMatch } from '../utils/wildcardMatch';
 import { zoomIn, zoomOut } from '../utils/zoomHelpers';
 import { sanitizeTimeRange, type TimeRangeOnly } from '../utils/viewport';
-import { getProvider, WaveformDataProvider, buildWasmSignals, updateProviderSettings } from '../wasm/waveformProvider';
+import { buildWasmSignals, updateProviderSettings } from '../wasm/waveformProvider';
+import { createWaveformProvider, logEnvironmentSupport } from '../wasm/waveformProviderFactory';
+import { WaveformProviderAdapter } from '../wasm/waveformProviderAdapter';
 
 interface SignalGroup {
   id: string;
@@ -101,25 +103,108 @@ export function WaveformWindow({
   const signalPanelRef = useRef<HTMLDivElement>(null);
   const [canvasWidth, setCanvasWidth] = useState(0);
 
-  // WASM Provider reference
-  const wasmProviderRef = useRef<WaveformDataProvider | null>(null);
+  // WASM Provider reference - 使用适配器包装新的 Provider
+  const wasmProviderRef = useRef<WaveformProviderAdapter | null>(null);
+  // 用于跟踪 Provider 是否已准备好
+  const [providerReady, setProviderReady] = useState(false);
 
   // Initialize WASM provider when not using mock data
   useEffect(() => {
     console.log(`[WaveformWindow] Provider init check: useMockData=${useMockData}, waveformName='${_waveformName}'`);
+
+    // 打印环境支持信息
+    logEnvironmentSupport();
+
     if (!useMockData && _waveformName) {
-      const provider = getProvider();
-      console.log(`[WaveformWindow] getProvider returned: ${provider ? 'provider' : 'null'}`);
-      if (provider) {
-        wasmProviderRef.current = provider;
-        console.log('[WaveformWindow] Using WASM provider');
-      } else {
-        console.warn('[WaveformWindow] WASM provider not available');
-      }
+      // 使用新的工厂函数创建 Provider
+      // Worker 模式已修复：WASM 现在兼容 Worker 环境（使用全局 fetch 而不是 window.fetch）
+
+      // 使用一个局部变量来跟踪这个 effect 实例创建的 provider
+      let currentProvider: WaveformProviderAdapter | null = null;
+
+      const initProvider = async () => {
+        // 先清理旧的 Provider（如果存在）
+        if (wasmProviderRef.current) {
+          console.log('[WaveformWindow] Cleaning up old provider before creating new one...');
+          await wasmProviderRef.current.getProvider().dispose();
+          wasmProviderRef.current = null;
+          setProviderReady(false);
+        }
+
+        // 重置 lastWasmSettingsRef 和 lastRenderParamsRef，确保新 Provider 能正确初始化
+        lastWasmSettingsRef.current = {
+          signalPrefix: '',
+          spaceBeforeBracket: false,
+          signalListHash: '',
+          viewportTimeStart: 0,
+          viewportTimeEnd: 0,
+          canvasWidth: 0,
+          canvasHeight: 0,
+        };
+        lastRenderParamsRef.current = {
+          signalPrefix: '',
+          spaceBeforeBracket: false,
+          viewportTimeStart: 0,
+          viewportTimeEnd: 0,
+          canvasWidth: 0,
+          canvasHeight: 0,
+          signalListHash: '',
+          timeConfigHash: '',
+        };
+        cachedSegmentsRef.current = [];
+        lastSegmentsParamsRef.current = {
+          signalListHash: '',
+          viewportTimeStart: 0,
+          viewportTimeEnd: 0,
+          canvasWidth: 0,
+          canvasHeight: 0,
+        };
+
+        // 启用 Worker 模式
+        const useWorkerMode = true;
+
+        try {
+          console.log(`[WaveformWindow] Creating provider (${useWorkerMode ? 'Worker' : 'Direct'} mode)...`);
+          const provider = await createWaveformProvider({
+            useWorker: useWorkerMode,
+            serverUrl: _serverUrl,
+            waveformName: _waveformName,
+            signalPrefix: _signalPrefix,
+            spaceBeforeBracket: _spaceBeforeBracket,
+            timeStamp: Date.now(),
+            enableOpfs: false,
+            enableMemoryCache: true,
+          });
+
+          console.log(`[WaveformWindow] Provider created: ${provider.constructor.name}`);
+          // 使用适配器包装新的 Provider
+          const adapter = new WaveformProviderAdapter(provider);
+          currentProvider = adapter;
+          wasmProviderRef.current = adapter;
+          console.log(`[WaveformWindow] Using WASM provider (${useWorkerMode ? 'Worker' : 'Direct'} mode)`);
+          // 触发重新渲染
+          setProviderReady(true);
+        } catch (error) {
+          console.error('[WaveformWindow] Failed to create provider:', error);
+        }
+      };
+
+      initProvider();
+
+      // 清理函数（在组件卸载或依赖项变化时执行）
+      return () => {
+        // 只清理这个 effect 实例创建的 provider
+        if (currentProvider && wasmProviderRef.current === currentProvider) {
+          console.log('[WaveformWindow] Disposing provider on cleanup...');
+          currentProvider.getProvider().dispose();
+          wasmProviderRef.current = null;
+          setProviderReady(false);
+        }
+      };
     } else {
       console.log(`[WaveformWindow] Skipping provider init: useMockData=${useMockData}, waveformName='${_waveformName}'`);
     }
-  }, [useMockData, _waveformName]);
+  }, [useMockData, _waveformName, _serverUrl, _signalPrefix, _spaceBeforeBracket]);
   
   // 根据 canvas 宽度和时间配置计算 viewport
   // 所有时间值使用 LoD0Unit（整数）
@@ -291,6 +376,12 @@ export function WaveformWindow({
 
   useEffect(() => {
     const initRenderers = async () => {
+      // 如果不是 mock 模式，等待 Provider 准备好
+      if (!useMockData && !providerReady) {
+        console.log('[WaveformWindow] Waiting for provider to be ready...');
+        return;
+      }
+      
       if (canvasRef.current) {
         await waveformRenderer.initialize(canvasRef.current);
         await renderWaveform();
@@ -302,7 +393,7 @@ export function WaveformWindow({
     return () => {
       waveformRenderer.dispose();
     };
-  }, []);
+  }, [useMockData, providerReady]);  // 依赖 providerReady，当 Provider 准备好时重新执行
 
   // 使用 ref 存储上一次的 canvas 尺寸，避免循环依赖
   // @ts-ignore - 暂时未使用但保留以备将来
@@ -320,6 +411,7 @@ export function WaveformWindow({
     canvasWidth: number;
     canvasHeight: number;
     signalListHash: string;
+    timeConfigHash: string;
   }>({
     signalPrefix: '',
     spaceBeforeBracket: false,
@@ -328,6 +420,7 @@ export function WaveformWindow({
     canvasWidth: 0,
     canvasHeight: 0,
     signalListHash: '',
+    timeConfigHash: '',
   });
 
   // 使用 ref 跟踪上一次的 WASM provider 设置
@@ -381,6 +474,12 @@ export function WaveformWindow({
 
   // 节流渲染函数 - 拖动时使用更长的节流间隔
   const throttledRenderWaveform = useCallback(() => {
+    // 如果不是 mock 模式，检查 Provider 是否准备好
+    if (!useMockData && !providerReady) {
+      console.log('[WaveformWindow] Provider not ready, skipping render');
+      return;
+    }
+    
     const now = Date.now();
     const THROTTLE_INTERVAL = isPanningRef.current ? 250 : 80; // 拖动时250ms，正常80ms
 
@@ -401,7 +500,7 @@ export function WaveformWindow({
         }
       }, THROTTLE_INTERVAL - (now - lastRenderTimeRef.current));
     }
-  }, []);
+  }, [useMockData, providerReady]);
 
   // 清理所有定时器
   useEffect(() => {
@@ -508,23 +607,27 @@ export function WaveformWindow({
 
     // 生成 signalList 的哈希值用于检测变化
     const signalListHash = signalList.map(s => `${s.name}-${s.row}-${s.width}`).join('|');
-    
+
+    // 生成 timeConfig 的哈希值用于检测变化
+    const timeConfigHash = `${timeConfig.displayUnitPerLoD0Unit}-${timeConfig.displayUnit}-${timeConfig.lod0Unit}`;
+
     // 检查参数是否真的有变化，如果没有变化则直接返回，避免重复渲染
     const lastParams = lastRenderParamsRef.current;
-    const hasParamsChanged = 
+    const hasParamsChanged =
       lastParams.signalPrefix !== _signalPrefix ||
       lastParams.spaceBeforeBracket !== _spaceBeforeBracket ||
       Math.abs(lastParams.viewportTimeStart - viewport.timeStart) > 0.1 ||
       Math.abs(lastParams.viewportTimeEnd - viewport.timeEnd) > 0.1 ||
       Math.abs(lastParams.canvasWidth - width) > 0.5 ||
       Math.abs(lastParams.canvasHeight - height) > 0.5 ||
-      lastParams.signalListHash !== signalListHash;
-    
+      lastParams.signalListHash !== signalListHash ||
+      lastParams.timeConfigHash !== timeConfigHash;
+
     if (!hasParamsChanged) {
       // 参数没有变化，直接返回
       return;
     }
-    
+
     // 更新上一次渲染的参数
     lastRenderParamsRef.current = {
       signalPrefix: _signalPrefix,
@@ -534,6 +637,7 @@ export function WaveformWindow({
       canvasWidth: width,
       canvasHeight: height,
       signalListHash,
+      timeConfigHash,
     };
 
     let segments;
@@ -790,6 +894,13 @@ export function WaveformWindow({
           lastWidth = newWidth;
         }
         
+        // 如果不是 mock 模式，检查 Provider 是否准备好
+        if (!useMockData && !providerReady) {
+          console.log('[WaveformWindow] Provider not ready, skipping resize render');
+          resizeTimeout = null;
+          return;
+        }
+        
         if (renderWaveformRef.current) {
           renderWaveformRef.current().catch(console.error);
         }
@@ -803,7 +914,7 @@ export function WaveformWindow({
       if (resizeTimeout) clearTimeout(resizeTimeout);
       resizeObserver.disconnect();
     };
-  }, [useMockData]);
+  }, [useMockData, providerReady]);
 
   // 监听时间配置变化，更新 viewport（保留当前时间范围）
   useEffect(() => {
@@ -859,66 +970,67 @@ export function WaveformWindow({
 
   // 监听 cursor 变化，更新信号值
   useEffect(() => {
-    if (!cursor.visible) return;
+    const updateSignalValues = async () => {
+      if (!cursor.visible) return;
 
-    // 根据模式选择正确的 provider
-    if (!useMockData && wasmProviderRef.current) {
-      // WASM 模式：从 WASM provider 获取信号值
-      const wasmProvider = wasmProviderRef.current;
-      const values = new Map<string, string>();
+      // 根据模式选择正确的 provider
+      if (!useMockData && wasmProviderRef.current) {
+        // WASM 模式：从 WASM provider 获取信号值
+        const wasmProvider = wasmProviderRef.current;
+        const values = new Map<string, string>();
 
-      for (const signal of displaySignals) {
-        try {
-          const signalName = signal.fullName || signal.name;
-          // console.log(`[WaveformWindow] Getting value for signal: ${signalName} at time ${cursor.position}`);
-          const valueInfo = wasmProvider.get_signal_value_at_time(signalName, cursor.position);
-          // console.log(`[WaveformWindow] Value info for ${signalName}:`, valueInfo);
-          if (valueInfo && typeof valueInfo === 'object') {
-            // ValueInfo object has displayStr field (camelCase from WASM serde)
-            const displayStr = (valueInfo as any).displayStr || (valueInfo as any).display_str || '0x0';
-            // console.log(`[WaveformWindow] Got value for ${signalName}: ${displayStr}`);
-            values.set(signalName, displayStr);
+        for (const signal of displaySignals) {
+          try {
+            const signalName = signal.fullName || signal.name;
+            const valueInfo = await wasmProvider.get_signal_value_at_time(signalName, cursor.position);
+            if (valueInfo && typeof valueInfo === 'object') {
+              // ValueInfo object has displayStr field (camelCase from WASM serde)
+              const displayStr = (valueInfo as any).displayStr || (valueInfo as any).display_str || '0x0';
+              values.set(signalName, displayStr);
 
-            // For expanded multi-bit signals, also get individual bit values
-            if (signal.msb !== signal.lsb && expandedSignals.has(signal.unique_id)) {
-              const bitCount = Math.min(signal.msb - signal.lsb + 1, 32);
-              for (let i = 0; i < bitCount; i++) {
-                const bitIndex = signal.msb - i;
-                const bitSignalName = `${signal.fullName}@[${bitIndex}]`;
-                try {
-                  const bitValueInfo = wasmProvider.get_signal_value_at_time(bitSignalName, cursor.position);
-                  if (bitValueInfo && typeof bitValueInfo === 'object') {
-                    const bitDisplayStr = (bitValueInfo as any).displayStr || (bitValueInfo as any).display_str || '0';
-                    values.set(bitSignalName, bitDisplayStr);
-                  } else {
+              // For expanded multi-bit signals, also get individual bit values
+              if (signal.msb !== signal.lsb && expandedSignals.has(signal.unique_id)) {
+                const bitCount = Math.min(signal.msb - signal.lsb + 1, 32);
+                for (let i = 0; i < bitCount; i++) {
+                  const bitIndex = signal.msb - i;
+                  const bitSignalName = `${signal.fullName}@[${bitIndex}]`;
+                  try {
+                    const bitValueInfo = await wasmProvider.get_signal_value_at_time(bitSignalName, cursor.position);
+                    if (bitValueInfo && typeof bitValueInfo === 'object') {
+                      const bitDisplayStr = (bitValueInfo as any).displayStr || (bitValueInfo as any).display_str || '0';
+                      values.set(bitSignalName, bitDisplayStr);
+                    } else {
+                      values.set(bitSignalName, '0');
+                    }
+                  } catch (error) {
                     values.set(bitSignalName, '0');
                   }
-                } catch (error) {
-                  values.set(bitSignalName, '0');
                 }
               }
+            } else {
+              values.set(signal.fullName || signal.name, '0x0');
             }
-          } else {
+          } catch (error) {
+            console.error(`[WaveformWindow] Error getting value for signal ${signal.name}:`, error);
             values.set(signal.fullName || signal.name, '0x0');
           }
-        } catch (error) {
-          console.error(`[WaveformWindow] Error getting value for signal ${signal.name}:`, error);
-          values.set(signal.fullName || signal.name, '0x0');
         }
-      }
 
-      setSignalValues(values);
-    } else {
-      // Mock 模式：从 mock provider 获取信号值
-      const values = mockDataProvider.getValuesAtTime(cursor.position);
-      setSignalValues(values);
-    }
+        setSignalValues(values);
+      } else {
+        // Mock 模式：从 mock provider 获取信号值
+        const values = mockDataProvider.getValuesAtTime(cursor.position);
+        setSignalValues(values);
+      }
+    };
+
+    updateSignalValues();
   }, [cursor.position, cursor.visible, displaySignals, expandedSignals, useMockData]);
 
   // 鼠标按下：立即设置 cursor 并开始选择
   const RULER_HEIGHT = 30; // 标尺区域高度
 
-  const handleCanvasMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  const handleCanvasMouseDown = useCallback(async (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -972,21 +1084,25 @@ export function WaveformWindow({
         const wasmProvider = wasmProviderRef.current;
         const signalName = displaySignals[0].fullName || displaySignals[0].name;
 
+        console.log(`[WaveformWindow] Cursor snap: signal=${signalName}, clickTime=${clickTime}, threshold=${snapThreshold}`);
+
         try {
-          // console.log(`[WaveformWindow] Finding transitions for signal: ${signalName} at time ${clickTime}`);
-          const transitions = wasmProvider.find_transitions_around(signalName, clickTime);
-          // console.log(`[WaveformWindow] Transitions result:`, transitions);
+          const transitions = await wasmProvider.find_transitions_around(signalName, clickTime);
+          console.log(`[WaveformWindow] Cursor snap: transitions=`, transitions);
           if (transitions && Array.isArray(transitions) && transitions.length >= 2) {
             const prev = transitions[0] as number | null;
             const next = transitions[1] as number | null;
-            // console.log(`[WaveformWindow] prev=${prev}, next=${next}, threshold=${snapThreshold}`);
+
+            console.log(`[WaveformWindow] Cursor snap: prev=${prev}, next=${next}, clickTime=${clickTime}`);
 
             if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
               finalTime = prev;
-              // console.log(`[WaveformWindow] Snapped to prev: ${finalTime}`);
+              console.log(`[WaveformWindow] Cursor snap: snapped to prev=${prev}`);
             } else if (next !== null && Math.abs(next - clickTime) <= snapThreshold) {
               finalTime = next;
-              // console.log(`[WaveformWindow] Snapped to next: ${finalTime}`);
+              console.log(`[WaveformWindow] Cursor snap: snapped to next=${next}`);
+            } else {
+              console.log(`[WaveformWindow] Cursor snap: no snap, distances: prev=${prev !== null ? Math.abs(clickTime - prev) : 'null'}, next=${next !== null ? Math.abs(next - clickTime) : 'null'}`);
             }
           }
         } catch (error) {
