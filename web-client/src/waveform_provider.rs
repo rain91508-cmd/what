@@ -1181,14 +1181,17 @@ impl WaveformDataProvider {
     total_cache_misses += tile_misses;
 }
 
-// Log OPFS lookup result
+// Log OPFS lookup result (disabled for performance)
+// if tile_missing_signals.is_empty() {
+//     console_log!("[WASM] 2. OPFS lookup complete, all data cached, no fetch needed");
+// } else {
+//     let missing_tiles = tile_missing_signals.len();
+//     let total_tiles = (end_tile - start_tile + 1) as usize;
+//     console_log!("[WASM] 2. OPFS lookup complete, need fetch from server: {}/{} tiles missing", missing_tiles, total_tiles);
+// }
+
 if tile_missing_signals.is_empty() {
-    console_log!("[WASM] 2. OPFS lookup complete, all data cached, no fetch needed");
     return Ok(());
-} else {
-    let missing_tiles = tile_missing_signals.len();
-    let total_tiles = (end_tile - start_tile + 1) as usize;
-    console_log!("[WASM] 2. OPFS lookup complete, need fetch from server: {}/{} tiles missing", missing_tiles, total_tiles);
 }
         
         // Step 3: Fetch missing signals using tile-based API
@@ -1273,8 +1276,8 @@ if tile_missing_signals.is_empty() {
             }
         }
         
-        console_log!("[WASM] 3. finish fetching from server");
-        console_log!("[WASM] 4. finish store to OPFS");
+        // console_log!("[WASM] 3. finish fetching from server");
+        // console_log!("[WASM] 4. finish store to OPFS");
         
         Ok(())
     }
@@ -1291,15 +1294,15 @@ if tile_missing_signals.is_empty() {
     /// * Serialized RenderSegment array
     #[wasm_bindgen]
     pub async fn fetch_and_get_segments(&mut self, signal_names: Vec<String>) -> Result<JsValue, JsValue> {
-        console_log!("[WASM] 1. start fetch_and_get_segments, signals: {}", signal_names.len());
+        // console_log!("[WASM] 1. start fetch_and_get_segments, signals: {}", signal_names.len());
         
         // Step 1: Fetch data using the existing internal function
         self.fetch_signals_data_batch(signal_names).await?;
         
         // Step 2: Generate segments using the existing get_segments logic
-        console_log!("[WASM] 5. start draw segments");
+        // console_log!("[WASM] 5. start draw segments");
         let result = self.get_segments();
-        console_log!("[WASM] 5. finish draw segments");
+        // console_log!("[WASM] 5. finish draw segments");
         
         result
     }
@@ -2744,13 +2747,13 @@ if tile_missing_signals.is_empty() {
         let bucket_size = 1u64 << lod;
         const TILE_SPAN_MULTIPLIER: u32 = 256;
         
-        // Debug log
-        console_log!("[WASM] find_value_at_time: signal={}, tile_start={}, target_time={}, lod={}", 
-            signal_name, tile_start, target_time, lod);
+        // Debug log (disabled for performance)
+        // console_log!("[WASM] find_value_at_time: signal={}, tile_start={}, target_time={}, lod={}", 
+        //     signal_name, tile_start, target_time, lod);
         
         // Check for potential underflow
         if target_time < tile_start {
-            console_log!("[WASM] WARNING: target_time < tile_start, searching backward in previous tiles");
+            // console_log!("[WASM] WARNING: target_time < tile_start, searching backward in previous tiles");
             // Search backward into previous tiles
             for prev_tile_idx in (0..tile_idx).rev() {
                 let (prev_tile_start, prev_buckets) = &all_bucket_data[prev_tile_idx];
@@ -2763,15 +2766,15 @@ if tile_missing_signals.is_empty() {
                         } else {
                             bucket.first.value.clone()
                         };
-                        console_log!("[WASM]   Found value in previous tile {} bucket {}: {}",
-                            prev_tile_idx, bucket_idx, value);
+                        // console_log!("[WASM]   Found value in previous tile {} bucket {}: {}",
+                        //     prev_tile_idx, bucket_idx, value);
                         return value;
                     }
                 }
             }
             
             // No transitions found, use default
-            console_log!("[WASM]   No value found, returning default '0'");
+            // console_log!("[WASM]   No value found, returning default '0'");
             return "0".to_string();
         }
         
@@ -2779,7 +2782,7 @@ if tile_missing_signals.is_empty() {
         let bucket_idx = ((target_time - tile_start) / bucket_size) as u32;
         let bucket_start = tile_start + (bucket_idx as u64) * bucket_size;
         
-        console_log!("[WASM]   bucket_idx={}, bucket_start={}", bucket_idx, bucket_start);
+        // console_log!("[WASM]   bucket_idx={}, bucket_start={}", bucket_idx, bucket_start);
         
         // console_log!("[WASM] find_value_at_time: target={}, bucket_idx={}, bucket_start={}",
         //     target_time, bucket_idx, bucket_start);
