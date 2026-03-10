@@ -1297,7 +1297,12 @@ if tile_missing_signals.is_empty() {
         }
 
         const MAX_BATCH_SIZE: usize = 256;
-        let lod = self.current_lod();
+        
+        // Calculate appropriate LoD based on current viewport and canvas
+        let lod = select_lod(&self.viewport, self.canvas_width);
+        // Store current LoD for bucket size calculation
+        self.current_lod = Some(lod);
+        
         let time_start = self.viewport.time_start as u64;
         let time_end = self.viewport.time_end as u64;
         
@@ -1306,14 +1311,24 @@ if tile_missing_signals.is_empty() {
         let start_tile = time_start / tile_span;
         let end_tile = time_end / tile_span;
 
+        // Filter out bit extraction signals - they don't need server data
+        let signals_to_fetch: Vec<String> = signal_names.iter()
+            .filter(|name| !name.contains("@["))
+            .cloned()
+            .collect();
+
+        // Optimization: if no signals to fetch, return early
+        if signals_to_fetch.is_empty() {
+            return Ok(());
+        }
+
         // Collect signals that need to be fetched
-        let mut signals_to_fetch: Vec<String> = Vec::new();
         let mut tile_missing_signals: std::collections::HashMap<u64, Vec<String>> = std::collections::HashMap::new();
         let mut total_cache_hits = 0u32;
         let mut total_cache_misses = 0u32;
 
         // Step 1 & 2: Check cache per signal per tile and collect missing combinations
-        for signal_name in signal_names.iter() {
+        for signal_name in signals_to_fetch.iter() {
             // Find signal in draw list to get draw_sig_id
             if let Some(signal) = self.signals_with_id.iter().find(|s| &s.name == signal_name) {
                 let draw_sig_id = signal.draw_sig_id;
@@ -1350,21 +1365,22 @@ if tile_missing_signals.is_empty() {
                                         .collect();
                                     
                                     // Convert transitions to bucket_data
-                                    let (_, buckets) = self.parse_buckets_from_transitions(&transitions);
+                                    let (start_value, buckets) = self.parse_buckets_from_transitions(&transitions);
+                                    let tile_end = tile_start + tile_span;
                                     
                                     if let Some(existing) = self.signal_data.get_mut(signal_name) {
                                         // Merge with existing signal data
                                         existing.bucket_data.push((tile_start, buckets));
-                                        if !transitions.is_empty() {
-                                            existing.tile_info.push((tile_start, tile_start + tile_span, BOUNDARY_TIME_START, transitions[0].value.clone()));
+                                        if let Some(sv) = start_value {
+                                            existing.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv));
                                         }
                                     } else {
                                         // Insert new signal data
                                         let width = self.get_signal_width(signal_name);
                                         let mut new_data = SignalWaveData::new(signal_name.clone(), width);
                                         new_data.bucket_data.push((tile_start, buckets));
-                                        if !transitions.is_empty() {
-                                            new_data.tile_info.push((tile_start, tile_start + tile_span, BOUNDARY_TIME_START, transitions[0].value.clone()));
+                                        if let Some(sv) = start_value {
+                                            new_data.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv));
                                         }
                                         self.signal_data.insert(signal_name.clone(), new_data);
                                     }
@@ -1394,10 +1410,6 @@ if tile_missing_signals.is_empty() {
                 
                 total_cache_hits += signal_hits;
                 total_cache_misses += signal_misses;
-                
-                if signal_misses > 0 {
-                    signals_to_fetch.push(signal_name.clone());
-                }
             } else {
                 // Signal not found in draw list, add all tiles as missing
                 for tile_id in start_tile..=end_tile {
@@ -1412,7 +1424,13 @@ if tile_missing_signals.is_empty() {
         
         // Step 3: Fetch missing signals using tile-based API
         const MAX_TILES_PER_REQUEST: usize = 100;
-        let all_signal_names: Vec<String> = signals_to_fetch.clone();
+        // Collect unique signal names from tile_missing_signals
+        let mut all_signal_names: Vec<String> = tile_missing_signals.values()
+            .flat_map(|v| v.iter().cloned())
+            .collect::<std::collections::HashSet<String>>()
+            .into_iter()
+            .collect();
+        all_signal_names.sort();
         
         for batch in all_signal_names.chunks(MAX_BATCH_SIZE) {
             let server_names: Vec<String> = batch.iter()
