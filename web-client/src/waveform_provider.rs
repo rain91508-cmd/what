@@ -1328,25 +1328,43 @@ if tile_missing_signals.is_empty() {
                     
                     match self.opfs_cache.read(&block).await {
                         Ok(Some(group_data)) => {
-                            // Try to extract this signal from group data
-                            match crate::opfs_cache::extract_signal_from_group(&group_data, draw_sig_id) {
+                            // Try to extract this signal from group data using V2 format
+                            match crate::opfs_cache::read_signal_from_group_v2(&group_data, draw_sig_id) {
                                 Ok(Some(signal_data)) => {
                                     // Cache hit - add to signal_data
                                     let tile_start = tile_id * tile_span;
                                     
+                                    // Convert opfs_cache::Transition to waveform_provider::Transition
+                                    let transitions: Vec<Transition> = signal_data.transitions
+                                        .iter()
+                                        .map(|t| {
+                                            let value_str = if t.value.len() <= 8 {
+                                                let mut bytes = [0u8; 8];
+                                                bytes[..t.value.len()].copy_from_slice(&t.value);
+                                                format!("0x{:X}", u64::from_le_bytes(bytes))
+                                            } else {
+                                                format!("0x{}", t.value.iter().map(|b| format!("{:02X}", b)).collect::<String>())
+                                            };
+                                            Transition { time: t.time, value: value_str }
+                                        })
+                                        .collect();
+                                    
+                                    // Convert transitions to bucket_data
+                                    let (_, buckets) = self.parse_buckets_from_transitions(&transitions);
+                                    
                                     if let Some(existing) = self.signal_data.get_mut(signal_name) {
                                         // Merge with existing signal data
-                                        existing.bucket_data.push((tile_start, signal_data.buckets));
-                                        if let Some(ref info) = signal_data.tile_info {
-                                            existing.tile_info.push((tile_start, tile_start + tile_span, info.0, info.1.clone()));
+                                        existing.bucket_data.push((tile_start, buckets));
+                                        if !transitions.is_empty() {
+                                            existing.tile_info.push((tile_start, tile_start + tile_span, BOUNDARY_TIME_START, transitions[0].value.clone()));
                                         }
                                     } else {
                                         // Insert new signal data
                                         let width = self.get_signal_width(signal_name);
                                         let mut new_data = SignalWaveData::new(signal_name.clone(), width);
-                                        new_data.bucket_data.push((tile_start, signal_data.buckets));
-                                        if let Some(ref info) = signal_data.tile_info {
-                                            new_data.tile_info.push((tile_start, tile_start + tile_span, info.0, info.1.clone()));
+                                        new_data.bucket_data.push((tile_start, buckets));
+                                        if !transitions.is_empty() {
+                                            new_data.tile_info.push((tile_start, tile_start + tile_span, BOUNDARY_TIME_START, transitions[0].value.clone()));
                                         }
                                         self.signal_data.insert(signal_name.clone(), new_data);
                                     }
