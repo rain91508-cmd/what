@@ -288,7 +288,7 @@ class WaveformRenderer {
     }
     
     // Debug: log group info
-    console.log(`[detectMinMaxGroups] Total groups: ${result.size}, last group size: ${groupSize}`);
+    // console.log(`[detectMinMaxGroups] Total groups: ${result.size}, last group size: ${groupSize}`);
     
     return result;
   }

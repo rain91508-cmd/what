@@ -10,8 +10,7 @@ use std::collections::HashMap;
 use base64::{Engine as _, engine::general_purpose};
 
 use crate::opfs_cache::{
-    OpfsCacheManager, SignalWithId, DataBlock, MissingBlock, 
-    PrepareDataResult, CacheStats
+    OpfsCacheManager, SignalWithId, DataBlock
 };
 
 // Console logging
@@ -422,114 +421,6 @@ impl WaveformDataProvider {
         Ok(())
     }
 
-    /// Prepare data (check cache and return missing blocks)
-    /// 
-    /// This is the main entry point for data loading.
-    /// WASM checks Memory LRU -> OPFS LRU -> returns missing blocks for server fetch.
-    /// 
-    /// # Returns
-    /// * Object with missing_blocks and cache_stats
-    #[wasm_bindgen]
-    pub async fn prepare_data(&mut self) -> Result<JsValue, JsValue> {
-        if self.signals_with_id.is_empty() {
-            console_log!("[WASM] prepare_data: no signals");
-            return serde_wasm_bindgen::to_value(&PrepareDataResult {
-                missing_blocks: vec![],
-                cache_stats: CacheStats { memory_hits: 0, opfs_hits: 0, misses: 0 },
-            }).map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)));
-        }
-
-        let lod = self.current_lod();
-        let time_start = self.viewport.time_start as u64;
-        let time_end = self.viewport.time_end as u64;
-
-        // Calculate required blocks
-        let blocks = crate::opfs_cache::compute_required_blocks(
-            &self.signals_with_id,
-            time_start,
-            time_end,
-            lod
-        );
-
-        // Check each block in cache
-        let mut missing_blocks: Vec<MissingBlock> = Vec::new();
-        let mut memory_hits = 0u32;
-        let mut opfs_hits = 0u32;
-
-        for block in blocks.iter() {
-            match self.opfs_cache.read(block).await? {
-                Some(_data) => {
-                    // Data found in cache
-                    if self.opfs_cache.enabled {
-                        opfs_hits += 1;
-                    } else {
-                        memory_hits += 1;
-                    }
-                }
-                None => {
-                    // Data not found, add to missing list
-                    let draw_sig_ids: Vec<u32> = self.signals_with_id.iter()
-                        .filter(|s| OpfsCacheManager::get_group_id(s.draw_sig_id) == block.group)
-                        .map(|s| s.draw_sig_id)
-                        .collect();
-
-                    missing_blocks.push(MissingBlock {
-                        lod: block.lod,
-                        tile: block.tile,
-                        group: block.group,
-                        draw_sig_ids,
-                    });
-                }
-            }
-        }
-
-        let misses = missing_blocks.len() as u32;
-        console_log!("[Cache] LoD{} tiles:{} mem_hit:{} opfs_hit:{} miss:{}",
-            lod, blocks.len(), memory_hits, opfs_hits, misses);
-
-        let result = PrepareDataResult {
-            missing_blocks,
-            cache_stats: CacheStats { memory_hits, opfs_hits, misses },
-        };
-
-        serde_wasm_bindgen::to_value(&result)
-            .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)))
-    }
-
-    /// Supplement data from server response
-    /// 
-    /// WASM 直接处理服务器返回的原始 chunk 数据：
-    /// 1. 解析服务器 chunk 数据
-    /// 2. 按 (lod, tile, group) 重组为 Group Bin 格式
-    /// 3. 写入 OPFS（通过 JS 回调）
-    /// 4. 存入 Memory LRU
-    /// 
-    /// # Arguments
-    /// * `server_data_js` - Server response data (ArrayBuffer)
-    #[wasm_bindgen]
-    pub async fn supplement_data(&mut self, server_data_js: JsValue) -> Result<(), JsValue> {
-        console_log!("[WASM] supplement_data: processing server response");
-
-        // Convert JsValue to Vec<u8>
-        let array_buffer: js_sys::ArrayBuffer = server_data_js.dyn_into()
-            .map_err(|_| JsValue::from_str("Invalid array buffer"))?;
-        let uint8_array = js_sys::Uint8Array::new(&array_buffer);
-        let mut bytes = vec![0u8; uint8_array.length() as usize];
-        uint8_array.copy_to(&mut bytes);
-
-        console_log!("[WASM] supplement_data: received {} bytes", bytes.len());
-
-        // Check minimum size for valid chunk
-        if bytes.len() < ChunkHeader::SIZE {
-            return Err(JsValue::from_str(&format!("Data too small: {} bytes", bytes.len())));
-        }
-
-        // Parse chunk and store in cache
-        self.process_server_chunk(&bytes, &[]).await?;
-
-        Ok(())
-    }
-
     /// Process server chunk data and store in cache
     /// signal_names: optional list of signal names in the same order as server response
     /// Used to map signal_handle to draw_sig_id
@@ -626,7 +517,7 @@ impl WaveformDataProvider {
 
         // Write each group to cache (with merge support for V2 format)
         let group_count = signals_by_group.len();
-        console_log!("[WASM]   Grouping complete: {} groups", group_count);
+        // console_log!("[WASM]   Grouping complete: {} groups", group_count);
         
         for (group_id, new_signals) in &signals_by_group {
             let block = crate::opfs_cache::DataBlock {
@@ -635,21 +526,21 @@ impl WaveformDataProvider {
                 group: *group_id,
             };
 
-            console_log!("[WASM]   Processing group {}: {} new signals", 
-                group_id, new_signals.len());
-            console_log!("[WASM]     Block: lod={}, tile={}, group={}", 
-                lod, tile_id, group_id);
+            // console_log!("[WASM]   Processing group {}: {} new signals", 
+            //     group_id, new_signals.len());
+            // console_log!("[WASM]     Block: lod={}, tile={}, group={}", 
+            //     lod, tile_id, group_id);
 
             // Try to read existing group data from cache
             let mut merged_signals: Vec<crate::opfs_cache::SignalData> = Vec::new();
             
             match self.opfs_cache.read(&block).await {
                 Ok(Some(existing_data)) => {
-                    console_log!("[WASM]     Existing group data found: {} bytes", existing_data.len());
+                    // console_log!("[WASM]     Existing group data found: {} bytes", existing_data.len());
                     // Deserialize existing data using V2 format
                     match crate::opfs_cache::deserialize_group_data_v2(&existing_data) {
                         Ok(existing_group) => {
-                            console_log!("[WASM]     Existing signals: {}", existing_group.signals.len());
+                            // console_log!("[WASM]     Existing signals: {}", existing_group.signals.len());
                             
                             // Merge: keep existing signals, add new ones or update existing ones
                             let mut signal_map: std::collections::HashMap<u32, crate::opfs_cache::SignalData> = 
@@ -666,20 +557,20 @@ impl WaveformDataProvider {
                             }
                             
                             merged_signals = signal_map.into_values().collect();
-                            console_log!("[WASM]     Merged signals: {} (existing + new)", merged_signals.len());
+                            // console_log!("[WASM]     Merged signals: {} (existing + new)", merged_signals.len());
                         }
                         Err(e) => {
-                            console_log!("[WASM]     Error deserializing existing data: {}, using new signals only", e);
+                            // console_log!("[WASM]     Error deserializing existing data: {}, using new signals only", e);
                             merged_signals = new_signals.clone();
                         }
                     }
                 }
                 Ok(None) => {
-                    console_log!("[WASM]     No existing group data, using new signals only");
+                    // console_log!("[WASM]     No existing group data, using new signals only");
                     merged_signals = new_signals.clone();
                 }
                 Err(e) => {
-                    console_log!("[WASM]     Error reading existing cache: {:?}, using new signals only", e);
+                    // console_log!("[WASM]     Error reading existing cache: {:?}, using new signals only", e);
                     merged_signals = new_signals.clone();
                 }
             }
@@ -688,14 +579,14 @@ impl WaveformDataProvider {
             let group_data = crate::opfs_cache::GroupData { signals: merged_signals };
             let bin_data = crate::opfs_cache::serialize_group_data_v2(&group_data);
 
-            console_log!("[WASM]     Serialized size: {} bytes", bin_data.len());
+            // console_log!("[WASM]     Serialized size: {} bytes", bin_data.len());
 
             // Write to cache (OPFS + Memory)
             self.opfs_cache.write(&block, bin_data).await?;
-            console_log!("[WASM]     Block written to cache successfully");
+            // console_log!("[WASM]     Block written to cache successfully");
         }
 
-        console_log!("[WASM] Server chunk processed: {} groups written to cache", group_count);
+        // console_log!("[WASM] Server chunk processed: {} groups written to cache", group_count);
 
         Ok(())
     }
@@ -843,7 +734,7 @@ impl WaveformDataProvider {
     #[wasm_bindgen]
     pub fn clear_cache(&mut self) {
         self.opfs_cache.clear_memory();
-        console_log!("[WASM] Cache cleared");
+        // console_log!("[WASM] Cache cleared");
     }
 
     /// Get server URL
@@ -879,14 +770,14 @@ impl WaveformDataProvider {
     /// Set signal prefix
     #[wasm_bindgen(setter)]
     pub fn set_signal_prefix(&mut self, prefix: String) {
-        console_log!("[WASM] Updated signal_prefix: '{}' -> '{}'", self.signal_prefix, prefix);
+        // console_log!("[WASM] Updated signal_prefix: '{}' -> '{}'", self.signal_prefix, prefix);
         self.signal_prefix = prefix;
     }
 
     /// Set space before bracket
     #[wasm_bindgen(setter)]
     pub fn set_space_before_bracket(&mut self, space: bool) {
-        console_log!("[WASM] Updated space_before_bracket: {} -> {}", self.space_before_bracket, space);
+        // console_log!("[WASM] Updated space_before_bracket: {} -> {}", self.space_before_bracket, space);
         self.space_before_bracket = space;
     }
 
@@ -899,14 +790,14 @@ impl WaveformDataProvider {
     /// Set display format (hex, bin, oct, dec)
     #[wasm_bindgen(setter)]
     pub fn set_display_format(&mut self, format: String) {
-        console_log!("[WASM] Updated display_format: '{}' -> '{}'", self.display_format, format);
+        // console_log!("[WASM] Updated display_format: '{}' -> '{}'", self.display_format, format);
         self.display_format = format;
     }
 
     /// Set memory cache enabled
     #[wasm_bindgen]
     pub fn set_memory_cache_enabled(&mut self, enabled: bool) {
-        console_log!("[WASM] Setting memory cache enabled: {}", enabled);
+        // console_log!("[WASM] Setting memory cache enabled: {}", enabled);
         self.opfs_cache.set_memory_cache_enabled(enabled);
     }
 
@@ -919,7 +810,7 @@ impl WaveformDataProvider {
     /// Set OPFS cache enabled (dynamic toggle)
     #[wasm_bindgen]
     pub fn set_opfs_enabled(&mut self, enabled: bool) {
-        console_log!("[WASM] Setting OPFS cache enabled: {}", enabled);
+        // console_log!("[WASM] Setting OPFS cache enabled: {}", enabled);
         self.opfs_cache.enabled = enabled;
     }
 
@@ -965,15 +856,15 @@ impl WaveformDataProvider {
         let signals: Vec<SignalInfo> = signals.into_iter().map(|mut s| {
             s.bit_extract = Self::parse_bit_extract(&s.name);
             if let Some((ref parent, (msb, lsb))) = s.bit_extract {
-                console_log!("[WASM]   Signal '{}': extract bits [{}:{}] from parent '{}'", 
-                    s.name, msb, lsb, parent);
+                // console_log!("[WASM]   Signal '{}': extract bits [{}:{}] from parent '{}'", 
+                //     s.name, msb, lsb, parent);
             }
             s
         }).collect();
 
-        console_log!("[WASM] Set {} signals", signals.len());
+        // console_log!("[WASM] Set {} signals", signals.len());
         for (i, s) in signals.iter().enumerate() {
-            console_log!("[WASM]   Signal[{}]: name='{}', row={}, width={}", i, s.name, s.row, s.width);
+            // console_log!("[WASM]   Signal[{}]: name='{}', row={}, width={}", i, s.name, s.row, s.width);
         }
         self.signals = signals;
         Ok(())
@@ -981,7 +872,7 @@ impl WaveformDataProvider {
 
     /// Set viewport
     pub fn set_viewport(&mut self, time_start: f64, time_end: f64) {
-        console_log!("[WASM] Set viewport: time_start={}, time_end={}", time_start, time_end);
+        // console_log!("[WASM] Set viewport: time_start={}, time_end={}", time_start, time_end);
         self.viewport = Viewport { time_start, time_end };
     }
 
@@ -1001,7 +892,7 @@ impl WaveformDataProvider {
     /// When width changes, adjust time_end to maintain the same time-to-pixel ratio
     /// time_start remains fixed
     pub fn set_canvas_dimensions(&mut self, width: f64, height: f64, row_height: f64) {
-        console_log!("[WASM] Set canvas dimensions: width={}, height={}, row_height={}", width, height, row_height);
+        // console_log!("[WASM] Set canvas dimensions: width={}, height={}, row_height={}", width, height, row_height);
         
         // If canvas width changes, adjust time_end to maintain time-to-pixel ratio
         if self.canvas_width > 0.0 && width != self.canvas_width {
@@ -1013,8 +904,8 @@ impl WaveformDataProvider {
             let new_time_range = time_per_pixel * width;
             let new_time_end = self.viewport.time_start + new_time_range;
             
-            console_log!("[WASM] Adjusting viewport: time_start={}, old_time_end={}, new_time_end={}", 
-                self.viewport.time_start, self.viewport.time_end, new_time_end);
+            // console_log!("[WASM] Adjusting viewport: time_start={}, old_time_end={}, new_time_end={}", 
+            //     self.viewport.time_start, self.viewport.time_end, new_time_end);
             
             self.viewport.time_end = new_time_end;
         }
@@ -1028,8 +919,8 @@ impl WaveformDataProvider {
     /// 
     /// NOTE: 根据搜索时确定的prefix和space_before_bracket来构建服务器信号名
     fn build_server_signal_name(&self, local_name: &str) -> String {
-        console_log!("[WASM] build_server_signal_name: local='{}', prefix='{}', space={}", 
-            local_name, self.signal_prefix, self.space_before_bracket);
+        // console_log!("[WASM] build_server_signal_name: local='{}', prefix='{}', space={}", 
+        //     local_name, self.signal_prefix, self.space_before_bracket);
         
         // 移除 prefix（如 work@）
         let mut server_name = if self.signal_prefix.is_empty() || !local_name.starts_with(&self.signal_prefix) {
@@ -1038,19 +929,19 @@ impl WaveformDataProvider {
             local_name[self.signal_prefix.len()..].to_string()
         };
         
-        console_log!("[WASM]   After removing prefix '{}': '{}'", self.signal_prefix, server_name);
+        // console_log!("[WASM]   After removing prefix '{}': '{}'", self.signal_prefix, server_name);
         
         // 根据 space_before_bracket 设置，在方括号前添加空格
         if self.space_before_bracket {
             if let Some(bracket_idx) = server_name.find('[') {
                 if bracket_idx > 0 && !server_name[..bracket_idx].ends_with(' ') {
                     server_name.insert(bracket_idx, ' ');
-                    console_log!("[WASM]   Added space before bracket: '{}'", server_name);
+                    // console_log!("[WASM]   Added space before bracket: '{}'", server_name);
                 }
             }
         }
 
-        console_log!("[WASM]   Final server name: '{}'", server_name);
+        // console_log!("[WASM]   Final server name: '{}'", server_name);
         server_name
     }
 
@@ -1077,7 +968,7 @@ impl WaveformDataProvider {
     /// Note: No regex escaping needed for base64 encoding
     pub fn local_to_server_name(&self, local_name: &str) -> String {
         let server_name = self.build_server_signal_name(local_name);
-        console_log!("[WASM] Converted '{}' -> '{}'", local_name, server_name);
+        // console_log!("[WASM] Converted '{}' -> '{}'", local_name, server_name);
         server_name
     }
 
@@ -1115,10 +1006,10 @@ impl WaveformDataProvider {
         let start_tile = time_start / tile_span;
         let end_tile = time_end / tile_span;
         
-        console_log!("[WASM] Fetching {} signals in batches (max {} per batch) at LoD {}, time {}-{}",
-            total_signals, MAX_BATCH_SIZE, lod, time_start, time_end);
-        console_log!("[WASM]   Tile info: span={}, start_tile={}, end_tile={}, tiles={}",
-            tile_span, start_tile, end_tile, end_tile - start_tile + 1);
+        // console_log!("[WASM] Fetching {} signals in batches (max {} per batch) at LoD {}, time {}-{}",
+        //     total_signals, MAX_BATCH_SIZE, lod, time_start, time_end);
+        // console_log!("[WASM]   Tile info: span={}, start_tile={}, end_tile={}, tiles={}",
+        //     tile_span, start_tile, end_tile, end_tile - start_tile + 1);
 
         // Filter out bit extraction signals - they don't need server data
         let signals_to_fetch: Vec<String> = signal_names.iter()
@@ -1126,23 +1017,23 @@ impl WaveformDataProvider {
             .cloned()
             .collect();
 
-        console_log!("[WASM] Total signals: {}, fetching {} (excluding {} bit-extract signals)",
-            signal_names.len(), signals_to_fetch.len(), signal_names.len() - signals_to_fetch.len());
+        // console_log!("[WASM] Total signals: {}, fetching {} (excluding {} bit-extract signals)",
+        //     signal_names.len(), signals_to_fetch.len(), signal_names.len() - signals_to_fetch.len());
 
         // Optimization: if no signals to fetch, return early
         if signals_to_fetch.is_empty() {
-            console_log!("[WASM] No signals to fetch, skipping cache check and server request");
+            // console_log!("[WASM] No signals to fetch, skipping cache check and server request");
             return Ok(());
         }
 
         // Step 1: Calculate all required tiles based on time range
-        console_log!("[WASM] Step 1: Calculating required tiles...");
+        // console_log!("[WASM] Step 1: Calculating required tiles...");
         let tiles_to_fetch: Vec<u64> = (start_tile..=end_tile).collect();
-        console_log!("[WASM]   Total tiles to check: {}", tiles_to_fetch.len());
+        // console_log!("[WASM]   Total tiles to check: {}", tiles_to_fetch.len());
 
         // Step 2: Per-signal per-tile cache check
         // Structure: tile_id -> Vec<signal_names> that need to be fetched for this tile
-        console_log!("[WASM] Step 2: Checking cache per signal per tile...");
+        // console_log!("[WASM] Step 2: Checking cache per signal per tile...");
         let mut tile_missing_signals: std::collections::HashMap<u64, Vec<String>> = std::collections::HashMap::new();
         let mut total_cache_hits = 0u32;
         let mut total_cache_misses = 0u32;
@@ -1177,7 +1068,7 @@ impl WaveformDataProvider {
                                     // For LoD 1+, directly parse into bucket_data (like server fetch)
                                     let lod = self.current_lod.unwrap_or(25);
                                     
-                                    // Debug: print raw cache transitions with bucket info
+                                    // Debug: print raw cache transitions with bucket info (disabled for performance)
                                     let bucket_size = 1u64 << lod;
                                     let tile_span = OpfsCacheManager::get_tile_span(lod);
                                     let canvas_width = self.canvas_width;
@@ -1185,38 +1076,38 @@ impl WaveformDataProvider {
                                     let view_start = self.viewport.time_start as u64;
                                     let view_end = self.viewport.time_end as u64;
                                     
-                                    console_log!("[WASM] Cache raw data for tile {}: {} transitions, tile_start={}, bucket_size={}, canvas_width={}", 
-                                        tile_id, signal_data.transitions.len(), tile_start, bucket_size, canvas_width);
+                                    // console_log!("[WASM] Cache raw data for tile {}: {} transitions, tile_start={}, bucket_size={}, canvas_width={}", 
+                                    //     tile_id, signal_data.transitions.len(), tile_start, bucket_size, canvas_width);
                                     
-                                    for (i, t) in signal_data.transitions.iter().take(10).enumerate() {
-                                        let value_str = if t.value.len() <= 8 {
-                                            let mut bytes = [0u8; 8];
-                                            bytes[..t.value.len()].copy_from_slice(&t.value);
-                                            format!("0x{:X}", u64::from_le_bytes(bytes))
-                                        } else {
-                                            format!("0x{}", t.value.iter().map(|b| format!("{:02X}", b)).collect::<String>())
-                                        };
+                                    // for (i, t) in signal_data.transitions.iter().take(10).enumerate() {
+                                    //     let value_str = if t.value.len() <= 8 {
+                                    //         let mut bytes = [0u8; 8];
+                                    //         bytes[..t.value.len()].copy_from_slice(&t.value);
+                                    //         format!("0x{:X}", u64::from_le_bytes(bytes))
+                                    //     } else {
+                                    //         format!("0x{}", t.value.iter().map(|b| format!("{:02X}", b)).collect::<String>())
+                                    //     };
                                         
-                                        // Calculate bucket start time and view x position
-                                        let bucket_start_time = if t.time == u64::MAX {
-                                            // BOUNDARY_TIME_START - use tile start
-                                            tile_start
-                                        } else {
-                                            tile_start + t.time * bucket_size
-                                        };
+                                    //     // Calculate bucket start time and view x position
+                                    //     let bucket_start_time = if t.time == u64::MAX {
+                                    //         // BOUNDARY_TIME_START - use tile start
+                                    //         tile_start
+                                    //     } else {
+                                    //         tile_start + t.time * bucket_size
+                                    //     };
                                         
-                                        // Calculate x position in viewport (if within view)
-                                        let view_x = if bucket_start_time >= view_start && bucket_start_time <= view_end {
-                                            let relative_time = (bucket_start_time - view_start) as f64;
-                                            let x_pixel = (relative_time / time_range) * canvas_width;
-                                            format!("{:.1}px", x_pixel)
-                                        } else {
-                                            "out-of-view".to_string()
-                                        };
+                                    //     // Calculate x position in viewport (if within view)
+                                    //     let view_x = if bucket_start_time >= view_start && bucket_start_time <= view_end {
+                                    //         let relative_time = (bucket_start_time - view_start) as f64;
+                                    //         let x_pixel = (relative_time / time_range) * canvas_width;
+                                    //         format!("{:.1}px", x_pixel)
+                                    //     } else {
+                                    //         "out-of-view".to_string()
+                                    //     };
                                         
-                                        console_log!("[WASM]   Raw[{}]: time={}, bucket_start={}, value={}, view_x={}", 
-                                            i, t.time, bucket_start_time, value_str, view_x);
-                                    }
+                                    //     console_log!("[WASM]   Raw[{}]: time={}, bucket_start={}, value={}, view_x={}", 
+                                    //         i, t.time, bucket_start_time, value_str, view_x);
+                                    // }
                                     
                                     // Convert cache transitions to our Transition format
                                     let transitions: Vec<Transition> = signal_data.transitions
@@ -1453,12 +1344,12 @@ if tile_missing_signals.is_empty() {
         let header = ChunkHeader::from_bytes(data)
             .map_err(|e| JsValue::from_str(&e))?;
 
-        console_log!("[WASM] Chunk for batch: level={}, signals={}, time={}-{}",
-            header.level, header.signal_count, header.time_start, header.time_end);
+        // console_log!("[WASM] Chunk for batch: level={}, signals={}, time={}-{}",
+        //     header.level, header.signal_count, header.time_start, header.time_end);
 
         if header.signal_count as usize != batch.len() {
-            console_log!("[WASM] Warning: Chunk signal count ({}) != batch size ({})",
-                header.signal_count, batch.len());
+            // console_log!("[WASM] Warning: Chunk signal count ({}) != batch size ({})",
+            //     header.signal_count, batch.len());
         }
 
         // Parse each signal block
@@ -1466,7 +1357,7 @@ if tile_missing_signals.is_empty() {
         
         for signal_idx in 0..header.signal_count.min(batch.len() as u32) {
             if offset + SignalBlockHeader::SIZE > data.len() {
-                console_log!("[WASM] Warning: Not enough data for signal block {}", signal_idx);
+                // console_log!("[WASM] Warning: Not enough data for signal block {}", signal_idx);
                 break;
             }
 
@@ -1614,8 +1505,8 @@ if tile_missing_signals.is_empty() {
         let header = ChunkHeader::from_bytes(data)
             .map_err(|e| JsValue::from_str(&e))?;
 
-        console_log!("[WASM] Chunk: level={}, signals={}, time={}-{}",
-            header.level, header.signal_count, header.time_start, header.time_end);
+        // console_log!("[WASM] Chunk: level={}, signals={}, time={}-{}",
+        //     header.level, header.signal_count, header.time_start, header.time_end);
 
         // If chunk contains multiple signals, parse all of them
         if header.signal_count > 1 {
@@ -1635,7 +1526,7 @@ if tile_missing_signals.is_empty() {
         // Parse each signal block
         for signal_idx in 0..header.signal_count {
             if offset + SignalBlockHeader::SIZE > data.len() {
-                console_log!("[WASM] Warning: Not enough data for signal block {}", signal_idx);
+                // console_log!("[WASM] Warning: Not enough data for signal block {}", signal_idx);
                 break;
             }
 
@@ -1643,8 +1534,8 @@ if tile_missing_signals.is_empty() {
             let block_header = SignalBlockHeader::from_bytes(&data[offset..])
                 .map_err(|e| JsValue::from_str(&e))?;
 
-            console_log!("[WASM] Signal block {}: handle={}, transitions={}",
-                signal_idx, block_header.signal_handle, block_header.transition_count);
+            // console_log!("[WASM] Signal block {}: handle={}, transitions={}",
+            //     signal_idx, block_header.signal_handle, block_header.transition_count);
 
             // Find signal name by handle (we need to map handle to name)
             // For now, use the signal at the same index in our signals list
@@ -1683,7 +1574,7 @@ if tile_missing_signals.is_empty() {
     /// Parse single signal chunk
     fn parse_single_signal_chunk(&mut self, signal_name: &str, data: &[u8], header: &ChunkHeader) -> Result<(), JsValue> {
         if data.len() < ChunkHeader::SIZE + SignalBlockHeader::SIZE {
-            console_log!("[WASM] Error: Not enough data for single signal chunk, got {} bytes", data.len());
+            // console_log!("[WASM] Error: Not enough data for single signal chunk, got {} bytes", data.len());
             return Err(JsValue::from_str("Not enough data for single signal chunk"));
         }
 
@@ -1691,8 +1582,8 @@ if tile_missing_signals.is_empty() {
         let block_header = SignalBlockHeader::from_bytes(&data[ChunkHeader::SIZE..])
             .map_err(|e| JsValue::from_str(&e))?;
 
-        console_log!("[WASM] Single signal block: handle={}, transitions={}",
-            block_header.signal_handle, block_header.transition_count);
+        // console_log!("[WASM] Single signal block: handle={}, transitions={}",
+        //     block_header.signal_handle, block_header.transition_count);
 
         // Parse transitions
         let transitions = self.parse_transitions_from_block(
@@ -1733,8 +1624,8 @@ if tile_missing_signals.is_empty() {
         let time_array_start = block_header.time_array_offset as usize;
         let value_array_start = block_header.value_array_offset as usize;
 
-        console_log!("[WASM] Parsing transitions for signal {}: time_start={}, value_start={}, transitions={}",
-            signal_index, time_array_start, value_array_start, block_header.transition_count);
+        // console_log!("[WASM] Parsing transitions for signal {}: time_start={}, value_start={}, transitions={}",
+        //     signal_index, time_array_start, value_array_start, block_header.transition_count);
         
         // First, read the start value (time = 0xFFFFFFFFFFFFFFFF)
         // Start value is always present and comes first in the arrays
@@ -1789,23 +1680,23 @@ if tile_missing_signals.is_empty() {
             }
         }
 
-        // Debug: print first 64 bytes of time and value arrays
+        // Debug: print first 64 bytes of time and value arrays (disabled for performance)
         let time_preview_len = ((block_header.transition_count + 1) as usize * 8).min(64);
         let value_preview_len = (data.len() - value_array_start).min(64);
-        console_log!("[WASM] Time array (first {} bytes): {:?}", 
-            time_preview_len,
-            &data[time_array_start..time_array_start + time_preview_len]
-                .iter()
-                .map(|b| format!("{:02X}", b))
-                .collect::<Vec<_>>()
-                .join(" "));
-        console_log!("[WASM] Value array (first {} bytes): {:?}",
-            value_preview_len,
-            &data[value_array_start..value_array_start + value_preview_len]
-                .iter()
-                .map(|b| format!("{:02X}", b))
-                .collect::<Vec<_>>()
-                .join(" "));
+        // console_log!("[WASM] Time array (first {} bytes): {:?}", 
+        //     time_preview_len,
+        //     &data[time_array_start..time_array_start + time_preview_len]
+        //         .iter()
+        //         .map(|b| format!("{:02X}", b))
+        //         .collect::<Vec<_>>()
+        //         .join(" "));
+        // console_log!("[WASM] Value array (first {} bytes): {:?}",
+        //     value_preview_len,
+        //     &data[value_array_start..value_array_start + value_preview_len]
+        //         .iter()
+        //         .map(|b| format!("{:02X}", b))
+        //         .collect::<Vec<_>>()
+        //         .join(" "));
 
         // Then, read the actual transitions (transition_count of them)
         // They start at index 1 in the time array (after start value)
@@ -1823,7 +1714,7 @@ if tile_missing_signals.is_empty() {
 
             // Check bounds for time
             if time_idx + 8 > data.len() {
-                console_log!("[WASM] Warning: Time data out of bounds at index {}", i);
+                // console_log!("[WASM] Warning: Time data out of bounds at index {}", i);
                 break;
             }
 
@@ -1836,7 +1727,7 @@ if tile_missing_signals.is_empty() {
             // Parse value according to FST-like format
             // Format: [type(u8), length(u16), value_bytes...]
             if value_idx + 3 > data.len() {
-                console_log!("[WASM] Warning: Value header out of bounds at index {}", i);
+                // console_log!("[WASM] Warning: Value header out of bounds at index {}", i);
                 break;
             }
 
@@ -1845,7 +1736,7 @@ if tile_missing_signals.is_empty() {
             value_idx += 3;
 
             if value_idx + value_len > data.len() {
-                console_log!("[WASM] Warning: Value data out of bounds at index {} (len={})", i, value_len);
+                // console_log!("[WASM] Warning: Value data out of bounds at index {} (len={})", i, value_len);
                 break;
             }
 
@@ -1902,16 +1793,16 @@ if tile_missing_signals.is_empty() {
 
         if transitions.is_empty() {
             // Fallback: create at least one transition
-            console_log!("[WASM] Warning: No transitions parsed, using fallback");
+            // console_log!("[WASM] Warning: No transitions parsed, using fallback");
             transitions.push(Transition { time: chunk_header.time_start, value: "0".to_string() });
         }
 
-        // Debug: print all parsed transitions
-        for (i, t) in transitions.iter().enumerate() {
-            console_log!("[WASM]   Parsed[{}]: time={}, value={}", i, t.time, t.value);
-        }
+        // Debug: print all parsed transitions (disabled for performance)
+        // for (i, t) in transitions.iter().enumerate() {
+        //     console_log!("[WASM]   Parsed[{}]: time={}, value={}", i, t.time, t.value);
+        // }
         
-        console_log!("[WASM] Parsed {} transitions at LoD {}", transitions.len(), chunk_header.level);
+        // console_log!("[WASM] Parsed {} transitions at LoD {}", transitions.len(), chunk_header.level);
         Ok(transitions)
     }
 
@@ -1998,7 +1889,7 @@ if tile_missing_signals.is_empty() {
     pub fn get_segments(&self) -> Result<JsValue, JsValue> {
         // Optimization: if no signals to draw, return empty segments early
         if self.signals.is_empty() {
-            console_log!("[WASM] get_segments: no signals to draw, returning empty segments");
+            // console_log!("[WASM] get_segments: no signals to draw, returning empty segments");
             return serde_wasm_bindgen::to_value(&Vec::<RenderSegment>::new())
                 .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)));
         }
@@ -2060,8 +1951,8 @@ if tile_missing_signals.is_empty() {
                         
                         let mut tile_buckets: std::collections::HashMap<u64, HashMap<u32, BucketData>> = std::collections::HashMap::new();
                         
-                        console_log!("[WASM] Grouping {} transitions by tile (lod={}, bucket_size={})", 
-                            data.transitions.len(), lod, bucket_size);
+                        // console_log!("[WASM] Grouping {} transitions by tile (lod={}, bucket_size={})", 
+                            // data.transitions.len(), lod, bucket_size);
                         
                         // Group transitions by tile_start (from tile_info)
                         // Each tile has its own set of transitions in the cache
@@ -2085,13 +1976,13 @@ if tile_missing_signals.is_empty() {
                                 .cloned()
                                 .collect();
                             
-                            console_log!("[WASM]   Tile {}: start={}, end={}, {} transitions", 
-                                tile_idx, tile_start, tile_end, tile_transitions.len());
+                            // console_log!("[WASM]   Tile {}: start={}, end={}, {} transitions", 
+                            //     tile_idx, tile_start, tile_end, tile_transitions.len());
                             
                             // Parse this tile's transitions into buckets
                             if !tile_transitions.is_empty() {
                                 let (_, buckets) = self.parse_buckets_from_transitions(&tile_transitions);
-                                console_log!("[WASM]   Tile {}: {} buckets parsed", tile_idx, buckets.len());
+                                // console_log!("[WASM]   Tile {}: {} buckets parsed", tile_idx, buckets.len());
                                 tile_buckets.insert(*tile_start, buckets);
                             }
                         }
@@ -2101,27 +1992,27 @@ if tile_missing_signals.is_empty() {
                         let mut bucket_data: Vec<(u64, HashMap<u32, BucketData>)> = tile_buckets.into_iter().collect();
                         bucket_data.sort_by_key(|(start, _)| *start);
                         
-                        console_log!("[WASM] Cache data: {} tiles from tile_info, {} bucket entries (sorted)", 
-                            data.tile_info.len(), bucket_data.len());
+                        // console_log!("[WASM] Cache data: {} tiles from tile_info, {} bucket entries (sorted)", 
+                        //     data.tile_info.len(), bucket_data.len());
                         
-                        // Debug: print bucket details for each tile
-                        for (tile_idx, (tile_start, buckets)) in bucket_data.iter().enumerate() {
-                            console_log!("[WASM]   Bucket entry {}: start={}, {} buckets", 
-                                tile_idx, tile_start, buckets.len());
-                            // Print first few bucket offsets
-                            let mut offsets: Vec<u32> = buckets.keys().cloned().collect();
-                            offsets.sort();
-                            for (i, offset) in offsets.iter().take(5).enumerate() {
-                                if let Some(bucket) = buckets.get(offset) {
-                                    let last_str = match &bucket.last {
-                                        Some(l) => format!(", last={}", l.value),
-                                        None => "".to_string(),
-                                    };
-                                    console_log!("[WASM]     Bucket[{}]: offset={}, first={}{}", 
-                                        i, offset, bucket.first.value, last_str);
-                                }
-                            }
-                        }
+                        // Debug: print bucket details for each tile (disabled for performance)
+                        // for (tile_idx, (tile_start, buckets)) in bucket_data.iter().enumerate() {
+                        //     console_log!("[WASM]   Bucket entry {}: start={}, {} buckets", 
+                        //         tile_idx, tile_start, buckets.len());
+                        //     // Print first few bucket offsets
+                        //     let mut offsets: Vec<u32> = buckets.keys().cloned().collect();
+                        //     offsets.sort();
+                        //     for (i, offset) in offsets.iter().take(5).enumerate() {
+                        //         if let Some(bucket) = buckets.get(offset) {
+                        //             let last_str = match &bucket.last {
+                        //                 Some(l) => format!(", last={}", l.value),
+                        //                 None => "".to_string(),
+                        //             };
+                        //             console_log!("[WASM]     Bucket[{}]: offset={}, first={}{}", 
+                        //                 i, offset, bucket.first.value, last_str);
+                        //         }
+                        //     }
+                        // }
                         
                         self.generate_lod_segments_from_buckets(
                             &bucket_data,
@@ -2188,7 +2079,7 @@ if tile_missing_signals.is_empty() {
         const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
         
         if transitions.len() < 2 {
-            console_log!("[WASM] detect_min_max_format: transitions.len() < 2, returning false");
+            // console_log!("[WASM] detect_min_max_format: transitions.len() < 2, returning false");
             return false;
         }
         
@@ -2200,20 +2091,20 @@ if tile_missing_signals.is_empty() {
             0
         };
         
-        console_log!("[WASM] detect_min_max_format: transitions={}, start_idx={}", transitions.len(), start_idx);
+        // console_log!("[WASM] detect_min_max_format: transitions={}, start_idx={}", transitions.len(), start_idx);
         
         // Check for same timestamp pattern (min/max pairs)
         // Check up to 20 transitions to find min/max pairs
         let check_limit = transitions.len().min(start_idx + 20).saturating_sub(1);
         for i in start_idx..check_limit {
-            console_log!("[WASM]   Checking transitions[{}].time={} vs transitions[{}].time={}", 
-                i, transitions[i].time, i+1, transitions[i+1].time);
+            // console_log!("[WASM]   Checking transitions[{}].time={} vs transitions[{}].time={}", 
+            //     i, transitions[i].time, i+1, transitions[i+1].time);
             if transitions[i].time == transitions[i + 1].time {
-                console_log!("[WASM]   Found min/max pair at index {}", i);
+                // console_log!("[WASM]   Found min/max pair at index {}", i);
                 return true;
             }
         }
-        console_log!("[WASM] detect_min_max_format: no min/max pairs found in first {} transitions", check_limit);
+        // console_log!("[WASM] detect_min_max_format: no min/max pairs found in first {} transitions", check_limit);
         false
     }
 
@@ -2228,7 +2119,7 @@ if tile_missing_signals.is_empty() {
             ((1u64 << bit_count) - 1) << lsb
         };
         
-        console_log!("[WASM] extract_bits_from_transitions: msb={}, lsb={}, bit_count={}, mask={:#x}", msb, lsb, bit_count, mask);
+        // console_log!("[WASM] extract_bits_from_transitions: msb={}, lsb={}, bit_count={}, mask={:#x}", msb, lsb, bit_count, mask);
         
         let mut result = Vec::new();
         let mut last_value: Option<String> = None;
@@ -2259,7 +2150,7 @@ if tile_missing_signals.is_empty() {
             }
         }
         
-        console_log!("[WASM] extract_bits_from_transitions: {} transitions after dedup", result.len());
+        // console_log!("[WASM] extract_bits_from_transitions: {} transitions after dedup", result.len());
         result
     }
 
@@ -2427,8 +2318,8 @@ if tile_missing_signals.is_empty() {
     fn generate_min_max_segments(&self, transitions: &[Transition], width: u32, y: f64,
         signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>) {
         
-        console_log!("[WASM] generate_min_max_segments: viewport={}-{}, transitions={}", 
-            self.viewport.time_start, self.viewport.time_end, transitions.len());
+        // console_log!("[WASM] generate_min_max_segments: viewport={}-{}, transitions={}", 
+            // self.viewport.time_start, self.viewport.time_end, transitions.len());
 
         // Separate start value (boundary) from normal transitions
         let start_value = transitions.iter()
@@ -2626,8 +2517,8 @@ if tile_missing_signals.is_empty() {
     ) {
         const TILE_SPAN_MULTIPLIER: u32 = 256;
         
-        console_log!("[WASM] generate_lod_segments_from_buckets: {} tiles, viewport={}-{}",
-            bucket_data.len(), self.viewport.time_start, self.viewport.time_end);
+        // console_log!("[WASM] generate_lod_segments_from_buckets: {} tiles, viewport={}-{}",
+        //     bucket_data.len(), self.viewport.time_start, self.viewport.time_end);
         
         // Track current value across tiles for continuity
         let mut cross_tile_value: Option<String> = None;
@@ -2638,8 +2529,8 @@ if tile_missing_signals.is_empty() {
             let bucket_size = 1u64 << lod;
             let tile_span = bucket_size * TILE_SPAN_MULTIPLIER as u64;
             
-            console_log!("[WASM]   Processing tile {}: start={}, {} buckets, bucket_size={}, tile_span={}",
-                tile_idx, tile_start, buckets.len(), bucket_size, tile_span);
+            // console_log!("[WASM]   Processing tile {}: start={}, {} buckets, bucket_size={}, tile_span={}",
+            //     tile_idx, tile_start, buckets.len(), bucket_size, tile_span);
             
             // Get initial value for this tile
             // For first tile: need to find value at viewport_start according to spec Rule 2
@@ -2673,8 +2564,8 @@ if tile_missing_signals.is_empty() {
                 TILE_SPAN_MULTIPLIER - 1
             };
             
-            console_log!("[WASM]   Bucket range: {} to {} (viewport: {}-{})",
-                first_bucket_idx, last_bucket_idx, viewport_start_u64, viewport_end_u64);
+            // console_log!("[WASM]   Bucket range: {} to {} (viewport: {}-{})",
+            //     first_bucket_idx, last_bucket_idx, viewport_start_u64, viewport_end_u64);
             
             // Process each bucket in the tile that intersects with viewport
             for bucket_idx in first_bucket_idx..=last_bucket_idx {
@@ -2792,11 +2683,11 @@ if tile_missing_signals.is_empty() {
             // Store last value for cross-tile continuity
             cross_tile_value = Some(current_value.clone());
             
-            console_log!("[WASM]   Tile {} complete: {} segments generated, last_value={}", 
-                tile_idx, segments_in_tile, current_value);
+            // console_log!("[WASM]   Tile {} complete: {} segments generated, last_value={}", 
+            //     tile_idx, segments_in_tile, current_value);
         }
         
-        console_log!("[WASM] generate_lod_segments_from_buckets complete: total {} segments", segments.len());
+        // console_log!("[WASM] generate_lod_segments_from_buckets complete: total {} segments", segments.len());
     }
     
     /// Find the value at a specific time according to Rule 2
@@ -2819,8 +2710,8 @@ if tile_missing_signals.is_empty() {
         let bucket_idx = ((target_time - tile_start) / bucket_size) as u32;
         let bucket_start = tile_start + (bucket_idx as u64) * bucket_size;
         
-        console_log!("[WASM] find_value_at_time: target={}, bucket_idx={}, bucket_start={}",
-            target_time, bucket_idx, bucket_start);
+        // console_log!("[WASM] find_value_at_time: target={}, bucket_idx={}, bucket_start={}",
+        //     target_time, bucket_idx, bucket_start);
         
         // Check if target_time falls within a bucket (not at boundary)
         if target_time > bucket_start {
@@ -2835,7 +2726,7 @@ if tile_missing_signals.is_empty() {
                 } else {
                     bucket.first.value.clone()
                 };
-                console_log!("[WASM]   Found value in bucket {}: {}", bucket_idx, value);
+                // console_log!("[WASM]   Found value in bucket {}: {}", bucket_idx, value);
                 return value;
             }
             
@@ -2847,7 +2738,7 @@ if tile_missing_signals.is_empty() {
                     } else {
                         bucket.first.value.clone()
                     };
-                    console_log!("[WASM]   Found value in earlier bucket {}: {}", idx, value);
+                    // console_log!("[WASM]   Found value in earlier bucket {}: {}", idx, value);
                     return value;
                 }
             }
@@ -2855,7 +2746,7 @@ if tile_missing_signals.is_empty() {
             // Target is exactly at bucket boundary
             if let Some(bucket) = buckets.get(&bucket_idx) {
                 let value = bucket.first.value.clone();
-                console_log!("[WASM]   Found value at bucket boundary {}: {}", bucket_idx, value);
+                // console_log!("[WASM]   Found value at bucket boundary {}: {}", bucket_idx, value);
                 return value;
             }
             
@@ -2867,7 +2758,7 @@ if tile_missing_signals.is_empty() {
                     } else {
                         bucket.first.value.clone()
                     };
-                    console_log!("[WASM]   Found value in earlier bucket {}: {}", idx, value);
+                    // console_log!("[WASM]   Found value in earlier bucket {}: {}", idx, value);
                     return value;
                 }
             }
@@ -2875,14 +2766,14 @@ if tile_missing_signals.is_empty() {
         
         // No transitions found in current tile before target_time
         // Search backward into previous tiles
-        console_log!("[WASM]   No transition found in current tile, searching previous tiles...");
+        // console_log!("[WASM]   No transition found in current tile, searching previous tiles...");
         
         for prev_tile_idx in (0..tile_idx).rev() {
             let (prev_tile_start, prev_buckets) = &all_bucket_data[prev_tile_idx];
             let prev_tile_span = bucket_size * TILE_SPAN_MULTIPLIER as u64;
             
-            console_log!("[WASM]   Checking previous tile {}: start={}, buckets={}",
-                prev_tile_idx, prev_tile_start, prev_buckets.len());
+            // console_log!("[WASM]   Checking previous tile {}: start={}, buckets={}",
+            //     prev_tile_idx, prev_tile_start, prev_buckets.len());
             
             // Search from last bucket to first bucket in previous tile
             for bucket_idx in (0..TILE_SPAN_MULTIPLIER).rev() {
@@ -2892,8 +2783,8 @@ if tile_missing_signals.is_empty() {
                     } else {
                         bucket.first.value.clone()
                     };
-                    console_log!("[WASM]   Found value in previous tile {} bucket {}: {}",
-                        prev_tile_idx, bucket_idx, value);
+                    // console_log!("[WASM]   Found value in previous tile {} bucket {}: {}",
+                    //     prev_tile_idx, bucket_idx, value);
                     return value;
                 }
             }
@@ -2906,7 +2797,7 @@ if tile_missing_signals.is_empty() {
                 .map(|(_, _, _, value)| value.clone()))
             .unwrap_or_else(|| "0".to_string());
         
-        console_log!("[WASM]   Using tile start_value: {}", start_value);
+        // console_log!("[WASM]   Using tile start_value: {}", start_value);
         start_value
     }
 
@@ -3023,7 +2914,7 @@ if tile_missing_signals.is_empty() {
     /// Returns [prev_time, next_time] where null means no transition found
     /// Note: BOUNDARY_TIME_START (0xFFFFFFFFFFFFFFFF) is excluded from results
     pub fn find_transitions_around(&self, signal_name: &str, time: f64) -> JsValue {
-        console_log!("[WASM] find_transitions_around: signal='{}', time={}", signal_name, time);
+        // console_log!("[WASM] find_transitions_around: signal='{}', time={}", signal_name, time);
 
         if let Some(data) = self.signal_data.get(signal_name) {
             // Check if we have bucket_data (new LoD 1+ format)
@@ -3032,7 +2923,7 @@ if tile_missing_signals.is_empty() {
             }
             
             // Fall back to transitions (LoD 0 or old format)
-            console_log!("[WASM]   Found signal data, transitions count: {}", data.transitions.len());
+            // console_log!("[WASM]   Found signal data, transitions count: {}", data.transitions.len());
 
             let mut prev: Option<u64> = None;
             let mut next: Option<u64> = None;
@@ -3052,12 +2943,12 @@ if tile_missing_signals.is_empty() {
                 }
             }
 
-            console_log!("[WASM]   Result: prev={:?}, next={:?}", prev, next);
+            // console_log!("[WASM]   Result: prev={:?}, next={:?}", prev, next);
 
             let result = vec![prev, next];
             serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
         } else {
-            console_log!("[WASM]   Signal data not found in cache!");
+            // console_log!("[WASM]   Signal data not found in cache!");
             JsValue::NULL
         }
     }
@@ -3068,7 +2959,7 @@ if tile_missing_signals.is_empty() {
         let bucket_size = 1u64 << lod;
         let time_u64 = time as u64;
         
-        console_log!("[WASM]   Using bucket_data, lod={}, bucket_size={}", lod, bucket_size);
+        // console_log!("[WASM]   Using bucket_data, lod={}, bucket_size={}", lod, bucket_size);
         
         // Sort bucket_data by tile_start
         let mut sorted_bucket_data: Vec<(u64, &HashMap<u32, BucketData>)> = data.bucket_data
@@ -3104,7 +2995,7 @@ if tile_missing_signals.is_empty() {
         all_transition_times.sort();
         all_transition_times.dedup();
         
-        console_log!("[WASM]   Total transition times: {}", all_transition_times.len());
+        // console_log!("[WASM]   Total transition times: {}", all_transition_times.len());
         
         // Find prev and next
         let mut prev: Option<u64> = None;
@@ -3120,7 +3011,7 @@ if tile_missing_signals.is_empty() {
             }
         }
         
-        console_log!("[WASM]   Result from buckets: prev={:?}, next={:?}", prev, next);
+        // console_log!("[WASM]   Result from buckets: prev={:?}, next={:?}", prev, next);
         
         let result = vec![prev, next];
         serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
@@ -3133,8 +3024,8 @@ if tile_missing_signals.is_empty() {
     pub fn get_signal_value_at_time(&self, signal_name: &str, time: f64) -> JsValue {
         // Check if this is a bit extraction signal
         if let Some((parent_name, (msb, lsb))) = Self::parse_bit_extract(signal_name) {
-            console_log!("[WASM] get_signal_value_at_time: bit extraction '{}' -> parent '{}' [{}:{}]", 
-                signal_name, parent_name, msb, lsb);
+            // console_log!("[WASM] get_signal_value_at_time: bit extraction '{}' -> parent '{}' [{}:{}]", 
+            //     signal_name, parent_name, msb, lsb);
             
             // Get parent signal data
             if let Some(parent_data) = self.signal_data.get(&parent_name) {
@@ -3271,7 +3162,7 @@ if tile_missing_signals.is_empty() {
             }
         } else {
             // Signal data not cached
-            console_log!("[WASM] get_signal_value_at_time: No cached data for signal '{}'", signal_name);
+            // console_log!("[WASM] get_signal_value_at_time: No cached data for signal '{}'", signal_name);
             JsValue::NULL
         }
     }
