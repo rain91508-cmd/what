@@ -68,6 +68,10 @@ pub struct ServerConfig {
     /// 启动时自动清除所有缓存
     #[arg(long, default_value = "false")]
     pub clear_cache_on_startup: bool,
+
+    /// 启用详细调试输出（仅在 log_level=debug 时生效）
+    #[arg(long, default_value = "false")]
+    pub verbose: bool,
 }
 
 impl ServerConfig {
@@ -151,6 +155,7 @@ impl Default for ServerConfig {
             fst_backend: "fstapi".to_string(),
             web_dir: None,
             clear_cache_on_startup: false,
+            verbose: false,
         }
     }
 }
