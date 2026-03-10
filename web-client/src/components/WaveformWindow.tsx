@@ -660,12 +660,9 @@ export function WaveformWindow({
         }
 
         try {
-          // Fetch data for all signals in batch (max 256 per request)
+          // 使用合并函数：获取数据并生成 segments（内部自动处理缓存）
           const signalNames = signalList.map(s => s.name);
-          await wasmProvider.fetch_signals_data_batch(signalNames);
-          
-          // Get segments from WASM provider
-          const segmentsJs = wasmProvider.get_segments();
+          const segmentsJs = await wasmProvider.fetch_and_get_segments(signalNames);
           segments = segmentsJs;
           cachedSegmentsRef.current = segments;
           
