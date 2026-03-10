@@ -219,7 +219,7 @@ export function updateProviderSettings(
   provider.signal_prefix = signalPrefix;
   provider.space_before_bracket = spaceBeforeBracket;
   
-  console.log(`[WASM] Updated provider settings: prefix='${signalPrefix}', spaceBeforeBracket=${spaceBeforeBracket}`);
+  // console.log(`[WASM] Updated provider settings: prefix='${signalPrefix}', spaceBeforeBracket=${spaceBeforeBracket}`);
 }
 
 /**

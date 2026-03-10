@@ -180,6 +180,13 @@ export function WaveformWindow({
   const ioDropdownRef = useRef<HTMLDivElement>(null);
   const [editingGroup, setEditingGroup] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  // 防抖/节流相关 refs
+  const renderThrottleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastRenderTimeRef = useRef<number>(0);
+  const selectionUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // 使用 ref 跟踪 isPanning，避免函数重新创建
+  const isPanningRef = useRef(false);
 
   // 拖动选择放大功能的状态
   const [isSelecting, setIsSelecting] = useState(false);
@@ -191,6 +198,8 @@ export function WaveformWindow({
   const selectionStartRef = useRef<number | null>(null);
   const panStartXRef = useRef<number | null>(null); // 平移开始时的鼠标X位置
   const panStartTimeStartRef = useRef<number>(0); // 平移开始时的viewport timeStart
+  const pendingViewportUpdateRef = useRef<TimeRangeOnly | null>(null); // 待更新的 viewport
+  const panUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null); // 拖动更新的 throttle timeout
 
   // 使用 props 中的列宽，如果没有则使用默认值
   const widths = columnWidths || DEFAULT_COLUMN_WIDTHS;
@@ -301,6 +310,113 @@ export function WaveformWindow({
 
   // 使用 ref 防止并发渲染
   const isRenderingRef = useRef(false);
+  
+  // 使用 ref 跟踪上一次渲染的参数，避免不必要的重复渲染
+  const lastRenderParamsRef = useRef<{
+    signalPrefix: string;
+    spaceBeforeBracket: boolean;
+    viewportTimeStart: number;
+    viewportTimeEnd: number;
+    canvasWidth: number;
+    canvasHeight: number;
+    signalListHash: string;
+  }>({
+    signalPrefix: '',
+    spaceBeforeBracket: false,
+    viewportTimeStart: 0,
+    viewportTimeEnd: 0,
+    canvasWidth: 0,
+    canvasHeight: 0,
+    signalListHash: '',
+  });
+
+  // 使用 ref 跟踪上一次的 WASM provider 设置
+  const lastWasmSettingsRef = useRef<{
+    signalPrefix: string;
+    spaceBeforeBracket: boolean;
+    signalListHash: string;
+    viewportTimeStart: number;
+    viewportTimeEnd: number;
+    canvasWidth: number;
+    canvasHeight: number;
+  }>({
+    signalPrefix: '',
+    spaceBeforeBracket: false,
+    signalListHash: '',
+    viewportTimeStart: 0,
+    viewportTimeEnd: 0,
+    canvasWidth: 0,
+    canvasHeight: 0,
+  });
+
+  // 添加 segments 缓存
+  const cachedSegmentsRef = useRef<any[]>([]);
+  const lastSegmentsParamsRef = useRef<{
+    signalListHash: string;
+    viewportTimeStart: number;
+    viewportTimeEnd: number;
+    canvasWidth: number;
+    canvasHeight: number;
+  }>({
+    signalListHash: '',
+    viewportTimeStart: 0,
+    viewportTimeEnd: 0,
+    canvasWidth: 0,
+    canvasHeight: 0,
+  });
+  
+  // 拖动时记录上一次计算 segments 时的 viewport
+  const lastSegmentsViewportRef = useRef<{
+    timeStart: number;
+    timeEnd: number;
+  }>({
+    timeStart: 0,
+    timeEnd: 0,
+  });
+
+  // 同步 isPanning 到 ref
+  useEffect(() => {
+    isPanningRef.current = isPanning;
+  }, [isPanning]);
+
+  // 节流渲染函数 - 拖动时使用更长的节流间隔
+  const throttledRenderWaveform = useCallback(() => {
+    const now = Date.now();
+    const THROTTLE_INTERVAL = isPanningRef.current ? 250 : 80; // 拖动时250ms，正常80ms
+
+    if (now - lastRenderTimeRef.current >= THROTTLE_INTERVAL) {
+      lastRenderTimeRef.current = now;
+      if (renderWaveformRef.current) {
+        renderWaveformRef.current().catch(console.error);
+      }
+    } else {
+      // 如果在节流间隔内，设置 pending 并等待
+      if (renderThrottleTimeoutRef.current) {
+        clearTimeout(renderThrottleTimeoutRef.current);
+      }
+      renderThrottleTimeoutRef.current = setTimeout(() => {
+        lastRenderTimeRef.current = Date.now();
+        if (renderWaveformRef.current) {
+          renderWaveformRef.current().catch(console.error);
+        }
+      }, THROTTLE_INTERVAL - (now - lastRenderTimeRef.current));
+    }
+  }, []);
+
+  // 清理所有定时器
+  useEffect(() => {
+    return () => {
+      if (renderThrottleTimeoutRef.current) {
+        clearTimeout(renderThrottleTimeoutRef.current);
+      }
+      if (panUpdateTimeoutRef.current) {
+        clearTimeout(panUpdateTimeoutRef.current);
+      }
+      if (selectionUpdateTimeoutRef.current) {
+        clearTimeout(selectionUpdateTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // renderWaveform 定义在 handleResize useEffect 之前，避免暂时性死区错误
   // 使用 ref 来存储函数，避免 useCallback 导致的依赖循环
@@ -317,18 +433,23 @@ export function WaveformWindow({
       if (!canvasRef.current || !containerRef.current) return;
 
       // Update canvas dimensions from container
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const width = containerRect.width;
-    const height = containerRect.height - 30; // Subtract ruler height
-    canvasRef.current.width = width;
-    canvasRef.current.height = height;
+      const containerRect = containerRef.current.getBoundingClientRect();
+      const width = containerRect.width;
+      const height = containerRect.height - 30; // Subtract ruler height
+      
+      // 只在尺寸真的变化时才设置 canvas 的 width 和 height，避免触发 ResizeObserver
+      if (Math.abs(canvasRef.current.width - width) > 0.5 || 
+          Math.abs(canvasRef.current.height - height) > 0.5) {
+        canvasRef.current.width = width;
+        canvasRef.current.height = height;
+      }
 
-    // Build visible signal list from treeNodes
-    // UI 决定哪些信号可见，以及它们的 row 顺序
-    const signalList: SignalInfo[] = [];
-    let currentRow = 0;
+      // Build visible signal list from treeNodes
+      // UI 决定哪些信号可见，以及它们的 row 顺序
+      const signalList: SignalInfo[] = [];
+      let currentRow = 0;
 
-    treeNodes.forEach((node) => {
+      treeNodes.forEach((node) => {
       if (node.type === 'group') {
         // Group row - no waveform, just increment row counter
         currentRow++;
@@ -385,6 +506,36 @@ export function WaveformWindow({
       }
     });
 
+    // 生成 signalList 的哈希值用于检测变化
+    const signalListHash = signalList.map(s => `${s.name}-${s.row}-${s.width}`).join('|');
+    
+    // 检查参数是否真的有变化，如果没有变化则直接返回，避免重复渲染
+    const lastParams = lastRenderParamsRef.current;
+    const hasParamsChanged = 
+      lastParams.signalPrefix !== _signalPrefix ||
+      lastParams.spaceBeforeBracket !== _spaceBeforeBracket ||
+      Math.abs(lastParams.viewportTimeStart - viewport.timeStart) > 0.1 ||
+      Math.abs(lastParams.viewportTimeEnd - viewport.timeEnd) > 0.1 ||
+      Math.abs(lastParams.canvasWidth - width) > 0.5 ||
+      Math.abs(lastParams.canvasHeight - height) > 0.5 ||
+      lastParams.signalListHash !== signalListHash;
+    
+    if (!hasParamsChanged) {
+      // 参数没有变化，直接返回
+      return;
+    }
+    
+    // 更新上一次渲染的参数
+    lastRenderParamsRef.current = {
+      signalPrefix: _signalPrefix,
+      spaceBeforeBracket: _spaceBeforeBracket,
+      viewportTimeStart: viewport.timeStart,
+      viewportTimeEnd: viewport.timeEnd,
+      canvasWidth: width,
+      canvasHeight: height,
+      signalListHash,
+    };
+
     let segments;
 
 
@@ -403,50 +554,160 @@ export function WaveformWindow({
     } else if (wasmProviderRef.current) {
       // Use WASM provider
       const wasmProvider = wasmProviderRef.current;
-
-      // Build WASM signals with draw_sig_id using SignalIdManager
-      // Use global_id for draw_sig_id (per waveform, as per spec)
-      const uiSignals = signalList.map((s) => ({
-        global_id: s.globalId,
-        name: s.name,
-        row: s.row,
-        width: s.width || 1,
-      }));
+      const lastWasmSettings = lastWasmSettingsRef.current;
       
-      try {
-        // Update provider settings (prefix and spaceBeforeBracket)
-        // This is important for correct signal name conversion when fetching data
-        updateProviderSettings(_signalPrefix, _spaceBeforeBracket);
-        console.log(`[WaveformWindow] Updated provider settings: prefix='${_signalPrefix}', spaceBeforeBracket=${_spaceBeforeBracket}`);
-        
-        // Build signals with draw_sig_id
-        const wasmSignalsWithId = await buildWasmSignals(uiSignals, _waveformName || 'unknown');
-        console.log(`[WaveformWindow] Built ${wasmSignalsWithId.length} WASM signals with draw_sig_id`);
-        
-        // Set signals with draw_sig_id in WASM provider
-        wasmProvider.set_draw_list(wasmSignalsWithId);
-        
-        // Set display format (TODO: get from UI state when format selector is implemented)
-        wasmProvider.display_format = 'hex';
+      // 检查 WASM 相关设置是否真的变化了
+      const hasSignalPrefixChanged = lastWasmSettings.signalPrefix !== _signalPrefix;
+      const hasSpaceBeforeBracketChanged = lastWasmSettings.spaceBeforeBracket !== _spaceBeforeBracket;
+      const hasSignalListChanged = lastWasmSettings.signalListHash !== signalListHash;
+      const hasViewportChanged = Math.abs(lastWasmSettings.viewportTimeStart - viewport.timeStart) > 0.1 ||
+                                 Math.abs(lastWasmSettings.viewportTimeEnd - viewport.timeEnd) > 0.1;
+      const hasCanvasSizeChanged = Math.abs(lastWasmSettings.canvasWidth - width) > 0.5 ||
+                                    Math.abs(lastWasmSettings.canvasHeight - height) > 0.5;
 
-        // Set viewport and canvas dimensions
-        wasmProvider.set_viewport(viewport.timeStart, viewport.timeEnd);
-        wasmProvider.set_canvas_dimensions(width, height, 24);  // rowHeight - must match CSS .waveform-signal-item height
+      // 检查 segments 参数是否变化
+      const lastSegParams = lastSegmentsParamsRef.current;
+      const hasSegParamsChanged = 
+        lastSegParams.signalListHash !== signalListHash ||
+        Math.abs(lastSegParams.viewportTimeStart - viewport.timeStart) > 0.1 ||
+        Math.abs(lastSegParams.viewportTimeEnd - viewport.timeEnd) > 0.1 ||
+        Math.abs(lastSegParams.canvasWidth - width) > 0.5 ||
+        Math.abs(lastSegParams.canvasHeight - height) > 0.5;
 
-        // Fetch data for all signals in batch (max 256 per request)
-        const signalNames = signalList.map(s => s.name);
-        console.log(`[WaveformWindow] Fetching ${signalNames.length} signals in batch`);
-        await wasmProvider.fetch_signals_data_batch(signalNames);
+      // 拖动时只做最必要的操作，避免耗时的 WASM 调用
+      if (isPanningRef.current) {
+        // 拖动时：只更新 viewport 和获取 segments，跳过其他操作
+        if (hasViewportChanged || hasCanvasSizeChanged) {
+          wasmProvider.set_viewport(viewport.timeStart, viewport.timeEnd);
+          if (hasCanvasSizeChanged) {
+            wasmProvider.set_canvas_dimensions(width, height, 24);
+          }
+        }
         
-        // Get segments from WASM provider
-        const segmentsJs = wasmProvider.get_segments();
-        segments = segmentsJs;
+        // 拖动时：检查 viewport 变化是否超过阈值（超过 10% 才重新计算 segments）
+        const timeSpan = viewport.timeEnd - viewport.timeStart;
+        const viewportDelta = Math.abs(viewport.timeStart - lastSegmentsViewportRef.current.timeStart);
+        const viewportChangeThreshold = Math.max(timeSpan * 0.1, 10); // 变化超过 10% 或 10 个时间单位
+        
+        const shouldRecalculateSegments = 
+          // 如果 canvas 尺寸或信号列表变化，必须重新计算
+          lastSegParams.signalListHash !== signalListHash ||
+          Math.abs(lastSegParams.canvasWidth - width) > 0.5 ||
+          Math.abs(lastSegParams.canvasHeight - height) > 0.5 ||
+          // 如果 viewport 变化超过阈值
+          viewportDelta > viewportChangeThreshold;
+        
+        if (shouldRecalculateSegments) {
+          const segmentsJs = wasmProvider.get_segments();
+          segments = segmentsJs;
+          cachedSegmentsRef.current = segments;
+          
+          // 更新 segments 缓存参数
+          lastSegmentsParamsRef.current = {
+            signalListHash: signalListHash,
+            viewportTimeStart: viewport.timeStart,
+            viewportTimeEnd: viewport.timeEnd,
+            canvasWidth: width,
+            canvasHeight: height,
+          };
+          
+          // 更新上一次计算 segments 时的 viewport
+          lastSegmentsViewportRef.current = {
+            timeStart: viewport.timeStart,
+            timeEnd: viewport.timeEnd,
+          };
+        } else {
+          // 使用缓存的 segments
+          segments = cachedSegmentsRef.current;
+        }
+        
+        // 更新 lastWasmSettingsRef 中的 viewport 和 canvas 尺寸
+        lastWasmSettingsRef.current = {
+          ...lastWasmSettingsRef.current,
+          viewportTimeStart: viewport.timeStart,
+          viewportTimeEnd: viewport.timeEnd,
+          canvasWidth: width,
+          canvasHeight: height,
+        };
+      } else {
+        // 非拖动时：完整的 WASM 调用流程
+        // 只有当信号列表或相关设置变化时才重新构建信号列表
+        if (hasSignalListChanged || hasSignalPrefixChanged || hasSpaceBeforeBracketChanged) {
+          // Build WASM signals with draw_sig_id using SignalIdManager
+          // Use global_id for draw_sig_id (per waveform, as per spec)
+          const uiSignals = signalList.map((s) => ({
+            global_id: s.globalId,
+            name: s.name,
+            row: s.row,
+            width: s.width || 1,
+          }));
+          
+          try {
+            // Update provider settings (prefix and spaceBeforeBracket) - only when changed
+            if (hasSignalPrefixChanged || hasSpaceBeforeBracketChanged) {
+              updateProviderSettings(_signalPrefix, _spaceBeforeBracket);
+            }
+            
+            // Build signals with draw_sig_id
+            const wasmSignalsWithId = await buildWasmSignals(uiSignals, _waveformName || 'unknown');
+            
+            // Set signals with draw_sig_id in WASM provider
+            wasmProvider.set_draw_list(wasmSignalsWithId);
+            
+            // Set display format (TODO: get from UI state when format selector is implemented)
+            wasmProvider.display_format = 'hex';
+          } catch (error) {
+            console.error(`[WaveformWindow] Failed to setup signals:`, error);
+          }
+        }
 
-        console.log(`[WaveformWindow] Got ${segments.length} segments from WASM provider`);
-      } catch (error) {
-        console.error(`[WaveformWindow] Failed to process signals:`, error);
-        // Fallback to empty segments
-        segments = [];
+        // 只有当 viewport 或 canvas 尺寸变化时才更新
+        if (hasViewportChanged || hasCanvasSizeChanged) {
+          // Set viewport and canvas dimensions
+          wasmProvider.set_viewport(viewport.timeStart, viewport.timeEnd);
+          wasmProvider.set_canvas_dimensions(width, height, 24);  // rowHeight - must match CSS .waveform-signal-item height
+        }
+
+        try {
+          // Fetch data for all signals in batch (max 256 per request)
+          const signalNames = signalList.map(s => s.name);
+          await wasmProvider.fetch_signals_data_batch(signalNames);
+          
+          // 只有在 segments 参数变化时才调用 get_segments
+          if (hasSegParamsChanged) {
+            // Get segments from WASM provider
+            const segmentsJs = wasmProvider.get_segments();
+            segments = segmentsJs;
+            cachedSegmentsRef.current = segments;
+            
+            // 更新 segments 缓存参数
+            lastSegmentsParamsRef.current = {
+              signalListHash: signalListHash,
+              viewportTimeStart: viewport.timeStart,
+              viewportTimeEnd: viewport.timeEnd,
+              canvasWidth: width,
+              canvasHeight: height,
+            };
+          } else {
+            // 使用缓存的 segments
+            segments = cachedSegmentsRef.current;
+          }
+
+          // 更新 lastWasmSettingsRef
+          lastWasmSettingsRef.current = {
+            signalPrefix: _signalPrefix,
+            spaceBeforeBracket: _spaceBeforeBracket,
+            signalListHash: signalListHash,
+            viewportTimeStart: viewport.timeStart,
+            viewportTimeEnd: viewport.timeEnd,
+            canvasWidth: width,
+            canvasHeight: height,
+          };
+        } catch (error) {
+          console.error(`[WaveformWindow] Failed to process signals:`, error);
+          // Fallback to empty segments
+          segments = [];
+        }
       }
     } else {
       // Fallback to mock data if WASM not available
@@ -578,20 +839,30 @@ export function WaveformWindow({
 
   // 监听 viewport 变化，重新渲染波形
   useEffect(() => {
-    if (canvasWidth > 0 && renderWaveformRef.current) {
-      renderWaveformRef.current().catch(console.error);
+    if (canvasWidth > 0) {
+      throttledRenderWaveform();
     }
-    // 不依赖 renderWaveform，使用 ref 避免循环
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewport.timeStart, viewport.timeEnd, canvasWidth, groups, expandedSignals]);
+  }, [viewport.timeStart, viewport.timeEnd, canvasWidth, groups, expandedSignals, throttledRenderWaveform]);
 
   // 监听 timeConfig 变化，重新渲染波形（影响标尺显示）
   useEffect(() => {
-    if (canvasWidth > 0 && renderWaveformRef.current) {
-      renderWaveformRef.current().catch(console.error);
+    if (canvasWidth > 0) {
+      throttledRenderWaveform();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeConfig]);
+  }, [timeConfig, throttledRenderWaveform]);
+
+  // 监听拖动状态变化，拖动结束后触发完整的数据获取
+  useEffect(() => {
+    if (!isPanning && canvasWidth > 0) {
+      // 拖动结束，等待一小段时间后触发完整渲染（避免和节流冲突）
+      const timeoutId = setTimeout(() => {
+        if (renderWaveformRef.current) {
+          renderWaveformRef.current().catch(console.error);
+        }
+      }, 100);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [isPanning, canvasWidth]);
 
   // Cleanup mouse timeout on unmount
   useEffect(() => {
@@ -615,13 +886,13 @@ export function WaveformWindow({
       for (const signal of displaySignals) {
         try {
           const signalName = signal.fullName || signal.name;
-          console.log(`[WaveformWindow] Getting value for signal: ${signalName} at time ${cursor.position}`);
+          // console.log(`[WaveformWindow] Getting value for signal: ${signalName} at time ${cursor.position}`);
           const valueInfo = wasmProvider.get_signal_value_at_time(signalName, cursor.position);
-          console.log(`[WaveformWindow] Value info for ${signalName}:`, valueInfo);
+          // console.log(`[WaveformWindow] Value info for ${signalName}:`, valueInfo);
           if (valueInfo && typeof valueInfo === 'object') {
             // ValueInfo object has displayStr field (camelCase from WASM serde)
             const displayStr = (valueInfo as any).displayStr || (valueInfo as any).display_str || '0x0';
-            console.log(`[WaveformWindow] Got value for ${signalName}: ${displayStr}`);
+            // console.log(`[WaveformWindow] Got value for ${signalName}: ${displayStr}`);
             values.set(signalName, displayStr);
 
             // For expanded multi-bit signals, also get individual bit values
@@ -678,6 +949,12 @@ export function WaveformWindow({
       panStartXRef.current = x;
       panStartTimeStartRef.current = viewport.timeStart;
       
+      // 初始化上一次计算 segments 时的 viewport
+      lastSegmentsViewportRef.current = {
+        timeStart: viewport.timeStart,
+        timeEnd: viewport.timeEnd,
+      };
+      
       // 同时设置 cursor 位置
       const canvasWidth = rect.width;
       const clickTime = viewport.timeStart + (x / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
@@ -712,20 +989,20 @@ export function WaveformWindow({
         const signalName = displaySignals[0].fullName || displaySignals[0].name;
 
         try {
-          console.log(`[WaveformWindow] Finding transitions for signal: ${signalName} at time ${clickTime}`);
+          // console.log(`[WaveformWindow] Finding transitions for signal: ${signalName} at time ${clickTime}`);
           const transitions = wasmProvider.find_transitions_around(signalName, clickTime);
-          console.log(`[WaveformWindow] Transitions result:`, transitions);
+          // console.log(`[WaveformWindow] Transitions result:`, transitions);
           if (transitions && Array.isArray(transitions) && transitions.length >= 2) {
             const prev = transitions[0] as number | null;
             const next = transitions[1] as number | null;
-            console.log(`[WaveformWindow] prev=${prev}, next=${next}, threshold=${snapThreshold}`);
+            // console.log(`[WaveformWindow] prev=${prev}, next=${next}, threshold=${snapThreshold}`);
 
             if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
               finalTime = prev;
-              console.log(`[WaveformWindow] Snapped to prev: ${finalTime}`);
+              // console.log(`[WaveformWindow] Snapped to prev: ${finalTime}`);
             } else if (next !== null && Math.abs(next - clickTime) <= snapThreshold) {
               finalTime = next;
-              console.log(`[WaveformWindow] Snapped to next: ${finalTime}`);
+              // console.log(`[WaveformWindow] Snapped to next: ${finalTime}`);
             }
           }
         } catch (error) {
@@ -745,6 +1022,10 @@ export function WaveformWindow({
     }
   }, [viewport, setCursor, useMockData, displaySignals, wasmProviderRef]);
 
+  // 添加 refs 来避免频繁的 state 更新
+  const selectionEndXRef = useRef<number | null>(null);
+  const selectionEndYRef = useRef<number | null>(null);
+
   // 鼠标移动：更新选择区域
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current) return;
@@ -758,22 +1039,32 @@ export function WaveformWindow({
     // Queue rAF-throttled update for rendering
     pendingMouseXRef.current = x;
 
-    // Also update mouseX for other purposes (like click handling and info bar)
+    // 只在非拖动时更新 displayMouseX（用于 info bar）
+    if (!isPanning && !isSelecting) {
+      setDisplayMouseX(x);
+    }
     setMouseX(x);
-    setDisplayMouseX(x);
 
     // Update canvasWidth to ensure alignment (in case it changed)
     if (rect.width !== canvasWidth) {
       setCanvasWidth(rect.width);
     }
 
-    // 如果在选择中，更新选择结束位置
+    // 如果在选择中，使用 ref 更新选择结束位置（避免频繁 re-render）
     if (isSelecting) {
-      setSelectionEndX(x);
-      setSelectionEndY(y);
+      selectionEndXRef.current = x;
+      selectionEndYRef.current = y;
+      // 使用 rAF 来批量更新 state
+      if (!selectionUpdateTimeoutRef.current) {
+        selectionUpdateTimeoutRef.current = setTimeout(() => {
+          setSelectionEndX(selectionEndXRef.current);
+          setSelectionEndY(selectionEndYRef.current);
+          selectionUpdateTimeoutRef.current = null;
+        }, 16); // 约 60fps
+      }
     }
     
-    // 如果在平移中，更新 viewport
+    // 如果在平移中，计算新的 viewport 但使用 throttle 来避免频繁更新
     if (isPanning && panStartXRef.current !== null && onViewportChange) {
       const canvasWidth = rect.width;
       const deltaX = x - panStartXRef.current;
@@ -787,24 +1078,68 @@ export function WaveformWindow({
       // 使用 sanity 函数验证
       const sanitized = sanitizeTimeRange(newTimeStart, newTimeEnd, waveformRange);
       
-      // 更新 viewport
-      onViewportChange({
+      // 保存待更新的 viewport
+      pendingViewportUpdateRef.current = {
         timeStart: sanitized.timeStart,
         timeEnd: sanitized.timeEnd,
-      });
+      };
+      
+      // 使用 throttle 更新 viewport，避免频繁触发 re-render
+      if (!panUpdateTimeoutRef.current) {
+        panUpdateTimeoutRef.current = setTimeout(() => {
+          if (pendingViewportUpdateRef.current && onViewportChange) {
+            onViewportChange(pendingViewportUpdateRef.current);
+            pendingViewportUpdateRef.current = null;
+          }
+          panUpdateTimeoutRef.current = null;
+        }, 100); // 100ms 更新一次
+      }
     }
     
     // 注意：不在这里更新 cursor，只在单击时更新
   }, [viewport, isSelecting, isPanning, canvasWidth, onViewportChange, waveformRange]);
 
+  // 清理拖动相关定时器
+  const cleanupPanTimeout = useCallback(() => {
+    if (panUpdateTimeoutRef.current) {
+      clearTimeout(panUpdateTimeoutRef.current);
+      panUpdateTimeoutRef.current = null;
+    }
+    // 如果有待更新的 viewport，在清理前最后更新一次
+    if (pendingViewportUpdateRef.current && onViewportChange) {
+      onViewportChange(pendingViewportUpdateRef.current);
+      pendingViewportUpdateRef.current = null;
+    }
+  }, [onViewportChange]);
+
+  // 清理选择区域更新定时器
+  const cleanupSelectionTimeout = useCallback(() => {
+    if (selectionUpdateTimeoutRef.current) {
+      clearTimeout(selectionUpdateTimeoutRef.current);
+      selectionUpdateTimeoutRef.current = null;
+    }
+    // 确保最终的选择区域状态更新
+    if (selectionEndXRef.current !== null) {
+      setSelectionEndX(selectionEndXRef.current);
+    }
+    if (selectionEndYRef.current !== null) {
+      setSelectionEndY(selectionEndYRef.current);
+    }
+  }, []);
+
   // 鼠标释放：结束选择/平移并处理相应操作（cursor 已在 mousedown 时设置）
   const handleCanvasMouseUp = useCallback(() => {
     // 处理平移结束
     if (isPanning) {
+      // 先清理定时器并确保最终 viewport 更新
+      cleanupPanTimeout();
       setIsPanning(false);
       panStartXRef.current = null;
       return;
     }
+    
+    // 清理选择区域更新定时器
+    cleanupSelectionTimeout();
     
     if (!isSelecting || !canvasRef.current) return;
 
@@ -878,7 +1213,7 @@ export function WaveformWindow({
     setSelectionEndX(null);
     setSelectionEndY(null);
     selectionStartRef.current = null;
-  }, [isSelecting, isPanning, selectionStartX, selectionStartY, selectionEndX, selectionEndY, viewport, setViewport, cursor, waveformRange]);
+  }, [isSelecting, isPanning, selectionStartX, selectionStartY, selectionEndX, selectionEndY, viewport, setViewport, cursor, waveformRange, cleanupPanTimeout, cleanupSelectionTimeout]);
 
   // Use refs for all cursor state to avoid dependency on React state in rAF loop
   const mousePosRef = useRef<number | null>(null);
@@ -913,10 +1248,16 @@ export function WaveformWindow({
     
     // 如果正在平移，取消平移状态
     if (isPanning) {
+      cleanupPanTimeout();
       setIsPanning(false);
       panStartXRef.current = null;
     }
-  }, [isPanning]);
+    
+    // 清理选择区域更新定时器
+    if (isSelecting) {
+      cleanupSelectionTimeout();
+    }
+  }, [isPanning, isSelecting, cleanupPanTimeout, cleanupSelectionTimeout]);
 
   const handleColumnResize = (column: 'hierarchy' | 'name' | 'value', e: React.MouseEvent) => {
     e.preventDefault();

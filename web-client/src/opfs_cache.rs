@@ -122,30 +122,6 @@ pub struct GroupData {
     pub signals: Vec<SignalData>,
 }
 
-/// Cache statistics
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CacheStats {
-    pub memory_hits: u32,
-    pub opfs_hits: u32,
-    pub misses: u32,
-}
-
-/// Missing block info for server request
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MissingBlock {
-    pub lod: u32,
-    pub tile: u64,
-    pub group: u32,
-    pub draw_sig_ids: Vec<u32>,
-}
-
-/// Prepare data result
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PrepareDataResult {
-    pub missing_blocks: Vec<MissingBlock>,
-    pub cache_stats: CacheStats,
-}
-
 // =============================================================================
 // Group Bin File Format
 // =============================================================================
@@ -692,7 +668,7 @@ impl OpfsCacheManager {
         // 1. Check memory cache (if enabled)
         if self.memory_cache_enabled {
             if let Some(data) = self.memory_cache.get(&path) {
-                console_log!("[OpfsCache] Memory hit: {}", path);
+                // console_log!("[OpfsCache] Memory hit: {}", path);
                 return Ok(Some(data.clone()));
             }
         }
@@ -700,7 +676,7 @@ impl OpfsCacheManager {
         // 2. Check OPFS (if enabled)
         if self.enabled {
             if let Some(ref opfs_read) = self.opfs_read {
-                console_log!("[OpfsCache] OPFS read: {}", path);
+                // console_log!("[OpfsCache] OPFS read: {}", path);
 
                 // Call JS callback: (path: string) -> Promise<Uint8Array | null>
                 let this = JsValue::NULL;
@@ -713,7 +689,7 @@ impl OpfsCacheManager {
 
                 // Check if null
                 if data_js.is_null() || data_js.is_undefined() {
-                    console_log!("[OpfsCache] OPFS miss: {}", path);
+                    // console_log!("[OpfsCache] OPFS miss: {}", path);
                     return Ok(None);
                 }
 
@@ -725,7 +701,7 @@ impl OpfsCacheManager {
                 // Store in memory cache
                 self.memory_cache.set(path, data.clone());
 
-                console_log!("[OpfsCache] OPFS hit: {}, size: {}", block.to_path(), data.len());
+                // console_log!("[OpfsCache] OPFS hit: {}, size: {}", block.to_path(), data.len());
                 return Ok(Some(data));
             }
         }
@@ -745,7 +721,7 @@ impl OpfsCacheManager {
         // Write to OPFS (if enabled)
         if self.enabled {
             if let Some(ref opfs_write) = self.opfs_write {
-                console_log!("[OpfsCache] OPFS write: {}, size: {}", path, data.len());
+                // console_log!("[OpfsCache] OPFS write: {}, size: {}", path, data.len());
 
                 // Call JS callback: (path: string, data: Uint8Array) -> Promise<()>
                 let this = JsValue::NULL;
@@ -794,73 +770,6 @@ impl OpfsCacheManager {
     pub fn get_memory_stats(&self) -> (usize, usize) {
         self.memory_cache.stats()
     }
-}
-
-// =============================================================================
-// Helper Functions
-// =============================================================================
-
-/// Calculate required data blocks for given signals and viewport
-pub fn compute_required_blocks(
-    signals: &[SignalWithId],
-    time_start: u64,
-    time_end: u64,
-    lod: u32,
-) -> Vec<DataBlock> {
-    let tile_span = OpfsCacheManager::get_tile_span(lod);
-    
-    // Calculate tile range
-    let start_tile = time_start / tile_span;
-    let end_tile = time_end / tile_span;
-    
-    web_sys::console::log_1(&format!(
-        "[OPFS] compute_required_blocks: signals={}, time={}-{}, lod={}, tile_span={}",
-        signals.len(), time_start, time_end, lod, tile_span
-    ).into());
-    web_sys::console::log_1(&format!(
-        "[OPFS]   Tile range: {} to {} (tiles: {})",
-        start_tile, end_tile, end_tile - start_tile + 1
-    ).into());
-
-    // Collect unique groups
-    let mut groups: Vec<u32> = signals
-        .iter()
-        .map(|s| {
-            let group_id = OpfsCacheManager::get_group_id(s.draw_sig_id);
-            web_sys::console::log_1(&format!(
-                "[OPFS]   Signal '{}': draw_sig_id={} -> group_id={}",
-                s.name, s.draw_sig_id, group_id
-            ).into());
-            group_id
-        })
-        .collect();
-    groups.sort_unstable();
-    groups.dedup();
-    
-    web_sys::console::log_1(&format!(
-        "[OPFS]   Unique groups: {:?} (count: {})",
-        groups, groups.len()
-    ).into());
-
-    // Generate all block combinations
-    let mut blocks = Vec::new();
-    for tile in start_tile..=end_tile {
-        for &group in &groups {
-            let block = DataBlock { lod, tile, group };
-            web_sys::console::log_1(&format!(
-                "[OPFS]   Required block: lod={}, tile={}, group={}",
-                lod, tile, group
-            ).into());
-            blocks.push(block);
-        }
-    }
-    
-    web_sys::console::log_1(&format!(
-        "[OPFS]   Total blocks to check: {}",
-        blocks.len()
-    ).into());
-
-    blocks
 }
 
 #[cfg(test)]
