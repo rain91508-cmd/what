@@ -1289,107 +1289,6 @@ if tile_missing_signals.is_empty() {
         self.get_segments()
     }
 
-    /// Internal implementation of get_segments (without wasm_bindgen)
-    fn get_segments_internal(&self) -> Result<JsValue, JsValue> {
-        if self.signals.is_empty() {
-            return serde_wasm_bindgen::to_value(&Vec::<RenderSegment>::new())
-                .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)));
-        }
-
-        let mut segments = Vec::new();
-        let time_range = self.viewport.time_end - self.viewport.time_start;
-
-        for signal in self.signals.iter() {
-            let y = 20.0 + signal.row as f64 * self.row_height + self.row_height / 2.0;
-
-            if let Some((ref parent_name, (msb, lsb))) = signal.bit_extract {
-                if let Some(parent_data) = self.signal_data.get(parent_name) {
-                    let extracted_transitions = self.extract_bits_from_transitions(
-                        &parent_data.transitions, parent_data.width, msb, lsb);
-                    
-                    let width = if msb == lsb { 1 } else { msb - lsb + 1 };
-                    
-                    let is_lod_min_max = self.detect_min_max_format(&extracted_transitions);
-                    if is_lod_min_max {
-                        self.generate_min_max_segments(&extracted_transitions, width, y, &signal.name,
-                            time_range, &mut segments);
-                    } else {
-                        self.generate_normal_segments(&extracted_transitions, width, y, &signal.name,
-                            time_range, &mut segments);
-                    }
-                }
-                continue;
-            }
-
-            if let Some(data) = self.signal_data.get(&signal.name) {
-                if !data.bucket_data.is_empty() {
-                    self.generate_lod_segments_from_buckets(
-                        &data.bucket_data,
-                        data.width,
-                        y,
-                        &signal.name,
-                        time_range,
-                        &mut segments,
-                    );
-                } else if !data.transitions.is_empty() {
-                    let is_lod_format = self.detect_lod_bucket_format(&data.transitions);
-                    
-                    if is_lod_format {
-                        let lod = self.current_lod.unwrap_or(25);
-                        let bucket_size = 1u64 << lod;
-                        let tile_span = OpfsCacheManager::get_tile_span(lod);
-                        
-                        let mut tile_buckets: std::collections::HashMap<u64, HashMap<u32, BucketData>> = std::collections::HashMap::new();
-                        
-                        for (tile_idx, (tile_start, tile_end, _, _)) in data.tile_info.iter().enumerate() {
-                            let tile_transitions: Vec<Transition> = data.transitions
-                                .iter()
-                                .filter(|t| {
-                                    if t.time == BOUNDARY_TIME_START {
-                                        return false;
-                                    }
-                                    let abs_time = *tile_start + t.time * bucket_size;
-                                    abs_time >= *tile_start && abs_time < *tile_end
-                                })
-                                .cloned()
-                                .collect();
-                            
-                            if !tile_transitions.is_empty() {
-                                let (_, buckets) = self.parse_buckets_from_transitions(&tile_transitions);
-                                tile_buckets.insert(*tile_start, buckets);
-                            }
-                        }
-                        
-                        let mut bucket_data: Vec<(u64, HashMap<u32, BucketData>)> = tile_buckets.into_iter().collect();
-                        bucket_data.sort_by_key(|(start, _)| *start);
-                        
-                        self.generate_lod_segments_from_buckets(
-                            &bucket_data,
-                            data.width,
-                            y,
-                            &signal.name,
-                            time_range,
-                            &mut segments,
-                        );
-                    } else {
-                        let is_lod_min_max = self.detect_min_max_format(&data.transitions);
-
-                        if is_lod_min_max {
-                            self.generate_min_max_segments(&data.transitions, data.width, y, &signal.name, 
-                                time_range, &mut segments);
-                        } else {
-                            self.generate_normal_segments(&data.transitions, data.width, y, &signal.name,
-                                time_range, &mut segments);
-                        }
-                    }
-                }
-            }
-        }
-
-        serde_wasm_bindgen::to_value(&segments)
-            .map_err(|e| JsValue::from_str(&format!("Serialization error: {}", e)))
-    }
-
     /// Parse multi-tile response and process each tile
     async fn parse_multi_tile_response(
         &mut self,
@@ -2008,7 +1907,9 @@ if tile_missing_signals.is_empty() {
     }
 
     /// Get render segments for current viewport
-    pub fn get_segments(&self) -> Result<JsValue, JsValue> {
+    /// 
+    /// This is an internal function, use fetch_and_get_segments for JS calls
+    fn get_segments(&self) -> Result<JsValue, JsValue> {
         // Optimization: if no signals to draw, return empty segments early
         if self.signals.is_empty() {
             // console_log!("[WASM] get_segments: no signals to draw, returning empty segments");
