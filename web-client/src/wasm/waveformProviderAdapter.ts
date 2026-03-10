@@ -1,13 +1,25 @@
 /**
  * Waveform Provider Adapter
- * 
- * 这个适配器将新的 WaveformProviderInterface 适配为旧的 WaveformDataProvider 接口，
- * 使得现有的 WaveformWindow 组件可以无缝使用新的 Provider，无需修改大量代码。
- * 
- * 这是一个临时解决方案，最终应该将 WaveformWindow 迁移到使用新的接口。
+ *
+ * 这个适配器将新的共享 Provider 接口适配为旧的接口，
+ * 使得现有的 WaveformWindow 组件可以无缝使用新的共享 Provider，
+ * 无需修改大量代码。
+ *
+ * 架构：共享 Provider + 参数化 Render
+ * - 内部使用共享 Provider
+ * - 管理自己的 Canvas（每个 Tab 一个）
+ * - 保存状态，在调用时转换为参数传递
  */
 
-import type { WaveformProviderInterface, WasmSignalInfo as NewWasmSignalInfo, RenderSegment, ValueInfo } from '../core/waveformProviderInterface';
+import type {
+  WaveformProviderInterface,
+  WasmSignalInfo as NewWasmSignalInfo,
+  RenderSegment,
+  ValueInfo,
+  ViewportConfig,
+  CanvasConfig,
+  TimeConfig,
+} from '../core/waveformProviderInterface';
 
 /**
  * 旧的 WasmSignalInfo 接口（snake_case）
@@ -26,38 +38,56 @@ interface OldWasmSignalInfo {
 }
 
 /**
- * 适配器类 - 将新接口适配为旧接口
- * 
- * 旧的 WaveformDataProvider 使用 snake_case 方法名，
- * 新的 WaveformProviderInterface 使用 camelCase 方法名。
+ * 显示格式
+ */
+type DisplayFormat = 'hex' | 'bin' | 'oct' | 'dec';
+
+/**
+ * 适配器类 - 将新的共享 Provider 接口适配为旧接口
+ *
+ * 每个 Tab 有自己的 Adapter 实例，保存 Tab 相关的状态：
+ * - signals: 当前信号列表
+ * - viewport: 当前视口
+ * - canvasId: Canvas ID
+ * - canvasConfig: Canvas 配置
+ * - displayFormat: 显示格式
+ * - timeConfig: 时间配置
  */
 export class WaveformProviderAdapter {
   private provider: WaveformProviderInterface;
+  private canvasId: string;
 
-  constructor(provider: WaveformProviderInterface) {
+  // Tab 相关状态（保存在 Adapter 中，不在 Provider 中）
+  private currentSignals: OldWasmSignalInfo[] = [];
+  private viewport: ViewportConfig = { startTime: 0, endTime: 1000, width: 800, height: 600 };
+  private canvasConfig: CanvasConfig = { width: 800, height: 600, rowHeight: 24 };
+  private _displayFormat: DisplayFormat = 'hex';
+  private timeConfig: TimeConfig = { displayUnit: 'ps', lod0Unit: 1, displayUnitPerLoD0Unit: 1 };
+
+  constructor(provider: WaveformProviderInterface, canvasId: string) {
     this.provider = provider;
+    this.canvasId = canvasId;
   }
 
   // ==================== 属性映射 ====================
 
   get viewport_time_start(): number {
-    return this.provider.viewportTimeStart;
+    return this.viewport.startTime;
   }
 
   get viewport_time_end(): number {
-    return this.provider.viewportTimeEnd;
+    return this.viewport.endTime;
   }
 
   get canvas_width(): number {
-    return this.provider.canvasWidth;
+    return this.canvasConfig.width;
   }
 
   get canvas_height(): number {
-    return this.provider.canvasHeight;
+    return this.canvasConfig.height;
   }
 
   get signal_prefix(): string {
-    // 从 provider 中获取，如果支持的话
     return '';
   }
 
@@ -73,61 +103,100 @@ export class WaveformProviderAdapter {
     // 暂不支持
   }
 
-  get display_format(): string {
-    return 'hex';
+  get display_format(): DisplayFormat {
+    return this._displayFormat;
   }
 
-  set display_format(value: string) {
-    // 使用新的方法
-    this.provider.setDisplayFormat(value as 'hex' | 'bin' | 'oct' | 'dec');
+  set display_format(value: DisplayFormat) {
+    this._displayFormat = value;
+  }
+
+  // ==================== Canvas 管理 ====================
+
+  /**
+   * 注册 Canvas（Tab 创建时调用）
+   */
+  async registerCanvas(canvas: OffscreenCanvas): Promise<void> {
+    await this.provider.registerCanvas(this.canvasId, canvas);
+  }
+
+  /**
+   * 注销 Canvas（Tab 关闭时调用）
+   */
+  async unregisterCanvas(): Promise<void> {
+    await this.provider.unregisterCanvas(this.canvasId);
   }
 
   // ==================== 方法映射 ====================
 
   set_viewport(timeStart: number, timeEnd: number): void {
-    this.provider.setViewport(timeStart, timeEnd);
+    this.viewport = { ...this.viewport, startTime: timeStart, endTime: timeEnd };
   }
 
   set_canvas_dimensions(width: number, height: number, rowHeight: number): void {
-    this.provider.setCanvasDimensions({ width, height, rowHeight });
+    this.canvasConfig = { width, height, rowHeight };
   }
 
   set_draw_list(signals: OldWasmSignalInfo[]): void {
-    // 转换 snake_case 到 camelCase
-    const newSignals: NewWasmSignalInfo[] = signals.map(sig => ({
-      globalId: sig.global_id,
-      name: sig.name,
-      row: sig.row,
-      width: sig.width,
-      drawSigId: sig.draw_sig_id,
-      bitExtract: sig.bit_extract ? {
-        parentName: sig.bit_extract.parent_name,
-        msb: sig.bit_extract.msb,
-        lsb: sig.bit_extract.lsb,
-      } : undefined,
-    }));
-    this.provider.setSignalList(newSignals);
+    this.currentSignals = signals;
   }
 
   async fetch_and_get_segments(signalNames: string[]): Promise<RenderSegment[]> {
-    return this.provider.fetchAndGetSegments(signalNames);
+    // 转换信号列表格式
+    const newSignals = this.convertSignals(this.currentSignals);
+
+    return this.provider.fetchAndGetSegments(
+      signalNames,
+      this.viewport,
+      newSignals
+    );
   }
 
   async get_signal_value_at_time(signalName: string, time: number): Promise<ValueInfo | null> {
-    return this.provider.getSignalValueAtTime(signalName, time);
+    // 转换信号列表格式
+    const newSignals = this.convertSignals(this.currentSignals);
+
+    return this.provider.getSignalValueAtTime(
+      signalName,
+      time,
+      newSignals
+    );
   }
 
   async find_transitions_around(signalName: string, time: number): Promise<(number | null)[]> {
-    const result = await this.provider.findTransitionsAround(signalName, time);
+    // 转换信号列表格式
+    const newSignals = this.convertSignals(this.currentSignals);
+
+    const result = await this.provider.findTransitionsAround(
+      signalName,
+      time,
+      newSignals
+    );
+
     if (!result) {
       return [null, null];
     }
-    // 处理两种可能的返回格式：对象 { prev, next } 或数组 [prev, next]
+
+    // 处理两种可能的返回格式
     if (Array.isArray(result)) {
       return result as (number | null)[];
     }
-    // 对象格式
+
     return [result.prev ?? null, result.next ?? null];
+  }
+
+  async render_waveform(): Promise<void> {
+    // 转换信号列表格式
+    const newSignals = this.convertSignals(this.currentSignals);
+
+    await this.provider.renderWaveform({
+      canvasId: this.canvasId,
+      signals: newSignals,
+      viewport: this.viewport,
+      canvasConfig: this.canvasConfig,
+      displayFormat: this._displayFormat,
+      timeConfig: this.timeConfig,
+    });
   }
 
   set_opfs_enabled(enabled: boolean): void {
@@ -142,7 +211,39 @@ export class WaveformProviderAdapter {
     this.provider.clearCache();
   }
 
-  // ==================== 额外方法 ====================
+  // ==================== 辅助方法 ====================
+
+  /**
+   * 转换信号列表格式（snake_case -> camelCase）
+   */
+  private convertSignals(signals: OldWasmSignalInfo[]): NewWasmSignalInfo[] {
+    return signals.map(sig => ({
+      globalId: sig.global_id,
+      name: sig.name,
+      row: sig.row,
+      width: sig.width,
+      drawSigId: sig.draw_sig_id,
+      bitExtract: sig.bit_extract ? {
+        parentName: sig.bit_extract.parent_name,
+        msb: sig.bit_extract.msb,
+        lsb: sig.bit_extract.lsb,
+      } : undefined,
+    }));
+  }
+
+  /**
+   * 设置时间配置
+   */
+  set_time_config(config: TimeConfig): void {
+    this.timeConfig = config;
+  }
+
+  /**
+   * 获取 Canvas ID
+   */
+  getCanvasId(): string {
+    return this.canvasId;
+  }
 
   /**
    * 获取底层的 Provider 实例
@@ -150,11 +251,4 @@ export class WaveformProviderAdapter {
   getProvider(): WaveformProviderInterface {
     return this.provider;
   }
-}
-
-/**
- * 创建适配器的工厂函数
- */
-export function createAdapter(provider: WaveformProviderInterface): WaveformProviderAdapter {
-  return new WaveformProviderAdapter(provider);
 }

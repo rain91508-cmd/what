@@ -12,6 +12,7 @@ import { sanitizeTimeRange, type TimeRangeOnly } from '../utils/viewport';
 import { buildWasmSignals, updateProviderSettings } from '../wasm/waveformProvider';
 import { createWaveformProvider, logEnvironmentSupport } from '../wasm/waveformProviderFactory';
 import { WaveformProviderAdapter } from '../wasm/waveformProviderAdapter';
+import { useWaveformProvider } from '../contexts/WaveformProviderContext';
 
 interface SignalGroup {
   id: string;
@@ -103,108 +104,51 @@ export function WaveformWindow({
   const signalPanelRef = useRef<HTMLDivElement>(null);
   const [canvasWidth, setCanvasWidth] = useState(0);
 
-  // WASM Provider reference - 使用适配器包装新的 Provider
+  // 使用共享 Provider
+  const { provider: sharedProvider, isLoading: providerLoading } = useWaveformProvider();
+  // WASM Provider reference - 使用适配器包装共享 Provider
   const wasmProviderRef = useRef<WaveformProviderAdapter | null>(null);
+  // Canvas ID - 每个 Tab 唯一
+  const canvasIdRef = useRef<string>(`canvas-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
   // 用于跟踪 Provider 是否已准备好
-  const [providerReady, setProviderReady] = useState(false);
+  const providerReady = !providerLoading && sharedProvider !== null && wasmProviderRef.current !== null;
 
-  // Initialize WASM provider when not using mock data
+  // Initialize WASM Adapter when shared provider is ready
   useEffect(() => {
-    console.log(`[WaveformWindow] Provider init check: useMockData=${useMockData}, waveformName='${_waveformName}'`);
+    console.log(`[WaveformWindow] Provider init check: useMockData=${useMockData}, providerLoading=${providerLoading}, sharedProvider=${sharedProvider ? 'yes' : 'no'}`);
 
-    // 打印环境支持信息
-    logEnvironmentSupport();
-
-    if (!useMockData && _waveformName) {
-      // 使用新的工厂函数创建 Provider
-      // Worker 模式已修复：WASM 现在兼容 Worker 环境（使用全局 fetch 而不是 window.fetch）
-
-      // 使用一个局部变量来跟踪这个 effect 实例创建的 provider
-      let currentProvider: WaveformProviderAdapter | null = null;
-
-      const initProvider = async () => {
-        // 先清理旧的 Provider（如果存在）
-        if (wasmProviderRef.current) {
-          console.log('[WaveformWindow] Cleaning up old provider before creating new one...');
-          await wasmProviderRef.current.getProvider().dispose();
-          wasmProviderRef.current = null;
-          setProviderReady(false);
-        }
-
-        // 重置 lastWasmSettingsRef 和 lastRenderParamsRef，确保新 Provider 能正确初始化
-        lastWasmSettingsRef.current = {
-          signalPrefix: '',
-          spaceBeforeBracket: false,
-          signalListHash: '',
-          viewportTimeStart: 0,
-          viewportTimeEnd: 0,
-          canvasWidth: 0,
-          canvasHeight: 0,
-        };
-        lastRenderParamsRef.current = {
-          signalPrefix: '',
-          spaceBeforeBracket: false,
-          viewportTimeStart: 0,
-          viewportTimeEnd: 0,
-          canvasWidth: 0,
-          canvasHeight: 0,
-          signalListHash: '',
-          timeConfigHash: '',
-        };
-        cachedSegmentsRef.current = [];
-        lastSegmentsParamsRef.current = {
-          signalListHash: '',
-          viewportTimeStart: 0,
-          viewportTimeEnd: 0,
-          canvasWidth: 0,
-          canvasHeight: 0,
-        };
-
-        // 启用 Worker 模式
-        const useWorkerMode = true;
-
-        try {
-          console.log(`[WaveformWindow] Creating provider (${useWorkerMode ? 'Worker' : 'Direct'} mode)...`);
-          const provider = await createWaveformProvider({
-            useWorker: useWorkerMode,
-            serverUrl: _serverUrl,
-            waveformName: _waveformName,
-            signalPrefix: _signalPrefix,
-            spaceBeforeBracket: _spaceBeforeBracket,
-            timeStamp: Date.now(),
-            enableOpfs: false,
-            enableMemoryCache: true,
-          });
-
-          console.log(`[WaveformWindow] Provider created: ${provider.constructor.name}`);
-          // 使用适配器包装新的 Provider
-          const adapter = new WaveformProviderAdapter(provider);
-          currentProvider = adapter;
-          wasmProviderRef.current = adapter;
-          console.log(`[WaveformWindow] Using WASM provider (${useWorkerMode ? 'Worker' : 'Direct'} mode)`);
-          // 触发重新渲染
-          setProviderReady(true);
-        } catch (error) {
-          console.error('[WaveformWindow] Failed to create provider:', error);
-        }
-      };
-
-      initProvider();
-
-      // 清理函数（在组件卸载或依赖项变化时执行）
-      return () => {
-        // 只清理这个 effect 实例创建的 provider
-        if (currentProvider && wasmProviderRef.current === currentProvider) {
-          console.log('[WaveformWindow] Disposing provider on cleanup...');
-          currentProvider.getProvider().dispose();
-          wasmProviderRef.current = null;
-          setProviderReady(false);
-        }
-      };
-    } else {
-      console.log(`[WaveformWindow] Skipping provider init: useMockData=${useMockData}, waveformName='${_waveformName}'`);
+    if (!useMockData && sharedProvider && !wasmProviderRef.current) {
+      // 创建 Adapter 包装共享 Provider
+      const adapter = new WaveformProviderAdapter(sharedProvider, canvasIdRef.current);
+      wasmProviderRef.current = adapter;
+      console.log(`[WaveformWindow] Created adapter for canvas: ${canvasIdRef.current}`);
     }
-  }, [useMockData, _waveformName, _serverUrl, _signalPrefix, _spaceBeforeBracket]);
+  }, [useMockData, sharedProvider, providerLoading]);
+
+  // Register Canvas when adapter is ready
+  useEffect(() => {
+    if (!wasmProviderRef.current || !canvasRef.current) return;
+
+    const registerCanvas = async () => {
+      try {
+        const offscreenCanvas = canvasRef.current!.transferControlToOffscreen();
+        await wasmProviderRef.current!.registerCanvas(offscreenCanvas);
+        console.log(`[WaveformWindow] Canvas registered: ${canvasIdRef.current}`);
+      } catch (error) {
+        console.error('[WaveformWindow] Failed to register canvas:', error);
+      }
+    };
+
+    registerCanvas();
+
+    // Cleanup: unregister canvas when component unmounts
+    return () => {
+      if (wasmProviderRef.current) {
+        wasmProviderRef.current.unregisterCanvas();
+        console.log(`[WaveformWindow] Canvas unregistered: ${canvasIdRef.current}`);
+      }
+    };
+  }, []);
   
   // 根据 canvas 宽度和时间配置计算 viewport
   // 所有时间值使用 LoD0Unit（整数）
@@ -812,7 +756,21 @@ export function WaveformWindow({
     }
 
     // Render with timeConfig for proper ruler display
-    waveformRenderer.render(segments, viewport, width, height, 20, timeConfig);
+    // 使用 Worker 渲染（通过 Adapter）
+    if (!useMockData && wasmProviderRef.current) {
+      // 设置时间配置
+      wasmProviderRef.current.set_time_config({
+        displayUnit: timeConfig.displayUnit,
+        lod0Unit: timeConfig.lod0Unit,
+        displayUnitPerLoD0Unit: timeConfig.displayUnitPerLoD0Unit,
+      });
+      
+      // 调用 Worker 渲染
+      await wasmProviderRef.current.render_waveform();
+    } else {
+      // 使用主线程渲染（Mock 数据模式）
+      waveformRenderer.render(segments, viewport, width, height, 20, timeConfig);
+    }
 
     // 绘制选择区域高亮（只在水平拖动时显示）
     if (isSelecting && selectionStartX !== null && selectionEndX !== null && selectionStartY !== null && selectionEndY !== null) {
