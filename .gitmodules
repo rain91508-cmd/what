@@ -1,3 +1,7 @@
 [submodule "third_party/fst-reader"]
 	path = third_party/fst-reader
 	url = https://github.com/newtonchen/fst-reader.git
+[submodule "third_party/Surelog"]
+	path = third_party/Surelog
+	url = https://github.com/chipsalliance/Surelog.git
+	branch = v1.86
