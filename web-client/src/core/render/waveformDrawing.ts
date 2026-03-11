@@ -9,7 +9,8 @@ import type { RenderSegment, ValueInfo } from '../waveformProviderInterface';
 
 // 类型定义 - 使用 ValueInfo 作为基础类型
 export interface FormattedValue extends ValueInfo {
-  // 扩展 ValueInfo 以支持 snake_case 和 camelCase 两种格式
+  // 扩展 ValueInfo 以支持 type/valueType/value_type 三种格式
+  type?: string;  // WASM返回的格式
   value_type?: string;
   display_str?: string;
   has_xz?: boolean;
@@ -37,8 +38,8 @@ export interface TimeConfig {
  * Returns: 0 for low, 1 for high, -1 for X/Z/unknown
  */
 export function getSignalLevel(value: FormattedValue): number {
-  // 使用 valueType（camelCase）或 value_type（snake_case）
-  const type = value.valueType || value.value_type;
+  // 使用 type/valueType/value_type 三种格式
+  const type = value.type || value.valueType || value.value_type;
   switch (type) {
     case 'zero': return 0;
     case 'one': return 1;
@@ -59,7 +60,7 @@ export function detectMinMaxGroups(
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
     const isMinMax = seg.value.isMinMax || seg.value.is_min_max;
-    const valueType = seg.value.valueType || seg.value.value_type;
+    const valueType = seg.value.type || seg.value.valueType || seg.value.value_type;
     if (valueType === 'min_max' && seg.value.width === 1 && isMinMax) {
       minMaxSegments.push({ index: i, x0: seg.x0, x1: seg.x1 });
     }
@@ -252,8 +253,8 @@ export function drawSingleBitWaveform(
   ctx.lineWidth = 2;
   ctx.setLineDash([]);
 
-  // 获取值类型（支持 camelCase 和 snake_case）
-  const valueType = value.valueType || value.value_type;
+  // 获取值类型（支持 type/valueType/value_type 三种格式）
+  const valueType = value.type || value.valueType || value.value_type;
 
   // 处理 min_max 类型（LoD > 0, min=max 情况）
   if (valueType === 'min_max') {
@@ -560,7 +561,7 @@ export function drawSegment(
   // _width 保留供后续使用
   void (x1 - x0);
 
-  const valueType = value.valueType || value.value_type;
+  const valueType = value.type || value.valueType || value.value_type;
   const isMinMax = value.isMinMax || value.is_min_max;
   if (valueType === 'min_max' && isMinMax) {
     const groupInfo = segmentIndex !== undefined ? minMaxGroups?.get(segmentIndex) : undefined;

@@ -148,17 +148,18 @@ export function WaveformWindow({
         const containerRect = containerRef.current!.getBoundingClientRect();
         const width = containerRect.width;
         const height = containerRect.height - 30; // Subtract ruler height
-        const dpr = window.devicePixelRatio || 1;
         
-        // 在 transfer 前设置 canvas 的物理尺寸
-        canvas.width = width * dpr;
-        canvas.height = height * dpr;
+        // 保持 CSS 尺寸和 canvas 物理尺寸 1:1，禁用 devicePixelRatio 缩放
+        // 这样不需要进行任何坐标转换
+        canvas.width = width;
+        canvas.height = height;
         
         const offscreenCanvas = canvas.transferControlToOffscreen();
         canvasTransferredRef.current = true;
         
-        await wasmProviderRef.current!.registerCanvas(offscreenCanvas, dpr);
-        console.log(`[WaveformWindow] Canvas registered: ${canvasIdRef.current}, dpr=${dpr}`);
+        // 传递 dpr=1，禁用缩放
+        await wasmProviderRef.current!.registerCanvas(offscreenCanvas, 1);
+        console.log(`[WaveformWindow] Canvas registered: ${canvasIdRef.current}, dpr=1 (1:1 mapping)`);
       } catch (error) {
         console.error('[WaveformWindow] Failed to register canvas:', error);
         canvasTransferredRef.current = false;
@@ -645,6 +646,12 @@ export function WaveformWindow({
       }
 
       // 调用 Adapter 的 render_waveform 并传递完整参数
+      console.log('[WaveformWindow] Calling render_waveform with viewport:', {
+        timeStart: viewport.timeStart,
+        timeEnd: viewport.timeEnd,
+        width,
+        height
+      });
       await wasmProviderRef.current.render_waveform({
         signals: wasmSignals,
         viewport: {
@@ -746,14 +753,14 @@ export function WaveformWindow({
            
           // 如果宽度变化了，更新 viewport 的 timeEnd 保持 pixelsPerTime 不变
           if (newWidth !== lastWidth && !useMockData && wasmProviderRef.current) {
-            const wasmProvider = wasmProviderRef.current;
-            const oldTimeStart = wasmProvider.viewport_time_start;
-            const oldTimeEnd = wasmProvider.viewport_time_end;
+            // 使用 React state 中的 viewport，而不是 Adapter 中的 viewport
+            const oldTimeStart = viewport.timeStart;
+            const oldTimeEnd = viewport.timeEnd;
             const oldTimeSpan = oldTimeEnd - oldTimeStart;
             const newTimeEnd = oldTimeStart + (oldTimeSpan * newWidth / lastWidth);
             
-            wasmProvider.set_viewport(oldTimeStart, newTimeEnd);
-            wasmProvider.set_canvas_dimensions(newWidth, newHeight, 24);
+            wasmProviderRef.current.set_viewport(oldTimeStart, newTimeEnd);
+            wasmProviderRef.current.set_canvas_dimensions(newWidth, newHeight, 24);
             
             // 同步更新 React viewport state
             setViewport(prev => ({
@@ -786,7 +793,7 @@ export function WaveformWindow({
       if (resizeTimeout) clearTimeout(resizeTimeout);
       resizeObserver.disconnect();
     };
-  }, [useMockData, providerReady]);
+  }, [useMockData, providerReady, viewport.timeStart, viewport.timeEnd]);
 
   // 监听时间配置变化，更新 viewport（保留当前时间范围）
   useEffect(() => {

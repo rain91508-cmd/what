@@ -405,6 +405,15 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
   currentRenderTask = renderTask;
 
   try {
+    // 0. 调整 Canvas 物理尺寸以匹配 CSS 尺寸（保持 1:1）
+    if (canvasConfig) {
+      if (canvas.width !== canvasConfig.width || canvas.height !== canvasConfig.height) {
+        canvas.width = canvasConfig.width;
+        canvas.height = canvasConfig.height;
+        console.log('[WaveformWorker] Resized canvas to:', canvasConfig.width, 'x', canvasConfig.height);
+      }
+    }
+
     // 1. 设置视口（参数传递）
     if (viewport) {
       wasmProvider.set_viewport(viewport.startTime, viewport.endTime);
@@ -475,19 +484,10 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
     }
 
     // 7. 渲染到 Canvas
-    const dpr = canvasEntry.devicePixelRatio || 1;
+    // CSS 尺寸和 canvas 物理尺寸保持 1:1，不需要任何缩放
+    // canvasConfig 是逻辑尺寸（CSS像素）
+    // WASM 返回的 segments 也是逻辑坐标
     
-    // 缩放上下文以适应物理像素
-    ctx.save();
-    ctx.scale(dpr, dpr);
-    
-    // 计算逻辑尺寸（物理尺寸 / dpr）
-    const logicalWidth = canvasConfig.width / dpr;
-    const logicalHeight = canvasConfig.height / dpr;
-    const logicalRowHeight = canvasConfig.rowHeight / dpr;
-    const logicalRulerHeight = 20;
-    
-    // segments 的坐标已经是逻辑尺寸（CSS像素），不需要缩放
     const renderSegments: RenderSegment[] = segments.map((seg: any) => ({
       x0: seg.x0,
       x1: seg.x1,
@@ -496,7 +496,15 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
       signalName: seg.signal_name,
     }));
 
-    console.log('[WaveformWorker] Rendering', renderSegments.length, 'segments to canvas with dpr=', dpr);
+    // 打印前几个segments的详细信息用于调试
+    if (renderSegments.length > 0) {
+      const firstSeg = renderSegments[0];
+      console.log('[WaveformWorker] First segment full value:', JSON.stringify(firstSeg.value));
+      console.log('[WaveformWorker] First segment value keys:', Object.keys(firstSeg.value || {}));
+    }
+
+    console.log('[WaveformWorker] Rendering', renderSegments.length, 'segments to canvas (1:1 mapping)');
+    console.log('[WaveformWorker] Canvas size:', canvasConfig.width, 'x', canvasConfig.height, 'rowHeight:', canvasConfig.rowHeight);
 
     // 转换 viewport 为 TimeRangeOnly 格式
     const timeRangeOnlyViewport: TimeRangeOnly = {
@@ -508,14 +516,12 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
       ctx,
       renderSegments,
       timeRangeOnlyViewport,
-      logicalWidth,
-      logicalHeight,
-      logicalRulerHeight,
+      canvasConfig.width,
+      canvasConfig.height,
+      20, // rulerHeight
       timeConfig,
-      logicalRowHeight
+      canvasConfig.rowHeight
     );
-    
-    ctx.restore();
 
     // 8. 返回成功
     console.log('[WaveformWorker] Render complete');
