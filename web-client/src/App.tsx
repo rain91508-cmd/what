@@ -313,9 +313,10 @@ function App() {
 
   // Preload WASM files in background
   const preloadWasmFiles = useCallback(async () => {
+    const base = import.meta.env.BASE_URL || '/'
     const wasmFiles = [
-      '/wasm-pkg/hwda_wasm_bg.wasm',
-      '/wasm-pkg/hwda_wasm.js'
+      `${base}wasm-pkg/hwda_wasm_bg.wasm`.replace(/\/+/g, '/'),
+      `${base}wasm-pkg/hwda_wasm.js`.replace(/\/+/g, '/')
     ]
     
     console.log('[App] Preloading WASM files in background...')

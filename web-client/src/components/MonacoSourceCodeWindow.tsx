@@ -7,12 +7,16 @@ import { LargeFileController, type FileMetadata } from '../services/largeFileCon
 
 // Configure monaco loader to use local files
 // Local files are copied to public/monaco-editor during build
-const MONACO_LOCAL_URL = '/monaco-editor/min/vs';
+// Use relative path to work with base URL
+const getMonacoUrl = () => {
+  const base = import.meta.env.BASE_URL || '/';
+  return `${base}monaco-editor/min/vs`.replace(/\/+/g, '/');
+};
 
 // Configure loader to use local files
 loader.config({
   paths: {
-    vs: MONACO_LOCAL_URL
+    vs: getMonacoUrl()
   }
 });
 
