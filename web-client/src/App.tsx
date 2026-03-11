@@ -38,7 +38,7 @@ import { zoomIn, zoomOut } from './utils/zoomHelpers'
 import { sanitizeTimeRange } from './utils/viewport'
 
 // WASM
-import { initWasm, createProvider, updateProviderSettings, setOpfsEnabled, checkOpfsSupport, setMemoryCacheEnabled as setWasmMemoryCacheEnabled } from './wasm/waveformProvider'
+import { initWasm, updateProviderSettings, setOpfsEnabled, checkOpfsSupport, setMemoryCacheEnabled as setWasmMemoryCacheEnabled } from './wasm/waveformProvider'
 
 // Components
 import { MenuBar } from './components/MenuBar'
@@ -99,10 +99,12 @@ function App() {
   const [, setCurrentWaveform] = useState<string | null>(null)
   
   // File change detection state
+  const [serverUrl, setServerUrl] = useState<string>('')
   const [currentKdbName, setCurrentKdbName] = useState<string | null>(null)
   const [currentKdbChecksum, setCurrentKdbChecksum] = useState<string | null>(null)
   const [currentWaveName, setCurrentWaveName] = useState<string | null>(null)
   const [currentWaveChecksum, setCurrentWaveChecksum] = useState<string | null>(null)
+  const [currentWaveTimeStamp, setCurrentWaveTimeStamp] = useState<number>(0)  // Waveform modification timestamp for CDN cache
   const [currentWaveSignalPrefix, setCurrentWaveSignalPrefix] = useState<string>('')  // Global signal prefix for current waveform
   const [currentWaveSignalSpaceBeforeBracket, setCurrentWaveSignalSpaceBeforeBracket] = useState<boolean>(false)  // Whether to add space before [msb:lsb]
   const [currentWaveTimeUnit, setCurrentWaveTimeUnit] = useState<number>(2)  // Waveform time unit enum (0=fs, 1=ps, 2=ns, etc.)
@@ -122,8 +124,6 @@ function App() {
   // Mock data state for waveform when no real wave file is loaded
   const [useMockData, setUseMockData] = useState(false)
 
-  // Server URL for WASM provider
-  const serverUrl = apiService.getBaseUrl()
   const [showMockDataDialog, setShowMockDataDialog] = useState(false)
   const [pendingMockSignal, setPendingMockSignal] = useState<Signal | null>(null)
 
@@ -887,6 +887,7 @@ function App() {
     setConnected(isConnected)
 
     if (isConnected) {
+      setServerUrl(apiService.getBaseUrl())
       localStorage.setItem('serverConfig', JSON.stringify({ host, port, useHttps: false }))
       addMessage(`Connected to server at ${host}:${port}`)
 
@@ -1061,22 +1062,13 @@ function App() {
 
     setCurrentWaveName(waveName)
     setCurrentWaveChecksum(waveChecksum)
+    setCurrentWaveTimeStamp(waveTimeStamp)  // Set waveform modification timestamp
     setCurrentWaveSignalPrefix('')  // Clear previous prefix
     setCurrentWaveSignalSpaceBeforeBracket(false)  // Clear previous space setting
     setCurrentWaveTimeUnit(waveTimeUnit)  // Set time unit from waveform
     setCurrentWaveEndTime(waveEndTime)  // Set end time from waveform
     setCurrentWaveDisplayUnitPerLoD0(displayUnitPerLoD0Unit)  // Set display unit ratio
     setCurrentWaveCustomRange(customRange)  // Save user custom range (if any)
-
-    // Create WASM provider for the new waveform with initial viewport and time stamp
-    // Pass the current OPFS cache enabled state
-    // Note: spaceBeforeBracket defaults to false, will be updated after signal search
-    try {
-      createProvider(serverUrl, waveName, 'work@', currentWaveSignalSpaceBeforeBracket, waveTimeStamp, opfsCacheEnabled)
-      console.log('[App] Created WASM provider for waveform:', waveName, 'timeStamp:', waveTimeStamp, 'OPFS:', opfsCacheEnabled, 'spaceBeforeBracket:', currentWaveSignalSpaceBeforeBracket)
-    } catch (error) {
-      console.error('[App] Failed to create WASM provider:', error)
-    }
 
     // Reset mock data flag when loading real waveform
     if (useMockData) {
@@ -2375,6 +2367,7 @@ function App() {
       waveformName={currentWaveName || ''}
       signalPrefix={currentWaveSignalPrefix}
       spaceBeforeBracket={currentWaveSignalSpaceBeforeBracket}
+      timeStamp={currentWaveTimeStamp}
       enableOpfs={opfsCacheEnabled}
       enableMemoryCache={memoryCacheEnabled}
     >

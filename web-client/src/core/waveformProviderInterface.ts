@@ -138,8 +138,9 @@ export interface WaveformProviderInterface {
    * 注册 Canvas（Tab 创建时调用）
    * @param canvasId Canvas 唯一标识
    * @param canvas OffscreenCanvas 实例
+   * @param devicePixelRatio 设备像素比
    */
-  registerCanvas(canvasId: string, canvas: OffscreenCanvas): Promise<void>;
+  registerCanvas(canvasId: string, canvas: OffscreenCanvas, devicePixelRatio?: number): Promise<void>;
 
   /**
    * 注销 Canvas（Tab 关闭时调用）
@@ -198,6 +199,7 @@ export interface WaveformProviderInterface {
     canvasConfig: CanvasConfig;    // Canvas 配置
     displayFormat: DisplayFormat;  // 显示格式
     timeConfig: TimeConfig;        // 时间配置
+    devicePixelRatio?: number;     // 设备像素比
   }): Promise<void>;
 
   // ==================== 缓存管理 ====================
@@ -216,6 +218,16 @@ export interface WaveformProviderInterface {
    * 设置内存缓存启用状态
    */
   setMemoryCacheEnabled(enabled: boolean): void;
+
+  /**
+   * 设置信号前缀
+   */
+  setSignalPrefix(prefix: string): void;
+
+  /**
+   * 设置是否在 [ 前加空格
+   */
+  setSpaceBeforeBracket(enabled: boolean): void;
 
   // ==================== 属性 ====================
 

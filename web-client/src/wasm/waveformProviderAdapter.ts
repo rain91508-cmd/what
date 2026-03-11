@@ -63,6 +63,7 @@ export class WaveformProviderAdapter {
   private canvasConfig: CanvasConfig = { width: 800, height: 600, rowHeight: 24 };
   private _displayFormat: DisplayFormat = 'hex';
   private timeConfig: TimeConfig = { displayUnit: 'ps', lod0Unit: 1, displayUnitPerLoD0Unit: 1 };
+  private devicePixelRatio: number = 1;
 
   constructor(provider: WaveformProviderInterface, canvasId: string) {
     this.provider = provider;
@@ -116,8 +117,9 @@ export class WaveformProviderAdapter {
   /**
    * 注册 Canvas（Tab 创建时调用）
    */
-  async registerCanvas(canvas: OffscreenCanvas): Promise<void> {
-    await this.provider.registerCanvas(this.canvasId, canvas);
+  async registerCanvas(canvas: OffscreenCanvas, dpr: number = 1): Promise<void> {
+    this.devicePixelRatio = dpr;
+    await this.provider.registerCanvas(this.canvasId, canvas, dpr);
   }
 
   /**
@@ -185,17 +187,51 @@ export class WaveformProviderAdapter {
     return [result.prev ?? null, result.next ?? null];
   }
 
-  async render_waveform(): Promise<void> {
+  async render_waveform(options?: {
+    signals?: OldWasmSignalInfo[],
+    viewport?: ViewportConfig,
+    canvasConfig?: CanvasConfig,
+    displayFormat?: DisplayFormat,
+    timeConfig?: TimeConfig,
+  }): Promise<void> {
+    // 使用提供的参数或默认参数
+    const currentSignals = options?.signals || this.currentSignals;
+    const viewport = options?.viewport || this.viewport;
+    const canvasConfig = options?.canvasConfig || this.canvasConfig;
+    const displayFormat = options?.displayFormat || this._displayFormat;
+    const timeConfig = options?.timeConfig || this.timeConfig;
+    
     // 转换信号列表格式
-    const newSignals = this.convertSignals(this.currentSignals);
+    const newSignals = this.convertSignals(currentSignals);
+    
+    // 为 renderWaveform 准备物理尺寸（乘以 dpr）
+    const physicalCanvasConfig = {
+      ...canvasConfig,
+      width: canvasConfig.width * this.devicePixelRatio,
+      height: canvasConfig.height * this.devicePixelRatio,
+      rowHeight: canvasConfig.rowHeight * this.devicePixelRatio,
+    };
+    
+    console.log('[WaveformProviderAdapter] render_waveform called with:', { 
+      canvasId: this.canvasId, 
+      currentSignals: currentSignals, 
+      newSignals, 
+      viewport, 
+      canvasConfig, 
+      physicalCanvasConfig,
+      dpr: this.devicePixelRatio,
+      displayFormat, 
+      timeConfig 
+    });
 
     await this.provider.renderWaveform({
       canvasId: this.canvasId,
       signals: newSignals,
-      viewport: this.viewport,
-      canvasConfig: this.canvasConfig,
-      displayFormat: this._displayFormat,
-      timeConfig: this.timeConfig,
+      viewport,
+      canvasConfig: physicalCanvasConfig,
+      displayFormat,
+      timeConfig,
+      devicePixelRatio: this.devicePixelRatio,
     });
   }
 

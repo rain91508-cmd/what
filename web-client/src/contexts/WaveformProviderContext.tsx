@@ -9,7 +9,7 @@
  * - Worker 管理多个 Canvas（每个 Tab 一个）
  */
 
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, ReactNode, useRef } from 'react';
 import { WaveformProviderInterface } from '../core/waveformProviderInterface';
 import { createWaveformProvider } from '../wasm/waveformProviderFactory';
 
@@ -40,6 +40,7 @@ interface WaveformProviderProviderProps {
   waveformName?: string;
   signalPrefix?: string;
   spaceBeforeBracket?: boolean;
+  timeStamp?: number;
   enableOpfs?: boolean;
   enableMemoryCache?: boolean;
 }
@@ -55,53 +56,105 @@ export function WaveformProviderProvider({
   waveformName = '',
   signalPrefix = '',
   spaceBeforeBracket = false,
+  timeStamp = 0,
   enableOpfs = false,
   enableMemoryCache = true,
 }: WaveformProviderProviderProps) {
   const [provider, setProvider] = useState<WaveformProviderInterface | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  
+  // Track previous values of props that require recreating provider
+  const prevPropsRef = useRef({
+    serverUrl: '',
+    waveformName: '',
+    timeStamp: 0,
+    enableOpfs: false,
+    enableMemoryCache: true,
+  });
 
   useEffect(() => {
-    let isMounted = true;
+    const prevProps = prevPropsRef.current;
+    const needsNewProvider = 
+      prevProps.serverUrl !== serverUrl ||
+      prevProps.waveformName !== waveformName ||
+      prevProps.timeStamp !== timeStamp ||
+      prevProps.enableOpfs !== enableOpfs ||
+      prevProps.enableMemoryCache !== enableMemoryCache;
 
-    const initProvider = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
+    // 只有在有有效的配置时才创建 Provider
+    // 必须要有 waveformName，否则我们不知道要渲染什么波形
+    const hasValidConfig = serverUrl && waveformName;
 
-        // 创建共享 Provider（Worker 模式）
-        const newProvider = await createWaveformProvider({
-          useWorker: true,
-          serverUrl,
-          waveformName,
-          signalPrefix,
-          spaceBeforeBracket,
-          timeStamp: Date.now(),
-          enableOpfs,
-          enableMemoryCache,
-        });
+    console.log('[WaveformProviderContext] Checking provider:', {
+      prevProps,
+      currentProps: { serverUrl, waveformName, timeStamp, enableOpfs, enableMemoryCache },
+      needsNewProvider,
+      hasValidConfig
+    });
 
-        if (isMounted) {
-          setProvider(newProvider);
-          setIsLoading(false);
+    if (needsNewProvider && hasValidConfig) {
+      console.log('[WaveformProviderContext] Recreating provider...');
+      // Recreate provider
+      let isMounted = true;
+      let oldProvider: WaveformProviderInterface | null = null;
+
+      const initProvider = async () => {
+        try {
+          setIsLoading(true);
+          setError(null);
+
+          console.log('[WaveformProviderContext] Creating provider with:', {
+            serverUrl,
+            waveformName,
+            timeStamp,
+            enableOpfs,
+            enableMemoryCache
+          });
+
+          const newProvider = await createWaveformProvider({
+            useWorker: true,
+            serverUrl,
+            waveformName,
+            signalPrefix,
+            spaceBeforeBracket,
+            timeStamp,
+            enableOpfs,
+            enableMemoryCache,
+          });
+
+          if (isMounted) {
+            oldProvider = provider;
+            setProvider(newProvider);
+            setIsLoading(false);
+            prevPropsRef.current = { serverUrl, waveformName, timeStamp, enableOpfs, enableMemoryCache };
+          }
+        } catch (err) {
+          if (isMounted) {
+            setError(err instanceof Error ? err : new Error(String(err)));
+            setIsLoading(false);
+          }
         }
-      } catch (err) {
-        if (isMounted) {
-          setError(err instanceof Error ? err : new Error(String(err)));
-          setIsLoading(false);
+      };
+
+      initProvider();
+
+      return () => {
+        isMounted = false;
+        if (oldProvider) {
+          oldProvider.dispose();
+        } else if (provider) {
+          provider.dispose();
         }
+      };
+    } else if (!needsNewProvider && provider) {
+      // Just update signalPrefix and/or spaceBeforeBracket on existing provider
+      if (provider) {
+        provider.setSignalPrefix(signalPrefix);
+        provider.setSpaceBeforeBracket(spaceBeforeBracket);
       }
-    };
-
-    initProvider();
-
-    return () => {
-      isMounted = false;
-      // Provider 在 App 级别，不应该在这里销毁
-      // 应该在 App 卸载时销毁
-    };
-  }, [serverUrl, waveformName, signalPrefix, spaceBeforeBracket, enableOpfs, enableMemoryCache]);
+    }
+  }, [serverUrl, waveformName, signalPrefix, spaceBeforeBracket, timeStamp, enableOpfs, enableMemoryCache]);
 
   const value: WaveformProviderContextType = {
     provider,
