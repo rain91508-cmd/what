@@ -18,6 +18,7 @@ export default defineConfig({
       '@utils': resolve(__dirname, 'src/utils'),
       '@types': resolve(__dirname, 'src/types'),
       '@wasm': resolve(__dirname, 'src/wasm'),
+      'hwda_wasm': resolve(__dirname, 'wasm-pkg/hwda_wasm.js'),
     },
   },
   server: {
