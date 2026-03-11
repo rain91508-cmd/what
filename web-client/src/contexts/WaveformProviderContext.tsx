@@ -152,11 +152,15 @@ export function WaveformProviderProvider({
       };
     } else if (!needsNewProvider && provider) {
       // Just update signalPrefix, serverPrefix and/or spaceBeforeBracket on existing provider
-      if (provider) {
-        provider.setSignalPrefix(signalPrefix);
-        provider.setServerPrefix(serverPrefix);
-        provider.setSpaceBeforeBracket(spaceBeforeBracket);
-      }
+      const updateSettings = async () => {
+        if (provider) {
+          await provider.setSignalPrefix(signalPrefix);
+          await provider.setServerPrefix(serverPrefix);
+          await provider.setSpaceBeforeBracket(spaceBeforeBracket);
+          console.log('[WaveformProviderContext] Provider settings updated:', { signalPrefix, serverPrefix, spaceBeforeBracket });
+        }
+      };
+      updateSettings();
     }
   }, [serverUrl, waveformName, signalPrefix, serverPrefix, spaceBeforeBracket, timeStamp, enableOpfs, enableMemoryCache]);
 

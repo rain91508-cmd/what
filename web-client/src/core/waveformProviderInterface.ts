@@ -223,17 +223,17 @@ export interface WaveformProviderInterface {
   /**
    * 设置信号前缀（local prefix）
    */
-  setSignalPrefix(prefix: string): void;
+  setSignalPrefix(prefix: string): Promise<void>;
 
   /**
    * 设置服务器前缀
    */
-  setServerPrefix(prefix: string): void;
+  setServerPrefix(prefix: string): Promise<void>;
 
   /**
    * 设置是否在 [ 前加空格
    */
-  setSpaceBeforeBracket(enabled: boolean): void;
+  setSpaceBeforeBracket(enabled: boolean): Promise<void>;
 
   // ==================== 属性 ====================
 

@@ -302,34 +302,31 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
   /**
    * 设置信号前缀（local prefix）
    */
-  setSignalPrefix(prefix: string): void {
-    this.worker?.postMessage({
-      type: 'SET_SIGNAL_PREFIX',
-      payload: { prefix },
-      id: ++globalMessageId,
-    });
+  async setSignalPrefix(prefix: string): Promise<void> {
+    if (!this.worker) {
+      throw new WaveformProviderError('Worker not initialized');
+    }
+    await this.sendMessage('SET_SIGNAL_PREFIX', { prefix });
   }
 
   /**
    * 设置服务器前缀
    */
-  setServerPrefix(prefix: string): void {
-    this.worker?.postMessage({
-      type: 'SET_SERVER_PREFIX',
-      payload: { prefix },
-      id: ++globalMessageId,
-    });
+  async setServerPrefix(prefix: string): Promise<void> {
+    if (!this.worker) {
+      throw new WaveformProviderError('Worker not initialized');
+    }
+    await this.sendMessage('SET_SERVER_PREFIX', { prefix });
   }
 
   /**
    * 设置是否在 [ 前加空格
    */
-  setSpaceBeforeBracket(enabled: boolean): void {
-    this.worker?.postMessage({
-      type: 'SET_SPACE_BEFORE_BRACKET',
-      payload: { enabled },
-      id: ++globalMessageId,
-    });
+  async setSpaceBeforeBracket(enabled: boolean): Promise<void> {
+    if (!this.worker) {
+      throw new WaveformProviderError('Worker not initialized');
+    }
+    await this.sendMessage('SET_SPACE_BEFORE_BRACKET', { enabled });
   }
 
   // ==================== 属性 ====================
