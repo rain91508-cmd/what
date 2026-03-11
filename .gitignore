@@ -66,10 +66,17 @@ third_party/build/
 target/
 Cargo.lock
 
-# WASM generated files - these are required runtime files
-# web-client/public/hwda_wasm.js
-# web-client/public/hwda_wasm_bg.wasm
-# web-client/public/hwda_wasm.d.ts
+# WASM generated files - GitHub Actions will compile these
+web-client/public/hwda_wasm.js
+web-client/public/hwda_wasm_bg.wasm
+web-client/public/hwda_wasm.d.ts
+web-client/public/hwda_wasm_bg.wasm.d.ts
+web-client/public/pkg/
+web-client/public/wasm/
+
+# Static files copied from node_modules (need to be managed)
+# web-client/public/pace.min.js - copied from pace-js
+# web-client/public/monaco-editor/ - copied from monaco-editor
 
 # Python cache
 __pycache__/

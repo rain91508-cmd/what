@@ -6,13 +6,13 @@ import type { editor } from 'monaco-editor';
 import { LargeFileController, type FileMetadata } from '../services/largeFileController';
 
 // Configure monaco loader to use local files
-// Local loading is more reliable for offline/air-gapped environments
-const LOCAL_URL = '/node_modules/monaco-editor/min/vs';
+// Local files are copied to public/monaco-editor during build
+const MONACO_LOCAL_URL = '/monaco-editor/min/vs';
 
 // Configure loader to use local files
 loader.config({
   paths: {
-    vs: LOCAL_URL
+    vs: MONACO_LOCAL_URL
   }
 });
 
