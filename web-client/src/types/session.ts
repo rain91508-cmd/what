@@ -42,11 +42,13 @@ export interface Session {
   }>;
   activeSourceTabId?: string;
 
+  // Global waveform signal ID counter (shared across all tabs)
+  nextWaveformSignalId: number;
+
   // Waveform Tabs
   waveformTabs: Array<{
     id: string;
     label: string;
-    nextSignalUniqueId: number;
     groups: Record<string, {
       name: string;
       parentId: string | null;
@@ -55,8 +57,15 @@ export interface Session {
         globalId: number;
       }>;
       expanded: boolean;
+      children: string[];
     }>;
     selectedGroup?: string;
+    // Viewport state (time in LoD0Unit)
+    viewport?: {
+      timeStart: number;
+      timeEnd: number;
+    };
+    cursorPosition?: number;
   }>;
   activeWaveformTabId?: string;
 
@@ -68,6 +77,12 @@ export interface Session {
     lineNumber: number;
     lineContent: string;
   }>;
+
+  // Hierarchy panel state
+  hierarchy?: {
+    expandedModules: number[];  // List of expanded module indices
+    selectedModule: number | null;  // Selected module index
+  };
 }
 
 export interface SessionInfo {
