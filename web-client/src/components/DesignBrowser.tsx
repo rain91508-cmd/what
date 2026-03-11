@@ -11,6 +11,9 @@ interface DesignBrowserProps {
   // Controlled expanded modules state
   expandedModules?: Set<number>;
   onExpandedModulesChange?: (expanded: Set<number>) => void;
+  // Controlled pagination state
+  paginationMap?: Map<number, PaginationState>;
+  onPaginationChange?: (paginationMap: Map<number, PaginationState>) => void;
 }
 
 interface TreeNodeState extends TreeNode {
@@ -35,7 +38,9 @@ export function DesignBrowser({
   selectedModuleIndex,
   kdbLoaded,
   expandedModules: controlledExpanded,
-  onExpandedModulesChange
+  onExpandedModulesChange,
+  paginationMap: controlledPagination,
+  onPaginationChange
 }: DesignBrowserProps) {
   const [activeTab, setActiveTab] = useState<TabType>('hierarchy');
   // Use controlled expanded modules if provided, otherwise use internal state
@@ -58,7 +63,19 @@ export function DesignBrowser({
   const [error, setError] = useState<string | null>(null);
   
   // Pagination state: nodeId -> PaginationState
-  const [paginationMap, setPaginationMap] = useState<Map<number, PaginationState>>(new Map());
+  const isPaginationControlled = controlledPagination !== undefined;
+  const [internalPaginationMap, setInternalPaginationMap] = useState<Map<number, PaginationState>>(new Map());
+  const paginationMap = isPaginationControlled ? controlledPagination : internalPaginationMap;
+  const setPaginationMap = useCallback((updater: Map<number, PaginationState> | ((prev: Map<number, PaginationState>) => Map<number, PaginationState>)) => {
+    if (isPaginationControlled) {
+      // In controlled mode, notify parent
+      const newPagination = typeof updater === 'function' ? updater(controlledPagination!) : updater;
+      onPaginationChange?.(newPagination);
+    } else {
+      // In uncontrolled mode, update internal state
+      setInternalPaginationMap(updater as Map<number, PaginationState>);
+    }
+  }, [isPaginationControlled, controlledPagination, onPaginationChange]);
   // Editing page size: nodeId -> temp value
   const [editingPageSize, setEditingPageSize] = useState<Map<number, string>>(new Map());
   
@@ -72,6 +89,33 @@ export function DesignBrowser({
     loadTopLevelModules();
     loadFiles();
   }, [kdbLoaded]);
+
+  // When expandedNodes changes in controlled mode, load children for expanded nodes
+  useEffect(() => {
+    if (isControlled && expandedNodes.size > 0 && treeNodes.size > 0) {
+      // Check if any expanded nodes need children loaded (recursively)
+      const loadMissingChildren = async () => {
+        let currentMap = treeNodes;
+        const nodesToLoad = [...expandedNodes];
+        
+        while (nodesToLoad.length > 0) {
+          const nodeId = nodesToLoad.shift()!;
+          const node = currentMap.get(nodeId);
+          if (node && !node.childrenLoaded && node.hasChildren) {
+            currentMap = await loadChildren(nodeId, currentMap);
+            // After loading, add children that are also expanded to the queue
+            const childNodes = Array.from(currentMap.values()).filter(n => n.parentId === nodeId);
+            for (const child of childNodes) {
+              if (expandedNodes.has(child.id)) {
+                nodesToLoad.push(child.id);
+              }
+            }
+          }
+        }
+      };
+      loadMissingChildren();
+    }
+  }, [expandedNodes, isControlled, treeNodes.size]);
 
   const loadTopLevelModules = async () => {
     try {
@@ -108,20 +152,21 @@ export function DesignBrowser({
         await loadChildren(rootIds[0], nodesMap);
       } else if (isControlled && expandedNodes.size > 0) {
         // In controlled mode with existing expanded nodes, load children for all expanded nodes recursively
-        const loadExpandedNodesRecursively = async (nodeIds: number[], currentMap: Map<number, TreeNodeState>) => {
+        const loadExpandedNodesRecursively = async (nodeIds: number[], currentMap: Map<number, TreeNodeState>): Promise<Map<number, TreeNodeState>> => {
+          let updatedMap = currentMap;
           for (const nodeId of nodeIds) {
-            const node = currentMap.get(nodeId);
+            const node = updatedMap.get(nodeId);
             if (node && !node.childrenLoaded) {
-              await loadChildren(nodeId, currentMap);
+              updatedMap = await loadChildren(nodeId, updatedMap);
               // After loading children, check if any children are also expanded
-              const updatedMap = treeNodes; // Get updated map after loadChildren
               const childNodes = Array.from(updatedMap.values()).filter(n => n.parentId === nodeId);
               const expandedChildIds = childNodes.filter(n => expandedNodes.has(n.id)).map(n => n.id);
               if (expandedChildIds.length > 0) {
-                await loadExpandedNodesRecursively(expandedChildIds, updatedMap);
+                updatedMap = await loadExpandedNodesRecursively(expandedChildIds, updatedMap);
               }
             }
           }
+          return updatedMap;
         };
         
         // Start with root-level expanded nodes
@@ -157,10 +202,10 @@ export function DesignBrowser({
   const loadChildren = async (
     parentId: number, 
     currentMap: Map<number, TreeNodeState>
-  ): Promise<void> => {
+  ): Promise<Map<number, TreeNodeState>> => {
     const parentNode = currentMap.get(parentId);
     if (!parentNode || parentNode.childrenLoaded || parentNode.loading) {
-      return;
+      return currentMap;
     }
 
     // Mark as loading
@@ -171,8 +216,16 @@ export function DesignBrowser({
       const children = await kdbManager.getChildModules(parentId);
       const newMap = new Map(currentMap);
 
-      // Mark parent as loaded
-      newMap.set(parentId, { ...parentNode, childrenLoaded: true, loading: false });
+      // Collect child IDs
+      const childIds = children.map(child => child.id);
+
+      // Mark parent as loaded and update childModuleIds
+      newMap.set(parentId, { 
+        ...parentNode, 
+        childrenLoaded: true, 
+        loading: false,
+        childModuleIds: childIds
+      });
 
       // Add children to map
       for (const child of children) {
@@ -186,12 +239,14 @@ export function DesignBrowser({
       }
 
       setTreeNodes(newMap);
+      return newMap;
     } catch (err) {
       console.error(`[DesignBrowser] Failed to load children for ${parentId}:`, err);
       // Mark as not loading but not loaded
       const newMap = new Map(currentMap);
       newMap.set(parentId, { ...parentNode, loading: false, childrenLoaded: false });
       setTreeNodes(newMap);
+      return newMap;
     }
   };
 

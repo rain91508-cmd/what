@@ -87,6 +87,11 @@ export interface Session {
   hierarchy?: {
     expandedModules: number[];  // List of expanded module indices
     selectedModule: number | null;  // Selected module index
+    // Pagination state for each expanded node: nodeId -> { startPosition, pageSize }
+    pagination?: Record<number, {
+      startPosition: number;
+      pageSize: number;
+    }>;
   };
 }
 

@@ -150,6 +150,9 @@ function App() {
   
   // Expanded modules in hierarchy panel (1-based module indices)
   const [expandedModules, setExpandedModules] = useState<Set<number>>(new Set())
+  
+  // Pagination state for hierarchy panel: nodeId -> { startPosition, pageSize }
+  const [hierarchyPagination, setHierarchyPagination] = useState<Map<number, { startPosition: number; pageSize: number }>>(new Map())
 
   // Info text for MenuBar (full hierarchy name)
   const [menuBarInfoText, setMenuBarInfoText] = useState<string>('')
@@ -2159,6 +2162,12 @@ function App() {
         hierarchy: {
           expandedModules: Array.from(expandedModules),
           selectedModule: selectedModuleIndex,
+          pagination: Object.fromEntries(
+            Array.from(hierarchyPagination.entries()).map(([id, state]) => [
+              id,
+              { startPosition: state.startPosition, pageSize: state.pageSize }
+            ])
+          ),
         },
       }
 
@@ -2338,6 +2347,14 @@ function App() {
       if (session.hierarchy) {
         setExpandedModules(new Set(session.hierarchy.expandedModules))
         setSelectedModuleIndex(session.hierarchy.selectedModule)
+        // Restore pagination state
+        if (session.hierarchy.pagination) {
+          const paginationMap = new Map<number, { startPosition: number; pageSize: number }>()
+          for (const [id, state] of Object.entries(session.hierarchy.pagination)) {
+            paginationMap.set(Number(id), { startPosition: state.startPosition, pageSize: state.pageSize })
+          }
+          setHierarchyPagination(paginationMap)
+        }
       }
 
       console.log('[Session] Session restored successfully:', name)
@@ -2513,6 +2530,8 @@ function App() {
             kdbLoaded={kdbLoaded}
             expandedModules={expandedModules}
             onExpandedModulesChange={setExpandedModules}
+            paginationMap={hierarchyPagination}
+            onPaginationChange={setHierarchyPagination}
           />
         </div>
 
