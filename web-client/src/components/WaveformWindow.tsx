@@ -370,7 +370,7 @@ export function WaveformWindow({
     return () => {
       waveformRenderer.dispose();
     };
-  }, [useMockData, providerReady]);  // 依赖 providerReady，当 Provider 准备好时重新执行
+  }, [useMockData, providerReady, viewport.timeStart, viewport.timeEnd]);  // 依赖 providerReady 和 viewport，当任一个准备好时重新执行
 
   // 使用 ref 存储上一次的 canvas 尺寸，避免循环依赖
   // @ts-ignore - 暂时未使用但保留以备将来

@@ -2119,6 +2119,7 @@ function App() {
           selectedGroup: tab.selectedGroup,
           viewport: tab.viewport,
           cursorPosition: tab.cursorPosition,
+          waveformRange: tab.waveformRange,
         }))
 
       // Get bookmarks
@@ -2305,6 +2306,7 @@ function App() {
           waveformTimeUnit: 2, // Default to ns
           viewport: waveTab.viewport,
           cursorPosition: waveTab.cursorPosition,
+          waveformRange: waveTab.waveformRange,
         }
         
         restoredTabs.push(newTab)

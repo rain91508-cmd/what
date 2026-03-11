@@ -101,11 +101,32 @@ export function DesignBrowser({
       setRootNodes(rootIds);
       setLoading(false);
 
-      // Auto-expand first root node if exists
-      if (rootIds.length > 0) {
+      // Auto-expand first root node if exists and not in controlled mode with existing expanded nodes
+      if (rootIds.length > 0 && (!isControlled || expandedNodes.size === 0)) {
         setExpandedNodes(new Set([rootIds[0]]));
         // Load children for first node
         await loadChildren(rootIds[0], nodesMap);
+      } else if (isControlled && expandedNodes.size > 0) {
+        // In controlled mode with existing expanded nodes, load children for all expanded nodes recursively
+        const loadExpandedNodesRecursively = async (nodeIds: number[], currentMap: Map<number, TreeNodeState>) => {
+          for (const nodeId of nodeIds) {
+            const node = currentMap.get(nodeId);
+            if (node && !node.childrenLoaded) {
+              await loadChildren(nodeId, currentMap);
+              // After loading children, check if any children are also expanded
+              const updatedMap = treeNodes; // Get updated map after loadChildren
+              const childNodes = Array.from(updatedMap.values()).filter(n => n.parentId === nodeId);
+              const expandedChildIds = childNodes.filter(n => expandedNodes.has(n.id)).map(n => n.id);
+              if (expandedChildIds.length > 0) {
+                await loadExpandedNodesRecursively(expandedChildIds, updatedMap);
+              }
+            }
+          }
+        };
+        
+        // Start with root-level expanded nodes
+        const rootExpandedIds = rootIds.filter(id => expandedNodes.has(id));
+        await loadExpandedNodesRecursively(rootExpandedIds, nodesMap);
       }
     } catch (err) {
       console.error('[DesignBrowser] Failed to load top-level modules:', err);
