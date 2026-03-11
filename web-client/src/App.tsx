@@ -147,6 +147,9 @@ function App() {
   
   // Global selected module index for hierarchy/signal panel (1-based)
   const [selectedModuleIndex, setSelectedModuleIndex] = useState<number | null>(null)
+  
+  // Expanded modules in hierarchy panel (1-based module indices)
+  const [expandedModules, setExpandedModules] = useState<Set<number>>(new Set())
 
   // Info text for MenuBar (full hierarchy name)
   const [menuBarInfoText, setMenuBarInfoText] = useState<string>('')
@@ -2106,15 +2109,16 @@ function App() {
           signalDeclarationLine: tab.signalDeclarationLine,
         }))
 
-      // Build waveform tabs data
+      // Build waveform tabs data (without nextSignalUniqueId - it's now global)
       const waveformTabsData = tabs
         .filter(tab => tab.type === 'waveform')
         .map(tab => ({
           id: tab.id,
           label: tab.label,
-          nextSignalUniqueId: nextWaveformSignalIdRef.current,
           groups: tab.groups || {},
           selectedGroup: tab.selectedGroup,
+          viewport: tab.viewport,
+          cursorPosition: tab.cursorPosition,
         }))
 
       // Get bookmarks
@@ -2147,9 +2151,14 @@ function App() {
         },
         sourceTabs: sourceTabsData,
         activeSourceTabId: activeTab,
+        nextWaveformSignalId: nextWaveformSignalIdRef.current,
         waveformTabs: waveformTabsData,
         activeWaveformTabId: activeTab,
         bookmarks: bookmarksData,
+        hierarchy: {
+          expandedModules: Array.from(expandedModules),
+          selectedModule: selectedModuleIndex,
+        },
       }
 
       sessionManager.saveSession(session)
@@ -2257,10 +2266,11 @@ function App() {
 
       // Step 6: Restore waveform tabs
       setSessionLoadingMessage('Restoring waveform tabs...')
+      
+      // Restore global signal ID counter
+      nextWaveformSignalIdRef.current = session.nextWaveformSignalId
+      
       for (const waveTab of session.waveformTabs) {
-        // Restore nextSignalUniqueId
-        nextWaveformSignalIdRef.current = waveTab.nextSignalUniqueId
-
         // Rebuild signals from globalIds
         const restoredGroups: Record<string, SignalGroup> = {}
         for (const [groupId, group] of Object.entries(waveTab.groups)) {
@@ -2280,7 +2290,7 @@ function App() {
             parentId: group.parentId,
             signals: restoredSignals,
             expanded: group.expanded,
-            children: [],
+            children: group.children || [],
           }
         }
 
@@ -2293,7 +2303,10 @@ function App() {
           columnWidths: DEFAULT_COLUMN_WIDTHS,
           timeConfig: DEFAULT_TIME_CONFIG,
           waveformTimeUnit: 2, // Default to ns
+          viewport: waveTab.viewport,
+          cursorPosition: waveTab.cursorPosition,
         }
+        
         restoredTabs.push(newTab)
       }
 
@@ -2317,6 +2330,12 @@ function App() {
           lineContent: bookmark.lineContent,
           name: bookmark.name,
         })
+      }
+
+      // Step 9: Restore hierarchy panel state
+      if (session.hierarchy) {
+        setExpandedModules(new Set(session.hierarchy.expandedModules))
+        setSelectedModuleIndex(session.hierarchy.selectedModule)
       }
 
       console.log('[Session] Session restored successfully:', name)
@@ -2490,6 +2509,8 @@ function App() {
             onFileDoubleClick={handleFileDoubleClick}
             selectedModuleIndex={selectedModuleIndex}
             kdbLoaded={kdbLoaded}
+            expandedModules={expandedModules}
+            onExpandedModulesChange={setExpandedModules}
           />
         </div>
 

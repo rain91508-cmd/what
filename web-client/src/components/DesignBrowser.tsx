@@ -8,6 +8,9 @@ interface DesignBrowserProps {
   onFileDoubleClick?: (fileId: number) => void;
   selectedModuleIndex: number | null;
   kdbLoaded: boolean;
+  // Controlled expanded modules state
+  expandedModules?: Set<number>;
+  onExpandedModulesChange?: (expanded: Set<number>) => void;
 }
 
 interface TreeNodeState extends TreeNode {
@@ -30,10 +33,25 @@ export function DesignBrowser({
   onModuleDoubleClick, 
   onFileDoubleClick,
   selectedModuleIndex,
-  kdbLoaded 
+  kdbLoaded,
+  expandedModules: controlledExpanded,
+  onExpandedModulesChange
 }: DesignBrowserProps) {
   const [activeTab, setActiveTab] = useState<TabType>('hierarchy');
-  const [expandedNodes, setExpandedNodes] = useState<Set<number>>(new Set());
+  // Use controlled expanded modules if provided, otherwise use internal state
+  const isControlled = controlledExpanded !== undefined;
+  const [internalExpandedNodes, setInternalExpandedNodes] = useState<Set<number>>(new Set());
+  const expandedNodes = isControlled ? controlledExpanded : internalExpandedNodes;
+  const setExpandedNodes = useCallback((updater: Set<number> | ((prev: Set<number>) => Set<number>)) => {
+    if (isControlled) {
+      // In controlled mode, notify parent
+      const newExpanded = typeof updater === 'function' ? updater(controlledExpanded!) : updater;
+      onExpandedModulesChange?.(newExpanded);
+    } else {
+      // In uncontrolled mode, update internal state
+      setInternalExpandedNodes(updater as Set<number>);
+    }
+  }, [isControlled, controlledExpanded, onExpandedModulesChange]);
   const [treeNodes, setTreeNodes] = useState<Map<number, TreeNodeState>>(new Map());
   const [rootNodes, setRootNodes] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
