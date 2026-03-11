@@ -66,6 +66,11 @@ third_party/build/
 target/
 Cargo.lock
 
+# WASM generated files
+web-client/public/hwda_wasm.js
+web-client/public/hwda_wasm_bg.wasm
+web-client/public/hwda_wasm.d.ts
+
 # Python cache
 __pycache__/
 *.pyc
