@@ -9,7 +9,7 @@ import { FilterInput } from './FilterInput';
 import { wildcardMatch } from '../utils/wildcardMatch';
 import { zoomIn, zoomOut } from '../utils/zoomHelpers';
 import { sanitizeTimeRange, type TimeRangeOnly } from '../utils/viewport';
-import { buildWasmSignals, updateProviderSettings } from '../wasm/waveformProvider';
+import { buildWasmSignals } from '../wasm/waveformProvider';
 
 import { WaveformProviderAdapter } from '../wasm/waveformProviderAdapter';
 import { useWaveformProvider } from '../contexts/WaveformProviderContext';
@@ -404,7 +404,8 @@ export function WaveformWindow({
   });
 
   // 使用 ref 跟踪上一次的 WASM provider 设置
-  const lastWasmSettingsRef = useRef<{
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _lastWasmSettingsRef = useRef<{
     signalPrefix: string;
     spaceBeforeBracket: boolean;
     signalListHash: string;
@@ -423,8 +424,10 @@ export function WaveformWindow({
   });
 
   // 添加 segments 缓存
-  const cachedSegmentsRef = useRef<any[]>([]);
-  const lastSegmentsParamsRef = useRef<{
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _cachedSegmentsRef = useRef<any[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _lastSegmentsParamsRef = useRef<{
     signalListHash: string;
     viewportTimeStart: number;
     viewportTimeEnd: number;

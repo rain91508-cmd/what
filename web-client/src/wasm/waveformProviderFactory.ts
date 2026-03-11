@@ -1,14 +1,13 @@
 /**
  * Waveform Provider Factory
  *
- * 工厂函数，根据配置创建直接模式或 Worker 模式的波形提供者。
+ * 工厂函数，创建 Worker 模式的波形提供者。
  */
 
 import {
   WaveformProviderInterface,
   FactoryConfig,
 } from '../core/waveformProviderInterface';
-import { WasmWaveformProvider } from './wasmWaveformProvider';
 import { WorkerWaveformProvider } from './workerWaveformProvider';
 
 /**
@@ -35,8 +34,7 @@ export function isWorkerRenderSupported(): boolean {
 /**
  * 创建波形提供者
  *
- * 根据配置选择直接模式或 Worker 模式。
- * 默认使用直接模式（向后兼容）。
+ * 只支持 Worker 模式。
  *
  * @param config 工厂配置
  * @returns WaveformProviderInterface 实例
@@ -44,41 +42,18 @@ export function isWorkerRenderSupported(): boolean {
 export async function createWaveformProvider(
   config: FactoryConfig
 ): Promise<WaveformProviderInterface> {
-  const { useWorker = false, ...providerConfig } = config;
+  const { useWorker = true, ...providerConfig } = config;
 
-  // 如果请求 Worker 模式，检查浏览器支持
-  if (useWorker) {
-    if (!isWorkerRenderSupported()) {
-      console.warn(
-        '[Factory] Worker mode requested but not supported by browser, ' +
-          'falling back to direct mode'
-      );
-      return createDirectProvider(providerConfig);
-    }
-
-    // 使用 Worker 模式
-    return createWorkerProvider(providerConfig);
+  // 检查浏览器支持
+  if (!isWorkerRenderSupported()) {
+    throw new Error(
+      '[Factory] Worker mode is required but not supported by browser. ' +
+      'Please use a modern browser with Web Worker and OffscreenCanvas support.'
+    );
   }
 
-  // 使用直接模式
-  return createDirectProvider(providerConfig);
-}
-
-/**
- * 创建直接模式提供者
- *
- * @param config 提供者配置
- * @returns WasmWaveformProvider 实例
- */
-async function createDirectProvider(
-  config: Omit<FactoryConfig, 'useWorker'>
-): Promise<WasmWaveformProvider> {
-  console.log('[Factory] Creating WasmWaveformProvider (direct mode)');
-
-  const provider = new WasmWaveformProvider();
-  await provider.initialize(config);
-
-  return provider;
+  // 使用 Worker 模式
+  return createWorkerProvider(providerConfig);
 }
 
 /**

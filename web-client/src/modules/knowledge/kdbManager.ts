@@ -32,6 +32,7 @@ export interface TreeNode {
   hasChildren: boolean;
   childModuleIds: number[];
   children?: TreeNode[];
+  parentId?: number;
 }
 
 class KdbManager {
