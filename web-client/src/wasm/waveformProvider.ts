@@ -103,6 +103,7 @@ export async function createProvider(
     serverUrl,
     waveformName,
     signalPrefix,
+    '',  // serverPrefix (default empty)
     spaceBeforeBracket,
     BigInt(timeStamp)
   );
@@ -203,15 +204,17 @@ export async function buildWasmSignals(
 }
 
 /**
- * Update provider settings (prefix and spaceBeforeBracket)
+ * Update provider settings (prefixes and spaceBeforeBracket)
  * This should be called after signal search finds the correct settings
  * Note: Now handled through WaveformProviderContext
  */
 export function updateProviderSettings(
   signalPrefix: string,
+  serverPrefix: string,
   spaceBeforeBracket: boolean
 ): void {
   // No-op now - handled through WaveformProviderContext
+  // Parameters kept for API compatibility
 }
 
 /**
@@ -232,6 +235,7 @@ export function testNameConversion(
     serverUrl,
     waveformName,
     signalPrefix,
+    '',  // serverPrefix (default empty)
     spaceBeforeBracket,
     BigInt(0)
   );

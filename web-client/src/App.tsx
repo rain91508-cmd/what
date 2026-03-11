@@ -107,7 +107,8 @@ function App() {
   const [currentWaveName, setCurrentWaveName] = useState<string | null>(null)
   const [currentWaveChecksum, setCurrentWaveChecksum] = useState<string | null>(null)
   const [currentWaveTimeStamp, setCurrentWaveTimeStamp] = useState<number>(0)  // Waveform modification timestamp for CDN cache
-  const [currentWaveSignalPrefix, setCurrentWaveSignalPrefix] = useState<string>('')  // Global signal prefix for current waveform
+  const [currentWaveSignalPrefix, setCurrentWaveSignalPrefix] = useState<string>('')  // Local signal prefix (removed from local signal name)
+  const [currentWaveSignalServerPrefix, setCurrentWaveSignalServerPrefix] = useState<string>('')  // Server signal prefix (added to server signal name)
   const [currentWaveSignalSpaceBeforeBracket, setCurrentWaveSignalSpaceBeforeBracket] = useState<boolean>(false)  // Whether to add space before [msb:lsb]
   const [currentWaveTimeUnit, setCurrentWaveTimeUnit] = useState<number>(2)  // Waveform time unit enum (0=fs, 1=ps, 2=ns, etc.)
   const [currentWaveEndTime, setCurrentWaveEndTime] = useState<number>(1000000)  // Waveform end time in LoD0 units (time_unit)
@@ -1111,7 +1112,8 @@ function App() {
     setCurrentWaveName(waveName)
     setCurrentWaveChecksum(waveChecksum)
     setCurrentWaveTimeStamp(waveTimeStamp)  // Set waveform modification timestamp
-    setCurrentWaveSignalPrefix('')  // Clear previous prefix
+    setCurrentWaveSignalPrefix('')  // Clear previous local prefix
+    setCurrentWaveSignalServerPrefix('')  // Clear previous server prefix
     setCurrentWaveSignalSpaceBeforeBracket(false)  // Clear previous space setting
     setCurrentWaveTimeUnit(waveTimeUnit)  // Set time unit from waveform
     setCurrentWaveEndTime(waveEndTime)  // Set end time from waveform
@@ -1180,7 +1182,8 @@ function App() {
     setCurrentWaveform(null)
     setCurrentWaveName(null)
     setCurrentWaveChecksum(null)
-    setCurrentWaveSignalPrefix('')  // Clear signal prefix when closing waveform
+    setCurrentWaveSignalPrefix('')  // Clear local signal prefix when closing waveform
+    setCurrentWaveSignalServerPrefix('')  // Clear server signal prefix when closing waveform
     setCurrentWaveSignalSpaceBeforeBracket(false)  // Clear space flag when closing waveform
     setWaveforms([])
     
@@ -1678,7 +1681,7 @@ function App() {
             if (signalHasBitWidth && result.spaceBeforeBracket !== undefined && result.spaceBeforeBracket !== currentWaveSignalSpaceBeforeBracket) {
               console.log(`[Signal Search] Updating spaceBeforeBracket: ${currentWaveSignalSpaceBeforeBracket} -> ${result.spaceBeforeBracket}`)
               setCurrentWaveSignalSpaceBeforeBracket(result.spaceBeforeBracket)
-              updateProviderSettings(currentWaveSignalPrefix, result.spaceBeforeBracket)
+              updateProviderSettings(currentWaveSignalPrefix, currentWaveSignalServerPrefix, result.spaceBeforeBracket)
             } else if (!signalHasBitWidth) {
               console.log(`[Signal Search] Single-bit signal, not updating spaceBeforeBracket (keep: ${currentWaveSignalSpaceBeforeBracket})`)
             }
@@ -1730,7 +1733,7 @@ function App() {
           setCurrentWaveSignalSpaceBeforeBracket(detectedSpaceBeforeBracket)
 
           // Update WASM provider settings
-          updateProviderSettings(detectedPrefix, detectedSpaceBeforeBracket)
+          updateProviderSettings(detectedPrefix, currentWaveSignalServerPrefix, detectedSpaceBeforeBracket)
 
           // Add signal to waveform (still using mock data for now)
           addSignalToWaveform(signal)
@@ -2152,6 +2155,7 @@ function App() {
           : undefined,
         waveformSettings: {
           signalPrefix: currentWaveSignalPrefix,
+          serverPrefix: currentWaveSignalServerPrefix,
           spaceBeforeBracket: currentWaveSignalSpaceBeforeBracket,
         },
         sourceTabs: sourceTabsData,
@@ -2250,6 +2254,7 @@ function App() {
       // Step 4.5: Restore waveform settings
       if (session.waveformSettings) {
         setCurrentWaveSignalPrefix(session.waveformSettings.signalPrefix)
+        setCurrentWaveSignalServerPrefix(session.waveformSettings.serverPrefix || '')  // Backward compatibility
         setCurrentWaveSignalSpaceBeforeBracket(session.waveformSettings.spaceBeforeBracket)
       }
 
@@ -2451,6 +2456,7 @@ function App() {
       serverUrl={serverUrl}
       waveformName={currentWaveName || ''}
       signalPrefix={currentWaveSignalPrefix}
+      serverPrefix={currentWaveSignalServerPrefix}
       spaceBeforeBracket={currentWaveSignalSpaceBeforeBracket}
       timeStamp={currentWaveTimeStamp}
       enableOpfs={opfsCacheEnabled}

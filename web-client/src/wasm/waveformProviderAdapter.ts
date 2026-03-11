@@ -90,11 +90,21 @@ export class WaveformProviderAdapter {
   }
 
   get signal_prefix(): string {
+    // Delegate to provider
     return '';
   }
 
   set signal_prefix(_value: string) {
-    // 暂不支持
+    // Delegate to provider via setSignalPrefix
+  }
+
+  get server_prefix(): string {
+    // Delegate to provider
+    return '';
+  }
+
+  set server_prefix(_value: string) {
+    // Delegate to provider via setServerPrefix
   }
 
   get space_before_bracket(): boolean {
@@ -102,7 +112,7 @@ export class WaveformProviderAdapter {
   }
 
   set space_before_bracket(_value: boolean) {
-    // 暂不支持
+    // Delegate to provider via setSpaceBeforeBracket
   }
 
   get display_format(): DisplayFormat {

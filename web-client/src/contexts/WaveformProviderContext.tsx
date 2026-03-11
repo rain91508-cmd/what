@@ -38,7 +38,8 @@ interface WaveformProviderProviderProps {
   children: ReactNode;
   serverUrl?: string;
   waveformName?: string;
-  signalPrefix?: string;
+  signalPrefix?: string;      // Local prefix (removed from local signal name)
+  serverPrefix?: string;      // Server prefix (added to server signal name)
   spaceBeforeBracket?: boolean;
   timeStamp?: number;
   enableOpfs?: boolean;
@@ -54,7 +55,8 @@ export function WaveformProviderProvider({
   children,
   serverUrl = '',
   waveformName = '',
-  signalPrefix = '',
+  signalPrefix = '',      // Local prefix
+  serverPrefix = '',      // Server prefix
   spaceBeforeBracket = false,
   timeStamp = 0,
   enableOpfs = false,
@@ -117,6 +119,7 @@ export function WaveformProviderProvider({
             serverUrl,
             waveformName,
             signalPrefix,
+            serverPrefix,
             spaceBeforeBracket,
             timeStamp,
             enableOpfs,
@@ -148,13 +151,14 @@ export function WaveformProviderProvider({
         }
       };
     } else if (!needsNewProvider && provider) {
-      // Just update signalPrefix and/or spaceBeforeBracket on existing provider
+      // Just update signalPrefix, serverPrefix and/or spaceBeforeBracket on existing provider
       if (provider) {
         provider.setSignalPrefix(signalPrefix);
+        provider.setServerPrefix(serverPrefix);
         provider.setSpaceBeforeBracket(spaceBeforeBracket);
       }
     }
-  }, [serverUrl, waveformName, signalPrefix, spaceBeforeBracket, timeStamp, enableOpfs, enableMemoryCache]);
+  }, [serverUrl, waveformName, signalPrefix, serverPrefix, spaceBeforeBracket, timeStamp, enableOpfs, enableMemoryCache]);
 
   const value: WaveformProviderContextType = {
     provider,

@@ -138,6 +138,11 @@ self.onmessage = async (event) => {
         break;
       }
 
+      case 'SET_SERVER_PREFIX': {
+        handleSetServerPrefix(payload, id);
+        break;
+      }
+
       case 'SET_SPACE_BEFORE_BRACKET': {
         handleSetSpaceBeforeBracket(payload, id);
         break;
@@ -209,6 +214,7 @@ async function handleInitialize(payload: any, id: number): Promise<void> {
     config.serverUrl,
     config.waveformName,
     config.signalPrefix,
+    config.serverPrefix,
     config.spaceBeforeBracket,
     BigInt(config.timeStamp)
   );
@@ -572,6 +578,17 @@ function handleSetSignalPrefix(payload: any, id: number): void {
 
   const { prefix } = payload;
   wasmProvider.signal_prefix = prefix;
+  sendSuccess(id, null);
+}
+
+/**
+ * 处理 SET_SERVER_PREFIX
+ */
+function handleSetServerPrefix(payload: any, id: number): void {
+  if (!wasmProvider) throw new Error('Provider not initialized');
+
+  const { prefix } = payload;
+  wasmProvider.server_prefix = prefix;
   sendSuccess(id, null);
 }
 

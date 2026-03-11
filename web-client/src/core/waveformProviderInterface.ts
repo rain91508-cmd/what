@@ -91,7 +91,8 @@ export type DisplayFormat = 'hex' | 'bin' | 'oct' | 'dec';
 export interface ProviderConfig {
   serverUrl: string;
   waveformName: string;
-  signalPrefix: string;
+  signalPrefix: string;      // Local prefix (removed from local signal name)
+  serverPrefix: string;      // Server prefix (added to server signal name)
   spaceBeforeBracket: boolean;
   timeStamp: number;
   enableOpfs?: boolean;
@@ -220,9 +221,14 @@ export interface WaveformProviderInterface {
   setMemoryCacheEnabled(enabled: boolean): void;
 
   /**
-   * 设置信号前缀
+   * 设置信号前缀（local prefix）
    */
   setSignalPrefix(prefix: string): void;
+
+  /**
+   * 设置服务器前缀
+   */
+  setServerPrefix(prefix: string): void;
 
   /**
    * 设置是否在 [ 前加空格
