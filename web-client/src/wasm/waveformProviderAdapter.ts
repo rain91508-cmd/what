@@ -64,6 +64,7 @@ export class WaveformProviderAdapter {
   private _displayFormat: DisplayFormat = 'hex';
   private timeConfig: TimeConfig = { displayUnit: 'ps', lod0Unit: 1, displayUnitPerLoD0Unit: 1 };
   private devicePixelRatio: number = 1;
+  private canvasRegistered: boolean = false;
 
   constructor(provider: WaveformProviderInterface, canvasId: string) {
     this.provider = provider;
@@ -120,6 +121,7 @@ export class WaveformProviderAdapter {
   async registerCanvas(canvas: OffscreenCanvas, dpr: number = 1): Promise<void> {
     this.devicePixelRatio = dpr;
     await this.provider.registerCanvas(this.canvasId, canvas, dpr);
+    this.canvasRegistered = true;
   }
 
   /**
@@ -127,6 +129,7 @@ export class WaveformProviderAdapter {
    */
   async unregisterCanvas(): Promise<void> {
     await this.provider.unregisterCanvas(this.canvasId);
+    this.canvasRegistered = false;
   }
 
   // ==================== 方法映射 ====================
@@ -194,6 +197,12 @@ export class WaveformProviderAdapter {
     displayFormat?: DisplayFormat,
     timeConfig?: TimeConfig,
   }): Promise<void> {
+    // 检查 Canvas 是否已注册
+    if (!this.canvasRegistered) {
+      console.log('[WaveformProviderAdapter] Canvas not registered, skipping render');
+      return;
+    }
+    
     // 使用提供的参数或默认参数
     const currentSignals = options?.signals || this.currentSignals;
     const viewport = options?.viewport || this.viewport;

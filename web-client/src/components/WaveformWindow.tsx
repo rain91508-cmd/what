@@ -113,27 +113,27 @@ export function WaveformWindow({
   // 用于跟踪 Provider 是否已准备好
   const providerReady = !providerLoading && sharedProvider !== null && wasmProviderRef.current !== null;
 
-  // Initialize WASM Adapter when shared provider is ready
-  useEffect(() => {
-    console.log(`[WaveformWindow] Provider init check: useMockData=${useMockData}, providerLoading=${providerLoading}, sharedProvider=${sharedProvider ? 'yes' : 'no'}`);
-
-    if (!useMockData && sharedProvider && !wasmProviderRef.current) {
-      // 创建 Adapter 包装共享 Provider
-      const adapter = new WaveformProviderAdapter(sharedProvider, canvasIdRef.current);
-      wasmProviderRef.current = adapter;
-      console.log(`[WaveformWindow] Created adapter for canvas: ${canvasIdRef.current}`);
-    }
-  }, [useMockData, sharedProvider, providerLoading]);
-
-  // Register Canvas when adapter is ready
+  // Initialize WASM Adapter and Register Canvas when shared provider is ready
   // 使用 ref 来跟踪 Canvas 是否已 transfer，防止 StrictMode 下的重复 transfer
   const canvasTransferredRef = useRef(false);
   
   useEffect(() => {
-    if (!wasmProviderRef.current || !canvasRef.current) return;
+    console.log(`[WaveformWindow] Provider init check: useMockData=${useMockData}, providerLoading=${providerLoading}, sharedProvider=${sharedProvider ? 'yes' : 'no'}`);
+
+    // 创建 Adapter（如果还没有创建）
+    if (!useMockData && sharedProvider && !wasmProviderRef.current) {
+      const adapter = new WaveformProviderAdapter(sharedProvider, canvasIdRef.current);
+      wasmProviderRef.current = adapter;
+      console.log(`[WaveformWindow] Created adapter for canvas: ${canvasIdRef.current}`);
+    }
+
+    // 注册 Canvas（如果adapter已创建且canvas未注册）
+    if (!wasmProviderRef.current || !canvasRef.current) {
+      console.log(`[WaveformWindow] Waiting for adapter or canvas: adapter=${wasmProviderRef.current ? 'yes' : 'no'}, canvas=${canvasRef.current ? 'yes' : 'no'}`);
+      return;
+    }
     
     // 如果已经 transfer 过，什么都不做
-    // Canvas 已经在 Worker 中了，不需要再次 transfer 或 register
     if (canvasTransferredRef.current) {
       console.log(`[WaveformWindow] Canvas already transferred, skipping: ${canvasIdRef.current}`);
       return;
@@ -160,6 +160,9 @@ export function WaveformWindow({
         // 传递 dpr=1，禁用缩放
         await wasmProviderRef.current!.registerCanvas(offscreenCanvas, 1);
         console.log(`[WaveformWindow] Canvas registered: ${canvasIdRef.current}, dpr=1 (1:1 mapping)`);
+        
+        // Canvas注册完成后触发渲染
+        await renderWaveform();
       } catch (error) {
         console.error('[WaveformWindow] Failed to register canvas:', error);
         canvasTransferredRef.current = false;
@@ -177,7 +180,7 @@ export function WaveformWindow({
       // 不调用 unregisterCanvas，让 Canvas 在 Worker 中保留
       // 因为 StrictMode 下这不是真正的卸载
     };
-  }, []);
+  }, [useMockData, sharedProvider, providerLoading]);
   
   // 根据 canvas 宽度和时间配置计算 viewport
   // 所有时间值使用 LoD0Unit（整数）
@@ -773,7 +776,7 @@ export function WaveformWindow({
           lastWidth = newWidth;
         }
         
-        // 如果不是 mock 模式，检查 Provider 是否准备好
+        // 如果不是 mock 模式，检查 Provider 和 Canvas 是否准备好
         if (!useMockData && !providerReady) {
           console.log('[WaveformWindow] Provider not ready, skipping resize render');
           resizeTimeout = null;
