@@ -204,21 +204,15 @@ export class WaveformProviderAdapter {
     // 转换信号列表格式
     const newSignals = this.convertSignals(currentSignals);
     
-    // 为 renderWaveform 准备物理尺寸（乘以 dpr）
-    const physicalCanvasConfig = {
-      ...canvasConfig,
-      width: canvasConfig.width * this.devicePixelRatio,
-      height: canvasConfig.height * this.devicePixelRatio,
-      rowHeight: canvasConfig.rowHeight * this.devicePixelRatio,
-    };
-    
+    // 使用逻辑尺寸（CSS像素）传递给WASM
+    // WASM计算segments时使用逻辑尺寸
+    // Worker中使用ctx.scale(dpr, dpr)来缩放绘制
     console.log('[WaveformProviderAdapter] render_waveform called with:', { 
       canvasId: this.canvasId, 
       currentSignals: currentSignals, 
       newSignals, 
       viewport, 
       canvasConfig, 
-      physicalCanvasConfig,
       dpr: this.devicePixelRatio,
       displayFormat, 
       timeConfig 
@@ -228,7 +222,7 @@ export class WaveformProviderAdapter {
       canvasId: this.canvasId,
       signals: newSignals,
       viewport,
-      canvasConfig: physicalCanvasConfig,
+      canvasConfig,
       displayFormat,
       timeConfig,
       devicePixelRatio: this.devicePixelRatio,
