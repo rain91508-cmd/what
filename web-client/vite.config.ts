@@ -51,11 +51,7 @@ export default defineConfig(({ mode }) => {
     worker: {
       format: 'es',
     },
-    // Configure Monaco editor loader to use local files
-    define: {
-      // Use local monaco instead of CDN
-      'process.env.MONACO_EDITOR_LOADER_URL': JSON.stringify('/node_modules/monaco-editor/min/vs/loader.js'),
-    },
+
     
     base: isProd ? '/what/' : '/',
   }
