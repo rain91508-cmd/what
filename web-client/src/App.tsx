@@ -1522,71 +1522,139 @@ function App() {
 
   // Helper function to search signal on server with prefix removal and bit width handling
   // Inputs:
-  //   - fullName: full hierarchical name (e.g., "work@tb_top.u_dut.mem_arid[7:0]")
-  //   - prefix: prefix to remove (e.g., "work@")
-  // Returns: { found, matchedName?, prefix?, spaceBeforeBracket? }
+  //   - fullName: full hierarchical name (e.g., "tb_top.u_dut.mem_arid[7:0]")
+  //   - localPrefix: local prefix to remove (e.g., "tb_top.u_dut.")
+  // Returns: { found, matchedNames?, localPrefix?, serverPrefix?, spaceBeforeBracket?, multipleServerPrefixes? }
+  // Note: Now uses $ (end of line) matching to allow server signals with different prefixes
   const searchSignalOnServer = async (
     waveName: string,
     fullName: string,
-    prefix: string = ''
-  ): Promise<{ found: boolean; matchedName?: string; prefix?: string; spaceBeforeBracket?: boolean }> => {
-    // Remove prefix if provided
-    let searchName = prefix && fullName.startsWith(prefix)
-      ? fullName.substring(prefix.length)
+    localPrefix: string = ''
+  ): Promise<{
+    found: boolean;
+    matchedNames?: string[];  // All matching server signal names
+    localPrefix?: string;     // The local prefix that was removed
+    serverPrefix?: string;    // The server prefix extracted from matches
+    spaceBeforeBracket?: boolean;
+    multipleServerPrefixes?: boolean;  // True if multiple different server prefixes found
+  }> => {
+    // Remove local prefix if provided
+    let sharedName = localPrefix && fullName.startsWith(localPrefix)
+      ? fullName.substring(localPrefix.length)
       : fullName
 
-    console.log(`[Signal Search] Original: "${fullName}", Prefix: "${prefix}", Search name: "${searchName}"`)
+    console.log(`[Signal Search] Original: "${fullName}", Local Prefix: "${localPrefix}", Shared name: "${sharedName}"`)
 
-    // Try with bit width first (no space)
-    let escapedName = escapeRegex(searchName)
-    console.log(`[Signal Search] Trying with bit width: "${searchName}" -> regex: ^${escapedName}$`)
+    // Try with bit width first (no space) - match end of line only
+    let escapedName = escapeRegex(sharedName)
+    console.log(`[Signal Search] Trying with bit width: "${sharedName}" -> regex: ${escapedName}$`)
 
     let response = await apiService.getWaveformSignals(waveName, {
-      nameRegex: `^${escapedName}$`,
-      limit: 1
+      nameRegex: `${escapedName}$`
+      // Note: No limit, get all matches
     })
 
-    console.log(`[Signal Search] Response: status=${response.status}, signal_count=${(response.data as any)?.signal_count ?? 0}`)
+    const signalCount = (response.data as any)?.signal_count ?? 0
+    console.log(`[Signal Search] Response: status=${response.status}, signal_count=${signalCount}`)
 
-    if (response.status === 'success' && (response.data as any)?.signal_count > 0) {
-      console.log(`[Signal Search] Found with bit width!`)
-      return { found: true, matchedName: searchName, prefix, spaceBeforeBracket: false }
+    if (response.status === 'success' && signalCount > 0) {
+      const signals = (response.data as any)?.signals ?? []
+      const matchedNames = signals.map((s: any) => s.name as string)
+      console.log(`[Signal Search] Found ${matchedNames.length} match(es):`, matchedNames)
+
+      // Extract server prefixes from matched names
+      const serverPrefixes = new Set<string>()
+      for (const matchedName of matchedNames) {
+        if (matchedName.endsWith(sharedName)) {
+          const serverPrefix = matchedName.substring(0, matchedName.length - sharedName.length)
+          serverPrefixes.add(serverPrefix)
+        }
+      }
+
+      console.log(`[Signal Search] Extracted server prefixes:`, Array.from(serverPrefixes))
+
+      return {
+        found: true,
+        matchedNames,
+        localPrefix,
+        serverPrefix: serverPrefixes.size === 1 ? Array.from(serverPrefixes)[0] : undefined,
+        spaceBeforeBracket: false,
+        multipleServerPrefixes: serverPrefixes.size > 1
+      }
     }
 
     // Try without bit width
-    const bracketIndex = searchName.indexOf('[')
+    const bracketIndex = sharedName.indexOf('[')
     if (bracketIndex !== -1) {
-      const nameWithoutBitWidth = searchName.substring(0, bracketIndex)
+      const nameWithoutBitWidth = sharedName.substring(0, bracketIndex)
       escapedName = escapeRegex(nameWithoutBitWidth)
-      console.log(`[Signal Search] Trying without bit width: "${nameWithoutBitWidth}" -> regex: ^${escapedName}$`)
+      console.log(`[Signal Search] Trying without bit width: "${nameWithoutBitWidth}" -> regex: ${escapedName}$`)
 
       response = await apiService.getWaveformSignals(waveName, {
-        nameRegex: `^${escapedName}$`,
-        limit: 1
+        nameRegex: `${escapedName}$`
       })
 
-      console.log(`[Signal Search] Response: status=${response.status}, signal_count=${(response.data as any)?.signal_count ?? 0}`)
+      const signalCountNoWidth = (response.data as any)?.signal_count ?? 0
+      console.log(`[Signal Search] Response: status=${response.status}, signal_count=${signalCountNoWidth}`)
 
-      if (response.status === 'success' && (response.data as any)?.signal_count > 0) {
-        console.log(`[Signal Search] Found without bit width!`)
-        return { found: true, matchedName: nameWithoutBitWidth, prefix, spaceBeforeBracket: false }
+      if (response.status === 'success' && signalCountNoWidth > 0) {
+        const signals = (response.data as any)?.signals ?? []
+        const matchedNames = signals.map((s: any) => s.name as string)
+        console.log(`[Signal Search] Found ${matchedNames.length} match(es) without bit width:`, matchedNames)
+
+        // Extract server prefixes
+        const serverPrefixes = new Set<string>()
+        for (const matchedName of matchedNames) {
+          if (matchedName.endsWith(nameWithoutBitWidth)) {
+            const serverPrefix = matchedName.substring(0, matchedName.length - nameWithoutBitWidth.length)
+            serverPrefixes.add(serverPrefix)
+          }
+        }
+
+        return {
+          found: true,
+          matchedNames,
+          localPrefix,
+          serverPrefix: serverPrefixes.size === 1 ? Array.from(serverPrefixes)[0] : undefined,
+          spaceBeforeBracket: false,
+          multipleServerPrefixes: serverPrefixes.size > 1
+        }
       }
 
       // Try with space before bracket (e.g., "mem_arid [7:0]")
-      const nameWithSpace = searchName.substring(0, bracketIndex) + ' ' + searchName.substring(bracketIndex)
+      const nameWithSpace = sharedName.substring(0, bracketIndex) + ' ' + sharedName.substring(bracketIndex)
       escapedName = escapeRegex(nameWithSpace)
-      console.log(`[Signal Search] Trying with space before bracket: "${nameWithSpace}" -> regex: ^${escapedName}$`)
+      console.log(`[Signal Search] Trying with space before bracket: "${nameWithSpace}" -> regex: ${escapedName}$`)
 
       response = await apiService.getWaveformSignals(waveName, {
-        nameRegex: `^${escapedName}$`,
-        limit: 1
+        nameRegex: `${escapedName}$`
       })
 
-      console.log(`[Signal Search] Response: status=${response.status}, signal_count=${(response.data as any)?.signal_count ?? 0}`)
+      const signalCountWithSpace = (response.data as any)?.signal_count ?? 0
+      console.log(`[Signal Search] Response: status=${response.status}, signal_count=${signalCountWithSpace}`)
 
-      if (response.status === 'success' && (response.data as any)?.signal_count > 0) {
-        console.log(`[Signal Search] Found with space before bracket!`)
-        return { found: true, matchedName: nameWithSpace, prefix, spaceBeforeBracket: true }
+      if (response.status === 'success' && signalCountWithSpace > 0) {
+        const signals = (response.data as any)?.signals ?? []
+        const matchedNames = signals.map((s: any) => s.name as string)
+        console.log(`[Signal Search] Found ${matchedNames.length} match(es) with space:`, matchedNames)
+
+        // Extract server prefixes
+        const serverPrefixes = new Set<string>()
+        for (const matchedName of matchedNames) {
+          if (matchedName.endsWith(nameWithSpace)) {
+            const serverPrefix = matchedName.substring(0, matchedName.length - nameWithSpace.length)
+            serverPrefixes.add(serverPrefix)
+          }
+        }
+
+        return {
+          found: true,
+          matchedNames,
+          localPrefix,
+          serverPrefix: serverPrefixes.size === 1 ? Array.from(serverPrefixes)[0] : undefined,
+          spaceBeforeBracket: true,
+          multipleServerPrefixes: serverPrefixes.size > 1
+        }
       }
     }
 
@@ -1594,50 +1662,69 @@ function App() {
   }
 
   // Helper function to try finding signal with prefix removal
+  // Returns all matching results for user selection if multiple server prefixes found
   const tryFindSignalWithPrefixRemoval = async (
     waveName: string,
     signalName: string
-  ): Promise<{ found: boolean; matchedName?: string; prefix?: string; spaceBeforeBracket?: boolean }> => {
+  ): Promise<{
+    found: boolean;
+    matchedNames?: string[];
+    localPrefix?: string;
+    serverPrefix?: string;
+    spaceBeforeBracket?: boolean;
+    multipleServerPrefixes?: boolean;
+    allMatches?: Array<{
+      serverPrefix: string;
+      matchedNames: string[];
+      localPrefix: string;
+      spaceBeforeBracket: boolean;
+    }>;
+  }> => {
     console.log(`[Signal Search] Starting prefix removal for: ${signalName}`)
 
-    // First, try removing work@ prefix if present (most common case)
-    const atIndex = signalName.indexOf('@')
-    if (atIndex !== -1) {
-      const prefix = signalName.substring(0, atIndex + 1)
-      console.log(`[Signal Search] Trying to remove work@ prefix: "${prefix}"`)
-      const result = await searchSignalOnServer(waveName, signalName, prefix)
-      if (result.found) {
-        console.log(`[Signal Search] Found after removing work@ prefix!`)
-        return {
-          found: true,
-          matchedName: result.matchedName,
-          prefix: prefix,
-          spaceBeforeBracket: result.spaceBeforeBracket
-        }
-      }
-    }
+    // Collect all successful matches with different prefixes
+    const allMatches: Array<{
+      serverPrefix: string;
+      matchedNames: string[];
+      localPrefix: string;
+      spaceBeforeBracket: boolean;
+    }> = []
 
-    // If not found with work@ removal, try hierarchical prefix removal
-    // But only remove from the part after @ (if @ exists)
-    const searchStartIndex = atIndex !== -1 ? atIndex + 1 : 0
-    const basePrefix = atIndex !== -1 ? signalName.substring(0, searchStartIndex) : ''
-    let currentName = signalName.substring(searchStartIndex)
+    // Try hierarchical prefix removal (no special handling for work@)
+    // Start with empty prefix and progressively remove hierarchical levels
+    let currentName = signalName
     let removedHierarchicalPrefix = ''
 
     console.log(`[Signal Search] Trying hierarchical removal from: "${currentName}"`)
 
     while (currentName.length > 0) {
-      const fullPrefix = basePrefix + removedHierarchicalPrefix
-      console.log(`[Signal Search] Trying with prefix: "${fullPrefix}"`)
+      const fullLocalPrefix = removedHierarchicalPrefix
+      console.log(`[Signal Search] Trying with local prefix: "${fullLocalPrefix}"`)
 
-      const result = await searchSignalOnServer(waveName, signalName, fullPrefix)
+      const result = await searchSignalOnServer(waveName, signalName, fullLocalPrefix)
       if (result.found) {
-        console.log(`[Signal Search] Found with hierarchical prefix removal!`)
-        return {
-          found: true,
-          matchedName: result.matchedName,
-          prefix: fullPrefix,
-          spaceBeforeBracket: result.spaceBeforeBracket
+        console.log(`[Signal Search] Found with local prefix "${fullLocalPrefix}"!`)
+
+        if (result.serverPrefix && result.matchedNames) {
+          // Single server prefix - add to matches
+          allMatches.push({
+            serverPrefix: result.serverPrefix,
+            matchedNames: result.matchedNames,
+            localPrefix: fullLocalPrefix,
+            spaceBeforeBracket: result.spaceBeforeBracket ?? false
+          })
+
+          // If only one server prefix found, return immediately
+          if (!result.multipleServerPrefixes) {
+            return {
+              found: true,
+              matchedNames: result.matchedNames,
+              localPrefix: fullLocalPrefix,
+              serverPrefix: result.serverPrefix,
+              spaceBeforeBracket: result.spaceBeforeBracket
+            }
+          }
+          // If multiple server prefixes, continue searching to collect all options
         }
       }
 
@@ -1649,6 +1736,37 @@ function App() {
       currentName = currentName.substring(dotIndex + 1)
 
       console.log(`[Signal Search] Removed hierarchical prefix: "${removedHierarchicalPrefix}", remaining: "${currentName}"`)
+    }
+
+    // If we found matches but need user to select server prefix
+    if (allMatches.length > 0) {
+      // Group matches by server prefix
+      const groupedByServerPrefix = new Map<string, typeof allMatches[0]>()
+      for (const match of allMatches) {
+        if (!groupedByServerPrefix.has(match.serverPrefix)) {
+          groupedByServerPrefix.set(match.serverPrefix, match)
+        }
+      }
+
+      if (groupedByServerPrefix.size === 1) {
+        // Only one unique server prefix across all matches
+        const match = Array.from(groupedByServerPrefix.values())[0]
+        return {
+          found: true,
+          matchedNames: match.matchedNames,
+          localPrefix: match.localPrefix,
+          serverPrefix: match.serverPrefix,
+          spaceBeforeBracket: match.spaceBeforeBracket
+        }
+      } else {
+        // Multiple server prefixes - need user selection
+        console.log(`[Signal Search] Multiple server prefixes found, need user selection:`, Array.from(groupedByServerPrefix.keys()))
+        return {
+          found: true,
+          multipleServerPrefixes: true,
+          allMatches: Array.from(groupedByServerPrefix.values())
+        }
+      }
     }
 
     console.log(`[Signal Search] Signal not found after all prefix removals`)
@@ -1666,14 +1784,30 @@ function App() {
     // If waveform is loaded from server, verify signal exists
     if (currentWaveName && apiService.isConnected()) {
       try {
-        // If we already have a signal prefix for this waveform, use it directly
+        // If we already have prefixes for this waveform, use them directly
         if (currentWaveSignalPrefix) {
-          console.log(`[Signal Search] Using existing prefix "${currentWaveSignalPrefix}"`)
+          console.log(`[Signal Search] Using existing local prefix "${currentWaveSignalPrefix}", server prefix "${currentWaveSignalServerPrefix}"`)
 
           const result = await searchSignalOnServer(currentWaveName, signal.fullName, currentWaveSignalPrefix)
 
           if (result.found) {
             console.log(`[Signal Search] Found with existing prefix! spaceBeforeBracket=${result.spaceBeforeBracket}`)
+
+            // Check if multiple server prefixes found
+            if (result.multipleServerPrefixes && result.matchedNames && result.matchedNames.length > 0) {
+              // Multiple server prefixes - need to check if our saved one is among them
+              const savedServerPrefix = currentWaveSignalServerPrefix
+              const matchingWithSavedPrefix = result.matchedNames.filter(name =>
+                savedServerPrefix ? name.startsWith(savedServerPrefix) : true
+              )
+
+              if (matchingWithSavedPrefix.length === 0) {
+                // Saved server prefix doesn't match any found signals
+                // This shouldn't happen normally, but handle it gracefully
+                console.warn(`[Signal Search] Saved server prefix "${savedServerPrefix}" doesn't match any found signals`)
+              }
+            }
+
             // Signal found with existing prefix
             // Only update spaceBeforeBracket if this signal has bit width (has '[')
             // Single-bit signals don't provide information about space before bracket
@@ -1696,8 +1830,28 @@ function App() {
         const result = await tryFindSignalWithPrefixRemoval(currentWaveName, signal.fullName)
 
         if (result.found) {
-          // Signal found (possibly with prefix removed)
-          const needsPrefixAdjustment = result.prefix && result.prefix.length > 0
+          // Check if multiple server prefixes found - need user selection
+          if (result.multipleServerPrefixes && result.allMatches && result.allMatches.length > 1) {
+            console.log(`[Signal Search] Multiple server prefixes found, showing selection dialog`)
+            // TODO: Show server prefix selection dialog
+            // For now, use the first match as default
+            const firstMatch = result.allMatches[0]
+            console.log(`[Signal Search] Using first server prefix: "${firstMatch.serverPrefix}"`)
+
+            // Save both prefixes
+            setCurrentWaveSignalPrefix(firstMatch.localPrefix)
+            setCurrentWaveSignalServerPrefix(firstMatch.serverPrefix)
+            setCurrentWaveSignalSpaceBeforeBracket(firstMatch.spaceBeforeBracket)
+
+            // Update WASM provider settings
+            updateProviderSettings(firstMatch.localPrefix, firstMatch.serverPrefix, firstMatch.spaceBeforeBracket)
+
+            addSignalToWaveform(signal)
+            return
+          }
+
+          // Signal found with single server prefix
+          const needsPrefixAdjustment = result.localPrefix && result.localPrefix.length > 0
 
           if (needsPrefixAdjustment) {
             // Show success dialog with prefix info
@@ -1712,8 +1866,8 @@ function App() {
 
             setSignalNotFoundInfo({
               attempted: signal.fullName,
-              matched: result.matchedName!,
-              prefix: result.prefix!,
+              matched: result.matchedNames?.[0] || '',
+              prefix: result.localPrefix!,
               firstAvailable: firstSignalName,
               success: true
             })
@@ -1725,15 +1879,17 @@ function App() {
           // Only update spaceBeforeBracket if this signal has bit width (has '[')
           const newSignalHasBitWidth = signal.fullName.includes('[')
           const detectedSpaceBeforeBracket = newSignalHasBitWidth ? (result.spaceBeforeBracket ?? false) : currentWaveSignalSpaceBeforeBracket
-          const detectedPrefix = result.prefix ?? ''
-          
-          console.log(`[Signal Search] Setting prefix="${detectedPrefix}", spaceBeforeBracket=${detectedSpaceBeforeBracket} (signalHasBitWidth=${newSignalHasBitWidth})`)
-          
-          setCurrentWaveSignalPrefix(detectedPrefix)
+          const detectedLocalPrefix = result.localPrefix ?? ''
+          const detectedServerPrefix = result.serverPrefix ?? ''
+
+          console.log(`[Signal Search] Setting localPrefix="${detectedLocalPrefix}", serverPrefix="${detectedServerPrefix}", spaceBeforeBracket=${detectedSpaceBeforeBracket} (signalHasBitWidth=${newSignalHasBitWidth})`)
+
+          setCurrentWaveSignalPrefix(detectedLocalPrefix)
+          setCurrentWaveSignalServerPrefix(detectedServerPrefix)
           setCurrentWaveSignalSpaceBeforeBracket(detectedSpaceBeforeBracket)
 
           // Update WASM provider settings
-          updateProviderSettings(detectedPrefix, currentWaveSignalServerPrefix, detectedSpaceBeforeBracket)
+          updateProviderSettings(detectedLocalPrefix, detectedServerPrefix, detectedSpaceBeforeBracket)
 
           // Add signal to waveform (still using mock data for now)
           addSignalToWaveform(signal)
