@@ -17,9 +17,18 @@ function getCurrentHost(): string {
   return hostname || 'localhost';
 }
 
+function getDefaultPort(): string {
+  // Use port 443 for GitHub Pages domain (HTTPS)
+  const hostname = window.location.hostname;
+  if (hostname === 'rain91508-cmd.github.io') {
+    return '443';
+  }
+  return '8080';
+}
+
 export function ConnectionDialog({ onConnect, onClose }: ConnectionDialogProps) {
   const [host, setHost] = useState(getCurrentHost);
-  const [port, setPort] = useState('8080');
+  const [port, setPort] = useState(getDefaultPort);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
