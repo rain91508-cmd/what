@@ -82,7 +82,7 @@ jobs:
           cp -r wasm-pkg/* public/wasm-pkg/
 
           # 3. 复制 monaco-editor 的 loader 和核心文件
-          cp -r node_modules/monaco-editor/min/vs public/monaco-editor/
+          cp -r node_modules/monaco-editor/min/vs public/monaco-editor/min/
 
       # 6. Vite 生产构建 (触发配置里的 base 替换)
       - name: Build Vite App
