@@ -20,7 +20,7 @@
 // │  Message Window                                                 │
 // └─────────────────────────────────────────────────────────────────┘
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
 import './App.css'
 
 // Core services
@@ -46,7 +46,6 @@ import { ToolBar } from './components/ToolBar'
 import { DesignBrowser } from './components/DesignBrowser'
 import { SignalPanel } from './components/SignalPanel'
 import { TabPanel } from './components/TabPanel'
-import { MonacoSourceCodeWindow } from './components/MonacoSourceCodeWindow'
 import { WaveformWindow } from './components/WaveformWindow'
 import { MessageWindow } from './components/MessageWindow'
 import { ConnectionDialog } from './components/ConnectionDialog'
@@ -57,6 +56,9 @@ import { MockDataDialog } from './components/MockDataDialog'
 import { Splitter } from './components/ResizablePanel'
 import { SessionDialog } from './components/SessionDialog'
 import { SessionLoadingOverlay } from './components/SessionLoadingOverlay'
+
+// Lazy load Monaco editor to reduce initial bundle size
+const MonacoSourceCodeWindow = lazy(() => import('./components/MonacoSourceCodeWindow'))
 
 // Contexts
 import { WaveformProviderProvider } from './contexts/WaveformProviderContext'
@@ -240,15 +242,27 @@ function App() {
           }
         }
 
-        // Initialize WASM module
+        // Update loading progress
+        const updateProgress = (progress: number, text: string) => {
+          const progressEl = document.getElementById('loading-progress')
+          const barEl = document.getElementById('progress-bar-fill')
+          if (progressEl) progressEl.textContent = text
+          if (barEl) barEl.style.width = `${progress}%`
+        }
+
+        // Initialize WASM module (30% of loading time)
+        updateProgress(10, 'Loading WASM module...')
         await initWasm()
         console.log('[App] WASM initialized')
-
-        // Initialize storage layers
+        
+        // Initialize storage layers (60% of loading time)
+        updateProgress(40, 'Initializing storage...')
         await indexedDBManager.initialize()
         if (opfsManager.isSupported()) {
           await opfsManager.initialize()
         }
+        
+        updateProgress(80, 'Preparing application...')
 
         // Initialize storage layers but don't auto-connect to server
         // Server starts in disconnected state - user must manually connect
@@ -2478,20 +2492,22 @@ function App() {
             onTabsReorder={setTabs}
           >
             {activeTabData?.type === 'source' ? (
-              <MonacoSourceCodeWindow
-                key={activeTabData.id}
-                moduleIndex={activeTabData.moduleIndex || null}
-                displayModuleIndex={activeTabData.displayModuleIndex || null}
-                fileId={activeTabData.fileId || null}
-                startFromLine1={activeTabData.startFromLine1}
-                signalDeclarationLine={activeTabData.signalDeclarationLine}
-                moduleStartLine={activeTabData.moduleStartLine}
-                moduleEndLine={activeTabData.moduleEndLine}
-                moduleFullName={activeTabData.displayModuleIndex ? kdbManager.calculateModuleFullName(activeTabData.displayModuleIndex) : 
-                  activeTabData.moduleIndex ? kdbManager.calculateModuleFullName(activeTabData.moduleIndex) : undefined}
-                editorRef={monacoEditorRef}
-                onWordClick={handleWordClick}
-              />
+              <Suspense fallback={<div style={{ padding: '20px', color: '#888' }}>Loading editor...</div>}>
+                <MonacoSourceCodeWindow
+                  key={activeTabData.id}
+                  moduleIndex={activeTabData.moduleIndex || null}
+                  displayModuleIndex={activeTabData.displayModuleIndex || null}
+                  fileId={activeTabData.fileId || null}
+                  startFromLine1={activeTabData.startFromLine1}
+                  signalDeclarationLine={activeTabData.signalDeclarationLine}
+                  moduleStartLine={activeTabData.moduleStartLine}
+                  moduleEndLine={activeTabData.moduleEndLine}
+                  moduleFullName={activeTabData.displayModuleIndex ? kdbManager.calculateModuleFullName(activeTabData.displayModuleIndex) : 
+                    activeTabData.moduleIndex ? kdbManager.calculateModuleFullName(activeTabData.moduleIndex) : undefined}
+                  editorRef={monacoEditorRef}
+                  onWordClick={handleWordClick}
+                />
+              </Suspense>
             ) : activeTabData ? (
               <WaveformWindow
                 key={activeTabData.id}
