@@ -1701,7 +1701,7 @@ function App() {
       spaceBeforeBracket: boolean;
     }> = []
 
-    // Try hierarchical prefix removal (no special handling for work@)
+    // Try hierarchical prefix removal
     // Start with empty prefix and progressively remove hierarchical levels
     let currentName = signalName
     let removedHierarchicalPrefix = ''
@@ -1716,7 +1716,7 @@ function App() {
       if (result.found) {
         console.log(`[Signal Search] Found with local prefix "${fullLocalPrefix}"!`)
 
-        if (result.serverPrefix && result.matchedNames) {
+        if (result.serverPrefix !== undefined && result.matchedNames) {
           // Single server prefix - add to matches
           allMatches.push({
             serverPrefix: result.serverPrefix,
