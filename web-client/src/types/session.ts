@@ -29,7 +29,8 @@ export interface Session {
 
   // Waveform display settings
   waveformSettings?: {
-    signalPrefix: string;
+    signalPrefix: string;      // Local prefix (removed from local signal name)
+    serverPrefix?: string;     // Server prefix (added to server signal name)
     spaceBeforeBracket: boolean;
   };
 

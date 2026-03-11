@@ -300,11 +300,22 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
   }
 
   /**
-   * 设置信号前缀
+   * 设置信号前缀（local prefix）
    */
   setSignalPrefix(prefix: string): void {
     this.worker?.postMessage({
       type: 'SET_SIGNAL_PREFIX',
+      payload: { prefix },
+      id: ++globalMessageId,
+    });
+  }
+
+  /**
+   * 设置服务器前缀
+   */
+  setServerPrefix(prefix: string): void {
+    this.worker?.postMessage({
+      type: 'SET_SERVER_PREFIX',
       payload: { prefix },
       id: ++globalMessageId,
     });

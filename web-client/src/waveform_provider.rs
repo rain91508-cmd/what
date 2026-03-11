@@ -376,7 +376,8 @@ impl MultiTileHeader {
 pub struct WaveformDataProvider {
     server_url: String,
     waveform_name: String,
-    signal_prefix: String,
+    signal_prefix: String,  // Local prefix (removed from local signal name)
+    server_prefix: String,  // Server prefix (added to server signal name)
     space_before_bracket: bool,
     time_stamp: u64,  // Waveform modification timestamp for CDN cache
     display_format: String,  // "hex", "bin", "oct", "dec"
@@ -401,6 +402,7 @@ impl WaveformDataProvider {
         server_url: String,
         waveform_name: String,
         signal_prefix: String,
+        server_prefix: String,
         space_before_bracket: bool,
         time_stamp: u64,
     ) -> Self {
@@ -410,6 +412,7 @@ impl WaveformDataProvider {
             server_url: server_url.clone(),
             waveform_name: waveform_name.clone(),
             signal_prefix,
+            server_prefix,
             space_before_bracket,
             time_stamp,
             display_format: "hex".to_string(),  // Default to hex
@@ -800,10 +803,16 @@ impl WaveformDataProvider {
         self.waveform_name.clone()
     }
 
-    /// Get signal prefix
+    /// Get signal prefix (local prefix)
     #[wasm_bindgen(getter)]
     pub fn signal_prefix(&self) -> String {
         self.signal_prefix.clone()
+    }
+
+    /// Get server prefix
+    #[wasm_bindgen(getter)]
+    pub fn server_prefix(&self) -> String {
+        self.server_prefix.clone()
     }
 
     /// Get space before bracket setting
@@ -818,11 +827,18 @@ impl WaveformDataProvider {
         select_lod(&self.viewport, self.canvas_width)
     }
 
-    /// Set signal prefix
+    /// Set signal prefix (local prefix)
     #[wasm_bindgen(setter)]
     pub fn set_signal_prefix(&mut self, prefix: String) {
         // console_log!("[WASM] Updated signal_prefix: '{}' -> '{}'", self.signal_prefix, prefix);
         self.signal_prefix = prefix;
+    }
+
+    /// Set server prefix
+    #[wasm_bindgen(setter)]
+    pub fn set_server_prefix(&mut self, prefix: String) {
+        // console_log!("[WASM] Updated server_prefix: '{}' -> '{}'", self.server_prefix, prefix);
+        self.server_prefix = prefix;
     }
 
     /// Set space before bracket
@@ -968,21 +984,30 @@ impl WaveformDataProvider {
 
     /// Build server signal name from local name
     /// 
-    /// NOTE: 根据搜索时确定的prefix和space_before_bracket来构建服务器信号名
+    /// Process:
+    /// 1. Remove local prefix (signal_prefix) from local_name
+    /// 2. Get shared name
+    /// 3. Add server prefix (server_prefix) to shared name
+    /// 4. Add space before bracket if space_before_bracket is true
     fn build_server_signal_name(&self, local_name: &str) -> String {
-        // console_log!("[WASM] build_server_signal_name: local='{}', prefix='{}', space={}", 
-        //     local_name, self.signal_prefix, self.space_before_bracket);
+        // console_log!("[WASM] build_server_signal_name: local='{}', local_prefix='{}', server_prefix='{}', space={}", 
+        //     local_name, self.signal_prefix, self.server_prefix, self.space_before_bracket);
         
-        // 移除 prefix（如 work@）
-        let mut server_name = if self.signal_prefix.is_empty() || !local_name.starts_with(&self.signal_prefix) {
+        // Step 1: Remove local prefix to get shared name
+        let shared_name = if self.signal_prefix.is_empty() || !local_name.starts_with(&self.signal_prefix) {
             local_name.to_string()
         } else {
             local_name[self.signal_prefix.len()..].to_string()
         };
         
-        // console_log!("[WASM]   After removing prefix '{}': '{}'", self.signal_prefix, server_name);
+        // console_log!("[WASM]   After removing local prefix '{}': '{}'", self.signal_prefix, shared_name);
         
-        // 根据 space_before_bracket 设置，在方括号前添加空格
+        // Step 2: Add server prefix
+        let mut server_name = format!("{}{}", self.server_prefix, shared_name);
+        
+        // console_log!("[WASM]   After adding server prefix '{}': '{}'", self.server_prefix, server_name);
+        
+        // Step 3: Add space before bracket if needed
         if self.space_before_bracket {
             if let Some(bracket_idx) = server_name.find('[') {
                 if bracket_idx > 0 && !server_name[..bracket_idx].ends_with(' ') {

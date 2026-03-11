@@ -49,6 +49,7 @@ export function WorkerTest() {
         serverUrl: 'http://localhost:8080',
         waveformName: 'test',
         signalPrefix: '',
+        serverPrefix: '',
         spaceBeforeBracket: false,
         timeStamp: Date.now(),
       });
@@ -92,6 +93,7 @@ export function WorkerTest() {
         serverUrl: 'http://localhost:8080',
         waveformName: 'test',
         signalPrefix: '',
+        serverPrefix: '',
         spaceBeforeBracket: false,
         timeStamp: Date.now(),
       });
