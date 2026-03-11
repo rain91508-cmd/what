@@ -25,6 +25,38 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 1. 缓存 Rust 和 Cargo 以加速构建
+      - name: Cache Rust
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # 2. 为 Rust 添加 wasm32 target
+      - name: Setup Rust Wasm Target
+        run: rustup target add wasm32-unknown-unknown
+
+      # 3. 极速安装 wasm-bindgen CLI (比 cargo install 快几分钟)
+      - name: Install wasm-bindgen
+        uses: jetli/wasm-bindgen-action@v0.2.0
+        with:
+          # 可以指定版本，比如 '0.2.89'，'latest' 代表最新
+          version: 'latest'
+
+      # 4. 执行你自己的 Makefile 或编译命令
+      - name: Build Rust to Wasm
+        working-directory: web-client
+        run: |
+          cargo build --target wasm32-unknown-unknown --release
+          wasm-bindgen target/wasm32-unknown-unknown/release/deps/hwda_wasm.wasm --out-dir wasm-pkg --target web
+
+      # 5. Node.js 环境及前端 Vite 依赖
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -32,14 +64,16 @@ jobs:
           cache: npm
           cache-dependency-path: web-client/package-lock.json
 
-      - name: Install dependencies
+      - name: Install NPM dependencies
         working-directory: web-client
         run: npm ci
 
-      - name: Build
+      # 6. Vite 生产构建 (触发配置里的 base 替换)
+      - name: Build Vite App
         working-directory: web-client
         run: npm run build
 
+      # 7. GitHub Pages 发布设置
       - name: Setup Pages
         uses: actions/configure-pages@v4
 
