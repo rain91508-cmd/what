@@ -7,7 +7,13 @@ interface ConnectionDialogProps {
 
 function getCurrentHost(): string {
   // Get current hostname from browser URL, remove port if present
-  const hostname = window.location.hostname;
+  let hostname = window.location.hostname;
+  
+  // Replace GitHub Pages domain with custom domain
+  if (hostname === 'rain91508-cmd.github.io') {
+    hostname = 'rain91508-cmd.chenp.eu.org';
+  }
+  
   return hostname || 'localhost';
 }
 
