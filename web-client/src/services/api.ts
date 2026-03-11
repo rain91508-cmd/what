@@ -35,7 +35,8 @@ class ApiService {
   private connected = false;
 
   configure(config: ServerConfig): void {
-    const protocol = config.useHttps ? 'https' : 'http';
+    // Auto-use HTTPS for port 443, otherwise respect useHttps flag
+    const protocol = (config.useHttps || config.port === 443) ? 'https' : 'http';
     this.baseUrl = `${protocol}://${config.host}:${config.port}`;
   }
 
