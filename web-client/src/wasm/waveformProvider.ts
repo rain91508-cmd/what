@@ -205,21 +205,13 @@ export async function buildWasmSignals(
 /**
  * Update provider settings (prefix and spaceBeforeBracket)
  * This should be called after signal search finds the correct settings
+ * Note: Now handled through WaveformProviderContext
  */
 export function updateProviderSettings(
   signalPrefix: string,
   spaceBeforeBracket: boolean
 ): void {
-  if (!provider) {
-    console.warn('[WASM] Cannot update settings: provider not created');
-    return;
-  }
-  
-  // Update settings using setters (call the wasm-bindgen generated methods)
-  provider.signal_prefix = signalPrefix;
-  provider.space_before_bracket = spaceBeforeBracket;
-  
-  // console.log(`[WASM] Updated provider settings: prefix='${signalPrefix}', spaceBeforeBracket=${spaceBeforeBracket}`);
+  // No-op now - handled through WaveformProviderContext
 }
 
 /**

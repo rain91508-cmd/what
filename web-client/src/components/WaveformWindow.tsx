@@ -10,7 +10,7 @@ import { wildcardMatch } from '../utils/wildcardMatch';
 import { zoomIn, zoomOut } from '../utils/zoomHelpers';
 import { sanitizeTimeRange, type TimeRangeOnly } from '../utils/viewport';
 import { buildWasmSignals, updateProviderSettings } from '../wasm/waveformProvider';
-import { createWaveformProvider, logEnvironmentSupport } from '../wasm/waveformProviderFactory';
+
 import { WaveformProviderAdapter } from '../wasm/waveformProviderAdapter';
 import { useWaveformProvider } from '../contexts/WaveformProviderContext';
 
@@ -126,27 +126,55 @@ export function WaveformWindow({
   }, [useMockData, sharedProvider, providerLoading]);
 
   // Register Canvas when adapter is ready
+  // 使用 ref 来跟踪 Canvas 是否已 transfer，防止 StrictMode 下的重复 transfer
+  const canvasTransferredRef = useRef(false);
+  
   useEffect(() => {
     if (!wasmProviderRef.current || !canvasRef.current) return;
+    
+    // 如果已经 transfer 过，什么都不做
+    // Canvas 已经在 Worker 中了，不需要再次 transfer 或 register
+    if (canvasTransferredRef.current) {
+      console.log(`[WaveformWindow] Canvas already transferred, skipping: ${canvasIdRef.current}`);
+      return;
+    }
 
     const registerCanvas = async () => {
       try {
-        const offscreenCanvas = canvasRef.current!.transferControlToOffscreen();
-        await wasmProviderRef.current!.registerCanvas(offscreenCanvas);
-        console.log(`[WaveformWindow] Canvas registered: ${canvasIdRef.current}`);
+        // 防止重复 transfer
+        if (canvasTransferredRef.current) return;
+        
+        const canvas = canvasRef.current!;
+        const containerRect = containerRef.current!.getBoundingClientRect();
+        const width = containerRect.width;
+        const height = containerRect.height - 30; // Subtract ruler height
+        const dpr = window.devicePixelRatio || 1;
+        
+        // 在 transfer 前设置 canvas 的物理尺寸
+        canvas.width = width * dpr;
+        canvas.height = height * dpr;
+        
+        const offscreenCanvas = canvas.transferControlToOffscreen();
+        canvasTransferredRef.current = true;
+        
+        await wasmProviderRef.current!.registerCanvas(offscreenCanvas, dpr);
+        console.log(`[WaveformWindow] Canvas registered: ${canvasIdRef.current}, dpr=${dpr}`);
       } catch (error) {
         console.error('[WaveformWindow] Failed to register canvas:', error);
+        canvasTransferredRef.current = false;
       }
     };
 
     registerCanvas();
 
-    // Cleanup: unregister canvas when component unmounts
+    // Cleanup: 不在这里 unregister Canvas
+    // 在 StrictMode 下，这个 cleanup 会在组件重新挂载前执行
+    // 但我们不 unregister，因为 Worker 中还需要这个 Canvas
+    // 真正的清理会在组件完全卸载时由其他机制处理
     return () => {
-      if (wasmProviderRef.current) {
-        wasmProviderRef.current.unregisterCanvas();
-        console.log(`[WaveformWindow] Canvas unregistered: ${canvasIdRef.current}`);
-      }
+      console.log(`[WaveformWindow] Component unmounting, but keeping canvas in Worker: ${canvasIdRef.current}`);
+      // 不调用 unregisterCanvas，让 Canvas 在 Worker 中保留
+      // 因为 StrictMode 下这不是真正的卸载
     };
   }, []);
   
@@ -327,7 +355,11 @@ export function WaveformWindow({
       }
       
       if (canvasRef.current) {
-        await waveformRenderer.initialize(canvasRef.current);
+        // Worker 模式下不需要初始化 waveformRenderer（Canvas 已 transfer 到 Worker）
+        // Mock 模式下需要初始化 waveformRenderer
+        if (useMockData) {
+          await waveformRenderer.initialize(canvasRef.current);
+        }
         await renderWaveform();
       }
     };
@@ -481,10 +513,18 @@ export function WaveformWindow({
       const height = containerRect.height - 30; // Subtract ruler height
       
       // 只在尺寸真的变化时才设置 canvas 的 width 和 height，避免触发 ResizeObserver
-      if (Math.abs(canvasRef.current.width - width) > 0.5 || 
-          Math.abs(canvasRef.current.height - height) > 0.5) {
-        canvasRef.current.width = width;
-        canvasRef.current.height = height;
+      // 注意：如果已经调用了 transferControlToOffscreen()，就不能再修改 canvas 尺寸了
+      // 这种情况下，尺寸管理交给 Worker 处理
+      if (!useMockData) {
+        // Worker 模式：不修改 canvas 尺寸，只更新 Adapter 中的 canvasConfig
+        // Worker 会在 render 时使用 canvasConfig 设置 WASM 的 canvas 尺寸
+      } else {
+        // Mock 模式：直接设置 canvas 尺寸
+        if (Math.abs(canvasRef.current.width - width) > 0.5 || 
+            Math.abs(canvasRef.current.height - height) > 0.5) {
+          canvasRef.current.width = width;
+          canvasRef.current.height = height;
+        }
       }
 
       // Build visible signal list from treeNodes
@@ -553,7 +593,7 @@ export function WaveformWindow({
     const signalListHash = signalList.map(s => `${s.name}-${s.row}-${s.width}`).join('|');
 
     // 生成 timeConfig 的哈希值用于检测变化
-    const timeConfigHash = `${timeConfig.displayUnitPerLoD0Unit}-${timeConfig.displayUnit}-${timeConfig.lod0Unit}`;
+    const timeConfigHash = `${timeConfig.DisplayUnitPerLoD0Unit}`;
 
     // 检查参数是否真的有变化，如果没有变化则直接返回，避免重复渲染
     const lastParams = lastRenderParamsRef.current;
@@ -584,192 +624,66 @@ export function WaveformWindow({
       timeConfigHash,
     };
 
-    let segments;
-
-
-
-    if (useMockData) {
-      // Use mock data provider
-      mockDataProvider.initialize(
-        signalList,
-        viewport,
-        'hex' as DisplayFormat,
-        width,
-        24,  // rowHeight - must match CSS .waveform-signal-item height
-        20   // rulerHeight
-      );
-      segments = mockDataProvider.getSegments();
-    } else if (wasmProviderRef.current) {
-      // Use WASM provider
-      const wasmProvider = wasmProviderRef.current;
-      const lastWasmSettings = lastWasmSettingsRef.current;
-      
-      // 检查 WASM 相关设置是否真的变化了
-      const hasSignalPrefixChanged = lastWasmSettings.signalPrefix !== _signalPrefix;
-      const hasSpaceBeforeBracketChanged = lastWasmSettings.spaceBeforeBracket !== _spaceBeforeBracket;
-      const hasSignalListChanged = lastWasmSettings.signalListHash !== signalListHash;
-      const hasViewportChanged = Math.abs(lastWasmSettings.viewportTimeStart - viewport.timeStart) > 0.1 ||
-                                 Math.abs(lastWasmSettings.viewportTimeEnd - viewport.timeEnd) > 0.1;
-      const hasCanvasSizeChanged = Math.abs(lastWasmSettings.canvasWidth - width) > 0.5 ||
-                                    Math.abs(lastWasmSettings.canvasHeight - height) > 0.5;
-
-      // 拖动时只做最必要的操作，避免耗时的 WASM 调用
-      if (isPanningRef.current) {
-        // 拖动时：只更新 viewport 和获取 segments，跳过其他操作
-        if (hasViewportChanged || hasCanvasSizeChanged) {
-          wasmProvider.set_viewport(viewport.timeStart, viewport.timeEnd);
-          if (hasCanvasSizeChanged) {
-            wasmProvider.set_canvas_dimensions(width, height, 24);
-          }
-        }
-        
-        // 拖动时：检查 viewport 变化是否超过阈值（超过 10% 才重新计算 segments）
-        const timeSpan = viewport.timeEnd - viewport.timeStart;
-        const viewportDelta = Math.abs(viewport.timeStart - lastSegmentsViewportRef.current.timeStart);
-        const viewportChangeThreshold = Math.max(timeSpan * 0.1, 10); // 变化超过 10% 或 10 个时间单位
-        
-        const shouldRecalculateSegments = 
-          // 如果 canvas 尺寸或信号列表变化，必须重新计算
-          lastSegmentsParamsRef.current.signalListHash !== signalListHash ||
-          Math.abs(lastSegmentsParamsRef.current.canvasWidth - width) > 0.5 ||
-          Math.abs(lastSegmentsParamsRef.current.canvasHeight - height) > 0.5 ||
-          // 如果 viewport 变化超过阈值
-          viewportDelta > viewportChangeThreshold;
-        
-        if (shouldRecalculateSegments) {
-          // 拖动时也需要获取数据并生成 segments
-          const signalNames = signalList.map(s => s.name);
-          const segmentsJs = await wasmProvider.fetch_and_get_segments(signalNames);
-          segments = segmentsJs;
-          cachedSegmentsRef.current = segments;
-          
-          // 更新 segments 缓存参数
-          lastSegmentsParamsRef.current = {
-            signalListHash: signalListHash,
-            viewportTimeStart: viewport.timeStart,
-            viewportTimeEnd: viewport.timeEnd,
-            canvasWidth: width,
-            canvasHeight: height,
-          };
-          
-          // 更新上一次计算 segments 时的 viewport
-          lastSegmentsViewportRef.current = {
-            timeStart: viewport.timeStart,
-            timeEnd: viewport.timeEnd,
-          };
-        } else {
-          // 使用缓存的 segments
-          segments = cachedSegmentsRef.current;
-        }
-        
-        // 更新 lastWasmSettingsRef 中的 viewport 和 canvas 尺寸
-        lastWasmSettingsRef.current = {
-          ...lastWasmSettingsRef.current,
-          viewportTimeStart: viewport.timeStart,
-          viewportTimeEnd: viewport.timeEnd,
-          canvasWidth: width,
-          canvasHeight: height,
-        };
-      } else {
-        // 非拖动时：完整的 WASM 调用流程
-        // 只有当信号列表或相关设置变化时才重新构建信号列表
-        if (hasSignalListChanged || hasSignalPrefixChanged || hasSpaceBeforeBracketChanged) {
-          // Build WASM signals with draw_sig_id using SignalIdManager
-          // Use global_id for draw_sig_id (per waveform, as per spec)
-          const uiSignals = signalList.map((s) => ({
-            global_id: s.globalId,
-            name: s.name,
-            row: s.row,
-            width: s.width || 1,
-          }));
-          
-          try {
-            // Update provider settings (prefix and spaceBeforeBracket) - only when changed
-            if (hasSignalPrefixChanged || hasSpaceBeforeBracketChanged) {
-              updateProviderSettings(_signalPrefix, _spaceBeforeBracket);
-            }
-            
-            // Build signals with draw_sig_id
-            const wasmSignalsWithId = await buildWasmSignals(uiSignals, _waveformName || 'unknown');
-            
-            // Set signals with draw_sig_id in WASM provider
-            wasmProvider.set_draw_list(wasmSignalsWithId);
-            
-            // Set display format (TODO: get from UI state when format selector is implemented)
-            wasmProvider.display_format = 'hex';
-          } catch (error) {
-            console.error(`[WaveformWindow] Failed to setup signals:`, error);
-          }
-        }
-
-        // 只有当 viewport 或 canvas 尺寸变化时才更新
-        if (hasViewportChanged || hasCanvasSizeChanged) {
-          // Set viewport and canvas dimensions
-          wasmProvider.set_viewport(viewport.timeStart, viewport.timeEnd);
-          wasmProvider.set_canvas_dimensions(width, height, 24);  // rowHeight - must match CSS .waveform-signal-item height
-        }
-
-        try {
-          // 使用合并函数：获取数据并生成 segments（内部自动处理缓存）
-          const signalNames = signalList.map(s => s.name);
-          const segmentsJs = await wasmProvider.fetch_and_get_segments(signalNames);
-          segments = segmentsJs;
-          cachedSegmentsRef.current = segments;
-          
-          // 更新 segments 缓存参数
-          lastSegmentsParamsRef.current = {
-            signalListHash: signalListHash,
-            viewportTimeStart: viewport.timeStart,
-            viewportTimeEnd: viewport.timeEnd,
-            canvasWidth: width,
-            canvasHeight: height,
-          };
-
-          // 更新 lastWasmSettingsRef
-          lastWasmSettingsRef.current = {
-            signalPrefix: _signalPrefix,
-            spaceBeforeBracket: _spaceBeforeBracket,
-            signalListHash: signalListHash,
-            viewportTimeStart: viewport.timeStart,
-            viewportTimeEnd: viewport.timeEnd,
-            canvasWidth: width,
-            canvasHeight: height,
-          };
-        } catch (error) {
-          console.error(`[WaveformWindow] Failed to process signals:`, error);
-          // Fallback to empty segments
-          segments = [];
-        }
-      }
-    } else {
-      // Fallback to mock data if WASM not available
-      console.warn('[WaveformWindow] WASM provider not available, falling back to mock data');
-      mockDataProvider.initialize(
-        signalList,
-        viewport,
-        'hex' as DisplayFormat,
-        width,
-        24,  // rowHeight - must match CSS .waveform-signal-item height
-        20
-      );
-      segments = mockDataProvider.getSegments();
-    }
-
     // Render with timeConfig for proper ruler display
-    // 使用 Worker 渲染（通过 Adapter）
     if (!useMockData && wasmProviderRef.current) {
-      // 设置时间配置
-      wasmProviderRef.current.set_time_config({
-        displayUnit: timeConfig.displayUnit,
-        lod0Unit: timeConfig.lod0Unit,
-        displayUnitPerLoD0Unit: timeConfig.displayUnitPerLoD0Unit,
-      });
+      // Worker 模式下直接使用 Adapter，传递完整的参数
       
-      // 调用 Worker 渲染
-      await wasmProviderRef.current.render_waveform();
+      // 构建旧格式的信号列表
+      const uiSignals = signalList.map((s) => ({
+        global_id: s.globalId,
+        name: s.name,
+        row: s.row,
+        width: s.width || 1,
+      }));
+
+      // 构建带 draw_sig_id 的信号
+      let wasmSignals: any[] = [];
+      try {
+        wasmSignals = await buildWasmSignals(uiSignals, _waveformName || 'unknown');
+      } catch (error) {
+        console.error('[WaveformWindow] Failed to build wasm signals:', error);
+      }
+
+      // 调用 Adapter 的 render_waveform 并传递完整参数
+      await wasmProviderRef.current.render_waveform({
+        signals: wasmSignals,
+        viewport: {
+          startTime: viewport.timeStart,
+          endTime: viewport.timeEnd,
+          width,
+          height,
+        },
+        canvasConfig: {
+          width,
+          height,
+          rowHeight: 24,
+        },
+        displayFormat: 'hex',
+        timeConfig: {
+          displayUnit: 'ps',
+          lod0Unit: 1,
+          displayUnitPerLoD0Unit: timeConfig.DisplayUnitPerLoD0Unit,
+        },
+      });
     } else {
+      // Mock 模式：使用旧流程
+      let segments;
+      if (useMockData) {
+        // Use mock data provider
+        mockDataProvider.initialize(
+          signalList,
+          viewport,
+          'hex' as DisplayFormat,
+          width,
+          24,
+          20
+        );
+        segments = mockDataProvider.getSegments();
+      }
       // 使用主线程渲染（Mock 数据模式）
-      waveformRenderer.render(segments, viewport, width, height, 20, timeConfig);
+      if (segments) {
+        waveformRenderer.render(segments, viewport, width, height, 20, timeConfig);
+      }
     }
 
     // 绘制选择区域高亮（只在水平拖动时显示）

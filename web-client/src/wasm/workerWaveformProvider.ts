@@ -126,19 +126,19 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
   /**
    * 注册 Canvas（Tab 创建时调用）
    */
-  async registerCanvas(canvasId: string, canvas: OffscreenCanvas): Promise<void> {
+  async registerCanvas(canvasId: string, canvas: OffscreenCanvas, devicePixelRatio: number = 1): Promise<void> {
     if (!this.worker) {
       throw new WaveformProviderError('Worker not initialized');
     }
 
     await this.sendMessage(
       'REGISTER_CANVAS',
-      { canvasId, canvas },
+      { canvasId, canvas, devicePixelRatio },
       this.DEFAULT_TIMEOUT,
       [canvas]
     );
 
-    console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Canvas registered: ${canvasId}`);
+    console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Canvas registered: ${canvasId}, dpr=${devicePixelRatio}`);
   }
 
   /**
@@ -234,14 +234,15 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
     canvasConfig: CanvasConfig;
     displayFormat: DisplayFormat;
     timeConfig: TimeConfig;
+    devicePixelRatio?: number;
   }): Promise<void> {
     if (!this.worker) {
       throw new WaveformProviderError('Worker not initialized');
     }
 
-    const { canvasId, signals, viewport, canvasConfig, displayFormat, timeConfig } = params;
+    const { canvasId, signals, viewport, canvasConfig, displayFormat, timeConfig, devicePixelRatio } = params;
 
-    console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Rendering: canvasId=${canvasId}, viewport=${viewport.startTime}-${viewport.endTime}, signals=${signals.length}`);
+    console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Rendering: canvasId=${canvasId}, viewport=${viewport.startTime}-${viewport.endTime}, signals=${signals.length}, dpr=${devicePixelRatio}`);
 
     await this.sendMessage(
       'RENDER_WAVEFORM',
@@ -252,6 +253,7 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
         canvasConfig,
         displayFormat,
         timeConfig,
+        devicePixelRatio,
       },
       60000 // 渲染超时 60 秒
     );
@@ -292,6 +294,28 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
 
     this.worker?.postMessage({
       type: 'SET_MEMORY_CACHE_ENABLED',
+      payload: { enabled },
+      id: ++globalMessageId,
+    });
+  }
+
+  /**
+   * 设置信号前缀
+   */
+  setSignalPrefix(prefix: string): void {
+    this.worker?.postMessage({
+      type: 'SET_SIGNAL_PREFIX',
+      payload: { prefix },
+      id: ++globalMessageId,
+    });
+  }
+
+  /**
+   * 设置是否在 [ 前加空格
+   */
+  setSpaceBeforeBracket(enabled: boolean): void {
+    this.worker?.postMessage({
+      type: 'SET_SPACE_BEFORE_BRACKET',
       payload: { enabled },
       id: ++globalMessageId,
     });

@@ -32,6 +32,7 @@ let wasmInitialized = false;
 const canvasManager = new Map<string, {
   canvas: OffscreenCanvas;
   ctx: OffscreenCanvasRenderingContext2D;
+  devicePixelRatio: number;
 }>();
 
 // 渲染任务管理
@@ -129,6 +130,16 @@ self.onmessage = async (event) => {
 
       case 'SET_MEMORY_CACHE_ENABLED': {
         handleSetMemoryCacheEnabled(payload, id);
+        break;
+      }
+
+      case 'SET_SIGNAL_PREFIX': {
+        handleSetSignalPrefix(payload, id);
+        break;
+      }
+
+      case 'SET_SPACE_BEFORE_BRACKET': {
+        handleSetSpaceBeforeBracket(payload, id);
         break;
       }
 
@@ -231,15 +242,15 @@ function handleDispose(id: number): void {
  * Tab 创建时注册 Canvas
  */
 function handleRegisterCanvas(payload: any, id: number): void {
-  const { canvasId, canvas } = payload;
+  const { canvasId, canvas, devicePixelRatio = 1 } = payload;
 
   const ctx = canvas.getContext('2d');
   if (!ctx) {
     throw new Error('Failed to get 2D context from canvas');
   }
 
-  canvasManager.set(canvasId, { canvas, ctx });
-  console.log(`[WaveformWorker] Canvas registered: ${canvasId}`);
+  canvasManager.set(canvasId, { canvas, ctx, devicePixelRatio });
+  console.log(`[WaveformWorker] Canvas registered: ${canvasId}, dpr=${devicePixelRatio}`);
 
   sendSuccess(id, null);
 }
@@ -366,6 +377,8 @@ async function handleFetchAndGetSegments(payload: any, id: number): Promise<void
 async function handleRenderWaveform(payload: any, id: number): Promise<void> {
   if (!wasmProvider) throw new Error('Provider not initialized');
 
+  console.log('[WaveformWorker] handleRenderWaveform called with:', payload);
+
   const {
     canvasId,
     signals,
@@ -395,6 +408,7 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
     // 1. 设置视口（参数传递）
     if (viewport) {
       wasmProvider.set_viewport(viewport.startTime, viewport.endTime);
+      console.log('[WaveformWorker] Set viewport:', viewport.startTime, viewport.endTime);
     }
 
     // 2. 设置画布尺寸（参数传递）
@@ -404,6 +418,7 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
         canvasConfig.height,
         canvasConfig.rowHeight
       );
+      console.log('[WaveformWorker] Set canvas config:', canvasConfig);
     }
 
     // 3. 设置信号列表（参数传递）
@@ -423,18 +438,35 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
           : undefined,
       }));
       wasmProvider.set_draw_list(wasmSignals);
+      console.log('[WaveformWorker] Set draw list with', wasmSignals.length, 'signals:', wasmSignals);
     }
 
     // 4. 设置显示格式（参数传递）
     if (displayFormat) {
       wasmProvider.display_format = displayFormat;
+      console.log('[WaveformWorker] Set display format:', displayFormat);
     }
 
     // 5. 获取信号名称列表
     const signalNames = signals?.map((sig: any) => sig.name) || [];
+    console.log('[WaveformWorker] Fetching segments for signals:', signalNames);
 
     // 6. 获取 segments
     const segments = await wasmProvider.fetch_and_get_segments(signalNames);
+    
+    // 打印第一个和最后几个 segments 的坐标，以便调试缩放问题
+    if (segments.length > 0) {
+      const firstSeg = segments[0];
+      const lastSeg = segments[segments.length - 1];
+      console.log('[WaveformWorker] Got segments:', segments.length, 
+        'first seg:', { x0: firstSeg.x0, x1: firstSeg.x1, y: firstSeg.y },
+        'last seg:', { x0: lastSeg.x0, x1: lastSeg.x1, y: lastSeg.y },
+        'viewport:', { startTime: viewport.startTime, endTime: viewport.endTime },
+        'canvas config:', canvasConfig
+      );
+    } else {
+      console.log('[WaveformWorker] Got segments:', segments.length, segments);
+    }
 
     // 检查任务是否已过期（被新任务覆盖）
     if (currentRenderTask?.id !== id) {
@@ -443,6 +475,19 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
     }
 
     // 7. 渲染到 Canvas
+    const dpr = canvasEntry.devicePixelRatio || 1;
+    
+    // 缩放上下文以适应物理像素
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    
+    // 计算逻辑尺寸（物理尺寸 / dpr）
+    const logicalWidth = canvasConfig.width / dpr;
+    const logicalHeight = canvasConfig.height / dpr;
+    const logicalRowHeight = canvasConfig.rowHeight / dpr;
+    const logicalRulerHeight = 20;
+    
+    // segments 的坐标已经是逻辑尺寸（CSS像素），不需要缩放
     const renderSegments: RenderSegment[] = segments.map((seg: any) => ({
       x0: seg.x0,
       x1: seg.x1,
@@ -451,20 +496,32 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
       signalName: seg.signal_name,
     }));
 
+    console.log('[WaveformWorker] Rendering', renderSegments.length, 'segments to canvas with dpr=', dpr);
+
+    // 转换 viewport 为 TimeRangeOnly 格式
+    const timeRangeOnlyViewport: TimeRangeOnly = {
+      timeStart: viewport.startTime,
+      timeEnd: viewport.endTime,
+    };
+
     renderWaveform(
       ctx,
       renderSegments,
-      viewport,
-      canvasConfig.width,
-      canvasConfig.height,
-      20, // rulerHeight
+      timeRangeOnlyViewport,
+      logicalWidth,
+      logicalHeight,
+      logicalRulerHeight,
       timeConfig,
-      canvasConfig.rowHeight
+      logicalRowHeight
     );
+    
+    ctx.restore();
 
     // 8. 返回成功
+    console.log('[WaveformWorker] Render complete');
     sendSuccess(id, { rendered: true, segmentCount: segments.length });
   } catch (error) {
+    console.error('[WaveformWorker] Error in handleRenderWaveform:', error);
     sendError(id, error instanceof Error ? error.message : String(error));
   }
 }
@@ -498,6 +555,28 @@ function handleSetMemoryCacheEnabled(payload: any, id: number): void {
 
   const { enabled } = payload;
   wasmProvider.set_memory_cache_enabled(enabled);
+  sendSuccess(id, null);
+}
+
+/**
+ * 处理 SET_SIGNAL_PREFIX
+ */
+function handleSetSignalPrefix(payload: any, id: number): void {
+  if (!wasmProvider) throw new Error('Provider not initialized');
+
+  const { prefix } = payload;
+  wasmProvider.signal_prefix = prefix;
+  sendSuccess(id, null);
+}
+
+/**
+ * 处理 SET_SPACE_BEFORE_BRACKET
+ */
+function handleSetSpaceBeforeBracket(payload: any, id: number): void {
+  if (!wasmProvider) throw new Error('Provider not initialized');
+
+  const { enabled } = payload;
+  wasmProvider.space_before_bracket = enabled;
   sendSuccess(id, null);
 }
 
