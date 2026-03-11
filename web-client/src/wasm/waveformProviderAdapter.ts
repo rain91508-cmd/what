@@ -132,6 +132,13 @@ export class WaveformProviderAdapter {
     this.canvasRegistered = false;
   }
 
+  /**
+   * 标记 Canvas 已注册（用于 StrictMode 下 canvas 已在 Worker 中的场景）
+   */
+  markCanvasRegistered(): void {
+    this.canvasRegistered = true;
+  }
+
   // ==================== 方法映射 ====================
 
   set_viewport(timeStart: number, timeEnd: number): void {

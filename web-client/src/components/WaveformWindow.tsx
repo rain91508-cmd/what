@@ -133,9 +133,12 @@ export function WaveformWindow({
       return;
     }
     
-    // 如果已经 transfer 过，什么都不做
+    // 如果已经 transfer 过，标记adapter中的canvas为已注册（StrictMode场景）
     if (canvasTransferredRef.current) {
-      console.log(`[WaveformWindow] Canvas already transferred, skipping: ${canvasIdRef.current}`);
+      console.log(`[WaveformWindow] Canvas already transferred, marking adapter as registered: ${canvasIdRef.current}`);
+      wasmProviderRef.current.markCanvasRegistered();
+      // 触发一次渲染
+      renderWaveform();
       return;
     }
 
