@@ -135,10 +135,21 @@ function App() {
   const [signalNotFoundInfo, setSignalNotFoundInfo] = useState<{
     attempted: string;
     matched: string;
-    prefix: string;
+    prefix: string;  // local prefix
+    serverPrefix: string;  // server prefix
     firstAvailable: string;
     success: boolean;
+    // For multiple server prefix selection
+    allMatches?: Array<{
+      serverPrefix: string;
+      matchedNames: string[];
+      localPrefix: string;
+      spaceBeforeBracket: boolean;
+    }>;
+    selectedMatchIndex?: number;
   } | null>(null)
+  // Store pending signal to add after user confirms in dialog
+  const [pendingSignalToAdd, setPendingSignalToAdd] = useState<Signal | null>(null)
 
   // Session dialog state
   const [showSessionDialog, setShowSessionDialog] = useState(false)
@@ -1833,20 +1844,31 @@ function App() {
           // Check if multiple server prefixes found - need user selection
           if (result.multipleServerPrefixes && result.allMatches && result.allMatches.length > 1) {
             console.log(`[Signal Search] Multiple server prefixes found, showing selection dialog`)
-            // TODO: Show server prefix selection dialog
-            // For now, use the first match as default
-            const firstMatch = result.allMatches[0]
-            console.log(`[Signal Search] Using first server prefix: "${firstMatch.serverPrefix}"`)
 
-            // Save both prefixes
-            setCurrentWaveSignalPrefix(firstMatch.localPrefix)
-            setCurrentWaveSignalServerPrefix(firstMatch.serverPrefix)
-            setCurrentWaveSignalSpaceBeforeBracket(firstMatch.spaceBeforeBracket)
+            // Show selection dialog with all matches
+            const firstSignalResponse = await apiService.getWaveformSignals(currentWaveName, {
+              limit: 1
+            })
+            const firstSignalName = firstSignalResponse.status === 'success' &&
+              firstSignalResponse.data &&
+              firstSignalResponse.data.signals.length > 0
+              ? firstSignalResponse.data.signals[0].name
+              : 'N/A'
 
-            // Update WASM provider settings
-            updateProviderSettings(firstMatch.localPrefix, firstMatch.serverPrefix, firstMatch.spaceBeforeBracket)
+            setSignalNotFoundInfo({
+              attempted: signal.fullName,
+              matched: result.matchedNames?.[0] || '',
+              prefix: '',  // Will be set after user selection
+              serverPrefix: '',  // Will be set after user selection
+              firstAvailable: firstSignalName,
+              success: true,
+              allMatches: result.allMatches,
+              selectedMatchIndex: undefined  // User needs to select
+            })
+            setPendingSignalToAdd(signal)  // Store signal to add after user confirms
+            setShowSignalNotFoundDialog(true)
 
-            addSignalToWaveform(signal)
+            // Wait for user selection in the dialog, then add signal
             return
           }
 
@@ -1868,6 +1890,7 @@ function App() {
               attempted: signal.fullName,
               matched: result.matchedNames?.[0] || '',
               prefix: result.localPrefix!,
+              serverPrefix: result.serverPrefix || '',
               firstAvailable: firstSignalName,
               success: true
             })
@@ -1910,6 +1933,7 @@ function App() {
             attempted: signal.fullName,
             matched: '',
             prefix: '',
+            serverPrefix: '',
             firstAvailable: firstSignalName,
             success: false
           })
@@ -2857,26 +2881,91 @@ function App() {
           <div className="dialog" onClick={e => e.stopPropagation()}>
             <div className="dialog-header">
               <span className="dialog-title">
-                {signalNotFoundInfo.success ? 'Signal Found with Prefix Adjustment' : 'Signal Not Found'}
+                {signalNotFoundInfo.success
+                  ? (signalNotFoundInfo.allMatches && signalNotFoundInfo.allMatches.length > 1
+                    ? 'Select Server Signal'
+                    : 'Signal Found with Prefix Adjustment')
+                  : 'Signal Not Found'}
               </span>
               <button className="dialog-close" onClick={() => setShowSignalNotFoundDialog(false)}>×</button>
             </div>
             <div className="dialog-body">
               {signalNotFoundInfo.success ? (
                 <>
-                  <p>The signal was found after removing the prefix:</p>
-                  <div className="form-group">
-                    <label className="form-label">Original Signal</label>
-                    <input type="text" className="form-input" value={signalNotFoundInfo.attempted} readOnly />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Matched Signal</label>
-                    <input type="text" className="form-input" value={signalNotFoundInfo.matched} readOnly />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Removed Prefix (saved for future use)</label>
-                    <input type="text" className="form-input" value={signalNotFoundInfo.prefix} readOnly />
-                  </div>
+                  {signalNotFoundInfo.allMatches && signalNotFoundInfo.allMatches.length > 1 ? (
+                    // Multiple server prefixes - show selection list
+                    <>
+                      <p>Multiple server signals matched. Please select the correct one:</p>
+                      <div className="form-group">
+                        <label className="form-label">Original Signal</label>
+                        <input type="text" className="form-input" value={signalNotFoundInfo.attempted} readOnly />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Select Matched Server Signal</label>
+                        <div style={{ maxHeight: '200px', overflowY: 'auto', border: '1px solid #ddd', borderRadius: '4px' }}>
+                          {signalNotFoundInfo.allMatches.map((match, index) => (
+                            <div
+                              key={index}
+                              onClick={() => setSignalNotFoundInfo({ ...signalNotFoundInfo, selectedMatchIndex: index })}
+                              style={{
+                                padding: '10px 12px',
+                                cursor: 'pointer',
+                                borderBottom: index < signalNotFoundInfo.allMatches!.length - 1 ? '1px solid #eee' : 'none',
+                                backgroundColor: signalNotFoundInfo.selectedMatchIndex === index ? '#e3f2fd' : 'transparent',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px'
+                              }}
+                            >
+                              <input
+                                type="radio"
+                                name="serverPrefix"
+                                checked={signalNotFoundInfo.selectedMatchIndex === index}
+                                onChange={() => setSignalNotFoundInfo({ ...signalNotFoundInfo, selectedMatchIndex: index })}
+                              />
+                              <div style={{ flex: 1 }}>
+                                <div style={{ fontWeight: 500 }}>{match.matchedNames[0]}</div>
+                                <div style={{ fontSize: '11px', color: '#666', marginTop: '2px' }}>
+                                  Server Prefix: "{match.serverPrefix}" | Local Prefix: "{match.localPrefix}"
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      {signalNotFoundInfo.selectedMatchIndex !== undefined && (
+                        <div className="form-group" style={{ marginTop: '12px', padding: '10px', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
+                          <label className="form-label">Selected Configuration</label>
+                          <div style={{ fontSize: '12px', color: '#333' }}>
+                            <div>Server Prefix: "{signalNotFoundInfo.allMatches[signalNotFoundInfo.selectedMatchIndex].serverPrefix}"</div>
+                            <div>Local Prefix: "{signalNotFoundInfo.allMatches[signalNotFoundInfo.selectedMatchIndex].localPrefix}"</div>
+                            <div>Space Before Bracket: {signalNotFoundInfo.allMatches[signalNotFoundInfo.selectedMatchIndex].spaceBeforeBracket ? 'Yes' : 'No'}</div>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    // Single match - show simple info
+                    <>
+                      <p>The signal was found after removing the prefix:</p>
+                      <div className="form-group">
+                        <label className="form-label">Original Signal</label>
+                        <input type="text" className="form-input" value={signalNotFoundInfo.attempted} readOnly />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Matched Signal</label>
+                        <input type="text" className="form-input" value={signalNotFoundInfo.matched} readOnly />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Local Prefix (removed from local name)</label>
+                        <input type="text" className="form-input" value={signalNotFoundInfo.prefix} readOnly />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">Server Prefix (added to server name)</label>
+                        <input type="text" className="form-input" value={signalNotFoundInfo.serverPrefix} readOnly />
+                      </div>
+                    </>
+                  )}
                 </>
               ) : (
                 <>
@@ -2893,9 +2982,41 @@ function App() {
               )}
             </div>
             <div className="dialog-footer">
-              <button className="btn btn-primary" onClick={() => setShowSignalNotFoundDialog(false)}>
-                OK
+              <button className="btn" onClick={() => setShowSignalNotFoundDialog(false)}>
+                Cancel
               </button>
+              {signalNotFoundInfo.success && (
+                <button
+                  className="btn btn-primary"
+                  onClick={() => {
+                    // Handle confirm action
+                    if (signalNotFoundInfo.allMatches && signalNotFoundInfo.allMatches.length > 1) {
+                      // Multiple matches - use selected one
+                      if (signalNotFoundInfo.selectedMatchIndex !== undefined) {
+                        const selectedMatch = signalNotFoundInfo.allMatches[signalNotFoundInfo.selectedMatchIndex];
+                        setCurrentWaveSignalPrefix(selectedMatch.localPrefix);
+                        setCurrentWaveSignalServerPrefix(selectedMatch.serverPrefix);
+                        setCurrentWaveSignalSpaceBeforeBracket(selectedMatch.spaceBeforeBracket);
+                        updateProviderSettings(selectedMatch.localPrefix, selectedMatch.serverPrefix, selectedMatch.spaceBeforeBracket);
+                        // Add the pending signal to waveform
+                        if (pendingSignalToAdd) {
+                          addSignalToWaveform(pendingSignalToAdd);
+                          setPendingSignalToAdd(null);
+                        }
+                      }
+                    }
+                    setShowSignalNotFoundDialog(false);
+                  }}
+                  disabled={signalNotFoundInfo.allMatches && signalNotFoundInfo.allMatches.length > 1 && signalNotFoundInfo.selectedMatchIndex === undefined}
+                >
+                  Confirm
+                </button>
+              )}
+              {!signalNotFoundInfo.success && (
+                <button className="btn btn-primary" onClick={() => setShowSignalNotFoundDialog(false)}>
+                  OK
+                </button>
+              )}
             </div>
           </div>
         </div>
