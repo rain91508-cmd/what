@@ -2186,6 +2186,11 @@ function App() {
       setSessionLoadingMessage('Connecting to server...')
       const { host, port } = session.server
       apiService.configure({ host, port, useHttps: false })
+      
+      // Update serverUrl state for WaveformProvider
+      const newServerUrl = apiService.getBaseUrl()
+      setServerUrl(newServerUrl)
+      
       const isConnected = await apiService.testConnection()
       setConnected(isConnected)
       
