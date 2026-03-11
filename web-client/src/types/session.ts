@@ -66,6 +66,11 @@ export interface Session {
       timeEnd: number;
     };
     cursorPosition?: number;
+    // Waveform total range for viewport validation
+    waveformRange?: {
+      start: number;
+      end: number;
+    };
   }>;
   activeWaveformTabId?: string;
 
