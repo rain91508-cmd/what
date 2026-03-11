@@ -38,6 +38,8 @@ export default defineConfig({
           'react-vendor': ['react', 'react-dom'],
           'render-vendor': ['regl'],
           'utils-vendor': ['comlink', 'idb', 'zustand', 'protobufjs'],
+          'monaco-vendor': ['monaco-editor', '@monaco-editor/react'],
+          'wasm-vendor': ['hwda_wasm'],
         },
       },
     },

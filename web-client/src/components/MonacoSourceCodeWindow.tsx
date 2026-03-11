@@ -5,12 +5,38 @@ import { kdbManager } from '../modules/knowledge/kdbManager';
 import type { editor } from 'monaco-editor';
 import { LargeFileController, type FileMetadata } from '../services/largeFileController';
 
-// Configure monaco loader to use local files instead of CDN
-loader.config({
-  paths: {
-    vs: '/node_modules/monaco-editor/min/vs'
+// Configure monaco loader to use CDN first, fallback to local
+// CDN is faster for users with good internet, local is more reliable for offline/air-gapped environments
+const CDN_URL = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs';
+const LOCAL_URL = '/node_modules/monaco-editor/min/vs';
+
+// Try CDN first, fallback to local if CDN fails
+async function configureMonacoLoader() {
+  try {
+    // Test if CDN is accessible by fetching a small file
+    const testUrl = `${CDN_URL}/loader.js`;
+    const response = await fetch(testUrl, { method: 'HEAD', mode: 'no-cors' });
+    
+    // If we get here (no error), assume CDN is available
+    loader.config({
+      paths: {
+        vs: CDN_URL
+      }
+    });
+    console.log('[Monaco] Using CDN version');
+  } catch (error) {
+    // CDN failed, use local
+    loader.config({
+      paths: {
+        vs: LOCAL_URL
+      }
+    });
+    console.log('[Monaco] CDN unavailable, using local version');
   }
-});
+}
+
+// Configure loader
+configureMonacoLoader();
 
 // Handle loader errors (ignore cancelation errors)
 loader.init().catch((err) => {
@@ -18,6 +44,13 @@ loader.init().catch((err) => {
     return;
   }
   console.error('[Monaco] Loader error:', err);
+  // If CDN failed during init, try local fallback
+  loader.config({
+    paths: {
+      vs: LOCAL_URL
+    }
+  });
+  return loader.init();
 });
 
 interface MonacoSourceCodeWindowProps {
