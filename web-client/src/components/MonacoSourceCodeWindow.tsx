@@ -5,38 +5,16 @@ import { kdbManager } from '../modules/knowledge/kdbManager';
 import type { editor } from 'monaco-editor';
 import { LargeFileController, type FileMetadata } from '../services/largeFileController';
 
-// Configure monaco loader to use CDN first, fallback to local
-// CDN is faster for users with good internet, local is more reliable for offline/air-gapped environments
-const CDN_URL = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs';
+// Configure monaco loader to use local files
+// Local loading is more reliable for offline/air-gapped environments
 const LOCAL_URL = '/node_modules/monaco-editor/min/vs';
 
-// Try CDN first, fallback to local if CDN fails
-async function configureMonacoLoader() {
-  try {
-    // Test if CDN is accessible by fetching a small file
-    const testUrl = `${CDN_URL}/loader.js`;
-    const response = await fetch(testUrl, { method: 'HEAD', mode: 'no-cors' });
-    
-    // If we get here (no error), assume CDN is available
-    loader.config({
-      paths: {
-        vs: CDN_URL
-      }
-    });
-    console.log('[Monaco] Using CDN version');
-  } catch (error) {
-    // CDN failed, use local
-    loader.config({
-      paths: {
-        vs: LOCAL_URL
-      }
-    });
-    console.log('[Monaco] CDN unavailable, using local version');
+// Configure loader to use local files
+loader.config({
+  paths: {
+    vs: LOCAL_URL
   }
-}
-
-// Configure loader
-configureMonacoLoader();
+});
 
 // Handle loader errors (ignore cancelation errors)
 loader.init().catch((err) => {
@@ -44,13 +22,6 @@ loader.init().catch((err) => {
     return;
   }
   console.error('[Monaco] Loader error:', err);
-  // If CDN failed during init, try local fallback
-  loader.config({
-    paths: {
-      vs: LOCAL_URL
-    }
-  });
-  return loader.init();
 });
 
 interface MonacoSourceCodeWindowProps {
@@ -68,7 +39,7 @@ interface MonacoSourceCodeWindowProps {
 
 const modelCache = new Map<string, editor.ITextModel>();
 
-export function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId, startFromLine1, signalDeclarationLine, moduleStartLine, moduleEndLine, moduleFullName, editorRef: externalEditorRef, onWordClick }: MonacoSourceCodeWindowProps) {
+function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId, startFromLine1, signalDeclarationLine, moduleStartLine, moduleEndLine, moduleFullName, editorRef: externalEditorRef, onWordClick }: MonacoSourceCodeWindowProps) {
   const [content, setContent] = useState<string>('');
   const [filePath, setFilePath] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -800,3 +771,6 @@ export function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId
     </div>
   );
 }
+
+// Default export for React.lazy
+export default MonacoSourceCodeWindow;

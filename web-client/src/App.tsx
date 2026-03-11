@@ -283,6 +283,9 @@ function App() {
             loader.remove()
           }, 500)
         }
+        
+        // Preload WASM files in background after main UI is ready
+        preloadWasmFiles()
       } catch (error) {
         console.error('Initialization error:', error)
         addMessage(`Initialization error: ${error}`)
@@ -300,6 +303,30 @@ function App() {
     }
 
     init()
+  }, [])
+
+  // Preload WASM files in background
+  const preloadWasmFiles = useCallback(async () => {
+    const wasmFiles = [
+      '/wasm-pkg/hwda_wasm_bg.wasm',
+      '/wasm-pkg/hwda_wasm.js'
+    ]
+    
+    console.log('[App] Preloading WASM files in background...')
+    
+    for (const file of wasmFiles) {
+      try {
+        const link = document.createElement('link')
+        link.rel = 'prefetch'
+        link.href = file
+        link.as = file.endsWith('.wasm') ? 'fetch' : 'script'
+        link.crossOrigin = 'anonymous'
+        document.head.appendChild(link)
+        console.log(`[App] Prefetching: ${file}`)
+      } catch (error) {
+        console.warn(`[App] Failed to prefetch ${file}:`, error)
+      }
+    }
   }, [])
 
   // Toggle OPFS cache
