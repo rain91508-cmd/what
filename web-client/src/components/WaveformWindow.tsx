@@ -1470,7 +1470,14 @@ export function WaveformWindow({
     return nodes;
   };
 
-  const treeNodes = buildTreeNodes('root', 0, []);
+  // Memoize treeNodes to prevent infinite useEffect loops
+  // The dependency array should include all values that affect the tree structure
+  const treeNodes = useMemo(() => buildTreeNodes('root', 0, []), [
+    groups,
+    expandedSignals,
+    ioFilters,
+    nameFilter,
+  ]);
 
   // 监听 cursor 变化，更新信号值
   // Note: This must be after treeNodes is defined
