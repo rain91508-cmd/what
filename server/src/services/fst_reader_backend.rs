@@ -516,6 +516,15 @@ async fn read_signals_data_fst_reader_tiles_lod0(
             let tile_start = start_time + tile_span * tile_idx as u64;
             let tile_end = tile_start + tile_span;
 
+            // 读取 pre-start values
+            let pre_start_filter = FstFilter {
+                start: 0,
+                end: Some(tile_start),
+                include: Some(handles.clone()),
+            };
+            let pre_start_values = reader.read_pre_start_values(&pre_start_filter)
+                .map_err(|e| ServerError::Internal(format!("读取 pre-start 值失败: {:?}", e)))?;
+
             // 读取该 tile 的所有 transitions
             let filter = FstFilter {
                 start: tile_start,
@@ -536,7 +545,28 @@ async fn read_signals_data_fst_reader_tiles_lod0(
                 );
             }
 
-            reader.read_signals(&filter, |time, handle, value| {
+            // 添加 pre-start values
+            for info in &signal_infos {
+                if let Some(signal_data) = result_map.get_mut(&info.handle) {
+                    let start_value = pre_start_values.string_values.iter()
+                        .find(|v| v.handle == info.handle)
+                        .map(|v| String::from_utf8_lossy(&v.value).to_string())
+                        .or_else(|| {
+                            pre_start_values.real_values.iter()
+                                .find(|v| v.handle == info.handle)
+                                .map(|v| format!("{}", v.value))
+                        })
+                        .unwrap_or_else(|| "X".to_string());
+                    
+                    signal_data.add_transition(Transition {
+                        time: u64::MAX, // 特殊时间戳表示 start value
+                        value: SignalValue::Numeric(start_value),
+                    });
+                }
+            }
+
+            // 使用 read_signals_in_range 替代 read_signals，确保能正确读取 filter 范围内的数据
+            reader.read_signals_in_range(&filter, |time, handle, value| {
                 if let Some(signal_data) = result_map.get_mut(&handle) {
                     let value_str = match value {
                         FstSignalValue::String(b) => String::from_utf8_lossy(b).to_string(),
@@ -951,9 +981,6 @@ fn find_signals(
     signal_names: &[String],
 ) -> Result<Vec<SignalInfo>> {
     let mut signal_infos: Vec<SignalInfo> = Vec::new();
-    let mut found_names: HashMap<String, bool> = signal_names.iter()
-        .map(|name| (name.clone(), false))
-        .collect();
 
     reader.read_hierarchy(|entry| {
         if let FstHierarchyEntry::Var { 
@@ -962,10 +989,13 @@ fn find_signals(
             length,
             ..
         } = entry {
-            // 检查是否匹配请求的信号名（支持全路径匹配）
-            if signal_names.iter().any(|req| name == *req) {
+            // 检查是否匹配请求的信号名（支持部分匹配，因为 FST 中的名称可能没有完整路径）
+            if let Some(matched_name) = signal_names.iter().find(|req| {
+                // 完全匹配或部分匹配（FST 名称是请求名称的后缀）
+                name == **req || req.ends_with(&name.to_string())
+            }) {
                 signal_infos.push(SignalInfo {
-                    name: name.to_string(),
+                    name: matched_name.clone(), // 保存原始请求的完整路径
                     handle: FstSignalHandle::from_index(handle.get_index()),
                     width: length,
                 });

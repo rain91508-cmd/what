@@ -46,6 +46,9 @@ pub mod services;
 pub mod state;
 pub mod utils;
 
+// 对比测试模块
+pub mod compare_test;
+
 // 重新导出常用类型
 pub use config::ServerConfig;
 pub use error::{Result, ServerError, success, SuccessResponse};
