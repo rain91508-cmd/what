@@ -164,7 +164,7 @@ async fn read_signals_data_fst_reader_batch_lod0(
     .map_err(|e| ServerError::Internal(format!("任务执行失败: {}", e)))?
 }
 
-/// LoD 1-10: 使用 read_range_boundary_values 读取每个 bucket 的 first/last
+/// LoD 1-10: 使用 read_signals_in_range 读取所有 transitions，然后分配到 bucket
 async fn read_signals_data_fst_reader_batch_lod_low(
     wave_path: &PathBuf,
     signal_names: &[String],
@@ -217,47 +217,35 @@ async fn read_signals_data_fst_reader_batch_lod_low(
             bucket_last.insert(info.handle.clone(), vec![None; num_buckets]);
         }
 
-        // 对每个 bucket 使用 read_range_boundary_values 读取 first/last
-        // 注意：read_range_boundary_values 是两端包含 [start, end]
-        // 但为了和 lod_high 保持一致（左闭右开），我们将 end 设为 bucket_end - 1
-        for bucket_idx in 0..num_buckets {
-            let bucket_start = aligned_start + bucket_idx as u64 * bucket_size;
-            let bucket_end = bucket_start + bucket_size;
+        // 使用 read_signals_in_range 一次性读取整个范围的 transitions
+        let range_filter = FstFilter {
+            start: aligned_start,
+            end: Some(time_end),
+            include: Some(handles.clone()),
+        };
 
-            // 最后一个 bucket 包含到 time_end，其他 bucket 不包含右边界
-            let filter_end = if bucket_idx == num_buckets - 1 {
-                time_end
-            } else {
-                bucket_end - 1
-            };
-
-            let boundary_filter = FstFilter {
-                start: bucket_start,
-                end: Some(filter_end),
-                include: Some(handles.clone()),
-            };
-
-            let boundary_values = reader.read_range_boundary_values(&boundary_filter)
-                .map_err(|e| ServerError::Internal(format!("读取 bucket {} 边界值失败: {:?}", bucket_idx, e)))?;
-
-            // 更新 bucket first
-            if let Some(first) = &boundary_values.first {
-                for val in &first.string_values {
-                    if let Some(first_vec) = bucket_first.get_mut(&val.handle) {
-                        first_vec[bucket_idx] = Some(String::from_utf8_lossy(&val.value).to_string());
+        reader.read_signals_in_range(&range_filter, |time, handle, value| {
+            // 计算 bucket index
+            let bucket_idx = ((time - aligned_start) / bucket_size) as usize;
+            if bucket_idx < num_buckets {
+                let value_str = match value {
+                    FstSignalValue::String(b) => String::from_utf8_lossy(b).to_string(),
+                    FstSignalValue::Real(v) => format!("{}", v),
+                };
+                
+                // 更新 first（如果还没有值）
+                if let Some(first_vec) = bucket_first.get_mut(&handle) {
+                    if first_vec[bucket_idx].is_none() {
+                        first_vec[bucket_idx] = Some(value_str.clone());
                     }
                 }
-            }
-
-            // 更新 bucket last
-            if let Some(last) = &boundary_values.last {
-                for val in &last.string_values {
-                    if let Some(last_vec) = bucket_last.get_mut(&val.handle) {
-                        last_vec[bucket_idx] = Some(String::from_utf8_lossy(&val.value).to_string());
-                    }
+                
+                // 更新 last（总是更新）
+                if let Some(last_vec) = bucket_last.get_mut(&handle) {
+                    last_vec[bucket_idx] = Some(value_str);
                 }
             }
-        }
+        }).map_err(|e| ServerError::Internal(format!("读取信号数据失败: {:?}", e)))?;
 
         // 构建结果
         let mut result_map: HashMap<String, SignalWaveData> = HashMap::new();
