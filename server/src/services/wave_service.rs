@@ -1284,44 +1284,37 @@ impl WaveService {
                 ).await?
             }
             FstBackend::FstReader => {
-                // fst-reader 后端：使用批量读取优化
-                let mut tiles = Vec::with_capacity(num_tiles);
-                for tile_idx in 0..num_tiles {
-                    let tile_start = start_time + tile_span * tile_idx as u64;
-                    
-                    // 计算 bucket 数量
-                    let bucket_size = 2u64.pow(lod_level.0);
-                    let num_buckets = (tile_span / bucket_size) as usize;
-                    
-                    // 使用批量读取函数一次读取所有信号
-                    let tile_signals = self.read_signals_data_fst_reader_batch(
-                        &wave_path, signal_names, lod_level, tile_start, num_buckets
-                    ).await?;
-                    
-                    // ===== 对比测试：同时使用 fstapi 读取相同数据 =====
-                    println!("[COMPARE] 开始对比测试 tile_idx={}, tile_signals.len()={}", tile_idx, tile_signals.len());
-                    match self.read_signals_data_tiles_fstapi(
-                        &wave_path, signal_names, lod_level, tile_start, tile_span, 1
-                    ).await {
-                        Ok(fstapi_signals) => {
-                            println!("[COMPARE] fstapi_signals.len()={}, fstapi_signals[0].len()={}", 
-                                fstapi_signals.len(), 
-                                fstapi_signals.get(0).map(|v| v.len()).unwrap_or(0));
+                // fst-reader 后端：使用新的多 tile 版本
+                let reader_tiles = self.read_signals_data_fst_reader_tiles(
+                    &wave_path, signal_names, lod_level, start_time, tile_span, num_tiles
+                ).await?;
+                
+                // ===== 对比测试：同时使用 fstapi 读取相同数据 =====
+                println!("[COMPARE] 开始对比测试 num_tiles={}", num_tiles);
+                match self.read_signals_data_tiles_fstapi(
+                    &wave_path, signal_names, lod_level, start_time, tile_span, num_tiles
+                ).await {
+                    Ok(fstapi_tiles) => {
+                        println!("[COMPARE] fstapi_tiles.len()={}, reader_tiles.len()={}", 
+                            fstapi_tiles.len(), reader_tiles.len());
+                        
+                        // 对比每个 tile 的结果
+                        for tile_idx in 0..num_tiles.min(fstapi_tiles.len()).min(reader_tiles.len()) {
+                            let reader_signals = &reader_tiles[tile_idx];
+                            let fstapi_signals = &fstapi_tiles[tile_idx];
                             
-                            // 对比两个后端的结果
-                            if !fstapi_signals.is_empty() && !tile_signals.is_empty() {
-                                self.compare_signal_data(&signal_names, &tile_signals, &fstapi_signals[0], tile_idx);
+                            if !reader_signals.is_empty() && !fstapi_signals.is_empty() {
+                                self.compare_signal_data(&signal_names, reader_signals, fstapi_signals, tile_idx);
                             }
                         }
-                        Err(e) => {
-                            println!("[COMPARE] fstapi 读取失败: {:?}", e);
-                        }
                     }
-                    // ===== 对比测试结束 =====
-                    
-                    tiles.push(tile_signals);
+                    Err(e) => {
+                        println!("[COMPARE] fstapi 读取失败: {:?}", e);
+                    }
                 }
-                tiles
+                // ===== 对比测试结束 =====
+                
+                reader_tiles
             }
         };
 
@@ -2092,6 +2085,21 @@ impl WaveService {
         use crate::services::fst_reader_backend::read_signals_data_fst_reader_batch;
         
         read_signals_data_fst_reader_batch(wave_path, signal_names, lod, time_start, num_buckets).await
+    }
+
+    /// 使用 fst-reader 批量读取多个 tiles
+    async fn read_signals_data_fst_reader_tiles(
+        &self,
+        wave_path: &PathBuf,
+        signal_names: &[String],
+        lod: LodLevel,
+        start_time: u64,
+        tile_span: u64,
+        num_tiles: usize,
+    ) -> Result<Vec<Vec<SignalWaveData>>> {
+        use crate::services::fst_reader_backend::read_signals_data_fst_reader_tiles;
+        
+        read_signals_data_fst_reader_tiles(wave_path, signal_names, lod, start_time, tile_span, num_tiles).await
     }
 
     /// 对比 fst-reader 和 fstapi 两个后端返回的数据

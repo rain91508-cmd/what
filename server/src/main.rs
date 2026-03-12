@@ -196,6 +196,7 @@ fn init_logging(config: &ServerConfig) {
 /// 运行 fst-reader 与 fstapi 对比测试
 async fn run_compare_test(config: &ServerConfig) {
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use hwda_server::services::{WaveService, FstBackend, LodLevel};
     
     // 固定使用 riscv2.fst 波形文件
@@ -244,8 +245,6 @@ async fn run_compare_test(config: &ServerConfig) {
     // 创建 fst-reader 服务
     let reader_service = WaveService::with_backend(state.clone(), FstBackend::FstReader);
     
-    println!("\n[COMPARE-TEST] 开始对比测试...\n");
-    
     // 测试不同的 LoD 值，每个 LoD 测试 10 个随机时间段
     let test_cases = vec![
         (0u32, 256usize),   // LoD 0: 原始数据
@@ -253,79 +252,108 @@ async fn run_compare_test(config: &ServerConfig) {
         (12u32, 256usize),  // LoD 12: bucket_size = 4096
     ];
     
-    // 伪随机数生成器
-    let mut rng_state: u64 = 12345;
-    let mut next_rand = || {
-        rng_state = rng_state.wrapping_mul(1103515245).wrapping_add(12345);
-        (rng_state >> 16) as u64
-    };
-    
-    for (lod, num_buckets) in test_cases {
-        let bucket_size = 2u64.pow(lod);
-        let tile_span = bucket_size * num_buckets as u64;
+    // 重复运行 10 次测试
+    for run_idx in 0..10 {
+        // 使用当前时间作为随机数 seed
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
         
-        println!("\n[COMPARE-TEST] ===== LoD={} 测试 (bucket_size={}, tile_span={}) =====", 
-            lod, bucket_size, tile_span);
+        println!("\n========================================");
+        println!("[COMPARE-TEST] ===== 第 {}/10 轮测试 (seed={}) =====", run_idx + 1, seed);
+        println!("========================================\n");
         
-        // 测试 10 个随机时间段，在波形范围内平均分布
-        for test_idx in 0..10 {
-            // 将波形总长度分成 10 个区间，在每个区间内随机选择起点
-            let segment_size = end_time / 10;
-            let segment_start = test_idx as u64 * segment_size;
-            let segment_end = ((test_idx + 1) as u64 * segment_size).min(end_time - tile_span);
+        // 伪随机数生成器
+        let mut rng_state: u64 = seed;
+        let mut next_rand = || {
+            rng_state = rng_state.wrapping_mul(1103515245).wrapping_add(12345);
+            (rng_state >> 16) as u64
+        };
+        
+        for (lod, num_buckets) in &test_cases {
+            let bucket_size = 2u64.pow(*lod);
+            let tile_span = bucket_size * *num_buckets as u64;
             
-            // 在该区间内随机选择 start_time
-            let start_time = if segment_end > segment_start {
-                segment_start + (next_rand() % (segment_end - segment_start))
-            } else {
-                segment_start
-            };
+            println!("\n[COMPARE-TEST] ===== LoD={} 测试 (bucket_size={}, tile_span={}) =====", 
+                lod, bucket_size, tile_span);
             
-            let num_tiles = 1usize;
-            
-            println!("\n[COMPARE-TEST] LoD={} 测试 {}/10: start={}, span={}, tiles={}", 
-                lod, test_idx + 1, start_time, tile_span, num_tiles);
-            
-            // 使用 fst-reader 读取
-            let reader_tiles = match reader_service.get_wave_data_tiles(
-                &wave_name, 
-                &test_signals, 
-                lod, 
-                start_time, 
-                tile_span, 
-                num_tiles,
-                hwda_server::services::CompressionAlgorithm::None,
-            ).await {
-                Ok(d) => d.0,
-                Err(e) => {
-                    println!("[COMPARE-TEST] fst-reader 读取失败 (LoD={}, test={}): {:?}", lod, test_idx, e);
-                    continue;
+            // 测试 10 个随机时间段，在波形范围内平均分布
+            for test_idx in 0..10 {
+                // 随机选择 tile 数量（1-5 个）
+                let num_tiles = ((next_rand() % 5) + 1) as usize;
+                
+                // 计算总的 tile span
+                let total_tile_span = tile_span * num_tiles as u64;
+                
+                // 将波形总长度分成 10 个区间，在每个区间内随机选择起点
+                let segment_size = end_time / 10;
+                let segment_start = test_idx as u64 * segment_size;
+                let segment_end = ((test_idx + 1) as u64 * segment_size).min(end_time.saturating_sub(total_tile_span));
+                
+                // 在该区间内随机选择 start_time
+                let start_time = if segment_end > segment_start {
+                    segment_start + (next_rand() % (segment_end - segment_start))
+                } else {
+                    segment_start
+                };
+                
+                println!("\n[COMPARE-TEST] LoD={} 测试 {}/10: start={}, span_per_tile={}, tiles={}", 
+                    lod, test_idx + 1, start_time, tile_span, num_tiles);
+                
+                // 使用 fst-reader 读取
+                let reader_tiles = match reader_service.get_wave_data_tiles(
+                    &wave_name, 
+                    &test_signals, 
+                    *lod, 
+                    start_time, 
+                    tile_span, 
+                    num_tiles,
+                    hwda_server::services::CompressionAlgorithm::None,
+                ).await {
+                    Ok(d) => d.0,
+                    Err(e) => {
+                        println!("[COMPARE-TEST] fst-reader 读取失败 (LoD={}, test={}): {:?}", lod, test_idx, e);
+                        println!("\n[COMPARE-TEST] ✗ 测试失败，提前退出!");
+                        return;
+                    }
+                };
+                
+                // 使用 fstapi 读取
+                let api_tiles = match api_service.get_wave_data_tiles(
+                    &wave_name, 
+                    &test_signals, 
+                    *lod, 
+                    start_time, 
+                    tile_span, 
+                    num_tiles,
+                    hwda_server::services::CompressionAlgorithm::None,
+                ).await {
+                    Ok(d) => d.0,
+                    Err(e) => {
+                        println!("[COMPARE-TEST] fstapi 读取失败 (LoD={}, test={}): {:?}", lod, test_idx, e);
+                        println!("\n[COMPARE-TEST] ✗ 测试失败，提前退出!");
+                        return;
+                    }
+                };
+                
+                // 解析并对比数据包
+                let passed = compare_tile_data(&reader_tiles, &api_tiles, test_idx);
+                
+                // 如果有失败，提前退出
+                if !passed {
+                    println!("\n[COMPARE-TEST] ✗ 第 {}/10 轮测试失败，提前退出!", run_idx + 1);
+                    return;
                 }
-            };
-            
-            // 使用 fstapi 读取
-            let api_tiles = match api_service.get_wave_data_tiles(
-                &wave_name, 
-                &test_signals, 
-                lod, 
-                start_time, 
-                tile_span, 
-                num_tiles,
-                hwda_server::services::CompressionAlgorithm::None,
-            ).await {
-                Ok(d) => d.0,
-                Err(e) => {
-                    println!("[COMPARE-TEST] fstapi 读取失败 (LoD={}, test={}): {:?}", lod, test_idx, e);
-                    continue;
-                }
-            };
-            
-            // 解析并对比数据包
-            compare_tile_data(&reader_tiles, &api_tiles, test_idx);
+            }
         }
+        
+        println!("\n[COMPARE-TEST] ✓ 第 {}/10 轮测试全部通过!", run_idx + 1);
     }
     
-    println!("\n[COMPARE-TEST] 所有对比测试完成!");
+    println!("\n========================================");
+    println!("[COMPARE-TEST] ✓✓✓ 所有 10 轮测试全部通过! ✓✓✓");
+    println!("========================================");
 }
 
 /// 解析并对比 tile 数据包
