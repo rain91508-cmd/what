@@ -475,10 +475,10 @@ impl WaveformDataProvider {
         Ok(())
     }
 
-    /// Process server chunk data and store in cache
-    /// signal_names: optional list of signal names in the same order as server response
-    /// Used to map signal_handle to draw_sig_id
-    async fn process_server_chunk(&mut self, data: &[u8], signal_names: &[String]) -> Result<(), JsValue> {
+    /// Process server chunk data and store in cache using pre-computed draw_sig_ids
+    /// signal_names: list of signal names in the same order as server response
+    /// draw_sig_ids: pre-computed draw_sig_ids for each signal (parallel array)
+    async fn process_server_chunk_with_ids(&mut self, data: &[u8], signal_names: &[String], draw_sig_ids: &[u32]) -> Result<(), JsValue> {
         // Skip if both OPFS and memory cache are disabled
         if !self.opfs_cache.enabled && !self.opfs_cache.memory_cache_enabled {
             return Ok(());
@@ -516,14 +516,11 @@ impl WaveformDataProvider {
                 signal_idx as usize
             )?;
 
-            // Get draw_sig_id from signal name mapping
-            let draw_sig_id = if (signal_idx as usize) < signal_names.len() {
-                let signal_name = &signal_names[signal_idx as usize];
-                match self.get_draw_sig_id(signal_name) {
-                    Some(id) => id,
-                    None => signal_idx as u32
-                }
+            // Use pre-computed draw_sig_id directly (no lookup needed)
+            let draw_sig_id = if (signal_idx as usize) < draw_sig_ids.len() {
+                draw_sig_ids[signal_idx as usize]
             } else {
+                // Fallback: should not happen if arrays are parallel
                 signal_idx as u32
             };
             let group_id = OpfsCacheManager::get_group_id(draw_sig_id);
@@ -1101,9 +1098,9 @@ impl WaveformDataProvider {
         // console_log!("[WASM]   Total tiles to check: {}", tiles_to_fetch.len());
 
         // Step 2: Per-signal per-tile cache check
-        // Structure: tile_id -> Vec<signal_names> that need to be fetched for this tile
+        // Structure: tile_id -> Vec<(signal_name, draw_sig_id)> that need to be fetched for this tile
         // console_log!("[WASM] Step 2: Checking cache per signal per tile...");
-        let mut tile_missing_signals: std::collections::HashMap<u64, Vec<String>> = std::collections::HashMap::new();
+        let mut tile_missing_signals: std::collections::HashMap<u64, Vec<(String, u32)>> = std::collections::HashMap::new();
         let mut total_cache_hits = 0u32;
         let mut total_cache_misses = 0u32;
         
@@ -1223,28 +1220,29 @@ impl WaveformDataProvider {
                                 Ok(None) => {
                                     // Group file exists but signal not found
                                     tile_misses += 1;
-                                    tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push(signal_name.clone());
+                                    tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push((signal_name.clone(), draw_sig_id));
                                 }
                                 Err(_e) => {
                             tile_misses += 1;
-                            tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push(signal_name.clone());
+                            tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push((signal_name.clone(), draw_sig_id));
                         }
                     }
                 }
                 Ok(None) => {
                     // Group file not in cache
                     tile_misses += 1;
-                    tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push(signal_name.clone());
+                    tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push((signal_name.clone(), draw_sig_id));
                 }
                 Err(_e) => {
                     tile_misses += 1;
-                    tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push(signal_name.clone());
+                    tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push((signal_name.clone(), draw_sig_id));
                 }
             }
         } else {
             // Signal not found in draw list, treat as miss
             tile_misses += 1;
-            tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push(signal_name.clone());
+            // Use a default draw_sig_id (should not happen in normal case)
+            tile_missing_signals.entry(*tile_id).or_insert_with(Vec::new).push((signal_name.clone(), 0));
         }
     }
     
@@ -1269,27 +1267,39 @@ if tile_missing_signals.is_empty() {
         // Group tiles by contiguous ranges to minimize HTTP requests
         const MAX_TILES_PER_REQUEST: usize = 100;
         
-        // Collect all unique signal names from all tiles
-        // Note: We must request ALL signals in the viewport, not just missing ones
-        // because server returns all requested signals and we need to maintain
-        // the correct order for signal identification
-        let all_signal_names: Vec<String> = signals_to_fetch.clone();
+        // Collect only missing signal names and draw_sig_ids from all tiles
+        // Only request signals that are actually missing from cache
+        let mut missing_signals_map: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        for signals in tile_missing_signals.values() {
+            for (signal_name, draw_sig_id) in signals {
+                missing_signals_map.insert(signal_name.clone(), *draw_sig_id);
+            }
+        }
+        let missing_signal_names: Vec<String> = missing_signals_map.keys().cloned().collect();
         
-        for batch in all_signal_names.chunks(MAX_BATCH_SIZE) {
-            // Convert all signal names to server names and remove duplicates (preserve order)
-            // Also keep track of unique local names for response parsing
-            let mut seen_server = std::collections::HashSet::new();
-            let mut seen_local = std::collections::HashSet::new();
-            let server_names: Vec<String> = batch.iter()
-                .map(|local_name| self.build_server_signal_name(local_name))
-                .filter(|name| seen_server.insert(name.clone()))  // Remove duplicates, preserve order
-                .collect();
+        // console_log!("[WASM] Fetching {} missing signals from server (out of {} total)",
+        //     missing_signal_names.len(), signals_to_fetch.len());
+        
+        for batch in missing_signal_names.chunks(MAX_BATCH_SIZE) {
+            // Build server names, local names, and draw_sig_ids in the same order
+            // Use a single pass to ensure order consistency
+            let mut seen = std::collections::HashSet::new();
+            let mut server_names: Vec<String> = Vec::new();
+            let mut unique_local_names: Vec<String> = Vec::new();
+            let mut unique_draw_sig_ids: Vec<u32> = Vec::new();
             
-            // Get unique local names in the same order (for response parsing)
-            let unique_local_names: Vec<String> = batch.iter()
-                .filter(|name| seen_local.insert((*name).clone()))  // Remove duplicates, preserve order
-                .cloned()
-                .collect();
+            for local_name in batch.iter() {
+                let server_name = self.build_server_signal_name(local_name);
+                // Only add if we haven't seen this server name before
+                if seen.insert(server_name.clone()) {
+                    server_names.push(server_name);
+                    unique_local_names.push(local_name.clone());
+                    // Get draw_sig_id from the map (should always exist)
+                    if let Some(&draw_sig_id) = missing_signals_map.get(local_name) {
+                        unique_draw_sig_ids.push(draw_sig_id);
+                    }
+                }
+            }
 
             // Join server names with comma, then base64 encode
             let names_batch = server_names.join(",");
@@ -1333,8 +1343,8 @@ if tile_missing_signals.is_empty() {
                 uint8_array.copy_to(&mut bytes);
                 
                 // Parse multi-tile response
-                // Use unique_local_names (deduplicated) to match server response
-                self.parse_multi_tile_response(&bytes, &unique_local_names, time_start, time_end, tile_span).await?;
+                // Use unique_local_names and unique_draw_sig_ids (deduplicated) to match server response
+                self.parse_multi_tile_response(&bytes, &unique_local_names, &unique_draw_sig_ids, time_start, time_end, tile_span).await?;
                 
                 tile_idx += num_tiles;
             }
@@ -1372,10 +1382,12 @@ if tile_missing_signals.is_empty() {
     }
 
     /// Parse multi-tile response and process each tile
+    /// signal_names and draw_sig_ids must be in the same order (parallel arrays)
     async fn parse_multi_tile_response(
         &mut self,
         data: &[u8],
         signal_names: &[String],
+        draw_sig_ids: &[u32],
         viewport_start: u64,
         viewport_end: u64,
         tile_span: u64,
@@ -1416,7 +1428,8 @@ if tile_missing_signals.is_empty() {
             self.parse_chunk_data_for_batch(signal_names, tile_data, viewport_start, viewport_end, is_first_tile, false, tile_start)?;
             
             // Store in OPFS cache for future use
-            self.process_server_chunk(tile_data, signal_names).await?;
+            // Use draw_sig_ids directly instead of looking up from signal_names
+            self.process_server_chunk_with_ids(tile_data, signal_names, draw_sig_ids).await?;
         }
         
         Ok(())
