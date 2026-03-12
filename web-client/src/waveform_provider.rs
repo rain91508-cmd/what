@@ -1199,11 +1199,15 @@ impl WaveformDataProvider {
                                     
                                     // Merge with existing signal_data
                                     if let Some(existing) = self.signal_data.get_mut(signal_name) {
-                                        // Add bucket_data for this tile
-                                        existing.bucket_data.push((tile_start, buckets));
-                                        // Store tile info
-                                        if let Some(sv) = start_value {
-                                            existing.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv));
+                                        // Check if this tile already exists (avoid duplicates for repeated signals)
+                                        let tile_exists = existing.bucket_data.iter().any(|(ts, _)| *ts == tile_start);
+                                        if !tile_exists {
+                                            // Add bucket_data for this tile
+                                            existing.bucket_data.push((tile_start, buckets));
+                                            // Store tile info
+                                            if let Some(sv) = start_value {
+                                                existing.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv));
+                                            }
                                         }
                                     } else {
                                         // Insert new signal_data with bucket_data
