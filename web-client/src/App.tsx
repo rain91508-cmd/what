@@ -2810,6 +2810,7 @@ function App() {
                 serverUrl={serverUrl}
                 waveformName={currentWaveName || ''}
                 signalPrefix={currentWaveSignalPrefix}
+                serverPrefix={currentWaveSignalServerPrefix}
                 spaceBeforeBracket={currentWaveSignalSpaceBeforeBracket}
                 waveformRange={activeTabData.waveformRange}
               />
