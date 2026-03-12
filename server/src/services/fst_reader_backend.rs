@@ -218,15 +218,18 @@ async fn read_signals_data_fst_reader_batch_lod_low(
         }
 
         // 使用 read_signals_in_range 一次性读取整个范围的 transitions
+        // 统一规则：bucket 范围是 [aligned_start + bucket_idx * bucket_size, aligned_start + (bucket_idx + 1) * bucket_size - 1]
+        // 最后一个 bucket 的 end 是 time_end - 1，所以 filter 的 end 应该是 time_end - 1
         let range_filter = FstFilter {
             start: aligned_start,
-            end: Some(time_end),
+            end: Some(time_end.saturating_sub(1)),
             include: Some(handles.clone()),
         };
 
         reader.read_signals_in_range(&range_filter, |time, handle, value| {
             // 计算 bucket index
             let bucket_idx = ((time - aligned_start) / bucket_size) as usize;
+            // bucket index 必须在有效范围内 [0, num_buckets-1]
             if bucket_idx < num_buckets {
                 let value_str = match value {
                     FstSignalValue::String(b) => String::from_utf8_lossy(b).to_string(),

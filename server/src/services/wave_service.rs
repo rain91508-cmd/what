@@ -1584,8 +1584,10 @@ impl WaveService {
                 let mut signal_data = SignalWaveData::new(handle.into(), full_data.width, full_data.value_type);
 
                 // 过滤时间范围内的 transitions（从对齐后的起始地址开始）
+                // 统一规则：bucket 范围是 [aligned_start + bucket_idx * bucket_size, aligned_start + (bucket_idx + 1) * bucket_size - 1]
+                // 所以 time_end 不包含在内
                 for trans in &full_data.transitions {
-                    if trans.time >= aligned_start && trans.time <= time_end {
+                    if trans.time >= aligned_start && trans.time < time_end {
                         signal_data.add_transition(trans.clone());
                     }
                 }

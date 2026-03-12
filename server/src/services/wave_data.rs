@@ -780,24 +780,24 @@ impl LodPyramidGenerator {
         let mut bucket_has_multiple = false;  // 跟踪 bucket 内是否有多个 transitions
         
         // 计算第一个 transition 的 bucket 索引
+        // 统一规则：只处理 [aligned_start, range_end - 1] 范围内的 transition
         let first_bucket_idx = if first_trans.time >= aligned_start && first_trans.time < range_end {
             ((first_trans.time - aligned_start) / bucket_size) as usize
-        } else if first_trans.time >= range_end {
-            total_buckets
         } else {
-            0  // 小于 aligned_start 的放入 bucket 0
+            // 超出范围的 transition 不处理
+            return result;
         };
         let mut current_bucket_idx: usize = first_bucket_idx;
 
         // 遍历所有 transitions（从第二个开始，第一个已经用于初始化）
         for trans in source.transitions.iter().skip(1) {
             // 计算当前 transition 属于哪个 bucket（基于对齐后的时间范围）
+            // 统一规则：只处理 [aligned_start, range_end - 1] 范围内的 transition
             let trans_bucket_idx = if trans.time >= aligned_start && trans.time < range_end {
                 ((trans.time - aligned_start) / bucket_size) as usize
-            } else if trans.time >= range_end {
-                total_buckets  // 超出范围的放入最后一个 bucket
             } else {
-                continue;  // 小于 aligned_start 的跳过
+                // 超出范围的 transition 不处理
+                continue;
             };
 
             // 获取当前转换点的四态值
