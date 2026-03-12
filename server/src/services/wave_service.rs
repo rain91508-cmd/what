@@ -1276,6 +1276,7 @@ impl WaveService {
         }
 
         // 使用优化的批量读取函数
+        println!("[DEBUG] backend={:?}, wave_name={}", self.backend, wave_name);
         let tiles_data = match self.backend {
             FstBackend::FstApi => {
                 self.read_signals_data_tiles_fstapi(
@@ -1287,12 +1288,36 @@ impl WaveService {
                 let mut tiles = Vec::with_capacity(num_tiles);
                 for tile_idx in 0..num_tiles {
                     let tile_start = start_time + tile_span * tile_idx as u64;
-                    let tile_end = tile_start + tile_span;
+                    
+                    // 计算 bucket 数量
+                    let bucket_size = 2u64.pow(lod_level.0);
+                    let num_buckets = (tile_span / bucket_size) as usize;
                     
                     // 使用批量读取函数一次读取所有信号
                     let tile_signals = self.read_signals_data_fst_reader_batch(
-                        &wave_path, signal_names, lod_level, tile_start, tile_end
+                        &wave_path, signal_names, lod_level, tile_start, num_buckets
                     ).await?;
+                    
+                    // ===== 对比测试：同时使用 fstapi 读取相同数据 =====
+                    println!("[COMPARE] 开始对比测试 tile_idx={}, tile_signals.len()={}", tile_idx, tile_signals.len());
+                    match self.read_signals_data_tiles_fstapi(
+                        &wave_path, signal_names, lod_level, tile_start, tile_span, 1
+                    ).await {
+                        Ok(fstapi_signals) => {
+                            println!("[COMPARE] fstapi_signals.len()={}, fstapi_signals[0].len()={}", 
+                                fstapi_signals.len(), 
+                                fstapi_signals.get(0).map(|v| v.len()).unwrap_or(0));
+                            
+                            // 对比两个后端的结果
+                            if !fstapi_signals.is_empty() && !tile_signals.is_empty() {
+                                self.compare_signal_data(&signal_names, &tile_signals, &fstapi_signals[0], tile_idx);
+                            }
+                        }
+                        Err(e) => {
+                            println!("[COMPARE] fstapi 读取失败: {:?}", e);
+                        }
+                    }
+                    // ===== 对比测试结束 =====
                     
                     tiles.push(tile_signals);
                 }
@@ -1580,16 +1605,8 @@ impl WaveService {
                 info!("信号 {} 时间范围内数据: {} transitions, start={:?}", 
                     name, signal_data.transitions.len(), start_value);
 
-                // 在 signal_data 开头添加 start_value（使用 aligned_start 时间）
-                // 这样 LoD 生成器可以正确计算第一个 bucket 的 min
-                if !signal_data.transitions.is_empty() {
-                    signal_data.transitions.insert(0, Transition {
-                        time: aligned_start,
-                        value: start_value.clone(),
-                    });
-                }
-
                 // 生成 LoD 数据（使用对齐后的时间范围）
+                // 注意：start_value 不放入 bucket 计算，只作为 BOUNDARY_TIME_START 输出
                 let mut lod_data = LodPyramidGenerator::new(config.clone())
                     .generate_level_with_range(&signal_data, lod, aligned_start, time_end);
                 info!("信号 {} 生成 LoD {} 数据: {} transitions", name, lod.0, lod_data.transitions.len());
@@ -2058,226 +2075,96 @@ impl WaveService {
 
     /// 使用 fst-reader 批量读取多个信号数据（优化版本）
     /// 
-    /// 利用 fst-reader 的 read_pre_start_values 和 read_range_boundary_values
-    /// 一次读取多个信号的数据，然后按请求顺序返回
+    /// 根据 LoD 选择不同的实现策略：
+    /// - LoD = 0: 使用 read_signals 读取所有 transitions
+    /// - LoD <= 10: 使用流式处理，边读取边计算 bucket first/last
+    /// - LoD > 10: 对每个 bucket 单独调用 read_range_boundary_values
     async fn read_signals_data_fst_reader_batch(
         &self,
         wave_path: &PathBuf,
         signal_names: &[String],
         lod: LodLevel,
         time_start: u64,
-        time_end: u64,
+        num_buckets: usize,
     ) -> Result<Vec<SignalWaveData>> {
-        use fst_reader::{FstReader, FstHierarchyEntry, FstSignalHandle, FstFilter};
-        use std::fs::File;
-        use std::io::BufReader;
+        use crate::services::fst_reader_backend::read_signals_data_fst_reader_batch;
         
-        let path = wave_path.clone();
-        let signal_names: Vec<String> = signal_names.to_vec();
-        let lod_level = lod.0;
+        read_signals_data_fst_reader_batch(wave_path, signal_names, lod, time_start, num_buckets).await
+    }
+
+    /// 对比 fst-reader 和 fstapi 两个后端返回的数据
+    fn compare_signal_data(
+        &self,
+        signal_names: &[String],
+        reader_signals: &[SignalWaveData],
+        fstapi_tile: &[SignalWaveData],
+        tile_idx: usize,
+    ) {
+        println!("[COMPARE] ========== 对比测试 tile_idx={} ==========", tile_idx);
         
-        tokio::task::spawn_blocking(move || {
-            let file = File::open(&path)
-                .map_err(|e| ServerError::Internal(format!("无法打开 FST 文件: {}", e)))?;
-            let buf_reader = BufReader::new(file);
-            let mut reader = FstReader::open(buf_reader)
-                .map_err(|e| ServerError::Internal(format!("无法读取 FST 文件: {:?}", e)))?;
-
-            // 查找所有信号
-            let mut signal_handles: Vec<(String, FstSignalHandle, u32)> = Vec::new();
-            let mut scope_stack: Vec<String> = Vec::new();
-
-            reader.read_hierarchy(|entry| {
-                match entry {
-                    FstHierarchyEntry::Scope { name, .. } => {
-                        scope_stack.push(name.to_string());
-                    }
-                    FstHierarchyEntry::UpScope => {
-                        scope_stack.pop();
-                    }
-                    FstHierarchyEntry::Var { name, handle, length, .. } => {
-                        let full_path = if scope_stack.is_empty() {
-                            name.to_string()
-                        } else {
-                            format!("{}.{}", scope_stack.join("."), name)
-                        };
-                        
-                        // 检查是否是请求的信号
-                        if signal_names.iter().any(|req| {
-                            full_path == *req || 
-                            req.ends_with(&full_path) ||
-                            full_path.ends_with(req)
-                        }) {
-                            signal_handles.push((
-                                full_path,
-                                FstSignalHandle::from_index(handle.get_index()),
-                                length.to_owned()
-                            ));
-                        }
-                    }
-                    _ => {}
-                }
-            }).map_err(|e| ServerError::Internal(format!("读取层次结构失败: {:?}", e)))?;
-
-            // 计算 bucket size 和对齐起始时间
-            let bucket_size = if lod_level == 0 { 1 } else { 256u64 << (lod_level - 1) };
-            let aligned_start = (time_start / bucket_size) * bucket_size;
-
-            // 获取所有 handles
-            let handles: Vec<FstSignalHandle> = signal_handles.iter()
-                .map(|(_, h, _)| h.clone())
-                .collect();
-
-            // 批量读取 pre-start values（所有信号一次读取）
-            let pre_start_filter = FstFilter {
-                start: 0,
-                end: Some(time_start),
-                include: Some(handles.clone()),
-            };
+        for (idx, (sig_name, reader_data)) in signal_names.iter().zip(reader_signals.iter()).enumerate() {
+            let fstapi_data = fstapi_tile.get(idx);
             
-            let pre_start_values = reader.read_pre_start_values(&pre_start_filter)
-                .map_err(|e| ServerError::Internal(format!("读取 pre-start 值失败: {:?}", e)))?;
-
-            // 批量读取 range boundary values（所有信号一次读取）
-            let boundary_filter = FstFilter {
-                start: aligned_start,
-                end: Some(time_end),
-                include: Some(handles.clone()),
-            };
+            println!("[COMPARE] 信号 {}: reader_transitions={}, fstapi_transitions={}",
+                sig_name,
+                reader_data.transitions.len(),
+                fstapi_data.map(|d| d.transitions.len()).unwrap_or(0)
+            );
             
-            let boundary_values = reader.read_range_boundary_values(&boundary_filter)
-                .map_err(|e| ServerError::Internal(format!("读取边界值失败: {:?}", e)))?;
-
-            // 处理每个信号的数据
-            let mut result_map: std::collections::HashMap<String, SignalWaveData> = 
-                std::collections::HashMap::new();
-
-            for (signal_name, handle, signal_width) in &signal_handles {
-                // 获取 start value
-                let _start_value = pre_start_values.string_values.iter()
-                    .find(|v| v.handle == *handle)
-                    .map(|v| String::from_utf8_lossy(&v.value).to_string())
-                    .or_else(|| {
-                        pre_start_values.real_values.iter()
-                            .find(|v| v.handle == *handle)
-                            .map(|v| format!("{}", v.value))
-                    })
-                    .unwrap_or_else(|| "X".to_string());
-
-                // 收集 transitions
-                let mut all_transitions: Vec<(u64, String)> = Vec::new();
-                
-                if let Some(first) = &boundary_values.first {
-                    for val in &first.string_values {
-                        if val.handle == *handle {
-                            all_transitions.push((val.time, String::from_utf8_lossy(&val.value).to_string()));
-                        }
-                    }
+            if let Some(fstapi) = fstapi_data {
+                // 对比 transition 数量
+                if reader_data.transitions.len() != fstapi.transitions.len() {
+                    println!("[COMPARE]   ⚠️  transition 数量不匹配: reader={}, fstapi={}",
+                        reader_data.transitions.len(),
+                        fstapi.transitions.len()
+                    );
                 }
                 
-                if let Some(last) = &boundary_values.last {
-                    for val in &last.string_values {
-                        if val.handle == *handle && !all_transitions.iter().any(|(t, _)| *t == val.time) {
-                            all_transitions.push((val.time, String::from_utf8_lossy(&val.value).to_string()));
-                        }
-                    }
-                }
-                
-                all_transitions.sort_by_key(|(time, _)| *time);
-
-                // 生成 LoD 数据
-                let mut signal_data = SignalWaveData::new(
-                    handle.get_index() as u32, 
-                    *signal_width as u16, 
-                    SignalValueType::Numeric
-                );
-
-                // 使用 First/Last Bucket 算法
-                let mut current_bucket_idx: Option<usize> = None;
-                let mut bucket_first: Option<String> = None;
-                let mut bucket_last: Option<String> = None;
-                let mut bucket_has_multiple = false;
-
-                for (time, value) in all_transitions.iter() {
-                    let (trans_idx, should_output) = if lod_level == 0 {
-                        (*time, *time >= aligned_start && *time <= time_end)
-                    } else {
-                        let idx = ((*time - aligned_start) / bucket_size) as usize;
-                        (idx as u64, *time >= aligned_start && *time < time_end)
-                    };
-
-                    if !should_output {
-                        continue;
-                    }
-
-                    match current_bucket_idx {
-                        None => {
-                            current_bucket_idx = Some(trans_idx as usize);
-                            bucket_first = Some(value.clone());
-                            bucket_last = Some(value.clone());
-                            bucket_has_multiple = false;
-                        }
-                        Some(idx) if trans_idx as usize > idx => {
-                            // 输出当前 bucket
-                            signal_data.add_transition(Transition {
-                                time: idx as u64,
-                                value: crate::services::wave_data::SignalValue::Numeric(bucket_first.clone().unwrap()),
-                            });
-                            
-                            if bucket_has_multiple {
-                                signal_data.add_transition(Transition {
-                                    time: idx as u64,
-                                    value: crate::services::wave_data::SignalValue::Numeric(bucket_last.clone().unwrap()),
-                                });
-                            }
-
-                            // 开始新 bucket
-                            current_bucket_idx = Some(trans_idx as usize);
-                            bucket_first = Some(value.clone());
-                            bucket_last = Some(value.clone());
-                            bucket_has_multiple = false;
-                        }
-                        Some(_) => {
-                            bucket_last = Some(value.clone());
-                            bucket_has_multiple = true;
-                        }
-                    }
-                }
-
-                // 输出最后一个 bucket
-                if let Some(idx) = current_bucket_idx {
-                    signal_data.add_transition(Transition {
-                        time: idx as u64,
-                        value: crate::services::wave_data::SignalValue::Numeric(bucket_first.clone().unwrap()),
-                    });
+                // 对比每个 transition
+                let min_len = reader_data.transitions.len().min(fstapi.transitions.len());
+                for i in 0..min_len {
+                    let r = &reader_data.transitions[i];
+                    let f = &fstapi.transitions[i];
                     
-                    if bucket_has_multiple {
-                        signal_data.add_transition(Transition {
-                            time: idx as u64,
-                            value: crate::services::wave_data::SignalValue::Numeric(bucket_last.clone().unwrap()),
-                        });
+                    let time_match = r.time == f.time;
+                    let value_match = match (&r.value, &f.value) {
+                        (SignalValue::Numeric(rv), SignalValue::Numeric(fv)) => rv == fv,
+                        (SignalValue::Real(rv), SignalValue::Real(fv)) => (rv - fv).abs() < 0.0001,
+                        _ => false,
+                    };
+                    
+                    if !time_match || !value_match {
+                        println!("[COMPARE]   ⚠️  transition[{}] 不匹配: reader(time={}, value={:?}) vs fstapi(time={}, value={:?})",
+                            i, r.time, r.value, f.time, f.value
+                        );
+                    } else {
+                        println!("[COMPARE]   ✓  transition[{}]: time={}, value={:?}",
+                            i, r.time, r.value
+                        );
                     }
                 }
-
-                result_map.insert(signal_name.clone(), signal_data);
-            }
-
-            // 按原始请求顺序返回结果
-            let mut ordered_results: Vec<SignalWaveData> = Vec::with_capacity(signal_names.len());
-            for req_name in &signal_names {
-                if let Some(data) = result_map.get(req_name) {
-                    ordered_results.push(data.clone());
-                } else {
-                    // 如果信号未找到，创建一个空的 SignalWaveData
-                    tracing::warn!("信号未找到: {}", req_name);
-                    ordered_results.push(SignalWaveData::new(0, 1, SignalValueType::Numeric));
+                
+                // 显示多余的 transitions
+                if reader_data.transitions.len() > min_len {
+                    for i in min_len..reader_data.transitions.len() {
+                        println!("[COMPARE]   ⚠️  reader 多余 transition[{}]: time={}, value={:?}",
+                            i, reader_data.transitions[i].time, reader_data.transitions[i].value
+                        );
+                    }
                 }
+                if fstapi.transitions.len() > min_len {
+                    for i in min_len..fstapi.transitions.len() {
+                        println!("[COMPARE]   ⚠️  fstapi 多余 transition[{}]: time={}, value={:?}",
+                            i, fstapi.transitions[i].time, fstapi.transitions[i].value
+                        );
+                    }
+                }
+            } else {
+                println!("[COMPARE]   ⚠️  fstapi 中没有找到信号 {}", sig_name);
             }
-
-            Ok::<_, ServerError>(ordered_results)
-        })
-        .await
-        .map_err(|e| ServerError::Internal(format!("任务执行失败: {}", e)))?
+        }
+        
+        println!("[COMPARE] ========== 对比测试结束 ==========\n");
     }
 
     /// 获取波形文件的结束时间

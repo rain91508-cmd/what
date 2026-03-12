@@ -74,7 +74,7 @@ pub async fn list_waves(
 ) -> Result<Json<serde_json::Value>> {
     state.stats.record_request(crate::state::RequestType::Wave).await;
     
-    let wave_service = WaveService::new(state.clone());
+    let wave_service = create_wave_service(&state);
     let waves = wave_service.list_waves().await?;
     
     // 应用分页
@@ -104,7 +104,7 @@ pub async fn get_wave_info(
 ) -> Result<Json<serde_json::Value>> {
     state.stats.record_request(crate::state::RequestType::Wave).await;
     
-    let wave_service = WaveService::new(state.clone());
+    let wave_service = create_wave_service(&state);
     let info = wave_service.get_wave_info(&waveform_name).await?;
 
     Ok(Json(serde_json::json!({
@@ -187,7 +187,7 @@ pub async fn get_signal_info(
         .map_err(|_| crate::error::ServerError::SignalNotFound(signal_name.clone()))?
         .to_string();
 
-    let wave_service = WaveService::new(state.clone());
+    let wave_service = create_wave_service(&state);
     let info = wave_service.get_signal_info(&waveform_name, &signal_name).await?;
 
     Ok(Json(serde_json::json!({
@@ -211,7 +211,7 @@ pub async fn get_wave_data(
         .map_err(|_| crate::error::ServerError::SignalNotFound(signal_name.clone()))?
         .to_string();
 
-    let wave_service = WaveService::new(state.clone());
+    let wave_service = create_wave_service(&state);
     
     // 验证 LoD 层级
     let lod = query.lod.unwrap_or(0);
@@ -523,7 +523,7 @@ pub async fn get_wave_data_tiles(
     };
 
     // 获取波形数据
-    let wave_service = crate::services::WaveService::new(state.clone());
+    let wave_service = create_wave_service(&state);
     let (data, file_size) = wave_service
         .get_wave_data_tiles(
             &waveform_name,

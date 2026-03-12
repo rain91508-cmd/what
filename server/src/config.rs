@@ -72,6 +72,10 @@ pub struct ServerConfig {
     /// 启用详细调试输出（仅在 log_level=debug 时生效）
     #[arg(long, default_value = "false")]
     pub verbose: bool,
+
+    /// 启用 fst-reader 与 fstapi 对比测试模式
+    #[arg(long, default_value = "false")]
+    pub compare_test: bool,
 }
 
 impl ServerConfig {
@@ -156,6 +160,7 @@ impl Default for ServerConfig {
             web_dir: None,
             clear_cache_on_startup: false,
             verbose: false,
+            compare_test: false,
         }
     }
 }
