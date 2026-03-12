@@ -990,34 +990,25 @@ impl WaveformDataProvider {
     /// 3. Add server prefix (server_prefix) to shared name
     /// 4. Add space before bracket if space_before_bracket is true
     fn build_server_signal_name(&self, local_name: &str) -> String {
-        console_log!("[WASM] build_server_signal_name: local='{}', local_prefix='{}', server_prefix='{}', space={}", 
-            local_name, self.signal_prefix, self.server_prefix, self.space_before_bracket);
-        
         // Step 1: Remove local prefix to get shared name
         let shared_name = if self.signal_prefix.is_empty() || !local_name.starts_with(&self.signal_prefix) {
             local_name.to_string()
         } else {
             local_name[self.signal_prefix.len()..].to_string()
         };
-        
-        console_log!("[WASM]   After removing local prefix '{}': '{}'", self.signal_prefix, shared_name);
-        
+
         // Step 2: Add server prefix
         let mut server_name = format!("{}{}", self.server_prefix, shared_name);
-        
-        console_log!("[WASM]   After adding server prefix '{}': '{}'", self.server_prefix, server_name);
-        
+
         // Step 3: Add space before bracket if needed
         if self.space_before_bracket {
             if let Some(bracket_idx) = server_name.find('[') {
                 if bracket_idx > 0 && !server_name[..bracket_idx].ends_with(' ') {
                     server_name.insert(bracket_idx, ' ');
-                    console_log!("[WASM]   Added space before bracket: '{}'", server_name);
                 }
             }
         }
 
-        console_log!("[WASM]   Final server name: '{}'", server_name);
         server_name
     }
 
