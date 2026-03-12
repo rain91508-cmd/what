@@ -210,6 +210,23 @@ export class WaveformProviderAdapter {
     this._spaceBeforeBracket = value;
   }
 
+  // ==================== Prefix 设置方法 ====================
+
+  setSignalPrefix(prefix: string): void {
+    this._signalPrefix = prefix;
+    console.log('[WaveformProviderAdapter] setSignalPrefix:', prefix);
+  }
+
+  setServerPrefix(prefix: string): void {
+    this._serverPrefix = prefix;
+    console.log('[WaveformProviderAdapter] setServerPrefix:', prefix);
+  }
+
+  setSpaceBeforeBracket(enabled: boolean): void {
+    this._spaceBeforeBracket = enabled;
+    console.log('[WaveformProviderAdapter] setSpaceBeforeBracket:', enabled);
+  }
+
   async render_waveform(options?: {
     signals?: OldWasmSignalInfo[],
     viewport?: ViewportConfig,
