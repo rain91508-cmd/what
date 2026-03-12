@@ -209,14 +209,156 @@ KDB 文件使用 Protocol Buffers 序列化，可选择使用 zstd 压缩。
 
 ### 4.2 Server（服务器）
 
-> **待补充**
-
 Server 提供 HTTP API，用于：
 - 服务 KDB 文件
 - 服务波形文件（FST 格式）
 - 提供信号搜索和查询接口
+- 支持两种 FST 读取后端：fstapi（默认）和 fst-reader
 
-详细使用说明请参考 `server/README.md`。
+#### 4.2.1 环境要求
+
+**Windows:**
+- **Rust** 1.70+ (使用 rustup 安装)
+- **LLVM/Clang** (用于 fst-reader 后端的 bindgen)
+- **vcpkg** (用于管理 C++ 依赖)
+
+**Ubuntu/WSL:**
+- **Rust** 1.70+ 
+- **LLVM/Clang** 
+- **pkg-config**
+- **libzstd-dev** (可选，用于压缩)
+
+#### 4.2.2 Windows 编译步骤
+
+1. **安装 Rust**
+   ```powershell
+   # 使用 rustup 安装
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   # 或从 https://rustup.rs/ 下载安装程序
+   ```
+
+2. **安装 LLVM/Clang**
+   - 从 https://github.com/llvm/llvm-project/releases 下载 LLVM
+   - 解压到 `C:\Users\<username>\Downloads\clang+llvm-<version>-x86_64-pc-windows-msvc`
+   - 设置环境变量：`LIBCLANG_PATH=C:\path\to\llvm\bin`
+
+3. **安装 vcpkg**
+   ```powershell
+   git clone https://github.com/Microsoft/vcpkg.git C:\path\to\vcpkg
+   cd C:\path\to\vcpkg
+   .\bootstrap-vcpkg.bat
+   ```
+
+4. **编译 Server**
+   ```powershell
+   cd server
+   $env:VCPKG_ROOT="C:\path\to\vcpkg"
+   $env:LIBCLANG_PATH="C:\path\to\llvm\bin"
+   cargo build --release
+   ```
+   
+   编译完成后，可执行文件位于：`target\release\hwda-server.exe`
+
+#### 4.2.3 Ubuntu/WSL 编译步骤
+
+1. **安装依赖**
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y build-essential pkg-config libzstd-dev
+   
+   # 安装 Rust
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   source $HOME/.cargo/env
+   
+   # 安装 LLVM/Clang
+   sudo apt-get install -y llvm libclang-dev
+   ```
+
+2. **编译 Server**
+   ```bash
+   cd server
+   cargo build --release
+   ```
+   
+   编译完成后，可执行文件位于：`target/release/hwda-server`
+
+#### 4.2.4 基本使用
+
+**启动 Server：**
+
+```bash
+# 基本用法（使用默认 fstapi 后端）
+./hwda-server --kdb-dir /path/to/kdb --wave-dir /path/to/waves --port 8080
+
+# 使用 fst-reader 后端
+./hwda-server --kdb-dir /path/to/kdb --wave-dir /path/to/waves --fst-backend fst-reader
+
+# 启用详细调试日志
+./hwda-server --kdb-dir /path/to/kdb --wave-dir /path/to/waves --log-level debug --verbose
+
+# 启动时清除缓存
+./hwda-server --kdb-dir /path/to/kdb --wave-dir /path/to/waves --clear-cache-on-startup
+
+# 启用 Web 客户端静态文件服务
+./hwda-server --kdb-dir /path/to/kdb --wave-dir /path/to/waves --web-dir /path/to/web-client/dist
+```
+
+**常用选项：**
+
+| 选项 | 说明 | 默认值 |
+|------|------|--------|
+| `--kdb-dir <path>` | KDB 文件目录 | `./kdb` |
+| `--wave-dir <path>` | 波形文件目录 | `./waves` |
+| `--port <port>` | 服务端口 | `8080` |
+| `--host <host>` | 绑定地址 | `0.0.0.0` |
+| `--fst-backend <backend>` | FST 读取后端 (`fstapi` 或 `fst-reader`) | `fstapi` |
+| `--log-level <level>` | 日志级别 (`trace`, `debug`, `info`, `warn`, `error`) | `info` |
+| `--verbose` | 启用详细调试输出（仅在 `log-level=debug` 时生效） | `false` |
+| `--web-dir <path>` | Web 客户端静态文件目录 | - |
+| `--clear-cache-on-startup` | 启动时清除所有缓存 | `false` |
+| `--enable-cors` | 启用 CORS | `true` |
+| `--cache-capacity-mb <size>` | LRU 缓存容量 (MB) | `512` |
+
+**查看帮助：**
+
+```bash
+./hwda-server --help
+```
+
+#### 4.2.5 FST 后端选择
+
+Server 支持两种 FST 读取后端：
+
+1. **fstapi** (默认)
+   - 使用 GTKWave 的 libfst C 库
+   - 兼容性好，支持所有 FST 特性
+   - 需要 C++ 编译环境
+
+2. **fst-reader** (纯 Rust)
+   - 纯 Rust 实现，无需 C++ 依赖
+   - 性能更好，内存占用更低
+   - 使用 `--fst-backend fst-reader` 启用
+
+**切换后端示例：**
+```bash
+# 使用 fstapi 后端（默认）
+./hwda-server --wave-dir ./waves
+
+# 使用 fst-reader 后端
+./hwda-server --wave-dir ./waves --fst-backend fst-reader
+```
+
+#### 4.2.6 API 接口
+
+Server 提供以下主要 API：
+
+- `GET /api/kdb` - 列出所有 KDB 文件
+- `GET /api/kdb/{name}/signals` - 获取 KDB 中的信号列表
+- `GET /api/wave` - 列出所有波形文件
+- `GET /api/wave/{name}/signals` - 获取波形文件中的信号列表
+- `GET /api/wave/{name}/lod/{lod}/tile/{start}/{span}/{count}/signals/{signal_ids}/data` - 获取波形数据
+
+详细 API 文档请参考 `server/API.md`。
 
 ### 4.3 Web Client（Web 客户端）
 
