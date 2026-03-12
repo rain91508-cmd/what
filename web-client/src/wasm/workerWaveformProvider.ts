@@ -235,14 +235,19 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
     displayFormat: DisplayFormat;
     timeConfig: TimeConfig;
     devicePixelRatio?: number;
+    // Prefix settings for signal name conversion
+    signalPrefix?: string;
+    serverPrefix?: string;
+    spaceBeforeBracket?: boolean;
   }): Promise<void> {
     if (!this.worker) {
       throw new WaveformProviderError('Worker not initialized');
     }
 
-    const { canvasId, signals, viewport, canvasConfig, displayFormat, timeConfig, devicePixelRatio } = params;
+    const { canvasId, signals, viewport, canvasConfig, displayFormat, timeConfig, devicePixelRatio, signalPrefix, serverPrefix, spaceBeforeBracket } = params;
 
     console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Rendering: canvasId=${canvasId}, viewport=${viewport.startTime}-${viewport.endTime}, signals=${signals.length}, dpr=${devicePixelRatio}`);
+    console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Prefix settings: signalPrefix="${signalPrefix}", serverPrefix="${serverPrefix}", spaceBeforeBracket=${spaceBeforeBracket}`);
 
     await this.sendMessage(
       'RENDER_WAVEFORM',
@@ -254,6 +259,9 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
         displayFormat,
         timeConfig,
         devicePixelRatio,
+        signalPrefix,
+        serverPrefix,
+        spaceBeforeBracket,
       },
       60000 // 渲染超时 60 秒
     );
@@ -302,31 +310,34 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
   /**
    * 设置信号前缀（local prefix）
    */
-  async setSignalPrefix(prefix: string): Promise<void> {
-    if (!this.worker) {
-      throw new WaveformProviderError('Worker not initialized');
-    }
-    await this.sendMessage('SET_SIGNAL_PREFIX', { prefix });
+  setSignalPrefix(prefix: string): void {
+    this.worker?.postMessage({
+      type: 'SET_SIGNAL_PREFIX',
+      payload: { prefix },
+      id: ++globalMessageId,
+    });
   }
 
   /**
    * 设置服务器前缀
    */
-  async setServerPrefix(prefix: string): Promise<void> {
-    if (!this.worker) {
-      throw new WaveformProviderError('Worker not initialized');
-    }
-    await this.sendMessage('SET_SERVER_PREFIX', { prefix });
+  setServerPrefix(prefix: string): void {
+    this.worker?.postMessage({
+      type: 'SET_SERVER_PREFIX',
+      payload: { prefix },
+      id: ++globalMessageId,
+    });
   }
 
   /**
    * 设置是否在 [ 前加空格
    */
-  async setSpaceBeforeBracket(enabled: boolean): Promise<void> {
-    if (!this.worker) {
-      throw new WaveformProviderError('Worker not initialized');
-    }
-    await this.sendMessage('SET_SPACE_BEFORE_BRACKET', { enabled });
+  setSpaceBeforeBracket(enabled: boolean): void {
+    this.worker?.postMessage({
+      type: 'SET_SPACE_BEFORE_BRACKET',
+      payload: { enabled },
+      id: ++globalMessageId,
+    });
   }
 
   // ==================== 属性 ====================

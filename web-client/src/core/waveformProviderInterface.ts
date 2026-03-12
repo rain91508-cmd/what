@@ -201,6 +201,10 @@ export interface WaveformProviderInterface {
     displayFormat: DisplayFormat;  // 显示格式
     timeConfig: TimeConfig;        // 时间配置
     devicePixelRatio?: number;     // 设备像素比
+    // Prefix settings for signal name conversion
+    signalPrefix?: string;         // Local prefix (removed from local signal name)
+    serverPrefix?: string;         // Server prefix (added to server signal name)
+    spaceBeforeBracket?: boolean;  // Whether to add space before bracket
   }): Promise<void>;
 
   // ==================== 缓存管理 ====================
@@ -223,17 +227,17 @@ export interface WaveformProviderInterface {
   /**
    * 设置信号前缀（local prefix）
    */
-  setSignalPrefix(prefix: string): Promise<void>;
+  setSignalPrefix(prefix: string): void;
 
   /**
    * 设置服务器前缀
    */
-  setServerPrefix(prefix: string): Promise<void>;
+  setServerPrefix(prefix: string): void;
 
   /**
    * 设置是否在 [ 前加空格
    */
-  setSpaceBeforeBracket(enabled: boolean): Promise<void>;
+  setSpaceBeforeBracket(enabled: boolean): void;
 
   // ==================== 属性 ====================
 

@@ -89,32 +89,6 @@ export class WaveformProviderAdapter {
     return this.canvasConfig.height;
   }
 
-  get signal_prefix(): string {
-    // Delegate to provider
-    return '';
-  }
-
-  set signal_prefix(_value: string) {
-    // Delegate to provider via setSignalPrefix
-  }
-
-  get server_prefix(): string {
-    // Delegate to provider
-    return '';
-  }
-
-  set server_prefix(_value: string) {
-    // Delegate to provider via setServerPrefix
-  }
-
-  get space_before_bracket(): boolean {
-    return false;
-  }
-
-  set space_before_bracket(_value: boolean) {
-    // Delegate to provider via setSpaceBeforeBracket
-  }
-
   get display_format(): DisplayFormat {
     return this._displayFormat;
   }
@@ -207,6 +181,35 @@ export class WaveformProviderAdapter {
     return [result.prev ?? null, result.next ?? null];
   }
 
+  // Prefix settings for signal name conversion
+  private _signalPrefix: string = '';
+  private _serverPrefix: string = '';
+  private _spaceBeforeBracket: boolean = false;
+
+  get signal_prefix(): string {
+    return this._signalPrefix;
+  }
+
+  set signal_prefix(value: string) {
+    this._signalPrefix = value;
+  }
+
+  get server_prefix(): string {
+    return this._serverPrefix;
+  }
+
+  set server_prefix(value: string) {
+    this._serverPrefix = value;
+  }
+
+  get space_before_bracket(): boolean {
+    return this._spaceBeforeBracket;
+  }
+
+  set space_before_bracket(value: boolean) {
+    this._spaceBeforeBracket = value;
+  }
+
   async render_waveform(options?: {
     signals?: OldWasmSignalInfo[],
     viewport?: ViewportConfig,
@@ -241,7 +244,10 @@ export class WaveformProviderAdapter {
       canvasConfig, 
       dpr: this.devicePixelRatio,
       displayFormat, 
-      timeConfig 
+      timeConfig,
+      signalPrefix: this._signalPrefix,
+      serverPrefix: this._serverPrefix,
+      spaceBeforeBracket: this._spaceBeforeBracket,
     });
 
     await this.provider.renderWaveform({
@@ -252,6 +258,9 @@ export class WaveformProviderAdapter {
       displayFormat,
       timeConfig,
       devicePixelRatio: this.devicePixelRatio,
+      signalPrefix: this._signalPrefix,
+      serverPrefix: this._serverPrefix,
+      spaceBeforeBracket: this._spaceBeforeBracket,
     });
   }
 
