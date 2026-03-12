@@ -1289,27 +1289,29 @@ impl WaveService {
                     &wave_path, signal_names, lod_level, start_time, tile_span, num_tiles
                 ).await?;
                 
-                // ===== 对比测试：同时使用 fstapi 读取相同数据 =====
-                println!("[COMPARE] 开始对比测试 num_tiles={}", num_tiles);
-                match self.read_signals_data_tiles_fstapi(
-                    &wave_path, signal_names, lod_level, start_time, tile_span, num_tiles
-                ).await {
-                    Ok(fstapi_tiles) => {
-                        println!("[COMPARE] fstapi_tiles.len()={}, reader_tiles.len()={}", 
-                            fstapi_tiles.len(), reader_tiles.len());
-                        
-                        // 对比每个 tile 的结果
-                        for tile_idx in 0..num_tiles.min(fstapi_tiles.len()).min(reader_tiles.len()) {
-                            let reader_signals = &reader_tiles[tile_idx];
-                            let fstapi_signals = &fstapi_tiles[tile_idx];
+                // ===== 对比测试：同时使用 fstapi 读取相同数据（仅在开启 compare_test 时执行）=====
+                if self.state.config.compare_test {
+                    println!("[COMPARE] 开始对比测试 num_tiles={}", num_tiles);
+                    match self.read_signals_data_tiles_fstapi(
+                        &wave_path, signal_names, lod_level, start_time, tile_span, num_tiles
+                    ).await {
+                        Ok(fstapi_tiles) => {
+                            println!("[COMPARE] fstapi_tiles.len()={}, reader_tiles.len()={}", 
+                                fstapi_tiles.len(), reader_tiles.len());
                             
-                            if !reader_signals.is_empty() && !fstapi_signals.is_empty() {
-                                self.compare_signal_data(&signal_names, reader_signals, fstapi_signals, tile_idx);
+                            // 对比每个 tile 的结果
+                            for tile_idx in 0..num_tiles.min(fstapi_tiles.len()).min(reader_tiles.len()) {
+                                let reader_signals = &reader_tiles[tile_idx];
+                                let fstapi_signals = &fstapi_tiles[tile_idx];
+                                
+                                if !reader_signals.is_empty() && !fstapi_signals.is_empty() {
+                                    self.compare_signal_data(&signal_names, reader_signals, fstapi_signals, tile_idx);
+                                }
                             }
                         }
-                    }
-                    Err(e) => {
-                        println!("[COMPARE] fstapi 读取失败: {:?}", e);
+                        Err(e) => {
+                            println!("[COMPARE] fstapi 读取失败: {:?}", e);
+                        }
                     }
                 }
                 // ===== 对比测试结束 =====
