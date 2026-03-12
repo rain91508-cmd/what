@@ -1277,10 +1277,18 @@ if tile_missing_signals.is_empty() {
         
         for batch in all_signal_names.chunks(MAX_BATCH_SIZE) {
             // Convert all signal names to server names and remove duplicates (preserve order)
-            let mut seen = std::collections::HashSet::new();
+            // Also keep track of unique local names for response parsing
+            let mut seen_server = std::collections::HashSet::new();
+            let mut seen_local = std::collections::HashSet::new();
             let server_names: Vec<String> = batch.iter()
                 .map(|local_name| self.build_server_signal_name(local_name))
-                .filter(|name| seen.insert(name.clone()))  // Remove duplicates, preserve order
+                .filter(|name| seen_server.insert(name.clone()))  // Remove duplicates, preserve order
+                .collect();
+            
+            // Get unique local names in the same order (for response parsing)
+            let unique_local_names: Vec<String> = batch.iter()
+                .filter(|name| seen_local.insert((*name).clone()))  // Remove duplicates, preserve order
+                .cloned()
                 .collect();
 
             // Join server names with comma, then base64 encode
@@ -1325,7 +1333,8 @@ if tile_missing_signals.is_empty() {
                 uint8_array.copy_to(&mut bytes);
                 
                 // Parse multi-tile response
-                self.parse_multi_tile_response(&bytes, batch, time_start, time_end, tile_span).await?;
+                // Use unique_local_names (deduplicated) to match server response
+                self.parse_multi_tile_response(&bytes, &unique_local_names, time_start, time_end, tile_span).await?;
                 
                 tile_idx += num_tiles;
             }
