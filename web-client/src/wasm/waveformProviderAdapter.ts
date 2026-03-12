@@ -233,6 +233,9 @@ export class WaveformProviderAdapter {
     canvasConfig?: CanvasConfig,
     displayFormat?: DisplayFormat,
     timeConfig?: TimeConfig,
+    signalPrefix?: string,
+    serverPrefix?: string,
+    spaceBeforeBracket?: boolean,
   }): Promise<void> {
     // 检查 Canvas 是否已注册
     if (!this.canvasRegistered) {

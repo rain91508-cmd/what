@@ -42,7 +42,8 @@ interface WaveformWindowProps {
   // WASM Provider 配置（当 useMockData=false 时使用）
   serverUrl?: string;           // 服务器 URL
   waveformName?: string;        // 波形名称
-  signalPrefix?: string;        // 信号前缀
+  signalPrefix?: string;        // 本地信号前缀
+  serverPrefix?: string;        // 服务器信号前缀
   spaceBeforeBracket?: boolean; // 是否在 [ 前加空格
   // Waveform total range for sanity checks
   waveformRange?: {
@@ -96,6 +97,7 @@ export function WaveformWindow({
   serverUrl: _serverUrl = 'http://localhost:8080',
   waveformName: _waveformName = '',
   signalPrefix: _signalPrefix = '',
+  serverPrefix: _serverPrefix = '',
   spaceBeforeBracket: _spaceBeforeBracket = false,
   waveformRange,
 }: WaveformWindowProps) {
@@ -659,7 +661,10 @@ export function WaveformWindow({
         timeStart: viewport.timeStart,
         timeEnd: viewport.timeEnd,
         width,
-        height
+        height,
+        signalPrefix: _signalPrefix,
+        serverPrefix: _serverPrefix,
+        spaceBeforeBracket: _spaceBeforeBracket,
       });
       await wasmProviderRef.current.render_waveform({
         signals: wasmSignals,
@@ -680,6 +685,9 @@ export function WaveformWindow({
           lod0Unit: 1,
           displayUnitPerLoD0Unit: timeConfig.DisplayUnitPerLoD0Unit,
         },
+        signalPrefix: _signalPrefix,
+        serverPrefix: _serverPrefix,
+        spaceBeforeBracket: _spaceBeforeBracket,
       });
     } else {
       // Mock 模式：使用旧流程
