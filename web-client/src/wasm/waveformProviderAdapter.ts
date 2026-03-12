@@ -249,6 +249,10 @@ export class WaveformProviderAdapter {
     const canvasConfig = options?.canvasConfig || this.canvasConfig;
     const displayFormat = options?.displayFormat || this._displayFormat;
     const timeConfig = options?.timeConfig || this.timeConfig;
+    // 使用传入的 prefix 参数，如果没有传入则使用实例变量
+    const signalPrefix = options?.signalPrefix !== undefined ? options.signalPrefix : this._signalPrefix;
+    const serverPrefix = options?.serverPrefix !== undefined ? options.serverPrefix : this._serverPrefix;
+    const spaceBeforeBracket = options?.spaceBeforeBracket !== undefined ? options.spaceBeforeBracket : this._spaceBeforeBracket;
     
     // 转换信号列表格式
     const newSignals = this.convertSignals(currentSignals);
@@ -265,9 +269,9 @@ export class WaveformProviderAdapter {
       dpr: this.devicePixelRatio,
       displayFormat, 
       timeConfig,
-      signalPrefix: this._signalPrefix,
-      serverPrefix: this._serverPrefix,
-      spaceBeforeBracket: this._spaceBeforeBracket,
+      signalPrefix,
+      serverPrefix,
+      spaceBeforeBracket,
     });
 
     await this.provider.renderWaveform({
@@ -278,9 +282,9 @@ export class WaveformProviderAdapter {
       displayFormat,
       timeConfig,
       devicePixelRatio: this.devicePixelRatio,
-      signalPrefix: this._signalPrefix,
-      serverPrefix: this._serverPrefix,
-      spaceBeforeBracket: this._spaceBeforeBracket,
+      signalPrefix,
+      serverPrefix,
+      spaceBeforeBracket,
     });
   }
 
