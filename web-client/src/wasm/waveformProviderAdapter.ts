@@ -181,52 +181,6 @@ export class WaveformProviderAdapter {
     return [result.prev ?? null, result.next ?? null];
   }
 
-  // Prefix settings for signal name conversion
-  private _signalPrefix: string = '';
-  private _serverPrefix: string = '';
-  private _spaceBeforeBracket: boolean = false;
-
-  get signal_prefix(): string {
-    return this._signalPrefix;
-  }
-
-  set signal_prefix(value: string) {
-    this._signalPrefix = value;
-  }
-
-  get server_prefix(): string {
-    return this._serverPrefix;
-  }
-
-  set server_prefix(value: string) {
-    this._serverPrefix = value;
-  }
-
-  get space_before_bracket(): boolean {
-    return this._spaceBeforeBracket;
-  }
-
-  set space_before_bracket(value: boolean) {
-    this._spaceBeforeBracket = value;
-  }
-
-  // ==================== Prefix 设置方法 ====================
-
-  setSignalPrefix(prefix: string): void {
-    this._signalPrefix = prefix;
-    console.log('[WaveformProviderAdapter] setSignalPrefix:', prefix);
-  }
-
-  setServerPrefix(prefix: string): void {
-    this._serverPrefix = prefix;
-    console.log('[WaveformProviderAdapter] setServerPrefix:', prefix);
-  }
-
-  setSpaceBeforeBracket(enabled: boolean): void {
-    this._spaceBeforeBracket = enabled;
-    console.log('[WaveformProviderAdapter] setSpaceBeforeBracket:', enabled);
-  }
-
   async render_waveform(options?: {
     signals?: OldWasmSignalInfo[],
     viewport?: ViewportConfig,
@@ -242,32 +196,32 @@ export class WaveformProviderAdapter {
       console.log('[WaveformProviderAdapter] Canvas not registered, skipping render');
       return;
     }
-    
+
     // 使用提供的参数或默认参数
     const currentSignals = options?.signals || this.currentSignals;
     const viewport = options?.viewport || this.viewport;
     const canvasConfig = options?.canvasConfig || this.canvasConfig;
     const displayFormat = options?.displayFormat || this._displayFormat;
     const timeConfig = options?.timeConfig || this.timeConfig;
-    // 使用传入的 prefix 参数，如果没有传入则使用实例变量
-    const signalPrefix = options?.signalPrefix !== undefined ? options.signalPrefix : this._signalPrefix;
-    const serverPrefix = options?.serverPrefix !== undefined ? options.serverPrefix : this._serverPrefix;
-    const spaceBeforeBracket = options?.spaceBeforeBracket !== undefined ? options.spaceBeforeBracket : this._spaceBeforeBracket;
-    
+    // Prefix 参数 - 必须从 options 传入
+    const signalPrefix = options?.signalPrefix ?? '';
+    const serverPrefix = options?.serverPrefix ?? '';
+    const spaceBeforeBracket = options?.spaceBeforeBracket ?? false;
+
     // 转换信号列表格式
     const newSignals = this.convertSignals(currentSignals);
-    
+
     // 使用逻辑尺寸（CSS像素）传递给WASM
     // WASM计算segments时使用逻辑尺寸
     // Worker中使用ctx.scale(dpr, dpr)来缩放绘制
-    console.log('[WaveformProviderAdapter] render_waveform called with:', { 
-      canvasId: this.canvasId, 
-      currentSignals: currentSignals, 
-      newSignals, 
-      viewport, 
-      canvasConfig, 
+    console.log('[WaveformProviderAdapter] render_waveform called with:', {
+      canvasId: this.canvasId,
+      currentSignals: currentSignals,
+      newSignals,
+      viewport,
+      canvasConfig,
       dpr: this.devicePixelRatio,
-      displayFormat, 
+      displayFormat,
       timeConfig,
       signalPrefix,
       serverPrefix,
