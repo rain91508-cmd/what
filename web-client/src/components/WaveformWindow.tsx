@@ -864,65 +864,6 @@ export function WaveformWindow({
     };
   }, []);
 
-  // 监听 cursor 变化，更新信号值
-  useEffect(() => {
-    const updateSignalValues = async () => {
-      if (!cursor.visible) return;
-
-      // 根据模式选择正确的 provider
-      if (!useMockData && wasmProviderRef.current) {
-        // WASM 模式：从 WASM provider 获取信号值
-        const wasmProvider = wasmProviderRef.current;
-        const values = new Map<string, string>();
-
-        for (const signal of displaySignals) {
-          try {
-            const signalName = signal.fullName || signal.name;
-            const valueInfo = await wasmProvider.get_signal_value_at_time(signalName, cursor.position);
-            if (valueInfo && typeof valueInfo === 'object') {
-              // ValueInfo object has displayStr field (camelCase from WASM serde)
-              const displayStr = (valueInfo as any).displayStr || (valueInfo as any).display_str || '0x0';
-              values.set(signalName, displayStr);
-
-              // For expanded multi-bit signals, also get individual bit values
-              if (signal.msb !== signal.lsb && expandedSignals.has(signal.unique_id)) {
-                const bitCount = Math.min(signal.msb - signal.lsb + 1, 32);
-                for (let i = 0; i < bitCount; i++) {
-                  const bitIndex = signal.msb - i;
-                  const bitSignalName = `${signal.fullName}@[${bitIndex}]`;
-                  try {
-                    const bitValueInfo = await wasmProvider.get_signal_value_at_time(bitSignalName, cursor.position);
-                    if (bitValueInfo && typeof bitValueInfo === 'object') {
-                      const bitDisplayStr = (bitValueInfo as any).displayStr || (bitValueInfo as any).display_str || '0';
-                      values.set(bitSignalName, bitDisplayStr);
-                    } else {
-                      values.set(bitSignalName, '0');
-                    }
-                  } catch (error) {
-                    values.set(bitSignalName, '0');
-                  }
-                }
-              }
-            } else {
-              values.set(signal.fullName || signal.name, '0x0');
-            }
-          } catch (error) {
-            console.error(`[WaveformWindow] Error getting value for signal ${signal.name}:`, error);
-            values.set(signal.fullName || signal.name, '0x0');
-          }
-        }
-
-        setSignalValues(values);
-      } else {
-        // Mock 模式：从 mock provider 获取信号值
-        const values = mockDataProvider.getValuesAtTime(cursor.position);
-        setSignalValues(values);
-      }
-    };
-
-    updateSignalValues();
-  }, [cursor.position, cursor.visible, displaySignals, expandedSignals, useMockData]);
-
   // 鼠标按下：立即设置 cursor 并开始选择
   const RULER_HEIGHT = 30; // 标尺区域高度
   const SIGNAL_ROW_HEIGHT = 24; // 信号行高度，与 CSS 中的 .waveform-signal-item 高度一致
@@ -1530,6 +1471,71 @@ export function WaveformWindow({
   };
 
   const treeNodes = buildTreeNodes('root', 0, []);
+
+  // 监听 cursor 变化，更新信号值
+  // Note: This must be after treeNodes is defined
+  useEffect(() => {
+    const updateSignalValues = async () => {
+      if (!cursor.visible) return;
+
+      // 根据模式选择正确的 provider
+      if (!useMockData && wasmProviderRef.current) {
+        // WASM 模式：从 WASM provider 获取信号值
+        const wasmProvider = wasmProviderRef.current;
+        const values = new Map<string, string>();
+
+        // Use treeNodes to get signals in the same order as rendering
+        // This ensures cursor values match the displayed signals (including expanded bits)
+        for (const node of treeNodes) {
+          if (node.type !== 'signal' || !node.signal) continue;
+          
+          const signal = node.signal as Signal & { unique_id: number };
+          try {
+            const signalName = signal.fullName || signal.name;
+            const valueInfo = await wasmProvider.get_signal_value_at_time(signalName, cursor.position);
+            if (valueInfo && typeof valueInfo === 'object') {
+              // ValueInfo object has displayStr field (camelCase from WASM serde)
+              const displayStr = (valueInfo as any).displayStr || (valueInfo as any).display_str || '0x0';
+              values.set(signalName, displayStr);
+
+              // For expanded multi-bit signals, also get individual bit values
+              if (signal.msb !== signal.lsb && expandedSignals.has(signal.unique_id)) {
+                const bitCount = Math.min(signal.msb - signal.lsb + 1, 32);
+                for (let i = 0; i < bitCount; i++) {
+                  const bitIndex = signal.msb - i;
+                  const bitSignalName = `${signal.fullName}@[${bitIndex}]`;
+                  try {
+                    const bitValueInfo = await wasmProvider.get_signal_value_at_time(bitSignalName, cursor.position);
+                    if (bitValueInfo && typeof bitValueInfo === 'object') {
+                      const bitDisplayStr = (bitValueInfo as any).displayStr || (bitValueInfo as any).display_str || '0';
+                      values.set(bitSignalName, bitDisplayStr);
+                    } else {
+                      values.set(bitSignalName, '0');
+                    }
+                  } catch (error) {
+                    values.set(bitSignalName, '0');
+                  }
+                }
+              }
+            } else {
+              values.set(signal.fullName || signal.name, '0x0');
+            }
+          } catch (error) {
+            console.error(`[WaveformWindow] Error getting value for signal ${signal.name}:`, error);
+            values.set(signal.fullName || signal.name, '0x0');
+          }
+        }
+
+        setSignalValues(values);
+      } else {
+        // Mock 模式：从 mock provider 获取信号值
+        const values = mockDataProvider.getValuesAtTime(cursor.position);
+        setSignalValues(values);
+      }
+    };
+
+    updateSignalValues();
+  }, [cursor.position, cursor.visible, treeNodes, expandedSignals, useMockData]);
 
   const renderTreeConnectors = (parentNodes: { level: number; isLast: boolean }[]) => {
     return parentNodes.map((node, index) => (
