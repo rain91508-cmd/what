@@ -229,7 +229,8 @@ export function WaveformWindow({
   }, [externalCursorPosition, onCursorPositionChange, cursor]);
   
   // 信号值（由 DataProvider 根据 cursor 位置提供）
-  const [signalValues, setSignalValues] = useState<Map<string, string>>(new Map());
+  // 使用 unique_id 作为 key，支持同一个信号多次出现
+  const [signalValues, setSignalValues] = useState<Map<number, string>>(new Map());
   const [selectedSignal, setSelectedSignal] = useState<number | null>(null);
   const [expandedSignals, setExpandedSignals] = useState<Set<number>>(new Set());
   // cursor state is now managed above with external support
@@ -1390,9 +1391,10 @@ export function WaveformWindow({
     return signal.name;
   };
 
-  const getSignalValue = (signal: Signal) => {
-    // 从 Map 获取信号值，如果没有则返回默认值
-    return signalValues.get(signal.fullName) || '0x0';
+  const getSignalValue = (signal: Signal & { unique_id: number }) => {
+    // 从 Map 获取信号值，使用 unique_id 作为 key
+    // 支持同一个信号多次出现
+    return signalValues.get(signal.unique_id) || '0x0';
   };
 
   const getHierarchyDisplay = (signal: Signal): string => {
@@ -1489,7 +1491,8 @@ export function WaveformWindow({
       if (!useMockData && wasmProviderRef.current) {
         // WASM 模式：从 WASM provider 获取信号值
         const wasmProvider = wasmProviderRef.current;
-        const values = new Map<string, string>();
+        // 使用 unique_id 作为 key，支持同一个信号多次出现
+        const values = new Map<number, string>();
 
         // Use treeNodes to get signals in the same order as rendering
         // This ensures cursor values match the displayed signals (including expanded bits)
@@ -1503,9 +1506,11 @@ export function WaveformWindow({
             if (valueInfo && typeof valueInfo === 'object') {
               // ValueInfo object has displayStr field (camelCase from WASM serde)
               const displayStr = (valueInfo as any).displayStr || (valueInfo as any).display_str || '0x0';
-              values.set(signalName, displayStr);
+              // Use unique_id as key to support duplicate signals
+              values.set(signal.unique_id, displayStr);
 
               // For expanded multi-bit signals, also get individual bit values
+              // Use negative indices for bit values to avoid conflicts with signal unique_ids
               if (signal.msb !== signal.lsb && expandedSignals.has(signal.unique_id)) {
                 const bitCount = Math.min(signal.msb - signal.lsb + 1, 32);
                 for (let i = 0; i < bitCount; i++) {
@@ -1513,30 +1518,47 @@ export function WaveformWindow({
                   const bitSignalName = `${signal.fullName}@[${bitIndex}]`;
                   try {
                     const bitValueInfo = await wasmProvider.get_signal_value_at_time(bitSignalName, cursor.position);
+                    // Use a unique key for each bit: -(unique_id * 100 + bit_index)
+                    const bitKey = -(signal.unique_id * 100 + i);
                     if (bitValueInfo && typeof bitValueInfo === 'object') {
                       const bitDisplayStr = (bitValueInfo as any).displayStr || (bitValueInfo as any).display_str || '0';
-                      values.set(bitSignalName, bitDisplayStr);
+                      values.set(bitKey, bitDisplayStr);
                     } else {
-                      values.set(bitSignalName, '0');
+                      values.set(bitKey, '0');
                     }
                   } catch (error) {
-                    values.set(bitSignalName, '0');
+                    const bitKey = -(signal.unique_id * 100 + i);
+                    values.set(bitKey, '0');
                   }
                 }
               }
             } else {
-              values.set(signal.fullName || signal.name, '0x0');
+              values.set(signal.unique_id, '0x0');
             }
           } catch (error) {
             console.error(`[WaveformWindow] Error getting value for signal ${signal.name}:`, error);
-            values.set(signal.fullName || signal.name, '0x0');
+            values.set(signal.unique_id, '0x0');
           }
         }
 
         setSignalValues(values);
       } else {
         // Mock 模式：从 mock provider 获取信号值
-        const values = mockDataProvider.getValuesAtTime(cursor.position);
+        // Convert string keys to number keys for consistency
+        const mockValues = mockDataProvider.getValuesAtTime(cursor.position);
+        const values = new Map<number, string>();
+        // Mock data uses signal names as keys, we need to map them to unique_ids
+        // For now, just use a simple hash of the name as the key
+        mockValues.forEach((value, key) => {
+          // Create a simple hash from the string key
+          let hash = 0;
+          for (let i = 0; i < key.length; i++) {
+            const char = key.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32bit integer
+          }
+          values.set(Math.abs(hash), value);
+        });
         setSignalValues(values);
       }
     };
@@ -2009,7 +2031,8 @@ export function WaveformWindow({
                             
                             {/* Value column */}
                             <span className="waveform-signal-value" style={{ flex: 1 }}>
-                              {signalValues.get(`${signal.fullName}@[${bitIndex}]`) || '0'}
+                              {/* Use unique key for bit value: -(unique_id * 100 + bit_index) */}
+                              {signalValues.get(-(signal.unique_id * 100 + i)) || '0'}
                             </span>
                           </div>
                         );
