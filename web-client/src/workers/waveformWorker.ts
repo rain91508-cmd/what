@@ -392,7 +392,25 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
     canvasConfig,
     displayFormat,
     timeConfig,
+    // Prefix settings for signal name conversion
+    signalPrefix,
+    serverPrefix,
+    spaceBeforeBracket,
   } = payload;
+
+  // Update WASM provider prefix settings if provided
+  if (signalPrefix !== undefined) {
+    wasmProvider.signal_prefix = signalPrefix;
+    console.log('[WaveformWorker] Set signal_prefix:', signalPrefix);
+  }
+  if (serverPrefix !== undefined) {
+    wasmProvider.server_prefix = serverPrefix;
+    console.log('[WaveformWorker] Set server_prefix:', serverPrefix);
+  }
+  if (spaceBeforeBracket !== undefined) {
+    wasmProvider.space_before_bracket = spaceBeforeBracket;
+    console.log('[WaveformWorker] Set space_before_bracket:', spaceBeforeBracket);
+  }
 
   // 获取 Canvas
   const canvasEntry = canvasManager.get(canvasId);
