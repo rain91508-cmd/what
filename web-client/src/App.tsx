@@ -1570,6 +1570,9 @@ function App() {
     const signalCount = (response.data as any)?.signal_count ?? 0
     console.log(`[Signal Search] Response: status=${response.status}, signal_count=${signalCount}`)
 
+    // Check if signal has bit width - if so, we need to also try with space
+    const hasBitWidth = sharedName.includes('[')
+    
     if (response.status === 'success' && signalCount > 0) {
       const signals = (response.data as any)?.signals ?? []
       const matchedNames = signals.map((s: any) => s.name as string)
@@ -1586,6 +1589,47 @@ function App() {
 
       console.log(`[Signal Search] Extracted server prefixes:`, Array.from(serverPrefixes))
 
+      // If signal has bit width, also try with space
+      if (hasBitWidth) {
+        const bracketIndex = sharedName.indexOf('[')
+        const nameWithSpace = sharedName.substring(0, bracketIndex) + ' ' + sharedName.substring(bracketIndex)
+        const escapedNameWithSpace = escapeRegex(nameWithSpace)
+        console.log(`[Signal Search] Also trying with space: "${nameWithSpace}" -> regex: .*${escapedNameWithSpace}$`)
+
+        const responseWithSpace = await apiService.getWaveformSignals(waveName, {
+          nameRegex: `.*${escapedNameWithSpace}$`
+        })
+
+        const signalCountWithSpace = (responseWithSpace.data as any)?.signal_count ?? 0
+        console.log(`[Signal Search] Response with space: status=${responseWithSpace.status}, signal_count=${signalCountWithSpace}`)
+
+        if (responseWithSpace.status === 'success' && signalCountWithSpace > 0) {
+          const signalsWithSpace = (responseWithSpace.data as any)?.signals ?? []
+          const matchedNamesWithSpace = signalsWithSpace.map((s: any) => s.name as string)
+          console.log(`[Signal Search] Found ${matchedNamesWithSpace.length} match(es) with space:`, matchedNamesWithSpace)
+
+          // Extract server prefixes
+          const serverPrefixesWithSpace = new Set<string>()
+          for (const matchedName of matchedNamesWithSpace) {
+            if (matchedName.endsWith(nameWithSpace)) {
+              const serverPrefix = matchedName.substring(0, matchedName.length - nameWithSpace.length)
+              serverPrefixesWithSpace.add(serverPrefix)
+            }
+          }
+
+          // Return with space = true
+          return {
+            found: true,
+            matchedNames: matchedNamesWithSpace,
+            localPrefix,
+            serverPrefix: serverPrefixesWithSpace.size === 1 ? Array.from(serverPrefixesWithSpace)[0] : undefined,
+            spaceBeforeBracket: true,
+            multipleServerPrefixes: serverPrefixesWithSpace.size > 1
+          }
+        }
+      }
+
+      // Return with space = false (either no bit width, or no match with space)
       return {
         found: true,
         matchedNames,
@@ -1596,9 +1640,9 @@ function App() {
       }
     }
 
-    // Try without bit width
-    const bracketIndex = sharedName.indexOf('[')
-    if (bracketIndex !== -1) {
+    // If not found with bit width, and has bit width, try without bit width or with space
+    if (hasBitWidth) {
+      const bracketIndex = sharedName.indexOf('[')
       const nameWithoutBitWidth = sharedName.substring(0, bracketIndex)
       escapedName = escapeRegex(nameWithoutBitWidth)
       console.log(`[Signal Search] Trying without bit width: "${nameWithoutBitWidth}" -> regex: .*${escapedName}$`)
@@ -1610,28 +1654,25 @@ function App() {
       const signalCountNoWidth = (response.data as any)?.signal_count ?? 0
       console.log(`[Signal Search] Response: status=${response.status}, signal_count=${signalCountNoWidth}`)
 
+      // Don't return immediately - continue to try with space
+      // Store result for later use
+      let foundWithoutBitWidth = false
+      let matchedNamesWithoutBitWidth: string[] = []
+      let serverPrefixesWithoutBitWidth = new Set<string>()
+      
       if (response.status === 'success' && signalCountNoWidth > 0) {
         const signals = (response.data as any)?.signals ?? []
-        const matchedNames = signals.map((s: any) => s.name as string)
-        console.log(`[Signal Search] Found ${matchedNames.length} match(es) without bit width:`, matchedNames)
+        matchedNamesWithoutBitWidth = signals.map((s: any) => s.name as string)
+        console.log(`[Signal Search] Found ${matchedNamesWithoutBitWidth.length} match(es) without bit width:`, matchedNamesWithoutBitWidth)
 
         // Extract server prefixes
-        const serverPrefixes = new Set<string>()
-        for (const matchedName of matchedNames) {
+        for (const matchedName of matchedNamesWithoutBitWidth) {
           if (matchedName.endsWith(nameWithoutBitWidth)) {
             const serverPrefix = matchedName.substring(0, matchedName.length - nameWithoutBitWidth.length)
-            serverPrefixes.add(serverPrefix)
+            serverPrefixesWithoutBitWidth.add(serverPrefix)
           }
         }
-
-        return {
-          found: true,
-          matchedNames,
-          localPrefix,
-          serverPrefix: serverPrefixes.size === 1 ? Array.from(serverPrefixes)[0] : undefined,
-          spaceBeforeBracket: false,
-          multipleServerPrefixes: serverPrefixes.size > 1
-        }
+        foundWithoutBitWidth = true
       }
 
       // Try with space before bracket (e.g., "mem_arid [7:0]")
@@ -1667,6 +1708,18 @@ function App() {
           serverPrefix: serverPrefixes.size === 1 ? Array.from(serverPrefixes)[0] : undefined,
           spaceBeforeBracket: true,
           multipleServerPrefixes: serverPrefixes.size > 1
+        }
+      }
+
+      // If no match with space, return result without bit width
+      if (foundWithoutBitWidth) {
+        return {
+          found: true,
+          matchedNames: matchedNamesWithoutBitWidth,
+          localPrefix,
+          serverPrefix: serverPrefixesWithoutBitWidth.size === 1 ? Array.from(serverPrefixesWithoutBitWidth)[0] : undefined,
+          spaceBeforeBracket: false,
+          multipleServerPrefixes: serverPrefixesWithoutBitWidth.size > 1
         }
       }
     }
