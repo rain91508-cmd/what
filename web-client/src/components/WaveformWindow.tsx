@@ -2147,12 +2147,18 @@ export function WaveformWindow({
               position: 'absolute',
               left: mouseX,
               transform: (() => {
+                const cursorX = ((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * canvasWidth;
                 const mouseTextWidth = 80; // Approximate width of mouse text
                 
-                // Default: show on right
-                // Only switch to left if too close to right edge
+                // Check if too close to right edge
                 if (displayMouseX > canvasWidth - mouseTextWidth) {
                   // Too close to right edge, show on left
+                  return 'translateX(-100%) translateX(-4px)';
+                }
+                
+                // Check if mouse is on the left of cursor and too close
+                if (cursor.visible && displayMouseX < cursorX && (cursorX - displayMouseX) < mouseTextWidth) {
+                  // Mouse on left of cursor and too close, show on left
                   return 'translateX(-100%) translateX(-4px)';
                 }
                 
