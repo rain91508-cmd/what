@@ -1987,9 +1987,9 @@ export function WaveformWindow({
                     <span
                       className="waveform-signal-value"
                       style={{
-                        width: valueColumnWidth,
-                        minWidth: valueColumnWidth,
-                        maxWidth: valueColumnWidth,
+                        width: `${valueColumnWidth}px`,
+                        minWidth: `${valueColumnWidth}px`,
+                        maxWidth: `${valueColumnWidth}px`,
                         display: 'flex',
                         justifyContent: 'flex-end',
                         alignItems: 'center',
@@ -2007,8 +2007,8 @@ export function WaveformWindow({
                           whiteSpace: 'nowrap',
                           overflow: 'hidden',
                           textOverflow: 'clip',
-                          width: valueColumnWidth - 8,
-                          maxWidth: valueColumnWidth - 8,
+                          width: `${valueColumnWidth - 8}px`,
+                          maxWidth: `${valueColumnWidth - 8}px`,
                           display: 'block',
                           direction: 'rtl',
                         }}
@@ -2059,9 +2059,9 @@ export function WaveformWindow({
                             <span 
                               className="waveform-signal-value" 
                               style={{ 
-                                width: valueColumnWidth,
-                                minWidth: valueColumnWidth,
-                                maxWidth: valueColumnWidth,
+                                width: `${valueColumnWidth}px`,
+                                minWidth: `${valueColumnWidth}px`,
+                                maxWidth: `${valueColumnWidth}px`,
                                 display: 'flex',
                                 justifyContent: 'flex-end',
                                 alignItems: 'center',
@@ -2079,8 +2079,8 @@ export function WaveformWindow({
                                   whiteSpace: 'nowrap',
                                   overflow: 'hidden',
                                   textOverflow: 'clip',
-                                  width: valueColumnWidth - 8,
-                                  maxWidth: valueColumnWidth - 8,
+                                  width: `${valueColumnWidth - 8}px`,
+                                  maxWidth: `${valueColumnWidth - 8}px`,
                                   display: 'block',
                                   direction: 'rtl',
                                 }}
