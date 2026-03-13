@@ -3,6 +3,7 @@ pub mod wave_service;
 pub mod wave_data;
 pub mod fst_backend;
 pub mod fst_reader_backend;
+pub mod fst_reader_cache;
 
 pub use kdb_service::KdbService;
 pub use wave_service::{WaveService, FstBackend};

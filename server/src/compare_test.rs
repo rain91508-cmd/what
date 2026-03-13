@@ -142,8 +142,12 @@ pub async fn run_compare_test(config: &ServerConfig) {
             let wave_path = PathBuf::from(&config.wave_dir).join(format!("{}.fst", wave_name));
             let time_end = start_time + tile_span;
             
+            // 获取全局缓存
+            let cache = crate::services::fst_reader_cache::get_fst_reader_cache();
+            
             // 调用 lod_low 方法
             let lod_low_result = match read_signals_data_fst_reader_batch_lod_low(
+                cache,
                 &wave_path,
                 &test_signals,
                 crate::services::LodLevel(lod),
@@ -161,6 +165,7 @@ pub async fn run_compare_test(config: &ServerConfig) {
             
             // 调用 lod_high 方法
             let lod_high_result = match read_signals_data_fst_reader_batch_lod_high(
+                cache,
                 &wave_path,
                 &test_signals,
                 crate::services::LodLevel(lod),

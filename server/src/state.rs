@@ -1,4 +1,5 @@
 use crate::config::ServerConfig;
+use crate::services::fst_reader_cache::FstReaderCache;
 use moka::future::Cache;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -25,6 +26,10 @@ pub struct ServerState {
     /// 源文件内容缓存
     /// 缓存 key: 文件路径，value: 文件内容
     pub source_cache: SourceCache,
+
+    /// FST Reader 缓存
+    /// 缓存 key: 文件路径，value: 缓存的 FST Reader
+    pub fst_reader_cache: FstReaderCache,
 
     /// 访问统计信息
     pub stats: Arc<ServerStats>,
@@ -181,12 +186,16 @@ impl ServerState {
         // 源文件缓存：中等大小
         let source_cache = Cache::new(cache_capacity / 4);
 
+        // FST Reader 缓存：缓存打开的 FST 文件 reader
+        let fst_reader_cache = FstReaderCache::new(10);
+
         Self {
             config: Arc::new(config),
             kdb_metadata_cache,
             wave_metadata_cache,
             wave_chunk_cache,
             source_cache,
+            fst_reader_cache,
             stats: Arc::new(ServerStats::default()),
         }
     }
@@ -197,6 +206,7 @@ impl ServerState {
         self.wave_metadata_cache.invalidate_all();
         self.wave_chunk_cache.invalidate_all();
         self.source_cache.invalidate_all();
+        // FST Reader 缓存不需要显式清除，它有 TTL
     }
 
     /// 清除波形数据块缓存

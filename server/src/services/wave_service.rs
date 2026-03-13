@@ -2085,8 +2085,10 @@ impl WaveService {
         num_buckets: usize,
     ) -> Result<Vec<SignalWaveData>> {
         use crate::services::fst_reader_backend::read_signals_data_fst_reader_batch;
+        use crate::services::fst_reader_cache::get_fst_reader_cache;
         
-        read_signals_data_fst_reader_batch(wave_path, signal_names, lod, time_start, num_buckets).await
+        let cache = get_fst_reader_cache();
+        read_signals_data_fst_reader_batch(cache, wave_path, signal_names, lod, time_start, num_buckets).await
     }
 
     /// 使用 fst-reader 批量读取多个 tiles

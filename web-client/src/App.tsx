@@ -1837,14 +1837,30 @@ function App() {
             // Only update spaceBeforeBracket if this signal has bit width (has '[')
             // Single-bit signals don't provide information about space before bracket
             const signalHasBitWidth = signal.fullName.includes('[')
-            if (signalHasBitWidth && result.spaceBeforeBracket !== undefined && result.spaceBeforeBracket !== currentWaveSignalSpaceBeforeBracket) {
-              console.log(`[Signal Search] Updating spaceBeforeBracket: ${currentWaveSignalSpaceBeforeBracket} -> ${result.spaceBeforeBracket}`)
-              setCurrentWaveSignalSpaceBeforeBracket(result.spaceBeforeBracket)
-              updateProviderSettings(currentWaveSignalPrefix, currentWaveSignalServerPrefix, result.spaceBeforeBracket)
-            } else if (!signalHasBitWidth) {
-              console.log(`[Signal Search] Single-bit signal, not updating spaceBeforeBracket (keep: ${currentWaveSignalSpaceBeforeBracket})`)
-            }
-            addSignalToWaveform(signal)
+            const detectedSpaceBeforeBracket = signalHasBitWidth 
+              ? (result.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket) 
+              : currentWaveSignalSpaceBeforeBracket
+            
+            // Show confirmation dialog before adding signal
+            const firstSignalResponse = await apiService.getWaveformSignals(currentWaveName, {
+              limit: 1
+            })
+            const firstSignalName = firstSignalResponse.status === 'success' &&
+              firstSignalResponse.data &&
+              firstSignalResponse.data.signals.length > 0
+              ? firstSignalResponse.data.signals[0].name
+              : 'N/A'
+
+            setSignalNotFoundInfo({
+              attempted: signal.fullName,
+              matched: result.matchedNames?.[0] || '',
+              prefix: currentWaveSignalPrefix,
+              serverPrefix: currentWaveSignalServerPrefix,
+              firstAvailable: firstSignalName,
+              success: true
+            })
+            setPendingSignalToAdd(signal)  // Store signal to add after user confirms
+            setShowSignalNotFoundDialog(true)
             return
           }
           console.log(`[Signal Search] Not found with existing prefix, trying prefix removal...`)
@@ -1886,50 +1902,27 @@ function App() {
             return
           }
 
-          // Signal found with single server prefix
-          const needsPrefixAdjustment = result.localPrefix && result.localPrefix.length > 0
+          // Signal found with single server prefix - always show dialog for user confirmation
+          const firstSignalResponse = await apiService.getWaveformSignals(currentWaveName, {
+            limit: 1
+          })
+          const firstSignalName = firstSignalResponse.status === 'success' &&
+            firstSignalResponse.data &&
+            firstSignalResponse.data.signals.length > 0
+            ? firstSignalResponse.data.signals[0].name
+            : 'N/A'
 
-          if (needsPrefixAdjustment) {
-            // Show success dialog with prefix info
-            const firstSignalResponse = await apiService.getWaveformSignals(currentWaveName, {
-              limit: 1
-            })
-            const firstSignalName = firstSignalResponse.status === 'success' &&
-              firstSignalResponse.data &&
-              firstSignalResponse.data.signals.length > 0
-              ? firstSignalResponse.data.signals[0].name
-              : 'N/A'
-
-            setSignalNotFoundInfo({
-              attempted: signal.fullName,
-              matched: result.matchedNames?.[0] || '',
-              prefix: result.localPrefix!,
-              serverPrefix: result.serverPrefix || '',
-              firstAvailable: firstSignalName,
-              success: true
-            })
-            setShowSignalNotFoundDialog(true)
-          }
-
-          // Always save prefix and space setting globally for this waveform
-          // Even if no prefix adjustment is needed, we still need to detect spaceBeforeBracket
-          // Only update spaceBeforeBracket if this signal has bit width (has '[')
-          const newSignalHasBitWidth = signal.fullName.includes('[')
-          const detectedSpaceBeforeBracket = newSignalHasBitWidth ? (result.spaceBeforeBracket ?? false) : currentWaveSignalSpaceBeforeBracket
-          const detectedLocalPrefix = result.localPrefix ?? ''
-          const detectedServerPrefix = result.serverPrefix ?? ''
-
-          console.log(`[Signal Search] Setting localPrefix="${detectedLocalPrefix}", serverPrefix="${detectedServerPrefix}", spaceBeforeBracket=${detectedSpaceBeforeBracket} (signalHasBitWidth=${newSignalHasBitWidth})`)
-
-          setCurrentWaveSignalPrefix(detectedLocalPrefix)
-          setCurrentWaveSignalServerPrefix(detectedServerPrefix)
-          setCurrentWaveSignalSpaceBeforeBracket(detectedSpaceBeforeBracket)
-
-          // Update WASM provider settings
-          updateProviderSettings(detectedLocalPrefix, detectedServerPrefix, detectedSpaceBeforeBracket)
-
-          // Add signal to waveform (still using mock data for now)
-          addSignalToWaveform(signal)
+          setSignalNotFoundInfo({
+            attempted: signal.fullName,
+            matched: result.matchedNames?.[0] || '',
+            prefix: result.localPrefix || '',
+            serverPrefix: result.serverPrefix || '',
+            firstAvailable: firstSignalName,
+            success: true
+          })
+          setPendingSignalToAdd(signal)  // Store signal to add after user confirms
+          setShowSignalNotFoundDialog(true)
+          return
         } else {
           // Signal not found even after prefix removal
           const firstSignalResponse = await apiService.getWaveformSignals(currentWaveName, {

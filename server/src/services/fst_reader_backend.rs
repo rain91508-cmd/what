@@ -3,11 +3,12 @@
 use crate::error::{Result, ServerError};
 use crate::services::wave_data::{SignalWaveData, Transition, SignalValueType, SignalValue};
 use crate::services::LodLevel;
+use crate::services::fst_reader_cache::FstReaderCache;
 use fst_reader::{FstReader, FstHierarchyEntry, FstSignalHandle, FstFilter, FstSignalValue};
 use std::collections::HashMap;
-use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
+use std::fs::File;
 
 /// 信号信息
 #[derive(Debug, Clone)]
@@ -25,12 +26,14 @@ struct SignalInfo {
 /// - LoD > 10: 对每个 bucket 单独调用 read_range_boundary_values
 /// 
 /// # 参数
+/// - `cache`: FST Reader 缓存
 /// - `wave_path`: FST 文件路径
 /// - `signal_names`: 信号名称列表
 /// - `lod`: LoD 级别
 /// - `time_start`: 开始时间
 /// - `num_buckets`: bucket 数量（用于计算 time_end）
 pub async fn read_signals_data_fst_reader_batch(
+    cache: &FstReaderCache,
     wave_path: &PathBuf,
     signal_names: &[String],
     lod: LodLevel,
@@ -44,18 +47,19 @@ pub async fn read_signals_data_fst_reader_batch(
     
     if lod_level == 0 {
         // LoD 0: 读取所有 transitions
-        read_signals_data_fst_reader_batch_lod0(wave_path, signal_names, time_start, time_end).await
+        read_signals_data_fst_reader_batch_lod0(cache, wave_path, signal_names, time_start, time_end).await
     } else if lod_level <= 10 {
         // LoD 1-10: 流式处理，边读取边计算 bucket first/last
-        read_signals_data_fst_reader_batch_lod_low(wave_path, signal_names, lod, time_start, time_end, num_buckets).await
+        read_signals_data_fst_reader_batch_lod_low(cache, wave_path, signal_names, lod, time_start, time_end, num_buckets).await
     } else {
         // LoD > 10: 对每个 bucket 单独调用 read_range_boundary_values
-        read_signals_data_fst_reader_batch_lod_high(wave_path, signal_names, lod, time_start, time_end, num_buckets).await
+        read_signals_data_fst_reader_batch_lod_high(cache, wave_path, signal_names, lod, time_start, time_end, num_buckets).await
     }
 }
 
 /// LoD = 0: 读取所有 transitions
 async fn read_signals_data_fst_reader_batch_lod0(
+    cache: &FstReaderCache,
     wave_path: &PathBuf,
     signal_names: &[String],
     time_start: u64,
@@ -63,16 +67,18 @@ async fn read_signals_data_fst_reader_batch_lod0(
 ) -> Result<Vec<SignalWaveData>> {
     let path = wave_path.clone();
     let signal_names: Vec<String> = signal_names.to_vec();
+    let path_str = path.to_string_lossy().to_string();
+    
+    // 从缓存获取 reader
+    let reader_arc = cache.get_or_create(&path_str).await?;
     
     tokio::task::spawn_blocking(move || {
-        let file = File::open(&path)
-            .map_err(|e| ServerError::Internal(format!("无法打开 FST 文件: {}", e)))?;
-        let buf_reader = BufReader::new(file);
-        let mut reader = FstReader::open(buf_reader)
-            .map_err(|e| ServerError::Internal(format!("无法读取 FST 文件: {:?}", e)))?;
+        // 获取 reader 的锁
+        let rt = tokio::runtime::Handle::current();
+        let mut reader = rt.block_on(reader_arc.lock());
 
         // 查找所有信号
-        let signal_infos = find_signals(&mut reader, &signal_names)?;
+        let signal_infos = find_signals(&mut *reader, &signal_names)?;
         
         if signal_infos.is_empty() {
             return Ok(Vec::new());
@@ -132,6 +138,7 @@ async fn read_signals_data_fst_reader_batch_lod0(
 
 /// LoD 1-10: 使用 read_signals_in_range 读取所有 transitions，然后分配到 bucket
 pub async fn read_signals_data_fst_reader_batch_lod_low(
+    cache: &FstReaderCache,
     wave_path: &PathBuf,
     signal_names: &[String],
     lod: LodLevel,
@@ -142,16 +149,18 @@ pub async fn read_signals_data_fst_reader_batch_lod_low(
     let path = wave_path.clone();
     let signal_names: Vec<String> = signal_names.to_vec();
     let lod_level = lod.0;
+    let path_str = path.to_string_lossy().to_string();
+    
+    // 从缓存获取 reader
+    let reader_arc = cache.get_or_create(&path_str).await?;
     
     tokio::task::spawn_blocking(move || {
-        let file = File::open(&path)
-            .map_err(|e| ServerError::Internal(format!("无法打开 FST 文件: {}", e)))?;
-        let buf_reader = BufReader::new(file);
-        let mut reader = FstReader::open(buf_reader)
-            .map_err(|e| ServerError::Internal(format!("无法读取 FST 文件: {:?}", e)))?;
+        // 获取 reader 的锁
+        let rt = tokio::runtime::Handle::current();
+        let mut reader = rt.block_on(reader_arc.lock());
 
         // 查找所有信号
-        let signal_infos = find_signals(&mut reader, &signal_names)?;
+        let signal_infos = find_signals(&mut *reader, &signal_names)?;
         
         if signal_infos.is_empty() {
             return Ok(Vec::new());
@@ -281,6 +290,7 @@ pub async fn read_signals_data_fst_reader_batch_lod_low(
 
 /// LoD > 10: 对每个 bucket 单独调用 read_range_boundary_values
 pub async fn read_signals_data_fst_reader_batch_lod_high(
+    cache: &FstReaderCache,
     wave_path: &PathBuf,
     signal_names: &[String],
     lod: LodLevel,
@@ -291,16 +301,18 @@ pub async fn read_signals_data_fst_reader_batch_lod_high(
     let path = wave_path.clone();
     let signal_names: Vec<String> = signal_names.to_vec();
     let lod_level = lod.0;
+    let path_str = path.to_string_lossy().to_string();
+    
+    // 从缓存获取 reader
+    let reader_arc = cache.get_or_create(&path_str).await?;
     
     tokio::task::spawn_blocking(move || {
-        let file = File::open(&path)
-            .map_err(|e| ServerError::Internal(format!("无法打开 FST 文件: {}", e)))?;
-        let buf_reader = BufReader::new(file);
-        let mut reader = FstReader::open(buf_reader)
-            .map_err(|e| ServerError::Internal(format!("无法读取 FST 文件: {:?}", e)))?;
+        // 获取 reader 的锁
+        let rt = tokio::runtime::Handle::current();
+        let mut reader = rt.block_on(reader_arc.lock());
 
         // 查找所有信号
-        let signal_infos = find_signals(&mut reader, &signal_names)?;
+        let signal_infos = find_signals(&mut *reader, &signal_names)?;
         
         if signal_infos.is_empty() {
             return Ok(Vec::new());
