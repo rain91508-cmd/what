@@ -1557,11 +1557,12 @@ function App() {
     console.log(`[Signal Search] Original: "${fullName}", Local Prefix: "${localPrefix}", Shared name: "${sharedName}"`)
 
     // Try with bit width first (no space) - match end of line only
+    // Use .* prefix to match any server prefix
     let escapedName = escapeRegex(sharedName)
-    console.log(`[Signal Search] Trying with bit width: "${sharedName}" -> regex: ${escapedName}$`)
+    console.log(`[Signal Search] Trying with bit width: "${sharedName}" -> regex: .*${escapedName}$`)
 
     let response = await apiService.getWaveformSignals(waveName, {
-      nameRegex: `${escapedName}$`
+      nameRegex: `.*${escapedName}$`
       // Note: No limit, get all matches
     })
 
@@ -1599,10 +1600,10 @@ function App() {
     if (bracketIndex !== -1) {
       const nameWithoutBitWidth = sharedName.substring(0, bracketIndex)
       escapedName = escapeRegex(nameWithoutBitWidth)
-      console.log(`[Signal Search] Trying without bit width: "${nameWithoutBitWidth}" -> regex: ${escapedName}$`)
+      console.log(`[Signal Search] Trying without bit width: "${nameWithoutBitWidth}" -> regex: .*${escapedName}$`)
 
       response = await apiService.getWaveformSignals(waveName, {
-        nameRegex: `${escapedName}$`
+        nameRegex: `.*${escapedName}$`
       })
 
       const signalCountNoWidth = (response.data as any)?.count ?? 0
