@@ -1887,35 +1887,21 @@ function App() {
               }
             }
 
-            // Signal found with existing prefix
+            // Signal found with existing prefix - AUTO ADD (no confirmation needed)
+            // This is the "后续信号匹配（自动）" case from the documentation
             // Only update spaceBeforeBracket if this signal has bit width (has '[')
             // Single-bit signals don't provide information about space before bracket
             const signalHasBitWidth = signal.fullName.includes('[')
-            const detectedSpaceBeforeBracket = signalHasBitWidth 
-              ? (result.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket) 
-              : currentWaveSignalSpaceBeforeBracket
+            if (signalHasBitWidth && result.spaceBeforeBracket !== undefined && result.spaceBeforeBracket !== currentWaveSignalSpaceBeforeBracket) {
+              console.log(`[Signal Search] Updating spaceBeforeBracket: ${currentWaveSignalSpaceBeforeBracket} -> ${result.spaceBeforeBracket}`)
+              setCurrentWaveSignalSpaceBeforeBracket(result.spaceBeforeBracket)
+              updateProviderSettings(currentWaveSignalPrefix, currentWaveSignalServerPrefix, result.spaceBeforeBracket)
+            } else if (!signalHasBitWidth) {
+              console.log(`[Signal Search] Single-bit signal, not updating spaceBeforeBracket (keep: ${currentWaveSignalSpaceBeforeBracket})`)
+            }
             
-            // Show confirmation dialog before adding signal
-            const firstSignalResponse = await apiService.getWaveformSignals(currentWaveName, {
-              limit: 1
-            })
-            const firstSignalName = firstSignalResponse.status === 'success' &&
-              firstSignalResponse.data &&
-              firstSignalResponse.data.signals.length > 0
-              ? firstSignalResponse.data.signals[0].name
-              : 'N/A'
-
-            setSignalNotFoundInfo({
-              attempted: signal.fullName,
-              matched: result.matchedNames?.[0] || '',
-              prefix: currentWaveSignalPrefix,
-              serverPrefix: currentWaveSignalServerPrefix,
-              spaceBeforeBracket: result.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket,
-              firstAvailable: firstSignalName,
-              success: true
-            })
-            setPendingSignalToAdd(signal)  // Store signal to add after user confirms
-            setShowSignalNotFoundDialog(true)
+            // Auto add signal without confirmation
+            addSignalToWaveform(signal)
             return
           }
           console.log(`[Signal Search] Not found with existing prefix, trying prefix removal...`)
