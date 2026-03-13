@@ -137,6 +137,7 @@ function App() {
     matched: string;
     prefix: string;  // local prefix
     serverPrefix: string;  // server prefix
+    spaceBeforeBracket: boolean;  // whether there's a space before bracket
     firstAvailable: string;
     success: boolean;
     // For multiple server prefix selection
@@ -1856,6 +1857,7 @@ function App() {
               matched: result.matchedNames?.[0] || '',
               prefix: currentWaveSignalPrefix,
               serverPrefix: currentWaveSignalServerPrefix,
+              spaceBeforeBracket: result.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket,
               firstAvailable: firstSignalName,
               success: true
             })
@@ -1890,6 +1892,7 @@ function App() {
               matched: result.matchedNames?.[0] || '',
               prefix: '',  // Will be set after user selection
               serverPrefix: '',  // Will be set after user selection
+              spaceBeforeBracket: false,  // Will be set after user selection
               firstAvailable: firstSignalName,
               success: true,
               allMatches: result.allMatches,
@@ -1917,6 +1920,7 @@ function App() {
             matched: result.matchedNames?.[0] || '',
             prefix: result.localPrefix || '',
             serverPrefix: result.serverPrefix || '',
+            spaceBeforeBracket: result.spaceBeforeBracket ?? false,
             firstAvailable: firstSignalName,
             success: true
           })
@@ -1941,6 +1945,7 @@ function App() {
             matched: '',
             prefix: '',
             serverPrefix: '',
+            spaceBeforeBracket: false,
             firstAvailable: firstSignalName,
             success: false
           })
@@ -3016,9 +3021,8 @@ function App() {
                       // Single match - use the info directly
                       setCurrentWaveSignalPrefix(signalNotFoundInfo.prefix);
                       setCurrentWaveSignalServerPrefix(signalNotFoundInfo.serverPrefix);
-                      // Note: spaceBeforeBracket should be detected from the matched signal
-                      // For now, keep the current value
-                      updateProviderSettings(signalNotFoundInfo.prefix, signalNotFoundInfo.serverPrefix, currentWaveSignalSpaceBeforeBracket);
+                      setCurrentWaveSignalSpaceBeforeBracket(signalNotFoundInfo.spaceBeforeBracket);
+                      updateProviderSettings(signalNotFoundInfo.prefix, signalNotFoundInfo.serverPrefix, signalNotFoundInfo.spaceBeforeBracket);
                       // Add the pending signal to waveform
                       if (pendingSignalToAdd) {
                         addSignalToWaveform(pendingSignalToAdd);
