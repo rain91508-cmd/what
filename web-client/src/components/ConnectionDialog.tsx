@@ -10,7 +10,7 @@ function getCurrentHost(): string {
   let hostname = window.location.hostname;
   
   // Replace GitHub Pages domain with custom domain
-  if (hostname === 'rain91508-cmd.github.io') {
+  if (hostname === 'what.chenp.eu.org') {
     hostname = 'rain91508-cmd.chenp.eu.org';
   }
   
@@ -18,9 +18,9 @@ function getCurrentHost(): string {
 }
 
 function getDefaultPort(): string {
-  // Use port 443 for GitHub Pages domain (HTTPS)
+  // Use port 443 for custom domain (HTTPS)
   const hostname = window.location.hostname;
-  if (hostname === 'rain91508-cmd.github.io') {
+  if (hostname === 'what.chenp.eu.org') {
     return '443';
   }
   return '8080';
