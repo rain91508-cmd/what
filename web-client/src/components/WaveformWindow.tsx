@@ -1397,6 +1397,19 @@ export function WaveformWindow({
     return signalValues.get(signal.unique_id) || '0x0';
   };
 
+  const truncateValueLeft = (value: string, maxWidth: number, fontSize: number = 12): { display: string; truncated: boolean } => {
+    const charWidth = fontSize * 0.6;
+    const maxChars = Math.floor(maxWidth / charWidth);
+    if (value.length <= maxChars) {
+      return { display: value, truncated: false };
+    }
+    const keepChars = maxChars - 2;
+    if (keepChars <= 0) {
+      return { display: '...', truncated: true };
+    }
+    return { display: '...' + value.slice(-keepChars), truncated: true };
+  };
+
   const getHierarchyDisplay = (signal: Signal): string => {
     // 返回完整信号路径（去掉信号名本身）
     const parts = signal.fullName.split('.');
@@ -1991,13 +2004,10 @@ export function WaveformWindow({
                           fontSize: '12px',
                           color: '#000',
                           fontWeight: 500,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
                           whiteSpace: 'nowrap',
-                          maxWidth: '100%',
                         }}
                       >
-                        {getSignalValue(signal)}
+                        {truncateValueLeft(getSignalValue(signal), valueColumnWidth - 16).display}
                       </span>
                     </span>
                   </div>
@@ -2060,14 +2070,11 @@ export function WaveformWindow({
                                   fontSize: '12px',
                                   color: '#000',
                                   fontWeight: 500,
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
                                   whiteSpace: 'nowrap',
-                                  maxWidth: '100%',
                                 }}
                               >
                                 {/* Use unique key for bit value: -(unique_id * 100 + bit_index) */}
-                                {signalValues.get(-(signal.unique_id * 100 + i)) || '0'}
+                                {truncateValueLeft(signalValues.get(-(signal.unique_id * 100 + i)) || '0', valueColumnWidth - 16).display}
                               </span>
                             </span>
                           </div>
