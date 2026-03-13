@@ -2005,9 +2005,15 @@ export function WaveformWindow({
                           color: '#000',
                           fontWeight: 500,
                           whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'clip',
+                          width: valueColumnWidth - 8,
+                          maxWidth: valueColumnWidth - 8,
+                          display: 'block',
+                          direction: 'rtl',
                         }}
                       >
-                        {truncateValueLeft(getSignalValue(signal), valueColumnWidth - 8).display}
+                        {getSignalValue(signal)}
                       </span>
                     </span>
                   </div>
@@ -2059,7 +2065,7 @@ export function WaveformWindow({
                                 display: 'flex',
                                 justifyContent: 'flex-end',
                                 alignItems: 'center',
-                                paddingRight: '8px',
+                                paddingRight: '4px',
                                 overflow: 'hidden',
                               }}
                             >
@@ -2071,10 +2077,16 @@ export function WaveformWindow({
                                   color: '#000',
                                   fontWeight: 500,
                                   whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'clip',
+                                  width: valueColumnWidth - 8,
+                                  maxWidth: valueColumnWidth - 8,
+                                  display: 'block',
+                                  direction: 'rtl',
                                 }}
                               >
                                 {/* Use unique key for bit value: -(unique_id * 100 + bit_index) */}
-                                {truncateValueLeft(signalValues.get(-(signal.unique_id * 100 + i)) || '0', valueColumnWidth - 16).display}
+                                {signalValues.get(-(signal.unique_id * 100 + i)) || '0'}
                               </span>
                             </span>
                           </div>
