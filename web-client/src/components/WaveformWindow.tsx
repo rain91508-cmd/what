@@ -14,6 +14,161 @@ import { buildWasmSignals } from '../wasm/waveformProvider';
 import { WaveformProviderAdapter } from '../wasm/waveformProviderAdapter';
 import { useWaveformProvider } from '../contexts/WaveformProviderContext';
 
+/**
+ * 统一的信号值管理器
+ * 管理原始值和格式化后的值，支持 displayFormat 变化时重新格式化
+ */
+class SignalValueManager {
+  // 存储原始值（未格式化，用于重新格式化）
+  private rawValues: Map<number, string> = new Map();
+  
+  // 存储格式化后的值（用于显示）
+  private formattedValues: Map<number, string> = new Map();
+  
+  // 当前显示格式
+  private displayFormat: 'hex' | 'bin' | 'oct' | 'dec' = 'hex';
+  
+  // 回调：格式化值变化
+  private onValuesChange?: (values: Map<number, string>) => void;
+
+  constructor(onValuesChange?: (values: Map<number, string>) => void) {
+    this.onValuesChange = onValuesChange;
+  }
+
+  /**
+   * 设置显示格式
+   * 会触发所有值的重新格式化
+   */
+  setDisplayFormat(format: 'hex' | 'bin' | 'oct' | 'dec'): void {
+    if (this.displayFormat !== format) {
+      this.displayFormat = format;
+      this.refreshFormattedValues();
+    }
+  }
+
+  /**
+   * 获取当前显示格式
+   */
+  getDisplayFormat(): 'hex' | 'bin' | 'oct' | 'dec' {
+    return this.displayFormat;
+  }
+
+  /**
+   * 设置单个信号的原始值
+   */
+  setRawValue(signalId: number, rawValue: string): void {
+    this.rawValues.set(signalId, rawValue);
+    this.refreshFormattedValue(signalId);
+  }
+
+  /**
+   * 批量设置原始值
+   */
+  setRawValues(values: Map<number, string>): void {
+    this.rawValues = new Map(values);
+    this.refreshFormattedValues();
+  }
+
+  /**
+   * 获取单个信号的格式化值
+   */
+  getFormattedValue(signalId: number): string {
+    return this.formattedValues.get(signalId) || '0x0';
+  }
+
+  /**
+   * 获取所有格式化值
+   */
+  getFormattedValues(): Map<number, string> {
+    return new Map(this.formattedValues);
+  }
+
+  /**
+   * 清除所有值
+   */
+  clear(): void {
+    this.rawValues.clear();
+    this.formattedValues.clear();
+    this.onValuesChange?.(new Map());
+  }
+
+  /**
+   * 将原始值格式化为指定格式
+   * 支持从任意格式的字符串转换
+   */
+  private formatValue(rawValue: string, format: 'hex' | 'bin' | 'oct' | 'dec'): string {
+    // 先解析原始值为 BigInt
+    let value: bigint;
+    
+    try {
+      // 尝试从各种格式解析
+      if (rawValue.startsWith('0x') || rawValue.startsWith('0X')) {
+        // 十六进制
+        value = BigInt(rawValue);
+      } else if (rawValue.startsWith('0b') || rawValue.startsWith('0B')) {
+        // 二进制
+        value = BigInt('0' + rawValue);
+      } else if (rawValue.startsWith('0o') || rawValue.startsWith('0O')) {
+        // 八进制
+        value = BigInt('0' + rawValue);
+      } else {
+        // 默认十进制
+        value = BigInt(rawValue);
+      }
+    } catch {
+      // 解析失败，返回原始值
+      return rawValue;
+    }
+
+    // 格式化为目标格式
+    switch (format) {
+      case 'hex':
+        return '0x' + value.toString(16);
+      case 'bin':
+        return '0b' + value.toString(2);
+      case 'oct':
+        return '0o' + value.toString(8);
+      case 'dec':
+        return value.toString(10);
+      default:
+        return rawValue;
+    }
+  }
+
+  /**
+   * 重新格式化单个值
+   */
+  private refreshFormattedValue(signalId: number): void {
+    const rawValue = this.rawValues.get(signalId);
+    if (rawValue !== undefined) {
+      const formattedValue = this.formatValue(rawValue, this.displayFormat);
+      this.formattedValues.set(signalId, formattedValue);
+    }
+    this.triggerChange();
+  }
+
+  /**
+   * 重新格式化所有值
+   */
+  private refreshFormattedValues(): void {
+    this.formattedValues.clear();
+    this.rawValues.forEach((rawValue, signalId) => {
+      const formattedValue = this.formatValue(rawValue, this.displayFormat);
+      this.formattedValues.set(signalId, formattedValue);
+    });
+    this.triggerChange();
+  }
+
+  /**
+   * 触发值变化回调
+   */
+  private triggerChange(): void {
+    if (this.onValuesChange) {
+      this.onValuesChange(new Map(this.formattedValues));
+    }
+  }
+}
+
 interface SignalGroup {
   id: string;
   name: string;
@@ -233,6 +388,22 @@ export function WaveformWindow({
   const [signalValues, setSignalValues] = useState<Map<number, string>>(new Map());
   const [selectedSignal, setSelectedSignal] = useState<number | null>(null);
   const [expandedSignals, setExpandedSignals] = useState<Set<number>>(new Set());
+  const [displayFormat, setDisplayFormat] = useState<'hex' | 'bin' | 'oct' | 'dec'>('hex');
+  
+  // 统一的信号值管理器
+  const signalValueManagerRef = useRef<SignalValueManager | null>(null);
+  
+  // 初始化 SignalValueManager 并监听 displayFormat 变化
+  useEffect(() => {
+    if (!signalValueManagerRef.current) {
+      signalValueManagerRef.current = new SignalValueManager((newValues) => {
+        setSignalValues(newValues);
+      });
+    }
+    // 无论是初始化还是 displayFormat 变化，都更新格式
+    signalValueManagerRef.current.setDisplayFormat(displayFormat);
+  }, [displayFormat]);
+  
   // cursor state is now managed above with external support
   const [mouseX, setMouseX] = useState<number | null>(null);
   const [displayMouseX, setDisplayMouseX] = useState<number | null>(null); // Debounced for display
@@ -1392,8 +1563,11 @@ export function WaveformWindow({
   };
 
   const getSignalValue = (signal: Signal & { unique_id: number }) => {
-    // 从 Map 获取信号值，使用 unique_id 作为 key
+    // 从 SignalValueManager 获取格式化后的信号值，使用 unique_id 作为 key
     // 支持同一个信号多次出现
+    if (signalValueManagerRef.current) {
+      return signalValueManagerRef.current.getFormattedValue(signal.unique_id);
+    }
     return signalValues.get(signal.unique_id) || '0x0';
   };
 
@@ -1485,14 +1659,14 @@ export function WaveformWindow({
   // Note: This must be after treeNodes is defined
   useEffect(() => {
     const updateSignalValues = async () => {
-      if (!cursor.visible) return;
+      if (!cursor.visible || !signalValueManagerRef.current) return;
 
       // 根据模式选择正确的 provider
       if (!useMockData && wasmProviderRef.current) {
         // WASM 模式：从 WASM provider 获取信号值
         const wasmProvider = wasmProviderRef.current;
         // 使用 unique_id 作为 key，支持同一个信号多次出现
-        const values = new Map<number, string>();
+        const rawValues = new Map<number, string>();
 
         // Use treeNodes to get signals in the same order as rendering
         // This ensures cursor values match the displayed signals (including expanded bits)
@@ -1507,7 +1681,7 @@ export function WaveformWindow({
               // ValueInfo object has displayStr field (camelCase from WASM serde)
               const displayStr = (valueInfo as any).displayStr || (valueInfo as any).display_str || '0x0';
               // Use unique_id as key to support duplicate signals
-              values.set(signal.unique_id, displayStr);
+              rawValues.set(signal.unique_id, displayStr);
 
               // For expanded multi-bit signals, also get individual bit values
               // Use negative indices for bit values to avoid conflicts with signal unique_ids
@@ -1522,31 +1696,32 @@ export function WaveformWindow({
                     const bitKey = -(signal.unique_id * 100 + i);
                     if (bitValueInfo && typeof bitValueInfo === 'object') {
                       const bitDisplayStr = (bitValueInfo as any).displayStr || (bitValueInfo as any).display_str || '0';
-                      values.set(bitKey, bitDisplayStr);
+                      rawValues.set(bitKey, bitDisplayStr);
                     } else {
-                      values.set(bitKey, '0');
+                      rawValues.set(bitKey, '0');
                     }
                   } catch (error) {
                     const bitKey = -(signal.unique_id * 100 + i);
-                    values.set(bitKey, '0');
+                    rawValues.set(bitKey, '0');
                   }
                 }
               }
             } else {
-              values.set(signal.unique_id, '0x0');
+              rawValues.set(signal.unique_id, '0x0');
             }
           } catch (error) {
             console.error(`[WaveformWindow] Error getting value for signal ${signal.name}:`, error);
-            values.set(signal.unique_id, '0x0');
+            rawValues.set(signal.unique_id, '0x0');
           }
         }
 
-        setSignalValues(values);
+        // 使用 SignalValueManager 批量设置原始值
+        signalValueManagerRef.current.setRawValues(rawValues);
       } else {
         // Mock 模式：从 mock provider 获取信号值
         // Convert string keys to number keys for consistency
         const mockValues = mockDataProvider.getValuesAtTime(cursor.position);
-        const values = new Map<number, string>();
+        const rawValues = new Map<number, string>();
         // Mock data uses signal names as keys, we need to map them to unique_ids
         // For now, just use a simple hash of the name as the key
         mockValues.forEach((value, key) => {
@@ -1557,9 +1732,10 @@ export function WaveformWindow({
             hash = ((hash << 5) - hash) + char;
             hash = hash & hash; // Convert to 32bit integer
           }
-          values.set(Math.abs(hash), value);
+          rawValues.set(Math.abs(hash), value);
         });
-        setSignalValues(values);
+        // 使用 SignalValueManager 批量设置原始值
+        signalValueManagerRef.current.setRawValues(rawValues);
       }
     };
 
@@ -2036,7 +2212,7 @@ export function WaveformWindow({
                             {/* Value column */}
                             <span className="waveform-signal-value" style={{ flex: 1 }}>
                               {/* Use unique key for bit value: -(unique_id * 100 + bit_index) */}
-                              {signalValues.get(-(signal.unique_id * 100 + i)) || '0'}
+                              {signalValueManagerRef.current?.getFormattedValue(-(signal.unique_id * 100 + i)) || '0'}
                             </span>
                           </div>
                         );
