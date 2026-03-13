@@ -48,6 +48,7 @@ pub mod utils;
 
 // 对比测试模块
 pub mod compare_test;
+pub mod compare_test_lod20;
 
 // 重新导出常用类型
 pub use config::ServerConfig;

@@ -76,6 +76,10 @@ pub struct ServerConfig {
     /// 启用 fst-reader 与 fstapi 对比测试模式
     #[arg(long, default_value = "false")]
     pub compare_test: bool,
+
+    /// 启用 LoD 20 专项测试模式
+    #[arg(long, default_value = "false")]
+    pub lod20_test: bool,
 }
 
 impl ServerConfig {
@@ -161,6 +165,7 @@ impl Default for ServerConfig {
             clear_cache_on_startup: false,
             verbose: false,
             compare_test: false,
+            lod20_test: false,
         }
     }
 }

@@ -1276,7 +1276,7 @@ impl WaveService {
         }
 
         // 使用优化的批量读取函数
-        println!("[DEBUG] backend={:?}, wave_name={}", self.backend, wave_name);
+        debug!("backend={:?}, wave_name={}", self.backend, wave_name);
         let tiles_data = match self.backend {
             FstBackend::FstApi => {
                 self.read_signals_data_tiles_fstapi(

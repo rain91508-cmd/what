@@ -164,6 +164,20 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // 如果启用 LoD 20 测试模式
+    if config.lod20_test {
+        println!("\n========================================");
+        println!("  LoD 20 专项测试模式");
+        println!("========================================\n");
+        
+        // 运行 LoD 20 测试，完成后立即退出
+        hwda_server::compare_test_lod20::run_lod20_test(&config).await;
+        println!("\n========================================");
+        println!("  LoD 20 测试完成，退出程序");
+        println!("========================================");
+        return Ok(());
+    }
+
     // 启动服务器
     let listener = tokio::net::TcpListener::bind(&config.bind_address()).await?;
     tracing::info!("服务器监听：{}", config.bind_address());

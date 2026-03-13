@@ -5,7 +5,9 @@
 use crate::config::ServerConfig;
 use crate::state::ServerState;
 use crate::services::{WaveService, FstBackend, CompressionAlgorithm, wave_data::MultiTileChunkSerializer};
+use crate::services::fst_reader_backend::{read_signals_data_fst_reader_batch_lod_low, read_signals_data_fst_reader_batch_lod_high};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::PathBuf;
 
 /// 运行 fst-reader 与 fstapi 对比测试（100次随机测试）
 pub async fn run_compare_test(config: &ServerConfig) {
@@ -49,8 +51,8 @@ pub async fn run_compare_test(config: &ServerConfig) {
     // 创建 fst-reader 服务
     let reader_service = WaveService::with_backend(state.clone(), FstBackend::FstReader);
     
-    // 测试的 LoD 值
-    let test_lods = vec![0u32, 8u32, 12u32];
+    // 测试的 LoD 值（包含 LoD > 10 的情况）
+    let test_lods = vec![0u32, 8u32, 12u32, 20u32];
     
     // 波形实际开始时间（跳过前段没有 transition 的区域）
     let min_start_time = 454423000u64;
@@ -134,6 +136,55 @@ pub async fn run_compare_test(config: &ServerConfig) {
         
         // 对比数据包
         let passed = compare_tile_data(&reader_tiles, &api_tiles, lod);
+        
+        // 如果 LoD > 10，额外比较 lod_low 和 lod_high 方法
+        if lod > 10 && passed {
+            let wave_path = PathBuf::from(&config.wave_dir).join(format!("{}.fst", wave_name));
+            let time_end = start_time + tile_span;
+            
+            // 调用 lod_low 方法
+            let lod_low_result = match read_signals_data_fst_reader_batch_lod_low(
+                &wave_path,
+                &test_signals,
+                crate::services::LodLevel(lod),
+                start_time,
+                time_end,
+                num_buckets,
+            ).await {
+                Ok(d) => d,
+                Err(e) => {
+                    println!("[COMPARE-TEST] 测试 {}/100: lod_low 读取失败 (LoD={}, start={}): {:?}", 
+                        test_idx + 1, lod, start_time, e);
+                    Vec::new()
+                }
+            };
+            
+            // 调用 lod_high 方法
+            let lod_high_result = match read_signals_data_fst_reader_batch_lod_high(
+                &wave_path,
+                &test_signals,
+                crate::services::LodLevel(lod),
+                start_time,
+                time_end,
+                num_buckets,
+            ).await {
+                Ok(d) => d,
+                Err(e) => {
+                    println!("[COMPARE-TEST] 测试 {}/100: lod_high 读取失败 (LoD={}, start={}): {:?}", 
+                        test_idx + 1, lod, start_time, e);
+                    Vec::new()
+                }
+            };
+            
+            // 比较 lod_low 和 lod_high 的结果
+            if !lod_low_result.is_empty() && !lod_high_result.is_empty() {
+                let lod_low_passed = compare_signal_wave_data(&lod_low_result, &lod_high_result, lod);
+                if !lod_low_passed {
+                    println!("[COMPARE-TEST] 测试 {}/100: lod_low vs lod_high 不匹配 (LoD={}, start={}, span={})", 
+                        test_idx + 1, lod, start_time, tile_span);
+                }
+            }
+        }
         
         if passed {
             passed_tests += 1;
@@ -283,4 +334,66 @@ fn compare_detailed_data(reader_data: &[u8], api_data: &[u8]) {
     }
     
     println!("[COMPARE-TEST] ========== 详细对比结束 ==========\n");
+}
+
+/// 比较两个 SignalWaveData 向量（用于比较 lod_low 和 lod_high 方法）
+fn compare_signal_wave_data(lod_low_data: &[crate::services::SignalWaveData], lod_high_data: &[crate::services::SignalWaveData], lod: u32) -> bool {
+    use crate::services::wave_data::SignalWaveData;
+    
+    if lod_low_data.len() != lod_high_data.len() {
+        println!("[COMPARE-TEST] LoD={}: lod_low 和 lod_high 信号数量不匹配 (low={}, high={})", 
+            lod, lod_low_data.len(), lod_high_data.len());
+        return false;
+    }
+    
+    let mut total_diff = 0usize;
+    
+    for (idx, (low_signal, high_signal)) in lod_low_data.iter().zip(lod_high_data.iter()).enumerate() {
+        // 过滤掉 pre-start value
+        let low_trans: Vec<_> = low_signal.transitions.iter()
+            .filter(|t| t.time != u64::MAX)
+            .collect();
+        let high_trans: Vec<_> = high_signal.transitions.iter()
+            .filter(|t| t.time != u64::MAX)
+            .collect();
+        
+        // 比较 transition 数量
+        if low_trans.len() != high_trans.len() {
+            let diff = if low_trans.len() > high_trans.len() { 
+                low_trans.len() - high_trans.len() 
+            } else { 
+                high_trans.len() - low_trans.len() 
+            };
+            total_diff += diff;
+            
+            println!("[COMPARE-TEST] LoD={}: 信号 {} transition 数量不匹配 (low={}, high={}, diff={})", 
+                lod, idx, low_trans.len(), high_trans.len(), diff);
+            
+            // 显示前几个 transition
+            let min_len = low_trans.len().min(high_trans.len()).min(3);
+            for j in 0..min_len {
+                println!("      transition[{}]: low(time={}, value={:?}) vs high(time={}, value={:?})",
+                    j, low_trans[j].time, low_trans[j].value,
+                    high_trans[j].time, high_trans[j].value);
+            }
+        } else {
+            // 数量相同，比较每个 transition
+            for (j, (low_t, high_t)) in low_trans.iter().zip(high_trans.iter()).enumerate() {
+                if low_t.time != high_t.time || low_t.value != high_t.value {
+                    println!("[COMPARE-TEST] LoD={}: 信号 {} transition[{}] 不匹配", lod, idx, j);
+                    println!("      low:  time={}, value={:?}", low_t.time, low_t.value);
+                    println!("      high: time={}, value={:?}", high_t.time, high_t.value);
+                    total_diff += 1;
+                }
+            }
+        }
+    }
+    
+    if total_diff == 0 {
+        println!("[COMPARE-TEST] LoD={}: lod_low vs lod_high ✓ 完全匹配", lod);
+        true
+    } else {
+        println!("[COMPARE-TEST] LoD={}: lod_low vs lod_high ✗ 有 {} 处差异", lod, total_diff);
+        false
+    }
 }

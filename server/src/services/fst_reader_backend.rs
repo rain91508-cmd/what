@@ -131,7 +131,7 @@ async fn read_signals_data_fst_reader_batch_lod0(
 }
 
 /// LoD 1-10: 使用 read_signals_in_range 读取所有 transitions，然后分配到 bucket
-async fn read_signals_data_fst_reader_batch_lod_low(
+pub async fn read_signals_data_fst_reader_batch_lod_low(
     wave_path: &PathBuf,
     signal_names: &[String],
     lod: LodLevel,
@@ -280,7 +280,7 @@ async fn read_signals_data_fst_reader_batch_lod_low(
 }
 
 /// LoD > 10: 对每个 bucket 单独调用 read_range_boundary_values
-async fn read_signals_data_fst_reader_batch_lod_high(
+pub async fn read_signals_data_fst_reader_batch_lod_high(
     wave_path: &PathBuf,
     signal_names: &[String],
     lod: LodLevel,
@@ -650,25 +650,48 @@ async fn read_signals_data_fst_reader_tiles_lod_low(
             // 获取 start values
             let start_values: HashMap<FstSignalHandle, String> = if tile_idx == 0 {
                 // 第一个 tile：使用 read_pre_start_values
+                // 注意：对于 Tile 0，我们需要读取波形的第一个值
+                // 由于波形可能不是从时间 0 开始的，我们需要读取整个 tile 范围内的 pre-start 值
                 let pre_start_filter = FstFilter {
                     start: 0,
-                    end: Some(tile_start),
+                    end: Some(tile_start + tile_span),
                     include: Some(handles.clone()),
                 };
+                
                 let pre_start_values = reader.read_pre_start_values(&pre_start_filter)
                     .map_err(|e| ServerError::Internal(format!("读取 pre-start 值失败: {:?}", e)))?;
+                
+                // 如果 pre_start 没有值，则使用默认值 "0"
+                let pre_start_values = if pre_start_values.string_values.is_empty() && pre_start_values.real_values.is_empty() {
+                    // 使用默认值 "0" 作为 start value
+                    let mut string_values = Vec::new();
+                    for info in &signal_infos {
+                        string_values.push(fst_reader::PreStartSignalValue {
+                            handle: info.handle.clone(),
+                            value: "0".as_bytes().to_vec(),
+                            time: u64::MAX, // 使用特殊时间戳表示 pre-start
+                        });
+                    }
+                    fst_reader::PreStartValues { string_values, real_values: Vec::new() }
+                } else {
+                    pre_start_values
+                };
                 
                 signal_infos.iter()
                     .map(|info| {
                         let value = pre_start_values.string_values.iter()
                             .find(|v| v.handle == info.handle)
-                            .map(|v| String::from_utf8_lossy(&v.value).to_string())
+                            .map(|v| {
+                                let s = String::from_utf8_lossy(&v.value).to_string();
+                                // 如果值为 "X"，则使用 "0" 作为默认值
+                                if s == "X" { "0".to_string() } else { s }
+                            })
                             .or_else(|| {
                                 pre_start_values.real_values.iter()
                                     .find(|v| v.handle == info.handle)
                                     .map(|v| format!("{}", v.value))
                             })
-                            .unwrap_or_else(|| "X".to_string());
+                            .unwrap_or_else(|| "0".to_string()); // 使用 "0" 作为默认值
                         (info.handle.clone(), value)
                     })
                     .collect()
@@ -740,11 +763,12 @@ async fn read_signals_data_fst_reader_tiles_lod_low(
                 });
 
                 // 添加每个 bucket 的 first/last
+                // 注意：时间戳使用相对于 tile 的 bucket 索引（从 0 开始）
                 
                 if let (Some(first_vec), Some(last_vec)) = (bucket_first.get(&info.handle), bucket_last.get(&info.handle)) {
                     for bucket_idx in 0..num_buckets {
                         if let Some(first_val) = &first_vec[bucket_idx] {
-                            // first
+                            // first - 使用相对于 tile 的 bucket 索引（从 0 开始）
                             signal_data.add_transition(Transition {
                                 time: bucket_idx as u64,
                                 value: SignalValue::Numeric(first_val.clone()),
@@ -766,6 +790,12 @@ async fn read_signals_data_fst_reader_tiles_lod_low(
                 }
 
                 // 保存 last value 用于下一个 tile
+                // 如果 last_value_for_next_tile 是 "X"，则使用 "0" 作为默认值
+                let last_value_for_next_tile = if last_value_for_next_tile == "X" {
+                    "0".to_string()
+                } else {
+                    last_value_for_next_tile
+                };
                 last_values.insert(info.handle.clone(), last_value_for_next_tile);
 
                 tile_signals.push(signal_data);
@@ -861,8 +891,8 @@ async fn read_signals_data_fst_reader_tiles_lod_high(
             };
 
             // 初始化 bucket 状态
-            let mut bucket_first: HashMap<FstSignalHandle, Vec<Option<String>>> = HashMap::new();
-            let mut bucket_last: HashMap<FstSignalHandle, Vec<Option<String>>> = HashMap::new();
+            let mut bucket_first: HashMap<FstSignalHandle, Vec<Option<(u64, String)>>> = HashMap::new();
+            let mut bucket_last: HashMap<FstSignalHandle, Vec<Option<(u64, String)>>> = HashMap::new();
             
             for info in &signal_infos {
                 bucket_first.insert(info.handle.clone(), vec![None; num_buckets]);
@@ -889,20 +919,24 @@ async fn read_signals_data_fst_reader_tiles_lod_high(
                 let boundary_values = reader.read_range_boundary_values(&boundary_filter)
                     .map_err(|e| ServerError::Internal(format!("读取 bucket {} 边界值失败: {:?}", bucket_idx, e)))?;
 
-                // 更新 bucket first
+                // 更新 bucket first（保存时间戳和值）
                 if let Some(first) = &boundary_values.first {
                     for val in &first.string_values {
                         if let Some(first_vec) = bucket_first.get_mut(&val.handle) {
-                            first_vec[bucket_idx] = Some(String::from_utf8_lossy(&val.value).to_string());
+                            // 将绝对时间戳转换为相对于 tile 的 bucket 索引
+                            let relative_bucket_idx = (val.time.saturating_sub(aligned_start)) / bucket_size;
+                            first_vec[bucket_idx] = Some((relative_bucket_idx, String::from_utf8_lossy(&val.value).to_string()));
                         }
                     }
                 }
 
-                // 更新 bucket last
+                // 更新 bucket last（保存时间戳和值）
                 if let Some(last) = &boundary_values.last {
                     for val in &last.string_values {
                         if let Some(last_vec) = bucket_last.get_mut(&val.handle) {
-                            last_vec[bucket_idx] = Some(String::from_utf8_lossy(&val.value).to_string());
+                            // 将绝对时间戳转换为相对于 tile 的 bucket 索引
+                            let relative_bucket_idx = (val.time.saturating_sub(aligned_start)) / bucket_size;
+                            last_vec[bucket_idx] = Some((relative_bucket_idx, String::from_utf8_lossy(&val.value).to_string()));
                         }
                     }
                 }
@@ -935,22 +969,24 @@ async fn read_signals_data_fst_reader_tiles_lod_high(
                 });
 
                 // 添加每个 bucket 的 first/last
+                // 注意：时间戳使用相对于 tile 的 bucket 索引（从 0 开始）
                 
                 if let (Some(first_vec), Some(last_vec)) = (bucket_first.get(&info.handle), bucket_last.get(&info.handle)) {
                     for bucket_idx in 0..num_buckets {
-                        if let Some(first_val) = &first_vec[bucket_idx] {
-                            // first
+                        if let Some((first_time, first_val)) = &first_vec[bucket_idx] {
+                            // first - 使用从 read_range_boundary_values 获取的相对 bucket 索引
                             signal_data.add_transition(Transition {
-                                time: bucket_idx as u64,
+                                time: *first_time,
                                 value: SignalValue::Numeric(first_val.clone()),
                             });
                             last_value_for_next_tile = first_val.clone();
                             
-                            // last（如果不同于 first）
-                            if let Some(last_val) = &last_vec[bucket_idx] {
-                                if last_val != first_val {
+                            // last（如果时间和值都不同于 first）
+                            if let Some((last_time, last_val)) = &last_vec[bucket_idx] {
+                                // 只有当 last_time != first_time 或者 last_val != first_val 时才添加
+                                if last_time != first_time || last_val != first_val {
                                     signal_data.add_transition(Transition {
-                                        time: bucket_idx as u64,
+                                        time: *last_time,
                                         value: SignalValue::Numeric(last_val.clone()),
                                     });
                                     last_value_for_next_tile = last_val.clone();
@@ -961,6 +997,12 @@ async fn read_signals_data_fst_reader_tiles_lod_high(
                 }
 
                 // 保存 last value 用于下一个 tile
+                // 如果 last_value_for_next_tile 是 "X"，则使用 "0" 作为默认值
+                let last_value_for_next_tile = if last_value_for_next_tile == "X" {
+                    "0".to_string()
+                } else {
+                    last_value_for_next_tile
+                };
                 last_values.insert(info.handle.clone(), last_value_for_next_tile);
 
                 tile_signals.push(signal_data);
