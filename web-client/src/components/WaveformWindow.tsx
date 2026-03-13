@@ -2187,7 +2187,7 @@ export function WaveformWindow({
                 const cursorTimeDisplay = Math.round(lod0ToDisplay(cursor.position, timeConfig));
                 const delta = mouseTimeDisplay - cursorTimeDisplay;
                 const deltaStr = delta >= 0 ? `+${delta}` : `${delta}`;
-                return `Mouse: ${mouseTimeDisplay} (${deltaStr})`;
+                return `${mouseTimeDisplay} (${deltaStr})`;
               })()}
             </span>
           )}
