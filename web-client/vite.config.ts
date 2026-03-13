@@ -53,6 +53,6 @@ export default defineConfig(({ mode }) => {
     },
 
     
-    base: isProd ? '/what/' : '/',
+    base: isProd ? '/' : '/',
   }
 })
