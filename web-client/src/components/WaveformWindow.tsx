@@ -1974,19 +1974,29 @@ export function WaveformWindow({
                     <span
                       className="waveform-signal-value"
                       style={{
-                        flex: 1,
+                        width: valueColumnWidth,
+                        minWidth: valueColumnWidth,
+                        maxWidth: valueColumnWidth,
                         display: 'flex',
                         justifyContent: 'flex-end',
                         alignItems: 'center',
                         paddingRight: '8px',
+                        overflow: 'hidden',
                       }}
                     >
-                      <span style={{
-                        textAlign: 'right',
-                        fontSize: '12px',
-                        color: '#000',
-                        fontWeight: 500,
-                      }}>
+                      <span 
+                        title={getSignalValue(signal)}
+                        style={{
+                          textAlign: 'right',
+                          fontSize: '12px',
+                          color: '#000',
+                          fontWeight: 500,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          maxWidth: '100%',
+                        }}
+                      >
                         {getSignalValue(signal)}
                       </span>
                     </span>
@@ -2030,9 +2040,35 @@ export function WaveformWindow({
                             </span>
                             
                             {/* Value column */}
-                            <span className="waveform-signal-value" style={{ flex: 1 }}>
-                              {/* Use unique key for bit value: -(unique_id * 100 + bit_index) */}
-                              {signalValues.get(-(signal.unique_id * 100 + i)) || '0'}
+                            <span 
+                              className="waveform-signal-value" 
+                              style={{ 
+                                width: valueColumnWidth,
+                                minWidth: valueColumnWidth,
+                                maxWidth: valueColumnWidth,
+                                display: 'flex',
+                                justifyContent: 'flex-end',
+                                alignItems: 'center',
+                                paddingRight: '8px',
+                                overflow: 'hidden',
+                              }}
+                            >
+                              <span 
+                                title={signalValues.get(-(signal.unique_id * 100 + i)) || '0'}
+                                style={{
+                                  textAlign: 'right',
+                                  fontSize: '12px',
+                                  color: '#000',
+                                  fontWeight: 500,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                  maxWidth: '100%',
+                                }}
+                              >
+                                {/* Use unique key for bit value: -(unique_id * 100 + bit_index) */}
+                                {signalValues.get(-(signal.unique_id * 100 + i)) || '0'}
+                              </span>
                             </span>
                           </div>
                         );
