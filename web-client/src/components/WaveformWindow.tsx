@@ -2117,23 +2117,20 @@ export function WaveformWindow({
               left: `${((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * 100}%`,
               transform: (() => {
                 const cursorX = ((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * canvasWidth;
-                const isClose = displayMouseX !== null && Math.abs(displayMouseX - cursorX) < 100;
+                const cursorTextWidth = 100; // Approximate width of cursor text
                 
-                // If close to mouse, position on opposite side
-                if (isClose && displayMouseX !== null) {
-                  if (displayMouseX > cursorX) {
-                    // Mouse on right, cursor label on left
-                    return 'translateX(-100%) translateX(-4px)';
-                  } else {
-                    // Mouse on left, cursor label on right
-                    return 'translateX(4px)';
-                  }
-                }
-                
-                // Default: check if too close to right edge
-                if (cursorX > canvasWidth - 80) {
+                // Check if mouse is on the right side and too close
+                if (displayMouseX !== null && displayMouseX > cursorX && (displayMouseX - cursorX) < cursorTextWidth) {
+                  // Mouse on right and too close, cursor label on left
                   return 'translateX(-100%) translateX(-4px)';
                 }
+                
+                // Check if too close to right edge
+                if (cursorX > canvasWidth - cursorTextWidth) {
+                  return 'translateX(-100%) translateX(-4px)';
+                }
+                
+                // Default: show on right
                 return 'translateX(4px)';
               })(),
               color: '#ffffff',
@@ -2150,30 +2147,17 @@ export function WaveformWindow({
               position: 'absolute',
               left: mouseX,
               transform: (() => {
-                const cursorX = ((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * canvasWidth;
-                const isClose = Math.abs(displayMouseX - cursorX) < 100;
+                const mouseTextWidth = 80; // Approximate width of mouse text
                 
-                // If close to cursor, position on opposite side
-                if (isClose) {
-                  if (displayMouseX < cursorX) {
-                    // Mouse on left, label on left
-                    return 'translateX(-100%) translateX(-4px)';
-                  } else {
-                    // Mouse on right, label on right
-                    return 'translateX(4px)';
-                  }
-                }
-                
-                // Default: check edges
-                if (displayMouseX < 60) {
-                  // Too close to left edge, show on right
-                  return 'translateX(4px)';
-                } else if (displayMouseX > canvasWidth - 80) {
+                // Default: show on right
+                // Only switch to left if too close to right edge
+                if (displayMouseX > canvasWidth - mouseTextWidth) {
                   // Too close to right edge, show on left
                   return 'translateX(-100%) translateX(-4px)';
                 }
-                // Default: show on left (opposite of cursor default)
-                return 'translateX(-100%) translateX(-4px)';
+                
+                // Default: show on right
+                return 'translateX(4px)';
               })(),
               color: '#00ffff',
               fontWeight: 'bold',
