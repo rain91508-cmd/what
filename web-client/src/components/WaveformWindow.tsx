@@ -1983,6 +1983,7 @@ export function WaveformWindow({
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
                       }}
+                      title={getSignalValue(signal)}  // Show full value on hover
                     >
                       <span style={{
                         textAlign: 'right',
