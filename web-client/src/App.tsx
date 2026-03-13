@@ -1566,8 +1566,8 @@ function App() {
       // Note: No limit, get all matches
     })
 
-    const signalCount = (response.data as any)?.count ?? 0
-    console.log(`[Signal Search] Response: status=${response.status}, count=${signalCount}`)
+    const signalCount = (response.data as any)?.signal_count ?? 0
+    console.log(`[Signal Search] Response: status=${response.status}, signal_count=${signalCount}`)
 
     if (response.status === 'success' && signalCount > 0) {
       const signals = (response.data as any)?.signals ?? []
@@ -1606,8 +1606,8 @@ function App() {
         nameRegex: `.*${escapedName}$`
       })
 
-      const signalCountNoWidth = (response.data as any)?.count ?? 0
-      console.log(`[Signal Search] Response: status=${response.status}, count=${signalCountNoWidth}`)
+      const signalCountNoWidth = (response.data as any)?.signal_count ?? 0
+      console.log(`[Signal Search] Response: status=${response.status}, signal_count=${signalCountNoWidth}`)
 
       if (response.status === 'success' && signalCountNoWidth > 0) {
         const signals = (response.data as any)?.signals ?? []
@@ -1636,13 +1636,13 @@ function App() {
       // Try with space before bracket (e.g., "mem_arid [7:0]")
       const nameWithSpace = sharedName.substring(0, bracketIndex) + ' ' + sharedName.substring(bracketIndex)
       escapedName = escapeRegex(nameWithSpace)
-      console.log(`[Signal Search] Trying with space before bracket: "${nameWithSpace}" -> regex: ${escapedName}$`)
+      console.log(`[Signal Search] Trying with space before bracket: "${nameWithSpace}" -> regex: .*${escapedName}$`)
 
       response = await apiService.getWaveformSignals(waveName, {
-        nameRegex: `${escapedName}$`
+        nameRegex: `.*${escapedName}$`
       })
 
-      const signalCountWithSpace = (response.data as any)?.count ?? 0
+      const signalCountWithSpace = (response.data as any)?.signal_count ?? 0
       console.log(`[Signal Search] Response: status=${response.status}, signal_count=${signalCountWithSpace}`)
 
       if (response.status === 'success' && signalCountWithSpace > 0) {
