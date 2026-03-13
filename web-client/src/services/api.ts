@@ -72,15 +72,12 @@ class ApiService {
     }
     
     try {
-      // For GET requests, don't set Content-Type header to avoid CORS preflight
-      const isGet = !options?.method || options?.method === 'GET';
-      const headers: HeadersInit = isGet 
-        ? { ...options?.headers }
-        : { 'Content-Type': 'application/json', ...options?.headers };
-      
       const response = await fetch(`${this.baseUrl}${endpoint}`, {
         ...options,
-        headers,
+        headers: {
+          'Content-Type': 'application/json',
+          ...options?.headers,
+        },
       });
 
       if (!response.ok) {

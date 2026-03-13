@@ -3012,6 +3012,18 @@ function App() {
                           setPendingSignalToAdd(null);
                         }
                       }
+                    } else {
+                      // Single match - use the info directly
+                      setCurrentWaveSignalPrefix(signalNotFoundInfo.prefix);
+                      setCurrentWaveSignalServerPrefix(signalNotFoundInfo.serverPrefix);
+                      // Note: spaceBeforeBracket should be detected from the matched signal
+                      // For now, keep the current value
+                      updateProviderSettings(signalNotFoundInfo.prefix, signalNotFoundInfo.serverPrefix, currentWaveSignalSpaceBeforeBracket);
+                      // Add the pending signal to waveform
+                      if (pendingSignalToAdd) {
+                        addSignalToWaveform(pendingSignalToAdd);
+                        setPendingSignalToAdd(null);
+                      }
                     }
                     setShowSignalNotFoundDialog(false);
                   }}
