@@ -275,9 +275,6 @@ export function WaveformWindow({
   const valueColumnWidth = widths.value;
   const signalPanelWidth = widths.panel;
 
-  // 辅助函数：将数字转换为像素单位
-  const w = (px: number) => `${px}px`;
-
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -1400,19 +1397,6 @@ export function WaveformWindow({
     return signalValues.get(signal.unique_id) || '0x0';
   };
 
-  const truncateValueLeft = (value: string, maxWidth: number, fontSize: number = 12): { display: string; truncated: boolean } => {
-    const charWidth = fontSize * 0.55;  // 更精确的字符宽度估算
-    const maxChars = Math.floor(maxWidth / charWidth);
-    if (value.length <= maxChars) {
-      return { display: value, truncated: false };
-    }
-    const keepChars = Math.max(0, maxChars - 1);
-    if (keepChars <= 0) {
-      return { display: '…', truncated: true };
-    }
-    return { display: '…' + value.slice(-keepChars), truncated: true };
-  };
-
   const getHierarchyDisplay = (signal: Signal): string => {
     // 返回完整信号路径（去掉信号名本身）
     const parts = signal.fullName.split('.');
@@ -1714,10 +1698,10 @@ export function WaveformWindow({
 
         {/* Header with 3 columns and visible dividers */}
         <div className="waveform-header" style={{ display: 'flex', position: 'relative', borderBottom: '1px solid #c0c0c0', height: '22px', boxSizing: 'border-box' }}>
-          <span style={{ width: w(hierarchyColumnWidth), paddingLeft: '4px', fontSize: '10px', borderRight: '1px solid #c0c0c0' }}>Scope</span>
-          <span style={{ width: w(nameColumnWidth), paddingLeft: '4px', borderRight: '1px solid #c0c0c0' }}>Name</span>
+          <span style={{ width: hierarchyColumnWidth, paddingLeft: '4px', fontSize: '10px', borderRight: '1px solid #c0c0c0' }}>Scope</span>
+          <span style={{ width: nameColumnWidth, paddingLeft: '4px', borderRight: '1px solid #c0c0c0' }}>Name</span>
           <span style={{ 
-            width: w(valueColumnWidth),
+            flex: 1,
             textAlign: 'right',
             paddingRight: '4px',
           }}>Value</span>
@@ -1794,14 +1778,14 @@ export function WaveformWindow({
                   >
                     {/* Scope column - empty for groups */}
                     <span style={{ 
-                      width: w(hierarchyColumnWidth),
+                      width: hierarchyColumnWidth,
                       borderRight: '1px solid #e0e0e0',
                       height: '100%',
                     }}></span>
                     
                     {/* Name column with tree structure */}
                     <span style={{ 
-                      width: w(nameColumnWidth),
+                      width: nameColumnWidth,
                       display: 'flex',
                       alignItems: 'center',
                       paddingLeft: `${node.level * 12}px`,
@@ -1938,7 +1922,7 @@ export function WaveformWindow({
                     {/* Scope column - 右对齐，显示完整路径，字体加大黑色 */}
                     <span
                       style={{
-                        width: w(hierarchyColumnWidth),
+                        width: hierarchyColumnWidth,
                         fontSize: '12px',
                         color: '#000',
                         fontWeight: 500,
@@ -1958,7 +1942,7 @@ export function WaveformWindow({
                     
                     {/* Name column with tree structure */}
                     <span style={{ 
-                      width: w(nameColumnWidth),
+                      width: nameColumnWidth,
                       display: 'flex',
                       alignItems: 'center',
                       paddingLeft: `${node.level * 12}px`,
@@ -1990,32 +1974,22 @@ export function WaveformWindow({
                     <span
                       className="waveform-signal-value"
                       style={{
-                        width: `${valueColumnWidth}px`,
-                        minWidth: `${valueColumnWidth}px`,
-                        maxWidth: `${valueColumnWidth}px`,
+                        flex: 1,
                         display: 'flex',
                         justifyContent: 'flex-end',
                         alignItems: 'center',
-                        paddingRight: '4px',
+                        paddingRight: '8px',
                         overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
                       }}
                     >
-                      <span 
-                        title={getSignalValue(signal)}
-                        style={{
-                          textAlign: 'right',
-                          fontSize: '12px',
-                          color: '#000',
-                          fontWeight: 500,
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'clip',
-                          width: `${valueColumnWidth - 8}px`,
-                          maxWidth: `${valueColumnWidth - 8}px`,
-                          display: 'block',
-                          direction: 'rtl',
-                        }}
-                      >
+                      <span style={{
+                        textAlign: 'right',
+                        fontSize: '12px',
+                        color: '#000',
+                        fontWeight: 500,
+                      }}>
                         {getSignalValue(signal)}
                       </span>
                     </span>
@@ -2037,14 +2011,14 @@ export function WaveformWindow({
                           >
                             {/* Scope column - empty for bus bits */}
                             <span style={{ 
-                              width: w(hierarchyColumnWidth),
+                              width: hierarchyColumnWidth,
                               borderRight: '1px solid #e0e0e0',
                               height: '100%',
                             }}></span>
                             
                             {/* Name column with tree structure */}
                             <span style={{ 
-                              width: w(nameColumnWidth),
+                              width: nameColumnWidth,
                               display: 'flex',
                               alignItems: 'center',
                               paddingLeft: `${(node.level + 1) * 12}px`,
@@ -2059,38 +2033,9 @@ export function WaveformWindow({
                             </span>
                             
                             {/* Value column */}
-                            <span 
-                              className="waveform-signal-value" 
-                              style={{ 
-                                width: `${valueColumnWidth}px`,
-                                minWidth: `${valueColumnWidth}px`,
-                                maxWidth: `${valueColumnWidth}px`,
-                                display: 'flex',
-                                justifyContent: 'flex-end',
-                                alignItems: 'center',
-                                paddingRight: '4px',
-                                overflow: 'hidden',
-                              }}
-                            >
-                              <span 
-                                title={signalValues.get(-(signal.unique_id * 100 + i)) || '0'}
-                                style={{
-                                  textAlign: 'right',
-                                  fontSize: '12px',
-                                  color: '#000',
-                                  fontWeight: 500,
-                                  whiteSpace: 'nowrap',
-                                  overflow: 'hidden',
-                                  textOverflow: 'clip',
-                                  width: `${valueColumnWidth - 8}px`,
-                                  maxWidth: `${valueColumnWidth - 8}px`,
-                                  display: 'block',
-                                  direction: 'rtl',
-                                }}
-                              >
-                                {/* Use unique key for bit value: -(unique_id * 100 + bit_index) */}
-                                {signalValues.get(-(signal.unique_id * 100 + i)) || '0'}
-                              </span>
+                            <span className="waveform-signal-value" style={{ flex: 1 }}>
+                              {/* Use unique key for bit value: -(unique_id * 100 + bit_index) */}
+                              {signalValues.get(-(signal.unique_id * 100 + i)) || '0'}
                             </span>
                           </div>
                         );
