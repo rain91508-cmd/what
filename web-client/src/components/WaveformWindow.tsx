@@ -275,6 +275,9 @@ export function WaveformWindow({
   const valueColumnWidth = widths.value;
   const signalPanelWidth = widths.panel;
 
+  // 辅助函数：将数字转换为像素单位
+  const w = (px: number) => `${px}px`;
+
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -1711,10 +1714,10 @@ export function WaveformWindow({
 
         {/* Header with 3 columns and visible dividers */}
         <div className="waveform-header" style={{ display: 'flex', position: 'relative', borderBottom: '1px solid #c0c0c0', height: '22px', boxSizing: 'border-box' }}>
-          <span style={{ width: hierarchyColumnWidth, paddingLeft: '4px', fontSize: '10px', borderRight: '1px solid #c0c0c0' }}>Scope</span>
-          <span style={{ width: nameColumnWidth, paddingLeft: '4px', borderRight: '1px solid #c0c0c0' }}>Name</span>
+          <span style={{ width: w(hierarchyColumnWidth), paddingLeft: '4px', fontSize: '10px', borderRight: '1px solid #c0c0c0' }}>Scope</span>
+          <span style={{ width: w(nameColumnWidth), paddingLeft: '4px', borderRight: '1px solid #c0c0c0' }}>Name</span>
           <span style={{ 
-            flex: 1,
+            width: w(valueColumnWidth),
             textAlign: 'right',
             paddingRight: '4px',
           }}>Value</span>
@@ -1791,14 +1794,14 @@ export function WaveformWindow({
                   >
                     {/* Scope column - empty for groups */}
                     <span style={{ 
-                      width: hierarchyColumnWidth,
+                      width: w(hierarchyColumnWidth),
                       borderRight: '1px solid #e0e0e0',
                       height: '100%',
                     }}></span>
                     
                     {/* Name column with tree structure */}
                     <span style={{ 
-                      width: nameColumnWidth,
+                      width: w(nameColumnWidth),
                       display: 'flex',
                       alignItems: 'center',
                       paddingLeft: `${node.level * 12}px`,
@@ -1935,7 +1938,7 @@ export function WaveformWindow({
                     {/* Scope column - 右对齐，显示完整路径，字体加大黑色 */}
                     <span
                       style={{
-                        width: hierarchyColumnWidth,
+                        width: w(hierarchyColumnWidth),
                         fontSize: '12px',
                         color: '#000',
                         fontWeight: 500,
@@ -1955,7 +1958,7 @@ export function WaveformWindow({
                     
                     {/* Name column with tree structure */}
                     <span style={{ 
-                      width: nameColumnWidth,
+                      width: w(nameColumnWidth),
                       display: 'flex',
                       alignItems: 'center',
                       paddingLeft: `${node.level * 12}px`,
@@ -2034,14 +2037,14 @@ export function WaveformWindow({
                           >
                             {/* Scope column - empty for bus bits */}
                             <span style={{ 
-                              width: hierarchyColumnWidth,
+                              width: w(hierarchyColumnWidth),
                               borderRight: '1px solid #e0e0e0',
                               height: '100%',
                             }}></span>
                             
                             {/* Name column with tree structure */}
                             <span style={{ 
-                              width: nameColumnWidth,
+                              width: w(nameColumnWidth),
                               display: 'flex',
                               alignItems: 'center',
                               paddingLeft: `${(node.level + 1) * 12}px`,
