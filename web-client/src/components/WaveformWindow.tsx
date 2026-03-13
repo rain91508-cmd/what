@@ -1398,16 +1398,16 @@ export function WaveformWindow({
   };
 
   const truncateValueLeft = (value: string, maxWidth: number, fontSize: number = 12): { display: string; truncated: boolean } => {
-    const charWidth = fontSize * 0.6;
+    const charWidth = fontSize * 0.55;  // 更精确的字符宽度估算
     const maxChars = Math.floor(maxWidth / charWidth);
     if (value.length <= maxChars) {
       return { display: value, truncated: false };
     }
-    const keepChars = maxChars - 2;
+    const keepChars = Math.max(0, maxChars - 1);
     if (keepChars <= 0) {
-      return { display: '...', truncated: true };
+      return { display: '…', truncated: true };
     }
-    return { display: '...' + value.slice(-keepChars), truncated: true };
+    return { display: '…' + value.slice(-keepChars), truncated: true };
   };
 
   const getHierarchyDisplay = (signal: Signal): string => {
@@ -1993,7 +1993,7 @@ export function WaveformWindow({
                         display: 'flex',
                         justifyContent: 'flex-end',
                         alignItems: 'center',
-                        paddingRight: '8px',
+                        paddingRight: '4px',
                         overflow: 'hidden',
                       }}
                     >
@@ -2007,7 +2007,7 @@ export function WaveformWindow({
                           whiteSpace: 'nowrap',
                         }}
                       >
-                        {truncateValueLeft(getSignalValue(signal), valueColumnWidth - 16).display}
+                        {truncateValueLeft(getSignalValue(signal), valueColumnWidth - 8).display}
                       </span>
                     </span>
                   </div>
