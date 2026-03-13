@@ -1565,8 +1565,8 @@ function App() {
       // Note: No limit, get all matches
     })
 
-    const signalCount = (response.data as any)?.signal_count ?? 0
-    console.log(`[Signal Search] Response: status=${response.status}, signal_count=${signalCount}`)
+    const signalCount = (response.data as any)?.count ?? 0
+    console.log(`[Signal Search] Response: status=${response.status}, count=${signalCount}`)
 
     if (response.status === 'success' && signalCount > 0) {
       const signals = (response.data as any)?.signals ?? []
@@ -1605,8 +1605,8 @@ function App() {
         nameRegex: `${escapedName}$`
       })
 
-      const signalCountNoWidth = (response.data as any)?.signal_count ?? 0
-      console.log(`[Signal Search] Response: status=${response.status}, signal_count=${signalCountNoWidth}`)
+      const signalCountNoWidth = (response.data as any)?.count ?? 0
+      console.log(`[Signal Search] Response: status=${response.status}, count=${signalCountNoWidth}`)
 
       if (response.status === 'success' && signalCountNoWidth > 0) {
         const signals = (response.data as any)?.signals ?? []
@@ -1641,7 +1641,7 @@ function App() {
         nameRegex: `${escapedName}$`
       })
 
-      const signalCountWithSpace = (response.data as any)?.signal_count ?? 0
+      const signalCountWithSpace = (response.data as any)?.count ?? 0
       console.log(`[Signal Search] Response: status=${response.status}, signal_count=${signalCountWithSpace}`)
 
       if (response.status === 'success' && signalCountWithSpace > 0) {
@@ -1703,6 +1703,7 @@ function App() {
 
     // Try hierarchical prefix removal
     // Start with empty prefix and progressively remove hierarchical levels
+    // Both '.' and '@' are treated as hierarchical separators
     let currentName = signalName
     let removedHierarchicalPrefix = ''
 
@@ -1739,12 +1740,24 @@ function App() {
         }
       }
 
-      // Remove next hierarchical level (find first dot)
+      // Remove next hierarchical level (find first separator: '.' or '@')
       const dotIndex = currentName.indexOf('.')
-      if (dotIndex === -1) break
+      const atIndex = currentName.indexOf('@')
+      
+      // Find the earliest separator
+      let separatorIndex = -1
+      if (dotIndex !== -1 && atIndex !== -1) {
+        separatorIndex = Math.min(dotIndex, atIndex)
+      } else if (dotIndex !== -1) {
+        separatorIndex = dotIndex
+      } else if (atIndex !== -1) {
+        separatorIndex = atIndex
+      }
+      
+      if (separatorIndex === -1) break
 
-      removedHierarchicalPrefix = removedHierarchicalPrefix + currentName.substring(0, dotIndex + 1)
-      currentName = currentName.substring(dotIndex + 1)
+      removedHierarchicalPrefix = removedHierarchicalPrefix + currentName.substring(0, separatorIndex + 1)
+      currentName = currentName.substring(separatorIndex + 1)
 
       console.log(`[Signal Search] Removed hierarchical prefix: "${removedHierarchicalPrefix}", remaining: "${currentName}"`)
     }
