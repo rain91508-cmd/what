@@ -156,11 +156,13 @@ export interface WaveformProviderInterface {
    * @param signalName 信号名称
    * @param time 时间点
    * @param signals 信号列表（参数传递，不依赖内部状态）
+   * @param displayFormat 显示格式
    */
   getSignalValueAtTime(
     signalName: string,
     time: number,
-    signals: WasmSignalInfo[]
+    signals: WasmSignalInfo[],
+    displayFormat?: DisplayFormat
   ): Promise<ValueInfo | null>;
 
   /**
@@ -182,11 +184,13 @@ export interface WaveformProviderInterface {
    * @param signalNames 信号名称列表
    * @param viewport 视口配置
    * @param signals 信号列表
+   * @param displayFormat 显示格式
    */
   fetchAndGetSegments(
     signalNames: string[],
     viewport: ViewportConfig,
-    signals: WasmSignalInfo[]
+    signals: WasmSignalInfo[],
+    displayFormat?: DisplayFormat
   ): Promise<RenderSegment[]>;
 
   /**

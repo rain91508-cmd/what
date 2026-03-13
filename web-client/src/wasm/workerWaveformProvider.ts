@@ -162,13 +162,15 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
   async getSignalValueAtTime(
     signalName: string,
     time: number,
-    signals: WasmSignalInfo[]
+    signals: WasmSignalInfo[],
+    displayFormat?: DisplayFormat
   ): Promise<ValueInfo | null> {
     try {
       return await this.sendMessage('GET_SIGNAL_VALUE_AT_TIME', {
         signalName,
         time,
         signals,
+        displayFormat,
       });
     } catch (error) {
       console.warn('[WorkerWaveformProvider] getSignalValueAtTime failed:', error);
@@ -204,13 +206,15 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
   async fetchAndGetSegments(
     signalNames: string[],
     viewport: ViewportConfig,
-    signals: WasmSignalInfo[]
+    signals: WasmSignalInfo[],
+    displayFormat?: DisplayFormat
   ): Promise<RenderSegment[]> {
     try {
       const segments = await this.sendMessage('FETCH_AND_GET_SEGMENTS', {
         signalNames,
         viewport,
         signals,
+        displayFormat,
       });
 
       if (!segments || !Array.isArray(segments)) {

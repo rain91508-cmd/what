@@ -144,7 +144,8 @@ export class WaveformProviderAdapter {
     return this.provider.fetchAndGetSegments(
       signalNames,
       this.viewport,
-      newSignals
+      newSignals,
+      this._displayFormat
     );
   }
 
@@ -155,7 +156,8 @@ export class WaveformProviderAdapter {
     return this.provider.getSignalValueAtTime(
       signalName,
       time,
-      newSignals
+      newSignals,
+      this._displayFormat
     );
   }
 

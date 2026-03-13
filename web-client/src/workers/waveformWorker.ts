@@ -280,7 +280,7 @@ function handleUnregisterCanvas(payload: any, id: number): void {
 async function handleGetSignalValueAtTime(payload: any, id: number): Promise<void> {
   if (!wasmProvider) throw new Error('Provider not initialized');
 
-  const { signalName, time, signals } = payload;
+  const { signalName, time, signals, displayFormat } = payload;
 
   // 设置信号列表（参数传递）
   if (signals) {
@@ -299,6 +299,11 @@ async function handleGetSignalValueAtTime(payload: any, id: number): Promise<voi
         : undefined,
     }));
     wasmProvider.set_draw_list(wasmSignals);
+  }
+
+  // 设置显示格式（参数传递）
+  if (displayFormat) {
+    wasmProvider.display_format = displayFormat;
   }
 
   const value = wasmProvider.get_signal_value_at_time(signalName, time);
