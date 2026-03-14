@@ -1133,6 +1133,135 @@ export function WaveformWindow({
       setSelectionEndX(x);
       setSelectionEndY(y);
       selectionStartRef.current = x;
+
+      // 添加全局鼠标事件监听，支持鼠标移出canvas后继续拖动
+      const handleGlobalMouseMove = (e: MouseEvent) => {
+        if (!canvasRef.current) return;
+        const rect = canvasRef.current.getBoundingClientRect();
+        
+        // 计算相对于canvas的坐标，限制在canvas边界内
+        let relativeX = e.clientX - rect.left;
+        let relativeY = e.clientY - rect.top;
+        
+        // 限制X坐标在canvas边界内
+        relativeX = Math.max(0, Math.min(rect.width, relativeX));
+        // 限制Y坐标在canvas边界内（考虑标尺高度）
+        relativeY = Math.max(RULER_HEIGHT, Math.min(rect.height, relativeY));
+        
+        // 更新选择结束位置
+        selectionEndXRef.current = relativeX;
+        selectionEndYRef.current = relativeY;
+        
+        // 更新state用于渲染
+        if (!selectionUpdateTimeoutRef.current) {
+          selectionUpdateTimeoutRef.current = setTimeout(() => {
+            setSelectionEndX(selectionEndXRef.current);
+            setSelectionEndY(selectionEndYRef.current);
+            selectionUpdateTimeoutRef.current = null;
+          }, 16);
+        }
+      };
+
+      const handleGlobalMouseUp = (e: MouseEvent) => {
+        // 移除全局事件监听
+        document.removeEventListener('mousemove', handleGlobalMouseMove);
+        document.removeEventListener('mouseup', handleGlobalMouseUp);
+        
+        // 检查鼠标是否在canvas内释放
+        if (!canvasRef.current) return;
+        const rect = canvasRef.current.getBoundingClientRect();
+        const isInsideCanvas = 
+          e.clientX >= rect.left && 
+          e.clientX <= rect.right && 
+          e.clientY >= rect.top && 
+          e.clientY <= rect.bottom;
+        
+        // 如果鼠标在canvas内释放，让handleCanvasMouseUp处理缩放
+        // 如果鼠标在canvas外释放，在这里处理缩放
+        if (isInsideCanvas) {
+          // 重置选择状态，让handleCanvasMouseUp处理缩放
+          setIsSelecting(false);
+          setSelectionStartX(null);
+          setSelectionStartY(null);
+          setSelectionEndX(null);
+          setSelectionEndY(null);
+          selectionStartRef.current = null;
+          return;
+        }
+        
+        // 鼠标在canvas外释放，执行缩放操作
+        const canvasWidth = rect.width;
+        
+        // 获取最终的选择结束位置
+        const finalEndX = selectionEndXRef.current ?? x;
+        const finalEndY = selectionEndYRef.current ?? y;
+        
+        // 计算拖动距离
+        const deltaX = Math.abs(finalEndX - x);
+        const deltaY = Math.abs(finalEndY - y);
+        
+        // 判断拖动方向
+        const isHorizontalDrag = deltaX >= deltaY;
+        
+        if (isHorizontalDrag) {
+          // 水平拖动：放大到选择的时间范围
+          const startXPos = Math.min(x, finalEndX);
+          const endXPos = Math.max(x, finalEndX);
+          
+          // 如果选择区域足够大（大于等于10像素），则放大
+          if (endXPos - startXPos >= 10) {
+            const rawTimeStart = viewport.timeStart + (startXPos / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
+            const rawTimeEnd = viewport.timeStart + (endXPos / canvasWidth) * (viewport.timeEnd - viewport.timeStart);
+            
+            // Validate time range
+            const sanitized = sanitizeTimeRange(rawTimeStart, rawTimeEnd, waveformRange);
+            
+            setViewport(prev => ({
+              ...prev,
+              timeStart: sanitized.timeStart,
+              timeEnd: sanitized.timeEnd,
+            }));
+          }
+        } else {
+          // 垂直拖动：根据方向放大或缩小
+          const dragY = finalEndY - y;
+          
+          if (dragY < -20) {
+            // 向上拖动超过20像素：放大（Zoom In）
+            const newViewport = zoomIn(viewport, cursor.position);
+            if (newViewport) {
+              const sanitized = sanitizeTimeRange(newViewport.timeStart, newViewport.timeEnd, waveformRange);
+              setViewport({
+                ...newViewport,
+                timeStart: sanitized.timeStart,
+                timeEnd: sanitized.timeEnd,
+              });
+            }
+          } else if (dragY > 20) {
+            // 向下拖动超过20像素：缩小（Zoom Out）
+            const newViewport = zoomOut(viewport, cursor.position);
+            if (newViewport) {
+              const sanitized = sanitizeTimeRange(newViewport.timeStart, newViewport.timeEnd, waveformRange);
+              setViewport({
+                ...newViewport,
+                timeStart: sanitized.timeStart,
+                timeEnd: sanitized.timeEnd,
+              });
+            }
+          }
+        }
+        
+        // 重置选择状态
+        setIsSelecting(false);
+        setSelectionStartX(null);
+        setSelectionStartY(null);
+        setSelectionEndX(null);
+        setSelectionEndY(null);
+        selectionStartRef.current = null;
+      };
+
+      document.addEventListener('mousemove', handleGlobalMouseMove);
+      document.addEventListener('mouseup', handleGlobalMouseUp);
     }
   }, [viewport, setCursor, useMockData, displaySignals, wasmProviderRef]);
 
