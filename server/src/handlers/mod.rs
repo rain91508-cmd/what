@@ -80,6 +80,13 @@ pub fn create_router(state: ServerState) -> Router<ServerState> {
         .route(
             "/api/wave/:waveform_name/lod/:lod/tile/:start/:span/:num/compress/:compress/signals/:signal_names/data",
             get(get_wave_data_tiles),
+        )
+        // Pattern Search API：搜索信号值模式
+        // 格式：POST /api/wave/{waveform_name}/signals/{signal_names}/pattern-search
+        // 示例：POST /api/wave/riscv2/signals/b64:dGJfdG9wLmNsaw==/pattern-search
+        .route(
+            "/api/wave/:waveform_name/signals/:signal_names/pattern-search",
+            post(pattern_search),
         );
 
     // 合并所有路由

@@ -1,6 +1,9 @@
 use crate::error::{Result, ServerError};
 use crate::services::{FstBackend, WaveService, CompressionAlgorithm};
 use crate::services::wave_data::{MultiTileChunkSerializer, TileInfo};
+use crate::services::pattern_search::{PatternSearchRequest, PatternSearchResponse};
+use crate::services::pattern_search_fst_reader::pattern_search_fst_reader;
+use crate::services::pattern_search_fstapi::pattern_search_fstapi;
 use crate::state::ServerState;
 use axum::{
     body::Body,
@@ -605,6 +608,70 @@ fn parse_signal_pattern(pattern: &str) -> (Option<String>, Vec<String>) {
             .collect();
         (None, names)
     }
+}
+
+/// Pattern Search API Handler
+/// 
+/// POST /api/wave/{waveform_name}/signals/{signal_names}/pattern-search
+/// 
+/// 在指定波形和信号中搜索特定的值模式，支持向前或向后搜索
+pub async fn pattern_search(
+    State(state): State<ServerState>,
+    Path((waveform_name, signal_names)): Path<(String, String)>,
+    Json(request): Json<PatternSearchRequest>,
+) -> Result<Json<PatternSearchResponse>> {
+    state.stats.record_request(crate::state::RequestType::Wave).await;
+
+    info!(
+        "Pattern search: waveform={}, signals={}, pattern={:?}, direction={:?}",
+        waveform_name, signal_names, request.pattern, request.direction
+    );
+
+    // 解码信号名
+    let full_signal_names: Vec<String> = if signal_names.starts_with("b64:") {
+        let b64_part = &signal_names[4..];
+        match base64::decode(b64_part) {
+            Ok(decoded) => {
+                let decoded_str = String::from_utf8_lossy(&decoded);
+                decoded_str.split(',').map(|s| s.to_string()).collect()
+            }
+            Err(_) => return Err(ServerError::InvalidSignalNameFormat),
+        }
+    } else if signal_names.starts_with("trie:") {
+        match crate::utils::trie::decode_signals(&signal_names) {
+            Ok(signals) => signals,
+            Err(_) => return Err(ServerError::InvalidSignalNameFormat),
+        }
+    } else {
+        signal_names.split(',').map(|s| s.to_string()).collect()
+    };
+
+    if full_signal_names.is_empty() {
+        return Err(ServerError::SignalNotFound("No signals specified".to_string()));
+    }
+
+    // 获取波形路径
+    let wave_path = state.config.wave_dir.join(format!("{}.fst", waveform_name));
+    if !wave_path.exists() {
+        return Err(ServerError::WaveformNotFound(waveform_name.clone()));
+    }
+
+    // 根据后端选择实现
+    let response = match state.config.fst_backend.as_str() {
+        "fst-reader" => {
+            pattern_search_fst_reader(&wave_path, &full_signal_names, &request, waveform_name).await
+        }
+        _ => {
+            pattern_search_fstapi(&wave_path, &full_signal_names, &request, waveform_name).await
+        }
+    }?;
+
+    info!(
+        "Pattern search completed: found {} matches",
+        response.total_matches
+    );
+
+    Ok(Json(response))
 }
 
 #[cfg(test)]

@@ -4,6 +4,9 @@ pub mod wave_data;
 pub mod fst_backend;
 pub mod fst_reader_backend;
 pub mod fst_reader_cache;
+pub mod pattern_search;
+pub mod pattern_search_fst_reader;
+pub mod pattern_search_fstapi;
 
 pub use kdb_service::KdbService;
 pub use wave_service::{WaveService, FstBackend};
