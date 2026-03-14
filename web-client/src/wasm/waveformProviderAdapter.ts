@@ -35,6 +35,7 @@ interface OldWasmSignalInfo {
     msb: number;
     lsb: number;
   };
+  display_format?: DisplayFormat;
 }
 
 /**
@@ -210,6 +211,11 @@ export class WaveformProviderAdapter {
     const serverPrefix = options?.serverPrefix ?? '';
     const spaceBeforeBracket = options?.spaceBeforeBracket ?? false;
 
+    // 如果提供了 signals 参数，更新 currentSignals 以便 get_signal_value_at_time 使用
+    if (options?.signals) {
+      this.currentSignals = options.signals;
+    }
+
     // 转换信号列表格式
     const newSignals = this.convertSignals(currentSignals);
 
@@ -273,6 +279,7 @@ export class WaveformProviderAdapter {
         msb: sig.bit_extract.msb,
         lsb: sig.bit_extract.lsb,
       } : undefined,
+      displayFormat: sig.display_format,
     }));
   }
 

@@ -297,6 +297,7 @@ async function handleGetSignalValueAtTime(payload: any, id: number): Promise<voi
             lsb: sig.bitExtract.lsb,
           }
         : undefined,
+      display_format: sig.displayFormat,
     }));
     wasmProvider.set_draw_list(wasmSignals);
   }
@@ -333,6 +334,7 @@ async function handleFindTransitionsAround(payload: any, id: number): Promise<vo
             lsb: sig.bitExtract.lsb,
           }
         : undefined,
+      display_format: sig.displayFormat,
     }));
     wasmProvider.set_draw_list(wasmSignals);
   }
@@ -369,6 +371,7 @@ async function handleFetchAndGetSegments(payload: any, id: number): Promise<void
             lsb: sig.bitExtract.lsb,
           }
         : undefined,
+      display_format: sig.displayFormat,
     }));
     wasmProvider.set_draw_list(wasmSignals);
   }
@@ -474,6 +477,7 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
               lsb: sig.bitExtract.lsb,
             }
           : undefined,
+        display_format: sig.displayFormat,
       }));
       wasmProvider.set_draw_list(wasmSignals);
       console.log('[WaveformWorker] Set draw list with', wasmSignals.length, 'signals:', wasmSignals);

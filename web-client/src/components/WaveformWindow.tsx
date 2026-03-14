@@ -215,7 +215,7 @@ export function WaveformWindow({
         const canvas = canvasRef.current!;
         const containerRect = containerRef.current!.getBoundingClientRect();
         const width = containerRect.width;
-        const height = containerRect.height; // No subtract ruler height
+        const height = containerRect.height - 30; // Subtract ruler height
         
         // 保持 CSS 尺寸和 canvas 物理尺寸 1:1，禁用 devicePixelRatio 缩放
         // 这样不需要进行任何坐标转换
@@ -300,6 +300,12 @@ export function WaveformWindow({
   
   // 每个信号独立的显示格式（使用 unique_id 作为 key）
   const [signalDisplayFormats, setSignalDisplayFormats] = useState<Map<number, 'hex' | 'bin' | 'oct' | 'dec'>>(new Map());
+  const signalDisplayFormatsRef = useRef<Map<number, 'hex' | 'bin' | 'oct' | 'dec'>>(signalDisplayFormats);
+  
+  // 同步 signalDisplayFormats 到 ref
+  useEffect(() => {
+    signalDisplayFormatsRef.current = signalDisplayFormats;
+  }, [signalDisplayFormats]);
   
   // 当前显示进制选择下拉菜单的信号 unique_id
   const [showFormatDropdown, setShowFormatDropdown] = useState<number | null>(null);
@@ -414,16 +420,16 @@ export function WaveformWindow({
   }, [showFormatDropdown]);
 
   // 获取信号的显示格式（单bit默认binary，多bit默认hex）
-  const getSignalDisplayFormat = (signal: Signal & { unique_id: number }): 'hex' | 'bin' | 'oct' | 'dec' => {
-    // 先检查是否有自定义格式
-    const customFormat = signalDisplayFormats.get(signal.unique_id);
+  const getSignalDisplayFormat = useCallback((signal: Signal & { unique_id: number }): 'hex' | 'bin' | 'oct' | 'dec' => {
+    // 先检查是否有自定义格式（使用 ref 获取最新值）
+    const customFormat = signalDisplayFormatsRef.current.get(signal.unique_id);
     if (customFormat) {
       return customFormat;
     }
     // 没有自定义格式，根据位宽返回默认值
     const isSingleBit = signal.msb === signal.lsb;
     return isSingleBit ? 'bin' : 'hex';
-  };
+  }, []);
 
   // 设置信号的显示格式
   const setSignalDisplayFormat = (uniqueId: number, format: 'hex' | 'bin' | 'oct' | 'dec') => {
@@ -433,12 +439,6 @@ export function WaveformWindow({
       return newMap;
     });
     setShowFormatDropdown(null);
-    // 重新渲染波形以应用新的格式
-    setTimeout(() => {
-      if (renderWaveformRef.current) {
-        renderWaveformRef.current().catch(console.error);
-      }
-    }, 0);
   };
 
   // rAF-throttled mouse position update for smooth rendering
@@ -678,7 +678,7 @@ export function WaveformWindow({
       // Update canvas dimensions from container
       const containerRect = containerRef.current.getBoundingClientRect();
       const width = containerRect.width;
-      const height = containerRect.height; // No subtract ruler height
+      const height = containerRect.height - 30; // Subtract ruler height
       
       // 只在尺寸真的变化时才设置 canvas 的 width 和 height，避免触发 ResizeObserver
       // 注意：如果已经调用了 transferControlToOffscreen()，就不能再修改 canvas 尺寸了
@@ -806,7 +806,7 @@ export function WaveformWindow({
         name: s.name,
         row: s.row,
         width: s.width || 1,
-        displayFormat: s.displayFormat,
+        displayFormat: s.displayFormat as 'hex' | 'bin' | 'oct' | 'dec' | undefined,
       }));
 
       // 构建带 draw_sig_id 的信号
@@ -867,7 +867,7 @@ export function WaveformWindow({
       }
       // 使用主线程渲染（Mock 数据模式）
       if (segments) {
-        waveformRenderer.render(segments, viewport, width, height, 30, timeConfig);
+        waveformRenderer.render(segments, viewport, width, height, 20, timeConfig);
       }
     }
 
@@ -887,12 +887,12 @@ export function WaveformWindow({
 
           // 绘制半透明蓝色选择区域
           ctx.fillStyle = 'rgba(100, 150, 255, 0.3)';
-          ctx.fillRect(startX, 30, selectionWidth, height - 30);
+          ctx.fillRect(startX, 20, selectionWidth, height - 20);
 
           // 绘制边框
           ctx.strokeStyle = 'rgba(100, 150, 255, 0.8)';
           ctx.lineWidth = 1;
-          ctx.strokeRect(startX, 30, selectionWidth, height - 30);
+          ctx.strokeRect(startX, 20, selectionWidth, height - 20);
         }
       }
     }
@@ -1016,6 +1016,13 @@ export function WaveformWindow({
     }
   }, [isPanning, canvasWidth]);
 
+  // 监听信号显示格式变化，重新渲染波形
+  useEffect(() => {
+    if (canvasWidth > 0 && renderWaveformRef.current) {
+      renderWaveformRef.current().catch(console.error);
+    }
+  }, [signalDisplayFormats, canvasWidth]);
+
   // Cleanup mouse timeout on unmount
   useEffect(() => {
     return () => {
@@ -1065,13 +1072,12 @@ export function WaveformWindow({
       const timeRange = viewport.timeEnd - viewport.timeStart;
       const snapThreshold = Math.max(timeRange * 0.04, 10);
 
-      // 根据点击的 Y 坐标计算对应的 canvasRenderNode 索引（考虑 group 占位）
-      // 现在 canvas 上有30px标尺偏移
-      const signalY = y - 30;
+      // 根据点击的 Y 坐标计算对应的 treeNode 索引（考虑 group 占位）
+      const signalY = y - RULER_HEIGHT;
       const nodeIndex = Math.floor(signalY / SIGNAL_ROW_HEIGHT);
 
-      // 找到对应的 canvasRenderNode
-      const targetNode = canvasRenderNodes[nodeIndex];
+      // 找到对应的 treeNode
+      const targetNode = treeNodes[nodeIndex];
 
       if (useMockData) {
         // Mock 数据模式：使用 mockDataProvider
@@ -1088,16 +1094,7 @@ export function WaveformWindow({
       } else if (wasmProviderRef.current && targetNode?.type === 'signal' && targetNode.signal) {
         // WASM 模式：从已获取数据的信号中找 transition
         const wasmProvider = wasmProviderRef.current;
-        let signalName: string;
-        
-        // 检查是否是bit行，如果是则使用原始信号名，否则使用信号全名
-        if (targetNode.bitIndex !== undefined) {
-          // Bit行：使用原始信号名（WASM会从原始信号提取对应bit）
-          signalName = targetNode.signal.fullName || targetNode.signal.name;
-        } else {
-          // 普通信号行：使用信号全名
-          signalName = targetNode.signal.fullName || targetNode.signal.name;
-        }
+        const signalName = targetNode.signal.fullName || targetNode.signal.name;
 
         console.log(`[WaveformWindow] Cursor snap: signal=${signalName}, clickTime=${clickTime}, threshold=${snapThreshold}, nodeIndex=${nodeIndex}`);
 
@@ -1654,37 +1651,6 @@ export function WaveformWindow({
     nameFilter,
   ]);
 
-  // 创建与canvas渲染行顺序一致的节点列表（包括展开的总线信号的各个bit行）
-  const canvasRenderNodes = useMemo(() => {
-    const nodes: Array<{ type: 'group' | 'signal', node?: TreeNode, signal?: Signal & { unique_id: number }, bitIndex?: number }> = [];
-    
-    treeNodes.forEach((treeNode) => {
-      if (treeNode.type === 'group') {
-        nodes.push({ type: 'group', node: treeNode });
-      } else if (treeNode.type === 'signal' && treeNode.signal) {
-        const signal = treeNode.signal as Signal & { unique_id: number };
-        const isExpanded = expandedSignals.has(signal.unique_id);
-        const isBus = signal.msb !== signal.lsb;
-        
-        if (isBus && isExpanded) {
-          // 展开状态：先添加总线信号本身
-          nodes.push({ type: 'signal', signal });
-          // 再添加每个bit的行
-          const bitCount = Math.min(signal.msb - signal.lsb + 1, 32);
-          for (let i = 0; i < bitCount; i++) {
-            const bitIndex = signal.msb - i;
-            nodes.push({ type: 'signal', signal, bitIndex });
-          }
-        } else {
-          // 折叠状态或单bit信号：作为一个整体
-          nodes.push({ type: 'signal', signal });
-        }
-      }
-    });
-    
-    return nodes;
-  }, [treeNodes, expandedSignals]);
-
   // 监听 cursor 或 displayFormat 变化，更新信号值
   // Note: This must be after treeNodes is defined
   useEffect(() => {
@@ -1774,7 +1740,7 @@ export function WaveformWindow({
     };
 
     updateSignalValues();
-  }, [cursor.position, cursor.visible, treeNodes, expandedSignals, useMockData, displayFormat]);
+  }, [cursor.position, cursor.visible, treeNodes, expandedSignals, useMockData, displayFormat, signalDisplayFormats]);
 
   const renderTreeConnectors = (parentNodes: { level: number; isLast: boolean }[]) => {
     return parentNodes.map((node, index) => (
@@ -2335,9 +2301,9 @@ export function WaveformWindow({
       </div>
 
       <div className="waveform-canvas-container" ref={containerRef} style={{ display: 'flex', flexDirection: 'column' }}>
-        {/* Cursor/Marker info bar - corresponds to left filter bar (60px) */}
+        {/* Cursor/Marker info bar - corresponds to left filter bar (30px) */}
         <div style={{
-          height: '60px',
+          height: '30px',
           background: '#1a1a1a',
           borderBottom: '1px solid #404040',
           flexShrink: 0,

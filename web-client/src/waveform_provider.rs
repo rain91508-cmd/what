@@ -1951,7 +1951,7 @@ if tile_missing_signals.is_empty() {
 
         for signal in self.signals.iter() {
             // Use signal.row provided by UI (accounts for group headers)
-            let y = 30.0 + signal.row as f64 * self.row_height + self.row_height / 2.0;
+            let y = 20.0 + signal.row as f64 * self.row_height + self.row_height / 2.0;
             let display_format = signal.display_format.as_deref();
 
             // Check if this is a bit extraction signal
@@ -2506,12 +2506,6 @@ if tile_missing_signals.is_empty() {
                 } else {
                     display_str.clone()
                 };
-                let start_val_str = server_value_to_string(start_val.value_type, start_val.value_len, &start_val.value);
-                let formatted_start_val = if width > 1 {
-                    self.format_multi_bit_value(&start_val_str, width, display_format)
-                } else {
-                    start_val_str.clone()
-                };
 
                 segments.push(RenderSegment {
                     x0: 0.0,
@@ -2522,8 +2516,8 @@ if tile_missing_signals.is_empty() {
                         display_str: final_display_str,
                         width,
                         has_xz,
-                        min_value: Some(formatted_start_val.clone()),
-                        max_value: Some(formatted_start_val),
+                        min_value: Some(display_str),
+                        max_value: Some(server_value_to_string(start_val.value_type, start_val.value_len, &start_val.value)),
                         is_min_max: false,
                     },
                     signal_name: signal_name.to_string(),
@@ -2636,16 +2630,6 @@ if tile_missing_signals.is_empty() {
             let min_val_str = server_value_to_string(min_trans.value_type, min_trans.value_len, &min_trans.value);
             let max_val_str = server_value_to_string(max_trans.value_type, max_trans.value_len, &max_trans.value);
 
-            // Format min and max values with display_format
-            let (formatted_min, formatted_max) = if width > 1 {
-                (
-                    self.format_multi_bit_value(&min_val_str, width, display_format),
-                    self.format_multi_bit_value(&max_val_str, width, display_format)
-                )
-            } else {
-                (min_val_str.clone(), max_val_str.clone())
-            };
-
             // Check if min != max and neither is X/Z
             let min_upper = min_val_str.to_uppercase();
             let max_upper = max_val_str.to_uppercase();
@@ -2658,11 +2642,11 @@ if tile_missing_signals.is_empty() {
                 if width == 1 {
                     "toggling".to_string()
                 } else {
-                    format!("{}..{}", formatted_min, formatted_max)
+                    format!("{}..{}", min_val_str, max_val_str)
                 }
             } else {
                 // min == max or has X/Z
-                formatted_min.clone()
+                min_val_str.clone()
             };
 
             segments.push(RenderSegment {
@@ -2674,8 +2658,8 @@ if tile_missing_signals.is_empty() {
                     display_str,
                     width,
                     has_xz,
-                    min_value: Some(formatted_min),
-                    max_value: Some(formatted_max),
+                    min_value: Some(min_val_str),
+                    max_value: Some(max_val_str),
                     is_min_max: is_changing,
                 },
                 signal_name: signal_name.to_string(),
@@ -2805,13 +2789,6 @@ if tile_missing_signals.is_empty() {
                             display_str
                         };
                         
-                        let current_val_str = server_value_to_string(current_value.value_type, current_value.value_len, &current_value.value);
-                        let formatted_current_val = if width > 1 {
-                            self.format_multi_bit_value(&current_val_str, width, display_format)
-                        } else {
-                            current_val_str.clone()
-                        };
-                        
                         segments.push(RenderSegment {
                             x0,
                             x1,
@@ -2821,8 +2798,8 @@ if tile_missing_signals.is_empty() {
                                 display_str: final_display_str,
                                 width,
                                 has_xz,
-                                min_value: Some(formatted_current_val.clone()),
-                                max_value: Some(formatted_current_val),
+                                min_value: Some(server_value_to_string(current_value.value_type, current_value.value_len, &current_value.value)),
+                                max_value: Some(server_value_to_string(current_value.value_type, current_value.value_len, &current_value.value)),
                                 is_min_max: false,
                             },
                             signal_name: signal_name.to_string(),
@@ -2836,19 +2813,10 @@ if tile_missing_signals.is_empty() {
                             let first_val_str = server_value_to_string(first_trans.value_type, first_trans.value_len, &first_trans.value);
                             let last_val_str = server_value_to_string(last_trans.value_type, last_trans.value_len, &last_trans.value);
                             
-                            let (formatted_first, formatted_last) = if width > 1 {
-                                (
-                                    self.format_multi_bit_value(&first_val_str, width, display_format),
-                                    self.format_multi_bit_value(&last_val_str, width, display_format)
-                                )
-                            } else {
-                                (first_val_str.clone(), last_val_str.clone())
-                            };
-                            
                             let display_str = if width == 1 {
                                 "toggling".to_string()
                             } else {
-                                format!("{}..{}", formatted_first, formatted_last)
+                                format!("{}..{}", first_val_str, last_val_str)
                             };
                             
                             segments.push(RenderSegment {
@@ -2860,8 +2828,8 @@ if tile_missing_signals.is_empty() {
                                     display_str,
                                     width,
                                     has_xz: false,
-                                    min_value: Some(formatted_first),
-                                    max_value: Some(formatted_last),
+                                    min_value: Some(first_val_str),
+                                    max_value: Some(last_val_str),
                                     is_min_max: true,  // This is a toggle bucket
                                 },
                                 signal_name: signal_name.to_string(),
@@ -2879,13 +2847,6 @@ if tile_missing_signals.is_empty() {
                                 display_str
                             };
                             
-                            let val_str = server_value_to_string(value_trans.value_type, value_trans.value_len, &value_trans.value);
-                            let formatted_val = if width > 1 {
-                                self.format_multi_bit_value(&val_str, width, display_format)
-                            } else {
-                                val_str.clone()
-                            };
-                            
                             segments.push(RenderSegment {
                                 x0,
                                 x1,
@@ -2895,8 +2856,8 @@ if tile_missing_signals.is_empty() {
                                     display_str: final_display_str,
                                     width,
                                     has_xz,
-                                    min_value: Some(formatted_val.clone()),
-                                    max_value: Some(formatted_val),
+                                    min_value: Some(server_value_to_string(value_trans.value_type, value_trans.value_len, &value_trans.value)),
+                                    max_value: Some(server_value_to_string(value_trans.value_type, value_trans.value_len, &value_trans.value)),
                                     is_min_max: false,
                                 },
                                 signal_name: signal_name.to_string(),
@@ -2942,12 +2903,6 @@ if tile_missing_signals.is_empty() {
                 } else {
                     display_str.clone()
                 };
-                let last_val_str = server_value_to_string(last_trans.value_type, last_trans.value_len, &last_trans.value);
-                let formatted_last_val = if width > 1 {
-                    self.format_multi_bit_value(&last_val_str, width, display_format)
-                } else {
-                    last_val_str.clone()
-                };
                 let x0 = ((tile_end as f64 - self.viewport.time_start) / time_range) * self.canvas_width;
                 let x1 = ((self.viewport.time_end - self.viewport.time_start) / time_range) * self.canvas_width;
                 
@@ -2961,8 +2916,8 @@ if tile_missing_signals.is_empty() {
                             display_str: final_display_str,
                             width,
                             has_xz,
-                            min_value: Some(formatted_last_val.clone()),
-                            max_value: Some(formatted_last_val),
+                            min_value: Some(display_str),
+                            max_value: Some(server_value_to_string(last_trans.value_type, last_trans.value_len, &last_trans.value)),
                             is_min_max: false,
                         },
                         signal_name: signal_name.to_string(),
