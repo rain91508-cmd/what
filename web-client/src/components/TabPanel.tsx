@@ -295,6 +295,10 @@ export interface Tab {
   signalDisplayFormats?: Record<number, 'hex' | 'bin' | 'oct' | 'dec'>;
   // Signal hierarchy selections for session save/restore: unique_id -> selected indices
   signalHierarchySelections?: Record<number, number[]>;
+  // Per-tab signal prefix settings (moved from global)
+  signalPrefix?: string;        // Local signal prefix (removed from local signal name)
+  serverPrefix?: string;        // Server signal prefix (added to server signal name)
+  spaceBeforeBracket?: boolean; // Whether to add space before [msb:lsb]
 }
 
 interface TabPanelProps {

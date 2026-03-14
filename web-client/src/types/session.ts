@@ -27,13 +27,6 @@ export interface Session {
     useMockData: boolean;
   };
 
-  // Waveform display settings
-  waveformSettings?: {
-    signalPrefix: string;      // Local prefix (removed from local signal name)
-    serverPrefix?: string;     // Server prefix (added to server signal name)
-    spaceBeforeBracket: boolean;
-  };
-
   // Source Tabs
   sourceTabs: Array<{
     id: string;
@@ -76,6 +69,10 @@ export interface Session {
     signalDisplayFormats?: Record<number, 'hex' | 'bin' | 'oct' | 'dec'>;
     // Signal hierarchy selections: unique_id -> selected indices array
     signalHierarchySelections?: Record<number, number[]>;
+    // Per-tab signal prefix settings
+    signalPrefix?: string;      // Local prefix (removed from local signal name)
+    serverPrefix?: string;      // Server prefix (added to server signal name)
+    spaceBeforeBracket?: boolean;
   }>;
   activeWaveformTabId?: string;
 

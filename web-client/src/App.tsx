@@ -1860,14 +1860,23 @@ function App() {
       return
     }
 
+    // Get current active tab's prefix settings
+    const activeTabData = tabs.find(t => t.id === activeTab && t.type === 'waveform')
+    const tabSignalPrefix = activeTabData?.signalPrefix
+    const tabServerPrefix = activeTabData?.serverPrefix
+    const tabSpaceBeforeBracket = activeTabData?.spaceBeforeBracket
+    
+    // Check if this tab has its own prefix settings
+    const hasTabPrefixSettings = tabSignalPrefix !== undefined && tabSignalPrefix !== ''
+
     // If waveform is loaded from server, verify signal exists
     if (currentWaveName && apiService.isConnected()) {
       try {
-        // If we already have prefixes for this waveform, use them directly
-        if (currentWaveSignalPrefix) {
-          console.log(`[Signal Search] Using existing local prefix "${currentWaveSignalPrefix}", server prefix "${currentWaveSignalServerPrefix}"`)
+        // If this tab already has its own prefix settings, use them directly
+        if (hasTabPrefixSettings) {
+          console.log(`[Signal Search] Using tab's existing local prefix "${tabSignalPrefix}", server prefix "${tabServerPrefix}"`)
 
-          const result = await searchSignalOnServer(currentWaveName, signal.fullName, currentWaveSignalPrefix)
+          const result = await searchSignalOnServer(currentWaveName, signal.fullName, tabSignalPrefix)
 
           if (result.found) {
             console.log(`[Signal Search] Found with existing prefix! spaceBeforeBracket=${result.spaceBeforeBracket}`)
@@ -1875,7 +1884,7 @@ function App() {
             // Check if multiple server prefixes found
             if (result.multipleServerPrefixes && result.matchedNames && result.matchedNames.length > 0) {
               // Multiple server prefixes - need to check if our saved one is among them
-              const savedServerPrefix = currentWaveSignalServerPrefix
+              const savedServerPrefix = tabServerPrefix
               const matchingWithSavedPrefix = result.matchedNames.filter(name =>
                 savedServerPrefix ? name.startsWith(savedServerPrefix) : true
               )
@@ -1888,16 +1897,17 @@ function App() {
             }
 
             // Signal found with existing prefix - AUTO ADD (no confirmation needed)
-            // This is the "后续信号匹配（自动）" case from the documentation
             // Only update spaceBeforeBracket if this signal has bit width (has '[')
-            // Single-bit signals don't provide information about space before bracket
             const signalHasBitWidth = signal.fullName.includes('[')
-            if (signalHasBitWidth && result.spaceBeforeBracket !== undefined && result.spaceBeforeBracket !== currentWaveSignalSpaceBeforeBracket) {
-              console.log(`[Signal Search] Updating spaceBeforeBracket: ${currentWaveSignalSpaceBeforeBracket} -> ${result.spaceBeforeBracket}`)
-              setCurrentWaveSignalSpaceBeforeBracket(result.spaceBeforeBracket)
-              updateProviderSettings(currentWaveSignalPrefix, currentWaveSignalServerPrefix, result.spaceBeforeBracket)
+            if (signalHasBitWidth && result.spaceBeforeBracket !== undefined && result.spaceBeforeBracket !== tabSpaceBeforeBracket) {
+              console.log(`[Signal Search] Updating spaceBeforeBracket: ${tabSpaceBeforeBracket} -> ${result.spaceBeforeBracket}`)
+              // Update tab's settings
+              setTabs(prev => prev.map(tab =>
+                tab.id === activeTab ? { ...tab, spaceBeforeBracket: result.spaceBeforeBracket } : tab
+              ))
+              updateProviderSettings(tabSignalPrefix, tabServerPrefix || '', result.spaceBeforeBracket)
             } else if (!signalHasBitWidth) {
-              console.log(`[Signal Search] Single-bit signal, not updating spaceBeforeBracket (keep: ${currentWaveSignalSpaceBeforeBracket})`)
+              console.log(`[Signal Search] Single-bit signal, not updating spaceBeforeBracket (keep: ${tabSpaceBeforeBracket})`)
             }
             
             // Auto add signal without confirmation
@@ -2360,6 +2370,10 @@ function App() {
           waveformRange: tab.waveformRange,
           signalDisplayFormats: tab.signalDisplayFormats,
           signalHierarchySelections: tab.signalHierarchySelections,
+          // Per-tab prefix settings (fallback to global settings for backward compatibility)
+          signalPrefix: tab.signalPrefix ?? currentWaveSignalPrefix,
+          serverPrefix: tab.serverPrefix ?? currentWaveSignalServerPrefix,
+          spaceBeforeBracket: tab.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket,
         }))
 
       // Get bookmarks
@@ -2557,6 +2571,10 @@ function App() {
           waveformRange: waveTab.waveformRange,
           signalDisplayFormats: waveTab.signalDisplayFormats,
           signalHierarchySelections: waveTab.signalHierarchySelections,
+          // Restore per-tab prefix settings
+          signalPrefix: waveTab.signalPrefix,
+          serverPrefix: waveTab.serverPrefix,
+          spaceBeforeBracket: waveTab.spaceBeforeBracket,
         }
         
         restoredTabs.push(newTab)
@@ -2864,9 +2882,9 @@ function App() {
                 useMockData={useMockData}
                 serverUrl={serverUrl}
                 waveformName={currentWaveName || ''}
-                signalPrefix={currentWaveSignalPrefix}
-                serverPrefix={currentWaveSignalServerPrefix}
-                spaceBeforeBracket={currentWaveSignalSpaceBeforeBracket}
+                signalPrefix={activeTabData.signalPrefix ?? currentWaveSignalPrefix}
+                serverPrefix={activeTabData.serverPrefix ?? currentWaveSignalServerPrefix}
+                spaceBeforeBracket={activeTabData.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket}
                 waveformRange={activeTabData.waveformRange}
                 initialSignalDisplayFormats={activeTabData.signalDisplayFormats}
                 initialSignalHierarchySelections={activeTabData.signalHierarchySelections}
@@ -3057,14 +3075,33 @@ function App() {
                   className="btn btn-primary"
                   onClick={() => {
                     // Handle confirm action
+                    // Update current tab's prefix settings instead of global settings
+                    const updateTabPrefixSettings = (localPrefix: string, serverPrefix: string, spaceBeforeBracket: boolean) => {
+                      // Check if current active tab is a waveform tab
+                      const activeTabData = tabs.find(t => t.id === activeTab && t.type === 'waveform')
+                      if (activeTabData) {
+                        // Update tab's settings
+                        setTabs(prev => prev.map(tab =>
+                          tab.id === activeTab ? {
+                            ...tab,
+                            signalPrefix: localPrefix,
+                            serverPrefix: serverPrefix,
+                            spaceBeforeBracket: spaceBeforeBracket,
+                          } : tab
+                        ))
+                      }
+                      // Also update global settings for backward compatibility and new tabs
+                      setCurrentWaveSignalPrefix(localPrefix);
+                      setCurrentWaveSignalServerPrefix(serverPrefix);
+                      setCurrentWaveSignalSpaceBeforeBracket(spaceBeforeBracket);
+                      updateProviderSettings(localPrefix, serverPrefix, spaceBeforeBracket);
+                    }
+
                     if (signalNotFoundInfo.allMatches && signalNotFoundInfo.allMatches.length > 1) {
                       // Multiple matches - use selected one
                       if (signalNotFoundInfo.selectedMatchIndex !== undefined) {
                         const selectedMatch = signalNotFoundInfo.allMatches[signalNotFoundInfo.selectedMatchIndex];
-                        setCurrentWaveSignalPrefix(selectedMatch.localPrefix);
-                        setCurrentWaveSignalServerPrefix(selectedMatch.serverPrefix);
-                        setCurrentWaveSignalSpaceBeforeBracket(selectedMatch.spaceBeforeBracket);
-                        updateProviderSettings(selectedMatch.localPrefix, selectedMatch.serverPrefix, selectedMatch.spaceBeforeBracket);
+                        updateTabPrefixSettings(selectedMatch.localPrefix, selectedMatch.serverPrefix, selectedMatch.spaceBeforeBracket);
                         // Add the pending signal to waveform
                         if (pendingSignalToAdd) {
                           addSignalToWaveform(pendingSignalToAdd);
@@ -3073,10 +3110,7 @@ function App() {
                       }
                     } else {
                       // Single match - use the info directly
-                      setCurrentWaveSignalPrefix(signalNotFoundInfo.prefix);
-                      setCurrentWaveSignalServerPrefix(signalNotFoundInfo.serverPrefix);
-                      setCurrentWaveSignalSpaceBeforeBracket(signalNotFoundInfo.spaceBeforeBracket);
-                      updateProviderSettings(signalNotFoundInfo.prefix, signalNotFoundInfo.serverPrefix, signalNotFoundInfo.spaceBeforeBracket);
+                      updateTabPrefixSettings(signalNotFoundInfo.prefix, signalNotFoundInfo.serverPrefix, signalNotFoundInfo.spaceBeforeBracket);
                       // Add the pending signal to waveform
                       if (pendingSignalToAdd) {
                         addSignalToWaveform(pendingSignalToAdd);
