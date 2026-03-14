@@ -2300,21 +2300,48 @@ export function WaveformWindow({
         <div className="panel-resizer-handle" />
       </div>
 
-      <div className="waveform-canvas-container" ref={containerRef} style={{ display: 'flex', flexDirection: 'column' }}>
+      <div className="waveform-canvas-container" ref={containerRef} style={{ display: 'flex', flexDirection: 'column', pointerEvents: 'auto' }}>
         {/* Cursor/Marker info bar - corresponds to left filter bar (30px) */}
-        <div style={{
-          height: '30px',
-          background: '#1a1a1a',
-          borderBottom: '1px solid #404040',
-          flexShrink: 0,
-          position: 'relative',
-          boxSizing: 'border-box',
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 12px',
-          fontSize: '13px',
-          fontFamily: 'Consolas, Monaco, monospace',
-        }}>
+        <div
+          style={{
+            height: '30px',
+            background: '#1a1a1a',
+            borderBottom: '1px solid #404040',
+            flexShrink: 0,
+            position: 'relative',
+            boxSizing: 'border-box',
+            display: 'flex',
+            alignItems: 'center',
+            padding: '0 12px',
+            fontSize: '13px',
+            fontFamily: 'Consolas, Monaco, monospace',
+            pointerEvents: 'auto',
+          }}
+          onMouseMove={(e) => {
+            // 当鼠标在info bar上移动时，更新mouseX以保持鼠标线显示
+            const containerRect = containerRef.current?.getBoundingClientRect();
+            if (containerRect) {
+              const x = e.clientX - containerRect.left;
+              setMouseX(x);
+              setDisplayMouseX(x);
+              pendingMouseXRef.current = x;
+            }
+          }}
+          onMouseEnter={(e) => {
+            // 当鼠标进入info bar时，恢复鼠标线显示
+            const containerRect = containerRef.current?.getBoundingClientRect();
+            if (containerRect) {
+              const x = e.clientX - containerRect.left;
+              setMouseX(x);
+              setDisplayMouseX(x);
+              pendingMouseXRef.current = x;
+            }
+          }}
+          onMouseLeave={() => {
+            // 当鼠标离开info bar时，如果不在canvas上，则清除鼠标线
+            // 这里不需要处理，因为canvas的onMouseLeave会处理
+          }}
+        >
           {/* Cursor vertical line in info bar */}
           {cursor.visible && (
             <div style={{
@@ -2369,6 +2396,7 @@ export function WaveformWindow({
               color: '#ffffff',
               fontWeight: 'bold',
               zIndex: 2,
+              pointerEvents: 'none',
             }}>
               Cursor: {Math.round(lod0ToDisplay(cursor.position, timeConfig))}
             </span>
@@ -2417,7 +2445,7 @@ export function WaveformWindow({
         </div>
         
         {/* Waveform canvas layers */}
-        <div style={{ position: 'relative', flex: 1 }}>
+        <div style={{ position: 'relative', flex: 1, pointerEvents: 'auto' }}>
           {/* Waveform layer - heavy rendering */}
           <canvas
             ref={canvasRef}
@@ -2431,6 +2459,7 @@ export function WaveformWindow({
               display: 'block',
               cursor: 'crosshair',
               background: selectedSignal ? '#f8f8ff' : '#fff',
+              pointerEvents: 'auto',
             }}
             onMouseDown={handleCanvasMouseDown}
             onMouseMove={handleCanvasMouseMove}
