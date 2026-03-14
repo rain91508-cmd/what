@@ -1942,12 +1942,14 @@ export function WaveformWindow({
   };
 
   return (
-    <div className="waveform-container">
-      <div 
-        className="waveform-signal-panel" 
-        ref={signalPanelRef}
-        style={{ width: signalPanelWidth }}
-      >
+    <div className="waveform-container" style={{ display: 'flex', flexDirection: 'column' }}>
+      {/* Main content area - signal panel + canvas */}
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        <div 
+          className="waveform-signal-panel" 
+          ref={signalPanelRef}
+          style={{ width: signalPanelWidth }}
+        >
         {/* Filter bar - 增加高度到40px */}
         <div style={{
           height: '40px',
@@ -2453,16 +2455,16 @@ export function WaveformWindow({
         </div>
       </div>
 
-      {/* Resizer between signal panel and canvas */}
-      <div
-        className="panel-resizer"
-        onMouseDown={handleSignalPanelResize}
-        title="Drag to resize"
-      >
-        <div className="panel-resizer-handle" />
-      </div>
+        {/* Resizer between signal panel and canvas */}
+        <div
+          className="panel-resizer"
+          onMouseDown={handleSignalPanelResize}
+          title="Drag to resize"
+        >
+          <div className="panel-resizer-handle" />
+        </div>
 
-      <div className="waveform-canvas-container" ref={containerRef} style={{ display: 'flex', flexDirection: 'column', pointerEvents: 'auto' }}>
+        <div className="waveform-canvas-container" ref={containerRef} style={{ display: 'flex', flexDirection: 'column', pointerEvents: 'auto', flex: 1 }}>
         {/* Cursor/Marker info bar - 40px，与左侧Filter Bar对齐 */}
         <div
           style={{
@@ -2678,6 +2680,108 @@ export function WaveformWindow({
           )}
         </div>
       </div>
+      </div>
+      
+      {/* Waveform Scrollbar - 显示当前view在整个波形中的位置和比例 */}
+      {waveformRange && (
+        <div
+          className="waveform-scrollbar"
+          style={{
+            height: '14px',
+            background: '#f0f0f0',
+            borderTop: '1px solid #d0d0d0',
+            position: 'relative',
+            cursor: 'pointer',
+            flexShrink: 0,
+            overflow: 'hidden',
+          }}
+          onMouseDown={(e) => {
+            // 计算点击位置对应的波形时间
+            const rect = e.currentTarget.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const ratio = clickX / rect.width;
+            const totalTime = waveformRange.end - waveformRange.start;
+            const viewTimeRange = viewport.timeEnd - viewport.timeStart;
+            
+            // 点击位置作为view的中心
+            const newCenterTime = waveformRange.start + ratio * totalTime;
+            const newTimeStart = Math.max(waveformRange.start, newCenterTime - viewTimeRange / 2);
+            const newTimeEnd = Math.min(waveformRange.end, newCenterTime + viewTimeRange / 2);
+            
+            setViewport({
+              timeStart: newTimeStart,
+              timeEnd: newTimeEnd,
+            });
+          }}
+        >
+          {/* 滑块 - 表示当前view的范围 */}
+          {(() => {
+            const totalTime = waveformRange.end - waveformRange.start;
+            const viewStartRatio = (viewport.timeStart - waveformRange.start) / totalTime;
+            const viewEndRatio = (viewport.timeEnd - waveformRange.start) / totalTime;
+            const leftPercent = Math.max(0, viewStartRatio * 100);
+            const widthPercent = Math.min(100, (viewEndRatio - viewStartRatio) * 100);
+            
+            return (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `${leftPercent}%`,
+                  width: `${widthPercent}%`,
+                  top: 0,
+                  bottom: 0,
+                  background: '#c0c0c0',
+                  borderLeft: '1px solid #a0a0a0',
+                  borderRight: '1px solid #a0a0a0',
+                  cursor: 'grab',
+                }}
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  const startX = e.clientX;
+                  const startTimeStart = viewport.timeStart;
+                  const startTimeEnd = viewport.timeEnd;
+                  const viewTimeRange = startTimeEnd - startTimeStart;
+                  const rect = e.currentTarget.parentElement?.getBoundingClientRect();
+                  if (!rect) return;
+                  
+                  const handleMouseMove = (moveEvent: MouseEvent) => {
+                    const deltaX = moveEvent.clientX - startX;
+                    const deltaRatio = deltaX / rect.width;
+                    const totalTime = waveformRange.end - waveformRange.start;
+                    const deltaTime = deltaRatio * totalTime;
+                    
+                    let newTimeStart = startTimeStart + deltaTime;
+                    let newTimeEnd = startTimeEnd + deltaTime;
+                    
+                    // 限制在波形范围内
+                    if (newTimeStart < waveformRange.start) {
+                      newTimeStart = waveformRange.start;
+                      newTimeEnd = newTimeStart + viewTimeRange;
+                    }
+                    if (newTimeEnd > waveformRange.end) {
+                      newTimeEnd = waveformRange.end;
+                      newTimeStart = newTimeEnd - viewTimeRange;
+                    }
+                    
+                    setViewport({
+                      timeStart: newTimeStart,
+                      timeEnd: newTimeEnd,
+                    });
+                  };
+                  
+                  const handleMouseUp = () => {
+                    document.removeEventListener('mousemove', handleMouseMove);
+                    document.removeEventListener('mouseup', handleMouseUp);
+                  };
+                  
+                  document.addEventListener('mousemove', handleMouseMove);
+                  document.addEventListener('mouseup', handleMouseUp);
+                }}
+              />
+            );
+          })()}
+        </div>
+      )}
     </div>
   );
 }
