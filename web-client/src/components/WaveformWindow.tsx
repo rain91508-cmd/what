@@ -215,7 +215,7 @@ export function WaveformWindow({
         const canvas = canvasRef.current!;
         const containerRect = containerRef.current!.getBoundingClientRect();
         const width = containerRect.width;
-        const height = containerRect.height - 30; // Subtract ruler height
+        const height = containerRect.height; // No subtract ruler height
         
         // 保持 CSS 尺寸和 canvas 物理尺寸 1:1，禁用 devicePixelRatio 缩放
         // 这样不需要进行任何坐标转换
@@ -298,6 +298,14 @@ export function WaveformWindow({
   const [expandedSignals, setExpandedSignals] = useState<Set<number>>(new Set());
   const [displayFormat, setDisplayFormat] = useState<'hex' | 'bin' | 'oct' | 'dec'>('hex');
   
+  // 每个信号独立的显示格式（使用 unique_id 作为 key）
+  const [signalDisplayFormats, setSignalDisplayFormats] = useState<Map<number, 'hex' | 'bin' | 'oct' | 'dec'>>(new Map());
+  
+  // 当前显示进制选择下拉菜单的信号 unique_id
+  const [showFormatDropdown, setShowFormatDropdown] = useState<number | null>(null);
+  const formatDropdownRef = useRef<HTMLDivElement>(null);
+  const dropdownPositionRef = useRef<{ x: number; y: number } | null>(null);
+  
   // 统一的信号值管理器
   const signalValueManagerRef = useRef<SignalValueManager | null>(null);
   
@@ -358,10 +366,80 @@ export function WaveformWindow({
       if (ioDropdownRef.current && !ioDropdownRef.current.contains(event.target as Node)) {
         setShowIoDropdown(false);
       }
+      if (formatDropdownRef.current && !formatDropdownRef.current.contains(event.target as Node)) {
+        setShowFormatDropdown(null);
+        dropdownPositionRef.current = null;
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // 定位进制选择下拉菜单
+  useEffect(() => {
+    if (showFormatDropdown !== null && formatDropdownRef.current && dropdownPositionRef.current) {
+      const dropdown = formatDropdownRef.current;
+      const { x, y } = dropdownPositionRef.current;
+      
+      // 计算下拉菜单的位置
+      const dropdownWidth = dropdown.offsetWidth || 90;
+      const dropdownHeight = dropdown.offsetHeight || 120;
+      
+      let left = x - dropdownWidth + 8; // 让下拉菜单左边缘对齐点击位置
+      let top = y + 8;
+      
+      // 确保下拉菜单不会超出屏幕右边界
+      if (left + dropdownWidth > window.innerWidth) {
+        left = window.innerWidth - dropdownWidth - 8;
+      }
+      
+      // 确保下拉菜单不会超出屏幕下边界
+      if (top + dropdownHeight > window.innerHeight) {
+        top = y - dropdownHeight - 8;
+      }
+      
+      // 确保下拉菜单不会超出屏幕左边界
+      if (left < 8) {
+        left = 8;
+      }
+      
+      // 确保下拉菜单不会超出屏幕上边界
+      if (top < 8) {
+        top = 8;
+      }
+      
+      dropdown.style.left = `${left}px`;
+      dropdown.style.top = `${top}px`;
+    }
+  }, [showFormatDropdown]);
+
+  // 获取信号的显示格式（单bit默认binary，多bit默认hex）
+  const getSignalDisplayFormat = (signal: Signal & { unique_id: number }): 'hex' | 'bin' | 'oct' | 'dec' => {
+    // 先检查是否有自定义格式
+    const customFormat = signalDisplayFormats.get(signal.unique_id);
+    if (customFormat) {
+      return customFormat;
+    }
+    // 没有自定义格式，根据位宽返回默认值
+    const isSingleBit = signal.msb === signal.lsb;
+    return isSingleBit ? 'bin' : 'hex';
+  };
+
+  // 设置信号的显示格式
+  const setSignalDisplayFormat = (uniqueId: number, format: 'hex' | 'bin' | 'oct' | 'dec') => {
+    setSignalDisplayFormats(prev => {
+      const newMap = new Map(prev);
+      newMap.set(uniqueId, format);
+      return newMap;
+    });
+    setShowFormatDropdown(null);
+    // 重新渲染波形以应用新的格式
+    setTimeout(() => {
+      if (renderWaveformRef.current) {
+        renderWaveformRef.current().catch(console.error);
+      }
+    }, 0);
+  };
 
   // rAF-throttled mouse position update for smooth rendering
   useEffect(() => {
@@ -600,7 +678,7 @@ export function WaveformWindow({
       // Update canvas dimensions from container
       const containerRect = containerRef.current.getBoundingClientRect();
       const width = containerRect.width;
-      const height = containerRect.height - 30; // Subtract ruler height
+      const height = containerRect.height; // No subtract ruler height
       
       // 只在尺寸真的变化时才设置 canvas 的 width 和 height，避免触发 ResizeObserver
       // 注意：如果已经调用了 transferControlToOffscreen()，就不能再修改 canvas 尺寸了
@@ -628,6 +706,7 @@ export function WaveformWindow({
         currentRow++;
       } else if (node.type === 'signal' && node.signal) {
         const signal = node.signal as Signal & { unique_id: number };
+        const signalDisplayFormat = getSignalDisplayFormat(signal);
 
         // 检查信号是否展开（多bit信号）
         const isExpanded = expandedSignals.has(signal.unique_id);
@@ -642,6 +721,7 @@ export function WaveformWindow({
             row: currentRow,
             displayName: signal.name,
             width: signal.msb - signal.lsb + 1,  // 提供位宽
+            displayFormat: signalDisplayFormat,
           });
           currentRow++;
 
@@ -660,6 +740,7 @@ export function WaveformWindow({
               row: currentRow,
               displayName: `${signal.name}[${bitIndex}]`,
               width: 1,  // 单个bit
+              displayFormat: 'bin',  // bit信号始终用binary显示
             });
             currentRow++;
           }
@@ -673,6 +754,7 @@ export function WaveformWindow({
             row: currentRow,
             displayName: signal.name,
             width,  // 提供位宽
+            displayFormat: signalDisplayFormat,
           });
           currentRow++;
         }
@@ -680,7 +762,7 @@ export function WaveformWindow({
     });
 
     // 生成 signalList 的哈希值用于检测变化
-    const signalListHash = signalList.map(s => `${s.name}-${s.row}-${s.width}`).join('|');
+    const signalListHash = signalList.map(s => `${s.name}-${s.row}-${s.width}-${s.displayFormat}`).join('|');
 
     // 生成 timeConfig 的哈希值用于检测变化
     const timeConfigHash = `${timeConfig.DisplayUnitPerLoD0Unit}`;
@@ -724,6 +806,7 @@ export function WaveformWindow({
         name: s.name,
         row: s.row,
         width: s.width || 1,
+        displayFormat: s.displayFormat,
       }));
 
       // 构建带 draw_sig_id 的信号
@@ -784,7 +867,7 @@ export function WaveformWindow({
       }
       // 使用主线程渲染（Mock 数据模式）
       if (segments) {
-        waveformRenderer.render(segments, viewport, width, height, 20, timeConfig);
+        waveformRenderer.render(segments, viewport, width, height, 30, timeConfig);
       }
     }
 
@@ -804,12 +887,12 @@ export function WaveformWindow({
 
           // 绘制半透明蓝色选择区域
           ctx.fillStyle = 'rgba(100, 150, 255, 0.3)';
-          ctx.fillRect(startX, 20, selectionWidth, height - 20);
+          ctx.fillRect(startX, 30, selectionWidth, height - 30);
 
           // 绘制边框
           ctx.strokeStyle = 'rgba(100, 150, 255, 0.8)';
           ctx.lineWidth = 1;
-          ctx.strokeRect(startX, 20, selectionWidth, height - 20);
+          ctx.strokeRect(startX, 30, selectionWidth, height - 30);
         }
       }
     }
@@ -982,12 +1065,13 @@ export function WaveformWindow({
       const timeRange = viewport.timeEnd - viewport.timeStart;
       const snapThreshold = Math.max(timeRange * 0.04, 10);
 
-      // 根据点击的 Y 坐标计算对应的 treeNode 索引（考虑 group 占位）
-      const signalY = y - RULER_HEIGHT;
+      // 根据点击的 Y 坐标计算对应的 canvasRenderNode 索引（考虑 group 占位）
+      // 现在 canvas 上有30px标尺偏移
+      const signalY = y - 30;
       const nodeIndex = Math.floor(signalY / SIGNAL_ROW_HEIGHT);
 
-      // 找到对应的 treeNode
-      const targetNode = treeNodes[nodeIndex];
+      // 找到对应的 canvasRenderNode
+      const targetNode = canvasRenderNodes[nodeIndex];
 
       if (useMockData) {
         // Mock 数据模式：使用 mockDataProvider
@@ -1004,7 +1088,16 @@ export function WaveformWindow({
       } else if (wasmProviderRef.current && targetNode?.type === 'signal' && targetNode.signal) {
         // WASM 模式：从已获取数据的信号中找 transition
         const wasmProvider = wasmProviderRef.current;
-        const signalName = targetNode.signal.fullName || targetNode.signal.name;
+        let signalName: string;
+        
+        // 检查是否是bit行，如果是则使用原始信号名，否则使用信号全名
+        if (targetNode.bitIndex !== undefined) {
+          // Bit行：使用原始信号名（WASM会从原始信号提取对应bit）
+          signalName = targetNode.signal.fullName || targetNode.signal.name;
+        } else {
+          // 普通信号行：使用信号全名
+          signalName = targetNode.signal.fullName || targetNode.signal.name;
+        }
 
         console.log(`[WaveformWindow] Cursor snap: signal=${signalName}, clickTime=${clickTime}, threshold=${snapThreshold}, nodeIndex=${nodeIndex}`);
 
@@ -1561,6 +1654,37 @@ export function WaveformWindow({
     nameFilter,
   ]);
 
+  // 创建与canvas渲染行顺序一致的节点列表（包括展开的总线信号的各个bit行）
+  const canvasRenderNodes = useMemo(() => {
+    const nodes: Array<{ type: 'group' | 'signal', node?: TreeNode, signal?: Signal & { unique_id: number }, bitIndex?: number }> = [];
+    
+    treeNodes.forEach((treeNode) => {
+      if (treeNode.type === 'group') {
+        nodes.push({ type: 'group', node: treeNode });
+      } else if (treeNode.type === 'signal' && treeNode.signal) {
+        const signal = treeNode.signal as Signal & { unique_id: number };
+        const isExpanded = expandedSignals.has(signal.unique_id);
+        const isBus = signal.msb !== signal.lsb;
+        
+        if (isBus && isExpanded) {
+          // 展开状态：先添加总线信号本身
+          nodes.push({ type: 'signal', signal });
+          // 再添加每个bit的行
+          const bitCount = Math.min(signal.msb - signal.lsb + 1, 32);
+          for (let i = 0; i < bitCount; i++) {
+            const bitIndex = signal.msb - i;
+            nodes.push({ type: 'signal', signal, bitIndex });
+          }
+        } else {
+          // 折叠状态或单bit信号：作为一个整体
+          nodes.push({ type: 'signal', signal });
+        }
+      }
+    });
+    
+    return nodes;
+  }, [treeNodes, expandedSignals]);
+
   // 监听 cursor 或 displayFormat 变化，更新信号值
   // Note: This must be after treeNodes is defined
   useEffect(() => {
@@ -2056,7 +2180,7 @@ export function WaveformWindow({
                       </span>
                     </span>
                     
-                    {/* Value column - 右对齐，字体加大黑色 */}
+                    {/* Value column - 右对齐，字体加大黑色，点击可选择进制 */}
                     <span
                       className="waveform-signal-value"
                       style={{
@@ -2068,17 +2192,70 @@ export function WaveformWindow({
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
+                        position: 'relative',
                       }}
-                      title={getSignalValue(signal)}  // Show full value on hover
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (showFormatDropdown === signal.unique_id) {
+                          setShowFormatDropdown(null);
+                          dropdownPositionRef.current = null;
+                        } else {
+                          dropdownPositionRef.current = { x: e.clientX, y: e.clientY };
+                          setShowFormatDropdown(signal.unique_id);
+                        }
+                      }}
+                      title={getSignalValue(signal)}
                     >
                       <span style={{
                         textAlign: 'right',
                         fontSize: '12px',
                         color: '#000',
                         fontWeight: 500,
+                        cursor: 'pointer',
                       }}>
                         {getSignalValue(signal)}
                       </span>
+                      
+                      {/* 进制选择下拉菜单 */}
+                      {showFormatDropdown === signal.unique_id && (
+                        <div
+                          ref={formatDropdownRef}
+                          style={{
+                            position: 'fixed',
+                            backgroundColor: 'white',
+                            border: '1px solid #c0c0c0',
+                            borderRadius: '2px',
+                            boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                            zIndex: 9999,
+                            minWidth: '90px',
+                          }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                        >
+                          {['bin', 'oct', 'dec', 'hex'].map((format) => (
+                            <div
+                              key={format}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSignalDisplayFormat(signal.unique_id, format as any);
+                              }}
+                              style={{
+                                padding: '4px 8px',
+                                fontSize: '11px',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                backgroundColor: getSignalDisplayFormat(signal) === format ? '#e3f2fd' : 'white',
+                              }}
+                            >
+                              <span style={{ width: '12px', textAlign: 'center' }}>
+                                {getSignalDisplayFormat(signal) === format ? '✓' : ''}
+                              </span>
+                              <span>{format.toUpperCase()}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </span>
                   </div>
                   
@@ -2158,9 +2335,9 @@ export function WaveformWindow({
       </div>
 
       <div className="waveform-canvas-container" ref={containerRef} style={{ display: 'flex', flexDirection: 'column' }}>
-        {/* Cursor/Marker info bar - corresponds to left filter bar (30px) */}
+        {/* Cursor/Marker info bar - corresponds to left filter bar (60px) */}
         <div style={{
-          height: '30px',
+          height: '60px',
           background: '#1a1a1a',
           borderBottom: '1px solid #404040',
           flexShrink: 0,

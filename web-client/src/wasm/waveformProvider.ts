@@ -177,6 +177,7 @@ export async function buildWasmSignals(
     name: string;
     row: number;
     width?: number;
+    displayFormat?: 'hex' | 'bin' | 'oct' | 'dec';
   }>,
   waveformName: string
 ): Promise<Array<{
@@ -185,6 +186,7 @@ export async function buildWasmSignals(
   row: number;
   width: number;
   draw_sig_id: number;
+  display_format?: string;
 }>> {
   const manager = await getSignalIdManager(waveformName);
   
@@ -199,6 +201,7 @@ export async function buildWasmSignals(
       row: uiSig.row,
       width,
       draw_sig_id,
+      display_format: uiSig.displayFormat,
     };
   });
 }

@@ -50,6 +50,7 @@ export interface WasmSignalInfo {
     msb: number;
     lsb: number;
   };
+  displayFormat?: DisplayFormat;
 }
 
 /**

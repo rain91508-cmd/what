@@ -33,6 +33,9 @@ export interface SignalInfo {
   
   /** 位宽（可选，用于正确渲染多bit信号） */
   width?: number;
+  
+  /** 显示格式（可选，每个信号独立的进制显示控制） */
+  displayFormat?: DisplayFormat;
 }
 
 /**

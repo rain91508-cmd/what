@@ -84,6 +84,7 @@ pub struct SignalInfo {
     /// For bit extraction signals (format: parent_name@[bit_index] or parent_name@[msb:lsb])
     /// Stores (parent_name, bit_range) if this signal should extract bits from parent
     pub bit_extract: Option<(String, (u32, u32))>,  // (parent_name, (msb, lsb))
+    pub display_format: Option<String>,  // Display format for this signal
 }
 
 /// Viewport configuration
@@ -502,7 +503,7 @@ impl WaveformDataProvider {
     /// Set signals with draw_sig_id (new API)
     /// 
     /// # Arguments
-    /// * `signals_js` - Array of { global_id, name, row, width, draw_sig_id }
+    /// * `signals_js` - Array of { global_id, name, row, width, draw_sig_id, display_format }
     #[wasm_bindgen]
     pub fn set_draw_list(&mut self, signals_js: JsValue) -> Result<(), JsValue> {
         let signals_with_id: Vec<SignalWithId> = serde_wasm_bindgen::from_value(signals_js)
@@ -516,6 +517,7 @@ impl WaveformDataProvider {
                 row: s.row,
                 width: s.width,
                 bit_extract,
+                display_format: s.display_format.clone(),
             }
         }).collect();
 
@@ -1949,7 +1951,8 @@ if tile_missing_signals.is_empty() {
 
         for signal in self.signals.iter() {
             // Use signal.row provided by UI (accounts for group headers)
-            let y = 20.0 + signal.row as f64 * self.row_height + self.row_height / 2.0;
+            let y = 30.0 + signal.row as f64 * self.row_height + self.row_height / 2.0;
+            let display_format = signal.display_format.as_deref();
 
             // Check if this is a bit extraction signal
             if let Some((ref parent_name, (msb, lsb))) = signal.bit_extract {
@@ -1971,6 +1974,7 @@ if tile_missing_signals.is_empty() {
                             &signal.name,
                             time_range,
                             &mut segments,
+                            display_format,
                         );
                     } else if !parent_data.transitions.is_empty() {
                         // Extract bits from transitions (LoD 0 format)
@@ -1981,10 +1985,10 @@ if tile_missing_signals.is_empty() {
                         let is_lod_min_max = self.detect_min_max_format(&extracted_transitions);
                         if is_lod_min_max {
                             self.generate_min_max_segments(&extracted_transitions, width, y, &signal.name,
-                                time_range, &mut segments);
+                                time_range, &mut segments, display_format);
                         } else {
                             self.generate_normal_segments(&extracted_transitions, width, y, &signal.name,
-                                time_range, &mut segments);
+                                time_range, &mut segments, display_format);
                         }
                     }
                 }
@@ -2002,6 +2006,7 @@ if tile_missing_signals.is_empty() {
                         &signal.name,
                         time_range,
                         &mut segments,
+                        display_format,
                     );
                 } else if !data.transitions.is_empty() {
                     // Check if transitions are in LoD 1+ format (bucket offsets 0-255)
@@ -2088,6 +2093,7 @@ if tile_missing_signals.is_empty() {
                             &signal.name,
                             time_range,
                             &mut segments,
+                            display_format,
                         );
                     } else {
                         // Check if this is LoD 1+ data (min/max format)
@@ -2096,11 +2102,11 @@ if tile_missing_signals.is_empty() {
                         if is_lod_min_max {
                             // Process LoD 1+ min/max format
                             self.generate_min_max_segments(&data.transitions, data.width, y, &signal.name, 
-                                time_range, &mut segments);
+                                time_range, &mut segments, display_format);
                         } else {
                             // Process LoD 0 format (original)
                             self.generate_normal_segments(&data.transitions, data.width, y, &signal.name,
-                                time_range, &mut segments);
+                                time_range, &mut segments, display_format);
                         }
                     }
                 }
@@ -2292,7 +2298,7 @@ if tile_missing_signals.is_empty() {
     /// - Then draw each transition's value until next transition
     /// - Last transition -> viewport end
     fn generate_normal_segments(&self, transitions: &[Transition], width: u32, y: f64,
-        signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>) {
+        signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>, display_format: Option<&str>) {
 
         // Separate start value (boundary) from normal transitions
         let start_value = transitions.iter()
@@ -2314,7 +2320,7 @@ if tile_missing_signals.is_empty() {
         // Helper to format multi-bit value
         let format_multi_bit = |t: &Transition| -> String {
             let display_str = server_value_to_string(t.value_type, t.value_len, &t.value);
-            self.format_multi_bit_value(&display_str, width)
+            self.format_multi_bit_value(&display_str, width, display_format)
         };
 
         // If no normal transitions, draw start value across viewport
@@ -2463,7 +2469,7 @@ if tile_missing_signals.is_empty() {
     /// - Last transition -> viewport end
     /// - Min/Max pairs: same timestamp, min first, max second
     fn generate_min_max_segments(&self, transitions: &[Transition], width: u32, y: f64,
-        signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>) {
+        signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>, display_format: Option<&str>) {
         
         // console_log!("[WASM] generate_min_max_segments: viewport={}-{}, transitions={}", 
             // self.viewport.time_start, self.viewport.time_end, transitions.len());
@@ -2478,7 +2484,7 @@ if tile_missing_signals.is_empty() {
         // Helper to format multi-bit value
         let format_multi_bit = |t: &Transition| -> String {
             let display_str = server_value_to_string(t.value_type, t.value_len, &t.value);
-            self.format_multi_bit_value(&display_str, width)
+            self.format_multi_bit_value(&display_str, width, display_format)
         };
 
         // Separate start value (boundary) from normal transitions
@@ -2500,6 +2506,12 @@ if tile_missing_signals.is_empty() {
                 } else {
                     display_str.clone()
                 };
+                let start_val_str = server_value_to_string(start_val.value_type, start_val.value_len, &start_val.value);
+                let formatted_start_val = if width > 1 {
+                    self.format_multi_bit_value(&start_val_str, width, display_format)
+                } else {
+                    start_val_str.clone()
+                };
 
                 segments.push(RenderSegment {
                     x0: 0.0,
@@ -2510,8 +2522,8 @@ if tile_missing_signals.is_empty() {
                         display_str: final_display_str,
                         width,
                         has_xz,
-                        min_value: Some(display_str),
-                        max_value: Some(server_value_to_string(start_val.value_type, start_val.value_len, &start_val.value)),
+                        min_value: Some(formatted_start_val.clone()),
+                        max_value: Some(formatted_start_val),
                         is_min_max: false,
                     },
                     signal_name: signal_name.to_string(),
@@ -2624,6 +2636,16 @@ if tile_missing_signals.is_empty() {
             let min_val_str = server_value_to_string(min_trans.value_type, min_trans.value_len, &min_trans.value);
             let max_val_str = server_value_to_string(max_trans.value_type, max_trans.value_len, &max_trans.value);
 
+            // Format min and max values with display_format
+            let (formatted_min, formatted_max) = if width > 1 {
+                (
+                    self.format_multi_bit_value(&min_val_str, width, display_format),
+                    self.format_multi_bit_value(&max_val_str, width, display_format)
+                )
+            } else {
+                (min_val_str.clone(), max_val_str.clone())
+            };
+
             // Check if min != max and neither is X/Z
             let min_upper = min_val_str.to_uppercase();
             let max_upper = max_val_str.to_uppercase();
@@ -2636,11 +2658,11 @@ if tile_missing_signals.is_empty() {
                 if width == 1 {
                     "toggling".to_string()
                 } else {
-                    format!("{}..{}", min_val_str, max_val_str)
+                    format!("{}..{}", formatted_min, formatted_max)
                 }
             } else {
                 // min == max or has X/Z
-                min_val_str.clone()
+                formatted_min.clone()
             };
 
             segments.push(RenderSegment {
@@ -2652,8 +2674,8 @@ if tile_missing_signals.is_empty() {
                     display_str,
                     width,
                     has_xz,
-                    min_value: Some(min_val_str),
-                    max_value: Some(max_val_str),
+                    min_value: Some(formatted_min),
+                    max_value: Some(formatted_max),
                     is_min_max: is_changing,
                 },
                 signal_name: signal_name.to_string(),
@@ -2677,6 +2699,7 @@ if tile_missing_signals.is_empty() {
         signal_name: &str,
         time_range: f64,
         segments: &mut Vec<RenderSegment>,
+        display_format: Option<&str>,
     ) {
         const TILE_SPAN_MULTIPLIER: u32 = 256;
         
@@ -2690,7 +2713,7 @@ if tile_missing_signals.is_empty() {
         // Helper to format multi-bit value
         let format_multi_bit = |t: &Transition| -> String {
             let display_str = server_value_to_string(t.value_type, t.value_len, &t.value);
-            self.format_multi_bit_value(&display_str, width)
+            self.format_multi_bit_value(&display_str, width, display_format)
         };
         
         // console_log!("[WASM] generate_lod_segments_from_buckets: {} tiles, viewport={}-{}",
@@ -2782,6 +2805,13 @@ if tile_missing_signals.is_empty() {
                             display_str
                         };
                         
+                        let current_val_str = server_value_to_string(current_value.value_type, current_value.value_len, &current_value.value);
+                        let formatted_current_val = if width > 1 {
+                            self.format_multi_bit_value(&current_val_str, width, display_format)
+                        } else {
+                            current_val_str.clone()
+                        };
+                        
                         segments.push(RenderSegment {
                             x0,
                             x1,
@@ -2791,8 +2821,8 @@ if tile_missing_signals.is_empty() {
                                 display_str: final_display_str,
                                 width,
                                 has_xz,
-                                min_value: Some(server_value_to_string(current_value.value_type, current_value.value_len, &current_value.value)),
-                                max_value: Some(server_value_to_string(current_value.value_type, current_value.value_len, &current_value.value)),
+                                min_value: Some(formatted_current_val.clone()),
+                                max_value: Some(formatted_current_val),
                                 is_min_max: false,
                             },
                             signal_name: signal_name.to_string(),
@@ -2806,10 +2836,19 @@ if tile_missing_signals.is_empty() {
                             let first_val_str = server_value_to_string(first_trans.value_type, first_trans.value_len, &first_trans.value);
                             let last_val_str = server_value_to_string(last_trans.value_type, last_trans.value_len, &last_trans.value);
                             
+                            let (formatted_first, formatted_last) = if width > 1 {
+                                (
+                                    self.format_multi_bit_value(&first_val_str, width, display_format),
+                                    self.format_multi_bit_value(&last_val_str, width, display_format)
+                                )
+                            } else {
+                                (first_val_str.clone(), last_val_str.clone())
+                            };
+                            
                             let display_str = if width == 1 {
                                 "toggling".to_string()
                             } else {
-                                format!("{}..{}", first_val_str, last_val_str)
+                                format!("{}..{}", formatted_first, formatted_last)
                             };
                             
                             segments.push(RenderSegment {
@@ -2821,8 +2860,8 @@ if tile_missing_signals.is_empty() {
                                     display_str,
                                     width,
                                     has_xz: false,
-                                    min_value: Some(first_val_str),
-                                    max_value: Some(last_val_str),
+                                    min_value: Some(formatted_first),
+                                    max_value: Some(formatted_last),
                                     is_min_max: true,  // This is a toggle bucket
                                 },
                                 signal_name: signal_name.to_string(),
@@ -2840,6 +2879,13 @@ if tile_missing_signals.is_empty() {
                                 display_str
                             };
                             
+                            let val_str = server_value_to_string(value_trans.value_type, value_trans.value_len, &value_trans.value);
+                            let formatted_val = if width > 1 {
+                                self.format_multi_bit_value(&val_str, width, display_format)
+                            } else {
+                                val_str.clone()
+                            };
+                            
                             segments.push(RenderSegment {
                                 x0,
                                 x1,
@@ -2849,8 +2895,8 @@ if tile_missing_signals.is_empty() {
                                     display_str: final_display_str,
                                     width,
                                     has_xz,
-                                    min_value: Some(server_value_to_string(value_trans.value_type, value_trans.value_len, &value_trans.value)),
-                                    max_value: Some(server_value_to_string(value_trans.value_type, value_trans.value_len, &value_trans.value)),
+                                    min_value: Some(formatted_val.clone()),
+                                    max_value: Some(formatted_val),
                                     is_min_max: false,
                                 },
                                 signal_name: signal_name.to_string(),
@@ -2896,6 +2942,12 @@ if tile_missing_signals.is_empty() {
                 } else {
                     display_str.clone()
                 };
+                let last_val_str = server_value_to_string(last_trans.value_type, last_trans.value_len, &last_trans.value);
+                let formatted_last_val = if width > 1 {
+                    self.format_multi_bit_value(&last_val_str, width, display_format)
+                } else {
+                    last_val_str.clone()
+                };
                 let x0 = ((tile_end as f64 - self.viewport.time_start) / time_range) * self.canvas_width;
                 let x1 = ((self.viewport.time_end - self.viewport.time_start) / time_range) * self.canvas_width;
                 
@@ -2909,8 +2961,8 @@ if tile_missing_signals.is_empty() {
                             display_str: final_display_str,
                             width,
                             has_xz,
-                            min_value: Some(display_str),
-                            max_value: Some(server_value_to_string(last_trans.value_type, last_trans.value_len, &last_trans.value)),
+                            min_value: Some(formatted_last_val.clone()),
+                            max_value: Some(formatted_last_val),
                             is_min_max: false,
                         },
                         signal_name: signal_name.to_string(),
@@ -3138,7 +3190,7 @@ if tile_missing_signals.is_empty() {
 
     /// Format multi-bit value for display based on configured format
     /// Supports: hex (0x), bin (0b), oct (0o), dec (no prefix)
-    fn format_multi_bit_value(&self, value: &str, width: u32) -> String {
+    fn format_multi_bit_value(&self, value: &str, width: u32, display_format: Option<&str>) -> String {
         // If contains X/Z, return as-is (but uppercase)
         if value.to_uppercase().contains('X') || value.to_uppercase().contains('Z') {
             return value.to_uppercase();
@@ -3195,8 +3247,11 @@ if tile_missing_signals.is_empty() {
             }
         };
 
+        // Determine which format to use
+        let format = display_format.unwrap_or(&self.display_format);
+        
         // Format based on display_format
-        match self.display_format.as_str() {
+        match format {
             "bin" => {
                 // Binary: 0b prefix, pad to width bits
                 format!("0b{:0width$b}", num, width = width as usize)
@@ -3335,6 +3390,11 @@ if tile_missing_signals.is_empty() {
     /// If data is not cached, returns null
     /// Handles BOUNDARY_TIME_START (0xFFFFFFFFFFFFFFFF) as the start-of-range value
     pub fn get_signal_value_at_time(&self, signal_name: &str, time: f64) -> JsValue {
+        // Find the signal in self.signals to get its display_format
+        let signal_display_format = self.signals.iter()
+            .find(|s| s.name == signal_name)
+            .and_then(|s| s.display_format.as_deref());
+        
         // Check if this is a bit extraction signal
         if let Some((parent_name, (msb, lsb))) = Self::parse_bit_extract(signal_name) {
             // console_log!("[WASM] get_signal_value_at_time: bit extraction '{}' -> parent '{}' [{}:{}]", 
@@ -3347,7 +3407,7 @@ if tile_missing_signals.is_empty() {
                 // Check if we have bucket_data (new LoD 1+ format)
                 if !parent_data.bucket_data.is_empty() {
                     return self.get_bucket_value_at_time(parent_data, time_u64, 
-                        (msb - lsb + 1) as u32, Some((msb, lsb)));
+                        (msb - lsb + 1) as u32, Some((msb, lsb)), signal_display_format);
                 }
                 
                 // Check if this is LoD > 0 data (min/max format)
@@ -3356,7 +3416,7 @@ if tile_missing_signals.is_empty() {
                 if is_lod_min_max {
                     // Handle LoD > 0 min/max format
                     return self.get_min_max_value_at_time(&parent_data.transitions, time_u64, 
-                        (msb - lsb + 1) as u32, Some((msb, lsb)));
+                        (msb - lsb + 1) as u32, Some((msb, lsb)), signal_display_format);
                 }
                 
                 // Find the transition that covers this time
@@ -3417,7 +3477,7 @@ if tile_missing_signals.is_empty() {
 
             // Check if we have bucket_data (new LoD 1+ format)
             if !data.bucket_data.is_empty() {
-                return self.get_bucket_value_at_time(data, time_u64, data.width, None);
+                return self.get_bucket_value_at_time(data, time_u64, data.width, None, signal_display_format);
             }
 
             // Check if this is LoD > 0 data (min/max format)
@@ -3425,7 +3485,7 @@ if tile_missing_signals.is_empty() {
             
             if is_lod_min_max {
                 // Handle LoD > 0 min/max format
-                return self.get_min_max_value_at_time(&data.transitions, time_u64, data.width, None);
+                return self.get_min_max_value_at_time(&data.transitions, time_u64, data.width, None, signal_display_format);
             }
 
             // Find the transition that covers this time
@@ -3454,7 +3514,7 @@ if tile_missing_signals.is_empty() {
 
                 // Format display string with prefix for multi-bit values
                 let display_str = if data.width > 1 {
-                    self.format_multi_bit_value(&value_str, data.width)
+                    self.format_multi_bit_value(&value_str, data.width, signal_display_format)
                 } else {
                     value_str.clone()
                 };
@@ -3487,6 +3547,7 @@ if tile_missing_signals.is_empty() {
         time_u64: u64,
         width: u32,
         bit_extract: Option<(u32, u32)>,
+        display_format: Option<&str>,
     ) -> JsValue {
         let lod = self.current_lod.unwrap_or(25);
         let bucket_size = 1u64 << lod;
@@ -3589,8 +3650,10 @@ if tile_missing_signals.is_empty() {
                     if bit_count == 1 {
                         format!("{}", extracted_value)
                     } else {
-                        format!("0x{:X}", extracted_value)
+                        self.format_multi_bit_value(&format!("0x{:X}", extracted_value), bit_count as u32, display_format)
                     }
+                } else if width > 1 {
+                    self.format_multi_bit_value(&value_str, width, display_format)
                 } else {
                     value_str
                 };
@@ -3629,6 +3692,7 @@ if tile_missing_signals.is_empty() {
         time_u64: u64,
         width: u32,
         bit_extract: Option<(u32, u32)>,
+        display_format: Option<&str>,
     ) -> JsValue {
         // Filter out boundary values
         let normal_transitions: Vec<_> = transitions.iter()
@@ -3686,11 +3750,16 @@ if tile_missing_signals.is_empty() {
                         if bit_count == 1 {
                             format!("{}", extracted)
                         } else {
-                            format!("0x{:X}", extracted)
+                            self.format_multi_bit_value(&format!("0x{:X}", extracted), bit_count as u32, display_format)
                         }
                     };
                     
                     (extract_bits(min_trans), extract_bits(max_trans))
+                } else if width > 1 {
+                    (
+                        self.format_multi_bit_value(&min_val_str, width, display_format),
+                        self.format_multi_bit_value(&max_val_str, width, display_format)
+                    )
                 } else {
                     (min_val_str.clone(), max_val_str.clone())
                 };

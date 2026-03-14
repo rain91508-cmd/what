@@ -63,6 +63,7 @@ pub struct SignalWithId {
     pub row: usize,          // Display row
     pub width: u32,          // Bit width
     pub draw_sig_id: u32,    // JS-allocated monotonic ID
+    pub display_format: Option<String>,  // Display format for this signal
     #[serde(skip)]          // Not serialized, computed on demand
     pub bit_extract: Option<(String, (u32, u32))>,  // For bit extraction signals
 }
