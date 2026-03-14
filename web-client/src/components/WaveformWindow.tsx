@@ -315,6 +315,14 @@ export function WaveformWindow({
   const formatDropdownRef = useRef<HTMLDivElement>(null);
   const dropdownPositionRef = useRef<{ x: number; y: number } | null>(null);
   
+  // 每个信号的 hierarchy 显示选项（使用 unique_id 作为 key）
+  // 存储用户选择的 hierarchy 部分索引
+  const [signalHierarchySelections, setSignalHierarchySelections] = useState<Map<number, Set<number>>>(new Map());
+  
+  // 当前显示 hierarchy 选择下拉菜单的信号 unique_id
+  const [showHierarchyDropdown, setShowHierarchyDropdown] = useState<number | null>(null);
+  const hierarchyDropdownRef = useRef<HTMLDivElement>(null);
+  
   // 统一的信号值管理器
   const signalValueManagerRef = useRef<SignalValueManager | null>(null);
   
@@ -378,6 +386,9 @@ export function WaveformWindow({
       if (formatDropdownRef.current && !formatDropdownRef.current.contains(event.target as Node)) {
         setShowFormatDropdown(null);
         dropdownPositionRef.current = null;
+      }
+      if (hierarchyDropdownRef.current && !hierarchyDropdownRef.current.contains(event.target as Node)) {
+        setShowHierarchyDropdown(null);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -1553,7 +1564,7 @@ export function WaveformWindow({
 
     const handleMouseMove = (e: MouseEvent) => {
       const delta = e.clientX - startX;
-      const newWidth = Math.max(150, Math.min(400, startWidth + delta));
+      const newWidth = Math.max(100, startWidth + delta);  // 只保留最小宽度限制100px，移除最大限制
 
       if (onColumnWidthsChange) {
         onColumnWidthsChange({ ...widths, panel: newWidth });
@@ -1706,13 +1717,32 @@ export function WaveformWindow({
     return signalValues.get(signal.unique_id) || '0x0';
   };
 
-  const getHierarchyDisplay = (signal: Signal): string => {
-    // 返回完整信号路径（去掉信号名本身）
-    const parts = signal.fullName.split('.');
+  const getHierarchyDisplay = (signal: Signal & { unique_id: number }): string => {
+    // 返回信号路径（根据用户选择显示部分hierarchy）
+    // 按 @ 和 . 分割hierarchy路径
+    const fullPath = signal.fullName;
+    const parts = fullPath.split(/[@.]/);
     if (parts.length <= 1) return '-';
-    // 去掉最后一部分（信号名），保留前面的路径
+    
+    // 去掉最后一部分（信号名）
     parts.pop();
-    return parts.join('.') || '-';
+    
+    // 获取用户选择的索引
+    const selectedIndices = signalHierarchySelections.get(signal.unique_id);
+    
+    if (!selectedIndices || selectedIndices.size === 0) {
+      // 没有选择，显示完整路径
+      return parts.join('.');
+    }
+    
+    // 根据用户选择的部分显示
+    const selectedParts = parts.filter((_, index) => selectedIndices.has(index));
+    
+    if (selectedParts.length === 0) {
+      return '-';
+    }
+    
+    return selectedParts.join('.');
   };
 
   const matchesIOFilter = (signal: Signal): boolean => {
@@ -2259,7 +2289,7 @@ export function WaveformWindow({
                       paddingLeft: '4px',
                     }}
                   >
-                    {/* Scope column - 右对齐，显示完整路径，字体加大黑色 */}
+                    {/* Scope column - 右对齐，显示完整路径，字体加大黑色，点击弹出选择菜单 */}
                     <span
                       style={{
                         width: hierarchyColumnWidth,
@@ -2274,8 +2304,13 @@ export function WaveformWindow({
                         textAlign: 'right',
                         paddingRight: '4px',
                         direction: 'rtl',
+                        cursor: 'pointer',
                       }}
                       title={getHierarchyDisplay(signal)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowHierarchyDropdown(signal.unique_id);
+                      }}
                     >
                       {getHierarchyDisplay(signal)}
                     </span>
@@ -2384,6 +2419,114 @@ export function WaveformWindow({
                               <span>{format.toUpperCase()}</span>
                             </div>
                           ))}
+                        </div>
+                      )}
+                      
+                      {/* Hierarchy 选择下拉菜单 */}
+                      {showHierarchyDropdown === signal.unique_id && (
+                        <div
+                          ref={hierarchyDropdownRef}
+                          style={{
+                            position: 'fixed',
+                            backgroundColor: 'white',
+                            border: '1px solid #c0c0c0',
+                            borderRadius: '2px',
+                            boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                            zIndex: 9999,
+                            minWidth: '150px',
+                            maxHeight: '200px',
+                            overflow: 'auto',
+                          }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                        >
+                          {(() => {
+                            // 分割 hierarchy 路径
+                            const fullPath = signal.fullName;
+                            const parts = fullPath.split(/[@.]/);
+                            parts.pop(); // 去掉信号名
+                            
+                            if (parts.length === 0) return null;
+                            
+                            // 获取当前选择
+                            const currentSelection = signalHierarchySelections.get(signal.unique_id);
+                            const allIndices = new Set(parts.map((_, i) => i));
+                            const isAllSelected = !currentSelection || currentSelection.size === parts.length;
+                            
+                            return (
+                              <>
+                                {/* 全选 / 全不选 */}
+                                <div
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSignalHierarchySelections(prev => {
+                                      const newMap = new Map(prev);
+                                      if (isAllSelected) {
+                                        // 全不选
+                                        newMap.set(signal.unique_id, new Set());
+                                      } else {
+                                        // 全选
+                                        newMap.set(signal.unique_id, new Set(parts.map((_, i) => i)));
+                                      }
+                                      return newMap;
+                                    });
+                                  }}
+                                  style={{
+                                    padding: '6px 8px',
+                                    fontSize: '11px',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '6px',
+                                    borderBottom: '1px solid #e0e0e0',
+                                    fontWeight: 'bold',
+                                  }}
+                                >
+                                  <span style={{ width: '12px', textAlign: 'center' }}>
+                                    {isAllSelected ? '✓' : '○'}
+                                  </span>
+                                  <span>{isAllSelected ? '全不选' : '全选'}</span>
+                                </div>
+                                
+                                {/* 每个 hierarchy 部分 */}
+                                {parts.map((part, index) => {
+                                  const isSelected = currentSelection?.has(index) ?? true;
+                                  return (
+                                    <div
+                                      key={index}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSignalHierarchySelections(prev => {
+                                          const newMap = new Map(prev);
+                                          const currentSet = new Set(prev.get(signal.unique_id) ?? parts.map((_, i) => i));
+                                          if (currentSet.has(index)) {
+                                            currentSet.delete(index);
+                                          } else {
+                                            currentSet.add(index);
+                                          }
+                                          newMap.set(signal.unique_id, currentSet);
+                                          return newMap;
+                                        });
+                                      }}
+                                      style={{
+                                        padding: '4px 8px',
+                                        fontSize: '11px',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '6px',
+                                        backgroundColor: isSelected ? '#e3f2fd' : 'white',
+                                      }}
+                                    >
+                                      <span style={{ width: '12px', textAlign: 'center' }}>
+                                        {isSelected ? '✓' : ''}
+                                      </span>
+                                      <span>{part}</span>
+                                    </div>
+                                  );
+                                })}
+                              </>
+                            );
+                          })()}
                         </div>
                       )}
                     </span>
