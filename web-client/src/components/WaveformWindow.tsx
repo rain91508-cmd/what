@@ -1040,7 +1040,9 @@ export function WaveformWindow({
   }, []);
 
   // 鼠标按下：立即设置 cursor 并开始选择
-  const RULER_HEIGHT = 30; // 标尺区域高度
+  // 注意：Canvas 坐标是相对于 canvas 元素的，canvas 从 Info Bar 下方开始
+  // 所以 canvas 内的 y 坐标 0 对应的是 Ruler 的顶部
+  const RULER_HEIGHT = 20; // 标尺区域高度（在 canvas 内）
   const SIGNAL_ROW_HEIGHT = 24; // 信号行高度，与 CSS 中的 .waveform-signal-item 高度一致
 
   const handleCanvasMouseDown = useCallback(async (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -1049,7 +1051,7 @@ export function WaveformWindow({
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    // 判断是否在标尺区域（顶部30px）
+    // 判断是否在标尺区域（canvas 顶部 20px）
     const isInRuler = y < RULER_HEIGHT;
 
     if (isInRuler) {
@@ -1080,6 +1082,7 @@ export function WaveformWindow({
       const snapThreshold = Math.max(timeRange * 0.04, 10);
 
       // 根据点击的 Y 坐标计算对应的 treeNode 索引（考虑 group 占位）
+      // 从 RULER_HEIGHT 开始计算信号位置（canvas 内坐标）
       const signalY = y - RULER_HEIGHT;
       const nodeIndex = Math.floor(signalY / SIGNAL_ROW_HEIGHT);
 
@@ -1152,7 +1155,7 @@ export function WaveformWindow({
         
         // 限制X坐标在canvas边界内
         relativeX = Math.max(0, Math.min(rect.width, relativeX));
-        // 限制Y坐标在canvas边界内（考虑标尺高度）
+        // 限制Y坐标在canvas边界内（考虑Ruler高度）
         relativeY = Math.max(RULER_HEIGHT, Math.min(rect.height, relativeY));
         
         // 更新选择结束位置
@@ -1945,9 +1948,9 @@ export function WaveformWindow({
         ref={signalPanelRef}
         style={{ width: signalPanelWidth }}
       >
-        {/* Filter bar */}
+        {/* Filter bar - 增加高度到40px */}
         <div style={{
-          height: '30px',
+          height: '40px',
           padding: '4px',
           borderBottom: '1px solid #d0d0d0',
           background: '#f0f0f0',
@@ -2031,8 +2034,8 @@ export function WaveformWindow({
           </div>
         </div>
 
-        {/* Header with 3 columns and visible dividers */}
-        <div className="waveform-header" style={{ display: 'flex', position: 'relative', borderBottom: '1px solid #c0c0c0', height: '22px', boxSizing: 'border-box' }}>
+        {/* Header with 3 columns and visible dividers - 增加高度到20px */}
+        <div className="waveform-header" style={{ display: 'flex', position: 'relative', borderBottom: '1px solid #c0c0c0', height: '20px', boxSizing: 'border-box' }}>
           <span style={{ width: hierarchyColumnWidth, paddingLeft: '4px', fontSize: '10px', borderRight: '1px solid #c0c0c0' }}>Scope</span>
           <span style={{ width: nameColumnWidth, paddingLeft: '4px', borderRight: '1px solid #c0c0c0' }}>Name</span>
           <span style={{ 
@@ -2460,10 +2463,10 @@ export function WaveformWindow({
       </div>
 
       <div className="waveform-canvas-container" ref={containerRef} style={{ display: 'flex', flexDirection: 'column', pointerEvents: 'auto' }}>
-        {/* Cursor/Marker info bar - corresponds to left filter bar (30px) */}
+        {/* Cursor/Marker info bar - 40px，与左侧Filter Bar对齐 */}
         <div
           style={{
-            height: '30px',
+            height: '40px',
             background: '#1a1a1a',
             borderBottom: '1px solid #404040',
             flexShrink: 0,
