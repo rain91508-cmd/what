@@ -280,34 +280,19 @@ function handleUnregisterCanvas(payload: any, id: number): void {
 async function handleGetSignalValueAtTime(payload: any, id: number): Promise<void> {
   if (!wasmProvider) throw new Error('Provider not initialized');
 
-  const { signalName, time, signals, displayFormat } = payload;
+  const { signalName, time, displayFormat } = payload;
 
-  // 设置信号列表（参数传递）
-  if (signals) {
-    const wasmSignals = signals.map((sig: any) => ({
-      global_id: sig.globalId,
-      name: sig.name,
-      row: sig.row,
-      width: sig.width,
-      draw_sig_id: sig.drawSigId,
-      bit_extract: sig.bitExtract
-        ? {
-            parent_name: sig.bitExtract.parentName,
-            msb: sig.bitExtract.msb,
-            lsb: sig.bitExtract.lsb,
-          }
-        : undefined,
-      display_format: sig.displayFormat,
-    }));
-    wasmProvider.set_draw_list(wasmSignals);
-  }
+  // 直接使用传入的 displayFormat，不再从 signals 中查找
+  // 因为 signals 中的 displayFormat 可能不是最新的
+  const signalDisplayFormat = displayFormat;
 
-  // 设置显示格式（参数传递）
-  if (displayFormat) {
-    wasmProvider.display_format = displayFormat;
-  }
+  console.log('[WaveformWorker] get_signal_value_at_time:', {
+    signalName,
+    time,
+    signalDisplayFormat,
+  });
 
-  const value = wasmProvider.get_signal_value_at_time(signalName, time);
+  const value = wasmProvider.get_signal_value_at_time(signalName, time, signalDisplayFormat);
   sendSuccess(id, value);
 }
 
@@ -376,10 +361,7 @@ async function handleFetchAndGetSegments(payload: any, id: number): Promise<void
     wasmProvider.set_draw_list(wasmSignals);
   }
 
-  // 设置显示格式（参数传递）
-  if (displayFormat) {
-    wasmProvider.display_format = displayFormat;
-  }
+  // 注意：不设置全局 display_format，因为每个信号的 display_format 已经在 set_draw_list 中设置
 
   const segments = await wasmProvider.fetch_and_get_segments(signalNames);
   sendSuccess(id, segments);
@@ -483,11 +465,7 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
       console.log('[WaveformWorker] Set draw list with', wasmSignals.length, 'signals:', wasmSignals);
     }
 
-    // 4. 设置显示格式（参数传递）
-    if (displayFormat) {
-      wasmProvider.display_format = displayFormat;
-      console.log('[WaveformWorker] Set display format:', displayFormat);
-    }
+    // 4. 注意：不设置全局 display_format，因为每个信号的 display_format 已经在 set_draw_list 中设置
 
     // 5. 获取信号名称列表
     const signalNames = signals?.map((sig: any) => sig.name) || [];

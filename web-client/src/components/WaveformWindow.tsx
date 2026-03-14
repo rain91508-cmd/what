@@ -302,6 +302,9 @@ export function WaveformWindow({
   const [signalDisplayFormats, setSignalDisplayFormats] = useState<Map<number, 'hex' | 'bin' | 'oct' | 'dec'>>(new Map());
   const signalDisplayFormatsRef = useRef<Map<number, 'hex' | 'bin' | 'oct' | 'dec'>>(signalDisplayFormats);
   
+  // 用于强制触发 updateSignalValues 的计数器
+  const [signalFormatVersion, setSignalFormatVersion] = useState(0);
+  
   // 同步 signalDisplayFormats 到 ref
   useEffect(() => {
     signalDisplayFormatsRef.current = signalDisplayFormats;
@@ -420,7 +423,8 @@ export function WaveformWindow({
   }, [showFormatDropdown]);
 
   // 获取信号的显示格式（单bit默认binary，多bit默认hex）
-  const getSignalDisplayFormat = useCallback((signal: Signal & { unique_id: number }): 'hex' | 'bin' | 'oct' | 'dec' => {
+  // 不使用 useCallback，确保每次都能获取最新的 signalDisplayFormatsRef 值
+  const getSignalDisplayFormat = (signal: Signal & { unique_id: number }): 'hex' | 'bin' | 'oct' | 'dec' => {
     // 先检查是否有自定义格式（使用 ref 获取最新值）
     const customFormat = signalDisplayFormatsRef.current.get(signal.unique_id);
     if (customFormat) {
@@ -429,7 +433,7 @@ export function WaveformWindow({
     // 没有自定义格式，根据位宽返回默认值
     const isSingleBit = signal.msb === signal.lsb;
     return isSingleBit ? 'bin' : 'hex';
-  }, []);
+  };
 
   // 设置信号的显示格式
   const setSignalDisplayFormat = (uniqueId: number, format: 'hex' | 'bin' | 'oct' | 'dec') => {
@@ -439,6 +443,9 @@ export function WaveformWindow({
       return newMap;
     });
     setShowFormatDropdown(null);
+    
+    // 增加计数器，强制触发 updateSignalValues
+    setSignalFormatVersion(prev => prev + 1);
   };
 
   // rAF-throttled mouse position update for smooth rendering
@@ -1784,13 +1791,25 @@ export function WaveformWindow({
   // Note: This must be after treeNodes is defined
   useEffect(() => {
     const updateSignalValues = async () => {
-      if (!cursor.visible || !signalValueManagerRef.current) return;
+      console.log('[WaveformWindow] updateSignalValues called:', {
+        cursorVisible: cursor.visible,
+        cursorPosition: cursor.position,
+        signalFormatVersion,
+        signalDisplayFormatsSize: signalDisplayFormats.size,
+        signalDisplayFormatsEntries: Array.from(signalDisplayFormats.entries()),
+        treeNodesCount: treeNodes.length,
+      });
+      
+      if (!cursor.visible || !signalValueManagerRef.current) {
+        console.log('[WaveformWindow] updateSignalValues early return:', {
+          cursorVisible: cursor.visible,
+          hasSignalValueManager: !!signalValueManagerRef.current,
+        });
+        return;
+      }
 
       // 根据模式选择正确的 provider
       if (!useMockData && wasmProviderRef.current) {
-        // 设置 WASM 的 displayFormat
-        wasmProviderRef.current.display_format = displayFormat;
-        
         // WASM 模式：从 WASM provider 获取信号值
         const wasmProvider = wasmProviderRef.current;
         if (!wasmProvider) return;
@@ -1803,9 +1822,19 @@ export function WaveformWindow({
           if (node.type !== 'signal' || !node.signal) continue;
           
           const signal = node.signal as Signal & { unique_id: number };
+          // 获取信号的显示格式
+          const signalDisplayFormat = getSignalDisplayFormat(signal);
+          
+          console.log('[WaveformWindow] Processing signal:', {
+            signalName: signal.name,
+            signalUniqueId: signal.unique_id,
+            signalDisplayFormat,
+          });
+          
           try {
             const signalName = signal.fullName || signal.name;
-            const valueInfo = await wasmProvider.get_signal_value_at_time(signalName, cursor.position);
+            // 传递 displayFormat 参数
+            const valueInfo = await wasmProvider.get_signal_value_at_time(signalName, cursor.position, signalDisplayFormat);
             if (valueInfo && typeof valueInfo === 'object') {
               // ValueInfo object has displayStr field (camelCase from WASM serde)
               const displayStr = (valueInfo as any).displayStr || (valueInfo as any).display_str || '0x0';
@@ -1820,7 +1849,8 @@ export function WaveformWindow({
                   const bitIndex = signal.msb - i;
                   const bitSignalName = `${signal.fullName}@[${bitIndex}]`;
                   try {
-                    const bitValueInfo = await wasmProvider.get_signal_value_at_time(bitSignalName, cursor.position);
+                    // bit信号使用bin格式
+                    const bitValueInfo = await wasmProvider.get_signal_value_at_time(bitSignalName, cursor.position, 'bin');
                     // Use a unique key for each bit: -(unique_id * 100 + bit_index)
                     const bitKey = -(signal.unique_id * 100 + i);
                     if (bitValueInfo && typeof bitValueInfo === 'object') {
@@ -1869,7 +1899,7 @@ export function WaveformWindow({
     };
 
     updateSignalValues();
-  }, [cursor.position, cursor.visible, treeNodes, expandedSignals, useMockData, displayFormat, signalDisplayFormats]);
+  }, [cursor.position, cursor.visible, treeNodes, expandedSignals, useMockData, displayFormat, signalDisplayFormats, signalFormatVersion]);
 
   const renderTreeConnectors = (parentNodes: { level: number; isLast: boolean }[]) => {
     return parentNodes.map((node, index) => (

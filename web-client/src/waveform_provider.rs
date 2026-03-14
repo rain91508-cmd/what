@@ -3344,11 +3344,16 @@ if tile_missing_signals.is_empty() {
     /// Returns the value of the signal at the given time (from cached data)
     /// If data is not cached, returns null
     /// Handles BOUNDARY_TIME_START (0xFFFFFFFFFFFFFFFF) as the start-of-range value
-    pub fn get_signal_value_at_time(&self, signal_name: &str, time: f64) -> JsValue {
-        // Find the signal in self.signals to get its display_format
-        let signal_display_format = self.signals.iter()
-            .find(|s| s.name == signal_name)
-            .and_then(|s| s.display_format.as_deref());
+    /// display_format: optional display format override ("hex", "bin", "oct", "dec")
+    #[wasm_bindgen(js_name = get_signal_value_at_time)]
+    pub fn get_signal_value_at_time_js(&self, signal_name: &str, time: f64, display_format: Option<String>) -> JsValue {
+        self.get_signal_value_at_time_internal(signal_name, time, display_format.as_deref())
+    }
+    
+    /// Internal implementation of get_signal_value_at_time
+    fn get_signal_value_at_time_internal(&self, signal_name: &str, time: f64, display_format: Option<&str>) -> JsValue {
+        // Use provided display_format, no longer rely on self.signals
+        let signal_display_format = display_format;
         
         // Check if this is a bit extraction signal
         if let Some((parent_name, (msb, lsb))) = Self::parse_bit_extract(signal_name) {
@@ -3403,10 +3408,14 @@ if tile_missing_signals.is_empty() {
                     };
                     let extracted_value = (value_u64 & mask) >> lsb;
                     
+                    // Format display string using signal_display_format
+                    let hex_str = format!("0x{:X}", extracted_value);
                     let display_str = if bit_count == 1 {
+                        // Single bit: always show as 0 or 1
                         format!("{}", extracted_value)
                     } else {
-                        format!("0x{:X}", extracted_value)
+                        // Multi-bit: use signal_display_format
+                        self.format_multi_bit_value(&hex_str, bit_count as u32, signal_display_format)
                     };
                     
                     let (value_type, has_xz) = Self::classify_value(&display_str, bit_count as u32);

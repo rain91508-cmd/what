@@ -236,7 +236,7 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
     signals: WasmSignalInfo[];
     viewport: ViewportConfig;
     canvasConfig: CanvasConfig;
-    displayFormat: DisplayFormat;
+    displayFormat?: DisplayFormat;
     timeConfig: TimeConfig;
     devicePixelRatio?: number;
     // Prefix settings for signal name conversion
@@ -248,7 +248,8 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
       throw new WaveformProviderError('Worker not initialized');
     }
 
-    const { canvasId, signals, viewport, canvasConfig, displayFormat, timeConfig, devicePixelRatio, signalPrefix, serverPrefix, spaceBeforeBracket } = params;
+    const { canvasId, signals, viewport, canvasConfig, timeConfig, devicePixelRatio, signalPrefix, serverPrefix, spaceBeforeBracket } = params;
+    // 注意：不再传递全局 displayFormat，因为每个信号的 display_format 已经在 signals 中设置
 
     console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Rendering: canvasId=${canvasId}, viewport=${viewport.startTime}-${viewport.endTime}, signals=${signals.length}, dpr=${devicePixelRatio}`);
     console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Prefix settings: signalPrefix="${signalPrefix}", serverPrefix="${serverPrefix}", spaceBeforeBracket=${spaceBeforeBracket}`);
@@ -260,7 +261,7 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
         signals,
         viewport,
         canvasConfig,
-        displayFormat,
+        // 注意：不再传递全局 displayFormat，因为每个信号的 display_format 已经在 signals 中设置
         timeConfig,
         devicePixelRatio,
         signalPrefix,

@@ -142,23 +142,29 @@ export class WaveformProviderAdapter {
     // 转换信号列表格式
     const newSignals = this.convertSignals(this.currentSignals);
 
+    // 注意：不再传递全局 displayFormat，因为每个信号的 display_format 已经在 newSignals 中设置
     return this.provider.fetchAndGetSegments(
       signalNames,
       this.viewport,
       newSignals,
-      this._displayFormat
+      undefined
     );
   }
 
-  async get_signal_value_at_time(signalName: string, time: number): Promise<ValueInfo | null> {
+  async get_signal_value_at_time(
+    signalName: string, 
+    time: number, 
+    displayFormat?: 'hex' | 'bin' | 'oct' | 'dec'
+  ): Promise<ValueInfo | null> {
     // 转换信号列表格式
     const newSignals = this.convertSignals(this.currentSignals);
 
+    // 传递 displayFormat 参数，优先使用传入的格式
     return this.provider.getSignalValueAtTime(
       signalName,
       time,
       newSignals,
-      this._displayFormat
+      displayFormat
     );
   }
 
@@ -204,7 +210,7 @@ export class WaveformProviderAdapter {
     const currentSignals = options?.signals || this.currentSignals;
     const viewport = options?.viewport || this.viewport;
     const canvasConfig = options?.canvasConfig || this.canvasConfig;
-    const displayFormat = options?.displayFormat || this._displayFormat;
+    // 注意：不再使用全局 displayFormat，因为每个信号的 display_format 已经在 signals 中设置
     const timeConfig = options?.timeConfig || this.timeConfig;
     // Prefix 参数 - 必须从 options 传入
     const signalPrefix = options?.signalPrefix ?? '';
@@ -229,7 +235,6 @@ export class WaveformProviderAdapter {
       viewport,
       canvasConfig,
       dpr: this.devicePixelRatio,
-      displayFormat,
       timeConfig,
       signalPrefix,
       serverPrefix,
@@ -241,7 +246,7 @@ export class WaveformProviderAdapter {
       signals: newSignals,
       viewport,
       canvasConfig,
-      displayFormat,
+      // 注意：不再传递全局 displayFormat，因为每个信号的 display_format 已经在 newSignals 中设置
       timeConfig,
       devicePixelRatio: this.devicePixelRatio,
       signalPrefix,
