@@ -2532,78 +2532,99 @@ export function WaveformWindow({
             }} />
           )}
 
-          {/* Cursor name and time */}
-          {cursor.visible && (
-            <span style={{
-              position: 'absolute',
-              left: `${((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * 100}%`,
-              transform: (() => {
-                const cursorX = ((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * canvasWidth;
-                const cursorTextWidth = 100; // Approximate width of cursor text
-                
-                // Check if mouse is on the right side and too close
-                if (displayMouseX !== null && displayMouseX > cursorX && (displayMouseX - cursorX) < cursorTextWidth) {
-                  // Mouse on right and too close, cursor label on left
-                  return 'translateX(-100%) translateX(-4px)';
-                }
-                
-                // Check if too close to right edge
-                if (cursorX > canvasWidth - cursorTextWidth) {
-                  return 'translateX(-100%) translateX(-4px)';
-                }
-                
-                // Default: show on right
-                return 'translateX(4px)';
-              })(),
-              color: '#ffffff',
-              fontWeight: 'bold',
-              zIndex: 2,
-              pointerEvents: 'none',
-            }}>
-              Cursor: {Math.round(lod0ToDisplay(cursor.position, timeConfig))}
-            </span>
-          )}
+          {/* Cursor info - 两行显示：第一行Cursor，第二行时间 */}
+          {cursor.visible && (() => {
+            const cursorTimeStr = Math.round(lod0ToDisplay(cursor.position, timeConfig)).toString();
+            const line1 = 'Cursor';
+            const line2 = cursorTimeStr;
+            // 估计每个字符8px宽度，取两行中较长的一行
+            const charWidth = 8;
+            const cursorTextWidth = Math.max(line1.length, line2.length) * charWidth + 8; // +8px padding
+            
+            return (
+              <div style={{
+                position: 'absolute',
+                left: `${((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * 100}%`,
+                transform: (() => {
+                  const cursorX = ((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * canvasWidth;
+                  
+                  // Check if mouse is on the right side and too close
+                  if (displayMouseX !== null && displayMouseX > cursorX && (displayMouseX - cursorX) < cursorTextWidth) {
+                    // Mouse on right and too close, cursor label on left
+                    return 'translateX(-100%) translateX(-4px)';
+                  }
+                  
+                  // Check if too close to right edge
+                  if (cursorX > canvasWidth - cursorTextWidth) {
+                    return 'translateX(-100%) translateX(-4px)';
+                  }
+                  
+                  // Default: show on right
+                  return 'translateX(4px)';
+                })(),
+                color: '#ffffff',
+                fontWeight: 'bold',
+                zIndex: 2,
+                pointerEvents: 'none',
+                display: 'flex',
+                flexDirection: 'column',
+                lineHeight: '1.2',
+              }}>
+                <span>{line1}</span>
+                <span>{line2}</span>
+              </div>
+            );
+          })()}
 
-          {/* Mouse name and time - using debounced displayMouseX for value */}
-          {displayMouseX !== null && mouseX !== null && (
-            <span style={{
-              position: 'absolute',
-              left: mouseX,
-              transform: (() => {
-                const cursorX = ((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * canvasWidth;
-                const mouseTextWidth = 80; // Approximate width of mouse text
-                
-                // Check if too close to right edge
-                if (displayMouseX > canvasWidth - mouseTextWidth) {
-                  // Too close to right edge, show on left
-                  return 'translateX(-100%) translateX(-4px)';
-                }
-                
-                // Check if mouse is on the left of cursor and too close
-                if (cursor.visible && displayMouseX < cursorX && (cursorX - displayMouseX) < mouseTextWidth) {
-                  // Mouse on left of cursor and too close, show on left
-                  return 'translateX(-100%) translateX(-4px)';
-                }
-                
-                // Default: show on right
-                return 'translateX(4px)';
-              })(),
-              color: '#00ffff',
-              fontWeight: 'bold',
-              zIndex: 2,
-              pointerEvents: 'none',
-              whiteSpace: 'nowrap',
-            }}>
-              {(() => {
-                const mouseTime = viewport.timeStart + (displayMouseX / (canvasWidth || 1)) * (viewport.timeEnd - viewport.timeStart);
-                const mouseTimeDisplay = Math.round(lod0ToDisplay(mouseTime, timeConfig));
-                const cursorTimeDisplay = Math.round(lod0ToDisplay(cursor.position, timeConfig));
-                const delta = mouseTimeDisplay - cursorTimeDisplay;
-                const deltaStr = delta >= 0 ? `+${delta}` : `${delta}`;
-                return `${mouseTimeDisplay} (${deltaStr})`;
-              })()}
-            </span>
-          )}
+          {/* Mouse info - 两行显示：第一行差值，第二行时间 */}
+          {displayMouseX !== null && mouseX !== null && (() => {
+            const mouseTime = viewport.timeStart + (displayMouseX / (canvasWidth || 1)) * (viewport.timeEnd - viewport.timeStart);
+            const mouseTimeDisplay = Math.round(lod0ToDisplay(mouseTime, timeConfig));
+            const cursorTimeDisplay = Math.round(lod0ToDisplay(cursor.position, timeConfig));
+            const delta = mouseTimeDisplay - cursorTimeDisplay;
+            const deltaStr = `(${delta >= 0 ? '+' : ''}${delta})`;
+            
+            const line1 = deltaStr;
+            const line2 = mouseTimeDisplay.toString();
+            // 估计每个字符8px宽度，取两行中较长的一行
+            const charWidth = 8;
+            const mouseTextWidth = Math.max(line1.length, line2.length) * charWidth + 8; // +8px padding
+            
+            return (
+              <div style={{
+                position: 'absolute',
+                left: mouseX,
+                transform: (() => {
+                  const cursorX = ((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * canvasWidth;
+                  
+                  // Check if too close to right edge
+                  if (displayMouseX > canvasWidth - mouseTextWidth) {
+                    // Too close to right edge, show on left
+                    return 'translateX(-100%) translateX(-4px)';
+                  }
+                  
+                  // Check if mouse is on the left of cursor and too close
+                  if (cursor.visible && displayMouseX < cursorX && (cursorX - displayMouseX) < mouseTextWidth) {
+                    // Mouse on left of cursor and too close, show on left
+                    return 'translateX(-100%) translateX(-4px)';
+                  }
+                  
+                  // Default: show on right
+                  return 'translateX(4px)';
+                })(),
+                color: '#00ffff',
+                fontWeight: 'bold',
+                zIndex: 2,
+                pointerEvents: 'none',
+                display: 'flex',
+                flexDirection: 'column',
+                lineHeight: '1.2',
+              }}>
+                <span>{line1}</span>
+                <span>{line2}</span>
+              </div>
+            );
+          })()}
         </div>
         
         {/* Waveform canvas layers */}
