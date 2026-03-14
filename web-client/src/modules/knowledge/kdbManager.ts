@@ -631,6 +631,28 @@ class KdbManager {
   }
 
   /**
+   * Get child instances for a module
+   * @param moduleId Module ID (1-based)
+   * @returns Array of child instance modules
+   */
+  async getModuleInstances(moduleId: number): Promise<Module[]> {
+    console.log(`[KdbManager] getModuleInstances called for moduleId: ${moduleId}`);
+    const module = this.getModuleById(moduleId);
+    if (!module) return [];
+
+    const instances: Module[] = [];
+    for (const childId of module.childModuleIds) {
+      const child = this.getModuleById(childId);
+      if (child && child.isInstance) {
+        instances.push(child);
+      }
+    }
+
+    console.log(`[KdbManager] Found ${instances.length} instances for module ${moduleId}`);
+    return instances;
+  }
+
+  /**
    * Find signal by name within a module (for source code click)
    * @param moduleId Module ID (1-based) to search in
    * @param signalName Signal name to find

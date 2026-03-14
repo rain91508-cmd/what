@@ -5,6 +5,7 @@ import { kdbManager } from '../modules/knowledge/kdbManager';
 import type { DriverGroup, DriverEntry } from '../types/driver';
 import type { Wavemark } from '../types/wavemark';
 import { WAVEMARK_COLORS } from '../types/wavemark';
+import type { SearchResultGroup, SearchResultItem } from '../types/search';
 
 interface MessageWindowProps {
   messages: string[];
@@ -23,6 +24,10 @@ interface MessageWindowProps {
   onWavemarkGroupsChange?: (wavemarkId: string, newGroups: string[]) => void;
   // Available groups for editing
   availableGroups?: Array<{ id: string; name: string }>;
+  // Search results props
+  searchResults?: SearchResultGroup[];
+  onSearchResultClick?: (result: SearchResultItem) => void;
+  onSearchResultDelete?: (searchId: string) => void;
 }
 
 // Component to display file name from module index or fileId
@@ -104,7 +109,7 @@ function DriverFileNameCell({ fileId, width }: { fileId?: number; width: number 
   );
 }
 
-type TabType = 'messages' | 'bookmarks' | 'wavemarks' | 'drivers';
+type TabType = 'messages' | 'bookmarks' | 'wavemarks' | 'search' | 'drivers';
 
 // Default column widths for bookmarks
 const DEFAULT_BOOKMARK_COL_WIDTHS = {
@@ -130,7 +135,7 @@ const DEFAULT_WAVEMARK_COL_WIDTHS = {
   action: 40,
 };
 
-export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavemarks = [], onWavemarkClick, onWavemarkDelete, onWavemarkRename, onWavemarkColorChange, onWavemarkGroupsChange, availableGroups = [] }: MessageWindowProps) {
+export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavemarks = [], onWavemarkClick, onWavemarkDelete, onWavemarkRename, onWavemarkColorChange, onWavemarkGroupsChange, availableGroups = [], searchResults = [], onSearchResultClick, onSearchResultDelete }: MessageWindowProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<TabType>('messages');
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
@@ -377,6 +382,23 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
           }}
         >
           Wavemarks ({wavemarks.length})
+        </div>
+        <div
+          onClick={() => setActiveTab('search')}
+          style={{
+            padding: '2px 10px',
+            cursor: 'pointer',
+            fontSize: '11px',
+            fontWeight: 600,
+            borderRight: '1px solid #a0b0c0',
+            backgroundColor: activeTab === 'search' ? '#fff' : 'transparent',
+            color: activeTab === 'search' ? '#1976d2' : '#333',
+            height: '100%',
+            display: 'flex',
+            alignItems: 'center',
+          }}
+        >
+          Search ({searchResults.length})
         </div>
         <div
           onClick={() => setActiveTab('drivers')}
@@ -863,6 +885,87 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
                       >
                         ✕
                       </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : activeTab === 'search' ? (
+          // Search Results Tab
+          <div style={{ padding: '4px', overflow: 'auto', flex: 1 }}>
+            {searchResults.length === 0 ? (
+              <div style={{ color: '#999', padding: '8px', fontSize: '12px' }}>
+                No search results. Use the search box in the toolbar to search for modules or signals.
+              </div>
+            ) : (
+              <div>
+                {searchResults.map((searchGroup) => (
+                  <div key={searchGroup.id} style={{ marginBottom: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
+                    {/* Search Group Header */}
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '4px 8px',
+                      background: '#f5f5f5',
+                      borderBottom: '1px solid #ddd',
+                      fontSize: '11px',
+                      fontWeight: 'bold',
+                    }}>
+                      <span style={{ flex: 1 }}>
+                        {searchGroup.pattern} ({searchGroup.resultCount} results)
+                        {searchGroup.isSignalSearch ? ' - Signals' : ' - Instances'}
+                      </span>
+                      <button
+                        onClick={() => onSearchResultDelete?.(searchGroup.id)}
+                        style={{
+                          padding: '2px 6px',
+                          fontSize: '10px',
+                          border: '1px solid #ddd',
+                          borderRadius: '2px',
+                          background: '#fff',
+                          cursor: 'pointer',
+                          color: '#d32f2f',
+                        }}
+                        title="Delete search results"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    
+                    {/* Search Results List */}
+                    <div style={{ maxHeight: '200px', overflow: 'auto' }}>
+                      {searchGroup.results.map((result, index) => (
+                        <div
+                          key={`${searchGroup.id}-${index}`}
+                          onDoubleClick={() => onSearchResultClick?.(result)}
+                          style={{
+                            padding: '4px 8px',
+                            borderBottom: '1px solid #eee',
+                            cursor: 'pointer',
+                            fontSize: '11px',
+                            display: 'flex',
+                            alignItems: 'center',
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                        >
+                          <span style={{
+                            display: 'inline-block',
+                            width: '12px',
+                            height: '12px',
+                            borderRadius: '2px',
+                            marginRight: '8px',
+                            background: result.type === 'signal' ? '#4caf50' : '#2196f3',
+                          }} />
+                          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {result.fullName}
+                          </span>
+                          <span style={{ color: '#999', fontSize: '10px', marginLeft: '8px' }}>
+                            {result.type === 'signal' ? 'Signal' : 'Module'}
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))}

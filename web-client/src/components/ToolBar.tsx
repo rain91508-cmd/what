@@ -55,12 +55,25 @@ interface ToolBarProps {
   autoCheckEnabled?: boolean;
   // Bookmark
   onAddBookmark?: () => void;
+  // Current tab type for bookmark behavior
+  currentTabType?: 'source' | 'waveform';
   // Viewport and cursor for time display
   viewportStart?: number;  // viewport timeStart in LoD0 units
   viewportEnd?: number;    // viewport timeEnd in LoD0 units
   cursorPosition?: number; // cursor position in LoD0 units
   onViewportStartChange?: (newStart: number) => void; // callback when user changes start time
   onCursorPositionChange?: (newPosition: number) => void; // callback when user changes cursor position
+  // Search functionality
+  searchPattern?: string;
+  onSearchPatternChange?: (pattern: string) => void;
+  onSearchExecute?: () => void;
+  onSearchCancel?: () => void;
+  isSearching?: boolean;
+  searchHistory?: string[];
+  // Hierarchy search mode (when no tab or source tab active)
+  isHierarchySearchMode?: boolean;
+  searchSignals?: boolean;
+  onSearchSignalsChange?: (searchSignals: boolean) => void;
 }
 
 export function ToolBar({ 
@@ -92,6 +105,16 @@ export function ToolBar({
   cursorPosition,
   onViewportStartChange,
   onCursorPositionChange,
+  // Search functionality
+  searchPattern = '',
+  onSearchPatternChange,
+  onSearchExecute,
+  onSearchCancel,
+  isSearching = false,
+  searchHistory = [],
+  isHierarchySearchMode = false,
+  searchSignals = false,
+  onSearchSignalsChange,
 }: ToolBarProps) {
   // Local state for display unit input value (only committed on Enter)
   const [inputValue, setInputValue] = useState<string>('');
@@ -108,6 +131,12 @@ export function ToolBar({
   const [cursorInputValue, setCursorInputValue] = useState<string>('');
   const [isCursorEditing, setIsCursorEditing] = useState(false);
   const cursorInputRef = useRef<HTMLInputElement>(null);
+
+  // Search state
+  const [showSearchHistory, setShowSearchHistory] = useState(false);
+  const [localSearchPattern, setLocalSearchPattern] = useState(searchPattern);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
 
   // 获取 fs 乘数（根据 waveformTimeUnit）
   const getFsPerLod0Unit = (): number => {
@@ -161,6 +190,17 @@ export function ToolBar({
       setInputValue(displayValue.toString());
     }
   }, [timeConfig, waveformTimeUnit, selectedUnit]);
+
+  // Close search history when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setShowSearchHistory(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // ==================== Display Unit Handlers ====================
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -545,9 +585,117 @@ export function ToolBar({
       )}
       
       <div className="tool-bar-separator"></div>
-      <button className="tool-bar-button" title="Search" onClick={onSearch}>
-        🔍
-      </button>
+      
+      {/* Search Section */}
+      <div ref={searchContainerRef} style={{ display: 'flex', alignItems: 'center', gap: '4px', position: 'relative' }}>
+        {/* Signal/Instance Checkbox (only in hierarchy search mode) */}
+        {isHierarchySearchMode && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: '2px', fontSize: '11px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+            <input
+              type="checkbox"
+              checked={searchSignals}
+              onChange={(e) => onSearchSignalsChange?.(e.target.checked)}
+              style={{ margin: 0 }}
+            />
+            <span>Signals</span>
+          </label>
+        )}
+        
+        {/* Search Input */}
+        <div style={{ position: 'relative' }}>
+          <input
+            ref={searchInputRef}
+            type="text"
+            value={localSearchPattern}
+            onChange={(e) => {
+              setLocalSearchPattern(e.target.value);
+              onSearchPatternChange?.(e.target.value);
+            }}
+            onFocus={() => setShowSearchHistory(true)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                setShowSearchHistory(false);
+                if (isSearching) {
+                  onSearchCancel?.();
+                } else {
+                  onSearchExecute?.();
+                }
+              }
+            }}
+            placeholder="Search..."
+            style={{
+              width: '120px',
+              padding: '4px 6px',
+              fontSize: '12px',
+              border: '1px solid #c0c0c0',
+              borderRadius: '3px',
+              height: '24px',
+            }}
+          />
+          
+          {/* Search History Dropdown */}
+          {showSearchHistory && searchHistory.length > 0 && (
+            <div
+              style={{
+                position: 'absolute',
+                top: '100%',
+                left: 0,
+                marginTop: '2px',
+                background: '#fff',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                padding: '4px 0',
+                zIndex: 1000,
+                minWidth: '150px',
+                maxHeight: '200px',
+                overflow: 'auto',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+              }}
+            >
+              {searchHistory.map((pattern, index) => (
+                <div
+                  key={index}
+                  onClick={() => {
+                    setLocalSearchPattern(pattern);
+                    onSearchPatternChange?.(pattern);
+                    setShowSearchHistory(false);
+                  }}
+                  style={{
+                    padding: '4px 8px',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    hover: { background: '#f0f0f0' },
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                >
+                  {pattern}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        
+        {/* Search/Cancel Button */}
+        <button
+          className="tool-bar-button"
+          title={isSearching ? 'Cancel Search' : 'Search'}
+          onClick={() => {
+            if (isSearching) {
+              onSearchCancel?.();
+            } else {
+              onSearchExecute?.();
+            }
+          }}
+          style={{
+            background: isSearching ? '#ffebee' : undefined,
+            color: isSearching ? '#d32f2f' : undefined,
+          }}
+        >
+          {isSearching ? '✕' : '🔍'}
+        </button>
+      </div>
+      
       <div className="tool-bar-separator"></div>
       <button className="tool-bar-button" title="Add Source Tab" onClick={onAddSourceTab}>
         📄+

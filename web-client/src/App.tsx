@@ -32,6 +32,8 @@ import { isOpfsAvailable } from './utils/opfsUtils'
 // Modules
 import { kdbManager } from './modules/knowledge/kdbManager'
 import { waveManager } from './modules/wSignal'
+import { searchManager } from './modules/search/searchManager'
+import { performHierarchySearch, CancelToken } from './modules/search/searchService'
 
 // Utils
 import { zoomIn, zoomOut } from './utils/zoomHelpers'
@@ -66,6 +68,7 @@ import { WaveformProviderProvider } from './contexts/WaveformProviderContext'
 // Bookmark
 import { bookmarkManager, type Bookmark } from './types/bookmark'
 import type { Wavemark } from './types/wavemark'
+import type { SearchResultGroup, SearchResultItem } from './types/search'
 
 // Session
 import { sessionManager } from './modules/session/sessionManager'
@@ -224,6 +227,14 @@ function App() {
   const [hierarchyWidth, setHierarchyWidth] = useState(220)
   const [signalWidth, setSignalWidth] = useState(200)
   const [messageHeight, setMessageHeight] = useState(100)
+
+  // Search state
+  const [searchPattern, setSearchPattern] = useState('')
+  const [searchHistory, setSearchHistory] = useState<string[]>([])
+  const [isSearching, setIsSearching] = useState(false)
+  const [searchSignals, setSearchSignals] = useState(false)
+  const [searchResults, setSearchResults] = useState<SearchResultGroup[]>([])
+  const cancelTokenRef = useRef<CancelToken | null>(null)
 
   // Track if OPFS warning has been shown (to prevent double alert in StrictMode)
   const opfsWarningShown = useRef(false)
@@ -856,7 +867,181 @@ function App() {
       } : tab
     ));
   }, [activeTab]);
-  
+
+  // ============================================
+  // Search Functionality
+  // ============================================
+
+  // Subscribe to search manager updates
+  useEffect(() => {
+    const unsubscribe = searchManager.subscribe(() => {
+      setSearchResults(searchManager.getSearchResults());
+      setSearchHistory(searchManager.getSearchHistory().map(h => h.pattern));
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  // Execute search
+  const handleSearchExecute = useCallback(async () => {
+    if (!searchPattern.trim()) {
+      addMessage('Please enter a search pattern');
+      return;
+    }
+
+    // Check if in hierarchy search mode (no tabs or source tab active)
+    const isHierarchyMode = tabs.length === 0 || activeTabData?.type === 'source';
+
+    if (!isHierarchyMode) {
+      addMessage('Hierarchy search is only available when no tabs are open or a source tab is active');
+      return;
+    }
+
+    // Get selected hierarchy node as starting point
+    const startModuleIndex = selectedModuleIndex || 0;
+
+    if (startModuleIndex === 0) {
+      addMessage('Please select a module in the hierarchy panel as the search starting point');
+      return;
+    }
+
+    setIsSearching(true);
+
+    // Create cancel token
+    const cancelToken = new CancelToken();
+    cancelTokenRef.current = cancelToken;
+
+    try {
+      addMessage(`Starting search for "${searchPattern}"...`);
+
+      // Perform search with async batching
+      const results = await performHierarchySearch({
+        pattern: searchPattern,
+        isSignalSearch: searchSignals,
+        startModuleIndex,
+        maxResults: 100,
+        shouldCancel: () => cancelToken.isCancelled,
+      });
+
+      if (cancelToken.isCancelled) {
+        addMessage('Search cancelled');
+        setIsSearching(false);
+        return;
+      }
+
+      // Create search result group
+      const resultGroup = {
+        id: `search_${Date.now()}`,
+        pattern: searchPattern,
+        timestamp: Date.now(),
+        isSignalSearch: searchSignals,
+        resultCount: results.length,
+        results: results,
+      };
+
+      // Add to search manager
+      searchManager.addSearchResult(resultGroup);
+      searchManager.addToHistory(searchPattern, searchSignals);
+
+      // Update state
+      setSearchResults(searchManager.getSearchResults());
+      setSearchHistory(searchManager.getSearchHistory().map(h => h.pattern));
+
+      addMessage(`Search completed: found ${results.length} results for "${searchPattern}"`);
+    } catch (error) {
+      addMessage(`Search error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsSearching(false);
+      cancelTokenRef.current = null;
+    }
+  }, [searchPattern, searchSignals, tabs.length, activeTabData?.type, selectedModuleIndex, addMessage]);
+
+  // Cancel search
+  const handleSearchCancel = useCallback(() => {
+    cancelTokenRef.current?.cancel();
+  }, []);
+
+  // Handle search result click (double click)
+  const handleSearchResultClick = useCallback(async (result: SearchResultItem) => {
+    if (result.type === 'module') {
+      // For instance: 
+      // - displayModuleId = parent module (for grey out)
+      // - selectedModuleId = result module
+      // - startFromLine & fileId = result module's definition
+      const moduleInfo = kdbManager.getModuleById(result.globalId);
+      if (!moduleInfo) {
+        addMessage(`Module not found: ${result.fullName}`);
+        return;
+      }
+
+      const definition = moduleInfo.definition;
+      const fileId = definition?.fileId;
+      const lineNumber = definition?.startLine; // Use startLine for module definition start
+
+      if (!fileId) {
+        addMessage(`No definition file found for module: ${result.fullName}`);
+        return;
+      }
+
+      // Set parent as display module, result as selected module
+      await setSourceDisplay({
+        displayModuleId: result.parentModuleIndex || result.globalId,
+        selectedModuleId: result.globalId,
+        startFromLine: lineNumber,
+        fileId: fileId,
+        addToHistory: true,
+      });
+      addMessage(`Jump to module: ${result.fullName} (line ${lineNumber})`);
+    } else if (result.type === 'signal') {
+      // For signal: 
+      // - displayModuleId = parent module (correct)
+      // - selectedModuleId = parent module (correct)
+      // - startFromLine & fileId = from signal.declaration (same as driver)
+      const signal = kdbManager.buildSignal(result.globalId);
+      if (!signal) {
+        addMessage(`Signal not found: ${result.fullName}`);
+        return;
+      }
+
+      // Get parent module info
+      const parentModuleId = signal.parentModuleId;
+      const parentModule = kdbManager.getModuleById(parentModuleId);
+
+      if (!parentModule) {
+        addMessage(`Parent module not found for signal: ${signal.name}`);
+        return;
+      }
+
+      // Get file ID and line from signal.declaration (same as driver)
+      const signalDef = signal.declaration;
+      const fileId = signalDef?.fileId;
+      const lineNumber = signalDef?.line;
+
+      if (!fileId) {
+        addMessage(`File not found for signal: ${signal.name}`);
+        return;
+      }
+
+      // Set parent module as display module and jump to signal declaration
+      await setSourceDisplay({
+        displayModuleId: parentModuleId,
+        selectedModuleId: parentModuleId,
+        startFromLine: lineNumber,
+        fileId: fileId,
+        addToHistory: true,
+      });
+      addMessage(`Jump to signal: ${signal.name} (line ${lineNumber})`);
+    }
+  }, [setSourceDisplay, addMessage]);
+
+  // Handle search result delete
+  const handleSearchResultDelete = useCallback((searchId: string) => {
+    searchManager.deleteSearchResult(searchId);
+    setSearchResults(searchManager.getSearchResults());
+  }, []);
+
   // Handle bookmark click - jump to source
   const handleBookmarkClick = useCallback(async (bookmark: Bookmark) => {
     // Use stored moduleIndex from bookmark as both selected and display module
@@ -2914,6 +3099,16 @@ function App() {
         cursorPosition={activeTabData?.cursorPosition}
         onViewportStartChange={handleViewportStartChange}
         onCursorPositionChange={handleCursorPositionChange}
+        // Search functionality
+        searchPattern={searchPattern}
+        onSearchPatternChange={setSearchPattern}
+        onSearchExecute={handleSearchExecute}
+        onSearchCancel={handleSearchCancel}
+        isSearching={isSearching}
+        searchHistory={searchHistory}
+        isHierarchySearchMode={tabs.length === 0 || activeTabData?.type === 'source'}
+        searchSignals={searchSignals}
+        onSearchSignalsChange={setSearchSignals}
       />
 
       {/* Main Content */}
@@ -3054,9 +3249,9 @@ function App() {
         className="bottom-panel"
         style={{ height: messageHeight, minHeight: 60 }}
       >
-        <MessageWindow 
-          messages={messages} 
-          onBookmarkClick={handleBookmarkClick} 
+        <MessageWindow
+          messages={messages}
+          onBookmarkClick={handleBookmarkClick}
           onDriverClick={handleDriverClick}
           wavemarks={activeTabData?.wavemarks || []}
           onWavemarkClick={handleWavemarkClick}
@@ -3064,10 +3259,13 @@ function App() {
           onWavemarkRename={handleWavemarkRename}
           onWavemarkColorChange={handleWavemarkColorChange}
           onWavemarkGroupsChange={handleWavemarkGroupsChange}
-          availableGroups={activeTabData?.type === 'waveform' 
+          availableGroups={activeTabData?.type === 'waveform'
             ? Object.values(activeTabData.groups || {}).map(g => ({ id: g.id, name: g.name }))
             : []
           }
+          searchResults={searchResults}
+          onSearchResultClick={handleSearchResultClick}
+          onSearchResultDelete={handleSearchResultDelete}
         />
       </div>
 
