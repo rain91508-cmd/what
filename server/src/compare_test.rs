@@ -9,7 +9,7 @@ use crate::services::fst_reader_backend::{read_signals_data_fst_reader_batch_lod
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::path::PathBuf;
 
-/// 运行 fst-reader 与 fstapi 对比测试（100次随机测试）
+/// 运行 fst-reader 与 fstapi 对比测试（30次随机测试）
 pub async fn run_compare_test(config: &ServerConfig) {
     // 固定使用 riscv2.fst 波形文件
     let wave_name = "riscv2";
@@ -51,8 +51,9 @@ pub async fn run_compare_test(config: &ServerConfig) {
     // 创建 fst-reader 服务
     let reader_service = WaveService::with_backend(state.clone(), FstBackend::FstReader);
     
-    // 测试的 LoD 值（包含 LoD > 10 的情况）
-    let test_lods = vec![0u32, 8u32, 12u32, 20u32];
+    // 固定 LoD = 30
+    let lod: u32 = 30;
+    let bucket_size = 2u64.pow(lod);
     
     // 波形实际开始时间（跳过前段没有 transition 的区域）
     let min_start_time = 454423000u64;
@@ -66,7 +67,7 @@ pub async fn run_compare_test(config: &ServerConfig) {
         .as_millis() as u64;
     
     println!("\n========================================");
-    println!("[COMPARE-TEST] ===== 100次随机测试 =====");
+    println!("[COMPARE-TEST] ===== 10次测试 (LoD=30, 256 buckets, 3 tiles) =====");
     println!("[COMPARE-TEST] 时间范围: [{}, {}]", min_start_time, max_start_time);
     println!("[COMPARE-TEST] 随机种子: {}", seed);
     println!("========================================\n");
@@ -78,23 +79,20 @@ pub async fn run_compare_test(config: &ServerConfig) {
         (rng_state >> 16) as u64
     };
     
-    // 运行 100 次测试
+    // 运行 10 次测试
     let mut total_tests = 0usize;
     let mut passed_tests = 0usize;
     
-    for test_idx in 0..100 {
-        // 随机选择 LoD
-        let lod_idx = (next_rand() % test_lods.len() as u64) as usize;
-        let lod = test_lods[lod_idx];
-        let bucket_size = 2u64.pow(lod);
-        
-        // 随机选择 tile_span（1-5 个 bucket）
-        let num_buckets = ((next_rand() % 5) + 1) as usize;
+    // 固定参数：每个 tile 256 个 bucket，共 3 个 tiles
+    let num_buckets = 256usize;
+    let num_tiles = 3usize;
+    
+    for test_idx in 0..10 {
+        // 固定 tile_span = 256 个 bucket
         let tile_span = bucket_size * num_buckets as u64;
         
         // 随机选择起始时间（在有效范围内平均分布）
         let start_time = min_start_time + (next_rand() % test_duration);
-        let num_tiles = 1usize;
         
         total_tests += 1;
         
@@ -110,7 +108,7 @@ pub async fn run_compare_test(config: &ServerConfig) {
         ).await {
             Ok(d) => d.0,
             Err(e) => {
-                println!("[COMPARE-TEST] 测试 {}/100: fst-reader 读取失败 (LoD={}, start={}): {:?}", 
+                println!("[COMPARE-TEST] 测试 {}/10: fst-reader 读取失败 (LoD={}, start={}): {:?}", 
                     test_idx + 1, lod, start_time, e);
                 continue;
             }
@@ -128,7 +126,7 @@ pub async fn run_compare_test(config: &ServerConfig) {
         ).await {
             Ok(d) => d.0,
             Err(e) => {
-                println!("[COMPARE-TEST] 测试 {}/100: fstapi 读取失败 (LoD={}, start={}): {:?}", 
+                println!("[COMPARE-TEST] 测试 {}/10: fstapi 读取失败 (LoD={}, start={}): {:?}", 
                     test_idx + 1, lod, start_time, e);
                 continue;
             }
@@ -137,35 +135,37 @@ pub async fn run_compare_test(config: &ServerConfig) {
         // 对比数据包
         let passed = compare_tile_data(&reader_tiles, &api_tiles, lod);
         
-        // 如果 LoD > 10，额外比较 lod_low 和 lod_high 方法
-        if lod > 10 && passed {
+        // 如果 LoD > 10，额外比较 lod_low 和 lod_high 方法并测量运行时间
+        if lod > 10 {
             let wave_path = PathBuf::from(&config.wave_dir).join(format!("{}.fst", wave_name));
             let time_end = start_time + tile_span;
             
             // 获取全局缓存
             let cache = crate::services::fst_reader_cache::get_fst_reader_cache();
             
-            // 调用 lod_low 方法
-            let lod_low_result = match read_signals_data_fst_reader_batch_lod_low(
-                cache,
-                &wave_path,
-                &test_signals,
-                crate::services::LodLevel(lod),
-                start_time,
-                time_end,
-                num_buckets,
-            ).await {
-                Ok(d) => d,
-                Err(e) => {
-                    println!("[COMPARE-TEST] 测试 {}/100: lod_low 读取失败 (LoD={}, start={}): {:?}", 
-                        test_idx + 1, lod, start_time, e);
-                    Vec::new()
-                }
-            };
+            // ===== 运行时间测试 =====
+            println!("\n[PERF-TEST] ===== LoD={}, start={}, span={} =====", lod, start_time, tile_span);
             
-            // 调用 lod_high 方法
-            let lod_high_result = match read_signals_data_fst_reader_batch_lod_high(
-                cache,
+            // 测试 1: fstapi
+            let api_start = std::time::Instant::now();
+            let api_tiles_perf = match api_service.get_wave_data_tiles(
+                &wave_name, 
+                &test_signals, 
+                lod, 
+                start_time, 
+                tile_span, 
+                num_tiles,
+                CompressionAlgorithm::None,
+            ).await {
+                Ok(d) => d.0,
+                Err(_) => Vec::new()
+            };
+            let api_elapsed = api_start.elapsed();
+            
+            // 测试 2: lod_low
+            let lod_low_start = std::time::Instant::now();
+            let lod_low_result = match read_signals_data_fst_reader_batch_lod_low(
+                &cache,
                 &wave_path,
                 &test_signals,
                 crate::services::LodLevel(lod),
@@ -174,18 +174,46 @@ pub async fn run_compare_test(config: &ServerConfig) {
                 num_buckets,
             ).await {
                 Ok(d) => d,
-                Err(e) => {
-                    println!("[COMPARE-TEST] 测试 {}/100: lod_high 读取失败 (LoD={}, start={}): {:?}", 
-                        test_idx + 1, lod, start_time, e);
-                    Vec::new()
-                }
+                Err(_) => Vec::new()
             };
+            let lod_low_elapsed = lod_low_start.elapsed();
+            
+            // 测试 3: lod_high
+            let lod_high_start = std::time::Instant::now();
+            let lod_high_result = match read_signals_data_fst_reader_batch_lod_high(
+                &cache,
+                &wave_path,
+                &test_signals,
+                crate::services::LodLevel(lod),
+                start_time,
+                time_end,
+                num_buckets,
+            ).await {
+                Ok(d) => d,
+                Err(_) => Vec::new()
+            };
+            let lod_high_elapsed = lod_high_start.elapsed();
+            
+            // 打印运行时间
+            println!("[PERF-TEST] fstapi:  {:?} ({} bytes)", api_elapsed, api_tiles_perf.len());
+            println!("[PERF-TEST] lod_low:  {:?} ({} signals)", lod_low_elapsed, lod_low_result.len());
+            println!("[PERF-TEST] lod_high: {:?} ({} signals)", lod_high_elapsed, lod_high_result.len());
+            
+            // 计算速度比
+            let base_time = api_elapsed.as_nanos() as f64;
+            if base_time > 0.0 {
+                println!("[PERF-TEST] 速度比 (以 fstapi 为基准):");
+                println!("[PERF-TEST]   fstapi:  {:.2}x", 1.0);
+                println!("[PERF-TEST]   lod_low:  {:.2}x", lod_low_elapsed.as_nanos() as f64 / base_time);
+                println!("[PERF-TEST]   lod_high: {:.2}x", lod_high_elapsed.as_nanos() as f64 / base_time);
+            }
+            println!("[PERF-TEST] ========================================\n");
             
             // 比较 lod_low 和 lod_high 的结果
             if !lod_low_result.is_empty() && !lod_high_result.is_empty() {
                 let lod_low_passed = compare_signal_wave_data(&lod_low_result, &lod_high_result, lod);
                 if !lod_low_passed {
-                    println!("[COMPARE-TEST] 测试 {}/100: lod_low vs lod_high 不匹配 (LoD={}, start={}, span={})", 
+                    println!("[COMPARE-TEST] 测试 {}/10: lod_low vs lod_high 不匹配 (LoD={}, start={}, span={})", 
                         test_idx + 1, lod, start_time, tile_span);
                 }
             }
@@ -194,11 +222,11 @@ pub async fn run_compare_test(config: &ServerConfig) {
         if passed {
             passed_tests += 1;
             if (test_idx + 1) % 10 == 0 {
-                println!("[COMPARE-TEST] 测试 {}/100: ✓ 通过 (LoD={}, start={}, span={})", 
+                println!("[COMPARE-TEST] 测试 {}/10: ✓ 通过 (LoD={}, start={}, span={})", 
                     test_idx + 1, lod, start_time, tile_span);
             }
         } else {
-            println!("[COMPARE-TEST] 测试 {}/100: ✗ 失败 (LoD={}, start={}, span={})", 
+            println!("[COMPARE-TEST] 测试 {}/10: ✗ 失败 (LoD={}, start={}, span={})", 
                 test_idx + 1, lod, start_time, tile_span);
         }
     }

@@ -48,12 +48,9 @@ pub async fn read_signals_data_fst_reader_batch(
     if lod_level == 0 {
         // LoD 0: 读取所有 transitions
         read_signals_data_fst_reader_batch_lod0(cache, wave_path, signal_names, time_start, time_end).await
-    } else if lod_level <= 10 {
-        // LoD 1-10: 流式处理，边读取边计算 bucket first/last
-        read_signals_data_fst_reader_batch_lod_low(cache, wave_path, signal_names, lod, time_start, time_end, num_buckets).await
     } else {
-        // LoD > 10: 对每个 bucket 单独调用 read_range_boundary_values
-        read_signals_data_fst_reader_batch_lod_high(cache, wave_path, signal_names, lod, time_start, time_end, num_buckets).await
+        // LoD > 0: 统一使用 lod_low 流式处理
+        read_signals_data_fst_reader_batch_lod_low(cache, wave_path, signal_names, lod, time_start, time_end, num_buckets).await
     }
 }
 
