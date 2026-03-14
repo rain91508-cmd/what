@@ -20,7 +20,7 @@ pub async fn pattern_search_fstapi(
     let req = request.clone();
     
     tokio::task::spawn_blocking(move || {
-        let mut reader = fstapi::Reader::open(&path.to_string_lossy())
+        let mut reader = fstapi::Reader::open(path.as_path())
             .map_err(|e| ServerError::Internal(format!("无法打开 FST 文件: {}", e)))?;
         
         // 查找信号
@@ -69,7 +69,7 @@ pub async fn pattern_search_fstapi(
         
         // 先读取 start_time 之前的值作为初始值
         if req.start_time > 0 {
-            let mut pre_reader = fstapi::Reader::open(&path.to_string_lossy())
+            let mut pre_reader = fstapi::Reader::open(path.as_path())
                 .map_err(|e| ServerError::Internal(format!("无法打开 FST 文件: {}", e)))?;
             
             for (_, handle) in &signal_handles {
@@ -83,7 +83,7 @@ pub async fn pattern_search_fstapi(
             pre_reader.for_each_block(|time, h, value, _var_len| {
                 for (name, handle) in &signal_handles {
                     if h == *handle {
-                        temp_values.insert(name.clone(), value.to_string());
+                        temp_values.insert(name.clone(), String::from_utf8_lossy(value).to_string());
                         break;
                     }
                 }
@@ -97,7 +97,7 @@ pub async fn pattern_search_fstapi(
         reader.for_each_block(|time, h, value, _var_len| {
             for (name, handle) in &signal_handles {
                 if h == *handle {
-                    all_transitions.push((time, name.clone(), value.to_string()));
+                    all_transitions.push((time, name.clone(), String::from_utf8_lossy(value).to_string()));
                     break;
                 }
             }

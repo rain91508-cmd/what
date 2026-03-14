@@ -37,6 +37,9 @@ pub enum ServerError {
     #[error("无效的参数：{0}")]
     InvalidParameter(String),
 
+    #[error("无效的请求：{0}")]
+    InvalidRequest(String),
+
     #[error("文件 IO 错误：{0}")]
     IoError(#[from] std::io::Error),
 
@@ -98,6 +101,11 @@ impl IntoResponse for ServerError {
             ServerError::InvalidParameter(msg) => (
                 StatusCode::BAD_REQUEST,
                 "INVALID_PARAMETER",
+                msg.clone(),
+            ),
+            ServerError::InvalidRequest(msg) => (
+                StatusCode::BAD_REQUEST,
+                "INVALID_REQUEST",
                 msg.clone(),
             ),
             ServerError::IoError(e) => (

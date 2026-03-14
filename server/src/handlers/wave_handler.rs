@@ -659,7 +659,8 @@ pub async fn pattern_search(
     // 根据后端选择实现
     let response = match state.config.fst_backend.as_str() {
         "fst-reader" => {
-            pattern_search_fst_reader(&wave_path, &full_signal_names, &request, waveform_name).await
+            let cache = &state.fst_reader_cache;
+            pattern_search_fst_reader(cache, &wave_path, &full_signal_names, &request, waveform_name).await
         }
         _ => {
             pattern_search_fstapi(&wave_path, &full_signal_names, &request, waveform_name).await

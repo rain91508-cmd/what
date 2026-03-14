@@ -5,12 +5,24 @@ use crate::services::pattern_search::{
     Match, PatternSearchRequest, PatternSearchResponse, PatternType, SearchDirection,
     value_matches,
 };
-use fst_reader::{FstFilter, FstReader, FstSignalHandle};
+use crate::services::fst_reader_cache::FstReaderCache;
+use fst_reader::{FstFilter, FstReader, FstSignalHandle, FstHierarchyEntry, FstSignalValue};
 use std::collections::HashMap;
+use std::io::BufReader;
+use std::fs::File;
 use std::path::PathBuf;
+
+/// 信号信息
+#[derive(Debug, Clone)]
+struct SignalInfo {
+    name: String,
+    handle: FstSignalHandle,
+    width: u32,
+}
 
 /// 使用 fst-reader 进行 pattern search
 pub async fn pattern_search_fst_reader(
+    cache: &FstReaderCache,
     wave_path: &PathBuf,
     signal_names: &[String],
     request: &PatternSearchRequest,
@@ -19,32 +31,28 @@ pub async fn pattern_search_fst_reader(
     let path = wave_path.clone();
     let signals = signal_names.to_vec();
     let req = request.clone();
+    let path_str = path.to_string_lossy().to_string();
+    let reader_arc = cache.get_or_create(&path_str).await?;
     
     tokio::task::spawn_blocking(move || {
-        let mut reader = FstReader::open(&path)
-            .map_err(|e| ServerError::Internal(format!("无法打开 FST 文件: {}", e)))?;
+        let rt = tokio::runtime::Handle::current();
+        let mut reader = rt.block_on(reader_arc.lock());
         
-        // 查找信号 handles
-        let mut signal_handles: Vec<(String, FstSignalHandle)> = Vec::new();
-        let hierarchy = reader.hierarchy();
+        // 查找信号
+        let signal_infos = find_signals(&mut *reader, &signals)?;
         
-        for entry in hierarchy.entries() {
-            if let fst_reader::FstHierarchyEntry::Var(var) = entry {
-                if signals.contains(&var.name) {
-                    signal_handles.push((var.name.clone(), var.handle));
-                }
-            }
-        }
-        
-        if signal_handles.is_empty() {
+        if signal_infos.is_empty() {
             return Err(ServerError::SignalNotFound(signals.join(", ")));
         }
         
+        let handles: Vec<FstSignalHandle> = signal_infos.iter()
+            .map(|info| info.handle.clone())
+            .collect();
+        
         // 获取时间范围
-        let header = reader.header();
         let start_time = req.time_range.as_ref().and_then(|r| r.start).unwrap_or(0);
         let end_time = req.time_range.as_ref().and_then(|r| r.end)
-            .unwrap_or(header.end_time);
+            .unwrap_or(u64::MAX);
         
         // 根据搜索方向确定实际搜索范围
         let (search_start, search_end) = match req.direction {
@@ -56,68 +64,54 @@ pub async fn pattern_search_fst_reader(
             }
         };
         
-        // 创建信号 mask
-        let mut filter_signals = fst_reader::BitMask::new(header.max_handle as usize);
-        for (_, handle) in &signal_handles {
-            let idx = handle.get_index();
-            if idx < header.max_handle as usize {
-                filter_signals.set(idx, true);
-            }
-        }
-        
-        let filter = FstFilter {
-            start_time: search_start,
-            end_time: search_end,
-            signals: filter_signals,
-        };
-        
         // 读取信号数据
         let mut matches: Vec<Match> = Vec::new();
         let mut prev_values: HashMap<String, String> = HashMap::new();
         let mut current_values: HashMap<String, String> = HashMap::new();
         
         // 先读取 start_time 之前的值作为初始值
-        let pre_start_filter = FstFilter {
-            start_time: 0,
-            end_time: req.start_time,
-            signals: filter.signals.clone(),
-        };
-        
-        if let Ok(pre_start_values) = reader.read_pre_start_values(&pre_start_filter) {
-            for (idx, value) in pre_start_values.iter() {
-                for (name, handle) in &signal_handles {
-                    if handle.get_index() == *idx {
-                        prev_values.insert(name.clone(), value.to_string());
-                        current_values.insert(name.clone(), value.to_string());
-                        break;
+        if req.start_time > 0 {
+            let pre_start_filter = FstFilter {
+                start: 0,
+                end: Some(req.start_time),
+                include: Some(handles.clone()),
+            };
+            
+            if let Ok(pre_start_values) = reader.read_pre_start_values(&pre_start_filter) {
+                for value in &pre_start_values.string_values {
+                    for info in &signal_infos {
+                        if info.handle == value.handle {
+                            let val_str = String::from_utf8_lossy(&value.value).to_string();
+                            prev_values.insert(info.name.clone(), val_str.clone());
+                            current_values.insert(info.name.clone(), val_str);
+                            break;
+                        }
                     }
                 }
             }
         }
         
         // 读取时间范围内的 transitions
-        let mut signal_data: HashMap<String, Vec<(u64, String)>> = HashMap::new();
+        let mut all_events: Vec<(u64, String, String)> = Vec::new();
         
-        reader.read_signals_in_range(&filter, &mut |time, handle, value| {
-            let idx = handle.get_index();
-            for (name, h) in &signal_handles {
-                if h.get_index() == idx {
-                    signal_data.entry(name.clone())
-                        .or_insert_with(Vec::new)
-                        .push((time, value.to_string()));
+        let filter = FstFilter {
+            start: search_start,
+            end: Some(search_end),
+            include: Some(handles.clone()),
+        };
+        
+        reader.read_signals_in_range(&filter, |time, handle, value| {
+            for info in &signal_infos {
+                if info.handle == handle {
+                    let val_str = match value {
+                        FstSignalValue::String(b) => String::from_utf8_lossy(b).to_string(),
+                        FstSignalValue::Real(v) => format!("{}", v),
+                    };
+                    all_events.push((time, info.name.clone(), val_str));
                     break;
                 }
             }
         }).map_err(|e| ServerError::Internal(format!("读取信号数据失败: {}", e)))?;
-        
-        // 根据搜索方向处理数据
-        let mut all_events: Vec<(u64, String, String)> = Vec::new(); // (time, signal_name, value)
-        
-        for (name, transitions) in &signal_data {
-            for (time, value) in transitions {
-                all_events.push((*time, name.clone(), value.clone()));
-            }
-        }
         
         // 按时间排序
         all_events.sort_by_key(|(time, _, _)| *time);
@@ -125,40 +119,34 @@ pub async fn pattern_search_fst_reader(
         // 根据方向处理
         match req.direction {
             SearchDirection::Forward => {
-                // 向前搜索：从 start_time 开始往后找
                 for (time, signal_name, value) in all_events {
                     if time < req.start_time {
-                        // 更新 prev_values
                         prev_values.insert(signal_name.clone(), value.clone());
                         current_values.insert(signal_name.clone(), value);
                         continue;
                     }
                     
-                    // 检查是否匹配模式
                     let prev = prev_values.get(&signal_name);
                     if value_matches(&req.pattern, &value, prev.map(|v| v.as_str())) {
-                        // 更新当前值
                         current_values.insert(signal_name.clone(), value.clone());
                         
-                        // 检查所有信号是否都满足条件（对于多信号搜索）
                         let mut match_values = HashMap::new();
                         let mut all_match = true;
                         
-                        for (name, _) in &signal_handles {
-                            let val = current_values.get(name).cloned()
+                        for info in &signal_infos {
+                            let val = current_values.get(&info.name).cloned()
                                 .unwrap_or_else(|| "0".to_string());
-                            match_values.insert(name.clone(), val);
+                            match_values.insert(info.name.clone(), val);
                             
-                            // 对于 Value 模式，检查每个信号是否都匹配
                             if matches!(req.pattern, PatternType::Value { .. }) {
-                                let signal_prev = prev_values.get(name).map(|v| v.as_str());
-                                if !value_matches(&req.pattern, &match_values[name], signal_prev) {
+                                let signal_prev = prev_values.get(&info.name).map(|v| v.as_str());
+                                if !value_matches(&req.pattern, &match_values[&info.name], signal_prev) {
                                     all_match = false;
                                 }
                             }
                         }
                         
-                        if all_match || signal_handles.len() == 1 {
+                        if all_match || signal_infos.len() == 1 {
                             matches.push(Match {
                                 time,
                                 signal_values: match_values,
@@ -175,15 +163,13 @@ pub async fn pattern_search_fst_reader(
             }
             
             SearchDirection::Backward => {
-                // 向后搜索：从 start_time 开始往前找
-                all_events.reverse(); // 反向遍历
+                all_events.reverse();
                 
                 for (time, signal_name, value) in all_events {
                     if time > req.start_time {
                         continue;
                     }
                     
-                    // 检查是否匹配模式
                     let prev = prev_values.get(&signal_name);
                     if value_matches(&req.pattern, &value, prev.map(|v| v.as_str())) {
                         current_values.insert(signal_name.clone(), value.clone());
@@ -191,20 +177,20 @@ pub async fn pattern_search_fst_reader(
                         let mut match_values = HashMap::new();
                         let mut all_match = true;
                         
-                        for (name, _) in &signal_handles {
-                            let val = current_values.get(name).cloned()
+                        for info in &signal_infos {
+                            let val = current_values.get(&info.name).cloned()
                                 .unwrap_or_else(|| "0".to_string());
-                            match_values.insert(name.clone(), val);
+                            match_values.insert(info.name.clone(), val);
                             
                             if matches!(req.pattern, PatternType::Value { .. }) {
-                                let signal_prev = prev_values.get(name).map(|v| v.as_str());
-                                if !value_matches(&req.pattern, &match_values[name], signal_prev) {
+                                let signal_prev = prev_values.get(&info.name).map(|v| v.as_str());
+                                if !value_matches(&req.pattern, &match_values[&info.name], signal_prev) {
                                     all_match = false;
                                 }
                             }
                         }
                         
-                        if all_match || signal_handles.len() == 1 {
+                        if all_match || signal_infos.len() == 1 {
                             matches.push(Match {
                                 time,
                                 signal_values: match_values,
@@ -219,7 +205,6 @@ pub async fn pattern_search_fst_reader(
                     prev_values.insert(signal_name, value);
                 }
                 
-                // 恢复正序
                 matches.reverse();
             }
         }
@@ -228,7 +213,7 @@ pub async fn pattern_search_fst_reader(
         
         Ok(PatternSearchResponse {
             waveform: waveform_name,
-            signals: signal_handles.iter().map(|(n, _)| n.clone()).collect(),
+            signals: signal_infos.iter().map(|info| info.name.clone()).collect(),
             pattern: req.pattern.clone(),
             direction: req.direction,
             total_matches: matches.len(),
@@ -236,4 +221,35 @@ pub async fn pattern_search_fst_reader(
             search_completed,
         })
     }).await.map_err(|e| ServerError::Internal(format!("Task failed: {}", e)))?
+}
+
+/// 查找信号
+fn find_signals(
+    reader: &mut FstReader<BufReader<File>>,
+    signal_names: &[String],
+) -> Result<Vec<SignalInfo>> {
+    let mut signal_infos: Vec<SignalInfo> = Vec::new();
+
+    reader.read_hierarchy(|entry| {
+        if let FstHierarchyEntry::Var { 
+            name, 
+            handle, 
+            length,
+            ..
+        } = entry {
+            // 检查是否匹配请求的信号名（支持部分匹配，因为 FST 中的名称可能没有完整路径）
+            if let Some(matched_name) = signal_names.iter().find(|req| {
+                // 完全匹配或部分匹配（FST 名称是请求名称的后缀）
+                name == **req || req.ends_with(&name.to_string())
+            }) {
+                signal_infos.push(SignalInfo {
+                    name: matched_name.clone(), // 保存原始请求的完整路径
+                    handle: FstSignalHandle::from_index(handle.get_index()),
+                    width: length,
+                });
+            }
+        }
+    }).map_err(|e| ServerError::Internal(format!("读取层次结构失败: {}", e)))?;
+
+    Ok(signal_infos)
 }
