@@ -2358,6 +2358,8 @@ function App() {
           viewport: tab.viewport,
           cursorPosition: tab.cursorPosition,
           waveformRange: tab.waveformRange,
+          signalDisplayFormats: tab.signalDisplayFormats,
+          signalHierarchySelections: tab.signalHierarchySelections,
         }))
 
       // Get bookmarks
@@ -2553,6 +2555,8 @@ function App() {
           viewport: waveTab.viewport,
           cursorPosition: waveTab.cursorPosition,
           waveformRange: waveTab.waveformRange,
+          signalDisplayFormats: waveTab.signalDisplayFormats,
+          signalHierarchySelections: waveTab.signalHierarchySelections,
         }
         
         restoredTabs.push(newTab)
@@ -2864,6 +2868,17 @@ function App() {
                 serverPrefix={currentWaveSignalServerPrefix}
                 spaceBeforeBracket={currentWaveSignalSpaceBeforeBracket}
                 waveformRange={activeTabData.waveformRange}
+                initialSignalDisplayFormats={activeTabData.signalDisplayFormats}
+                initialSignalHierarchySelections={activeTabData.signalHierarchySelections}
+                onSignalSettingsChange={(settings) => {
+                  setTabs(prev => prev.map(tab =>
+                    tab.id === activeTabData.id ? { 
+                      ...tab, 
+                      signalDisplayFormats: settings.signalDisplayFormats,
+                      signalHierarchySelections: settings.signalHierarchySelections,
+                    } : tab
+                  ))
+                }}
               />
             ) : null}
           </TabPanel>

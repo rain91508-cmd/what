@@ -113,6 +113,13 @@ interface WaveformWindowProps {
     start: number;  // LoD0Unit - total start time of waveform
     end: number;    // LoD0Unit - total end time of waveform
   };
+  // Signal settings for session save/restore
+  initialSignalDisplayFormats?: Record<number, 'hex' | 'bin' | 'oct' | 'dec'>;
+  initialSignalHierarchySelections?: Record<number, number[]>;
+  onSignalSettingsChange?: (settings: {
+    signalDisplayFormats?: Record<number, 'hex' | 'bin' | 'oct' | 'dec'>;
+    signalHierarchySelections?: Record<number, number[]>;
+  }) => void;
 }
 
 interface CursorState {
@@ -163,6 +170,9 @@ export function WaveformWindow({
   serverPrefix: _serverPrefix = '',
   spaceBeforeBracket: _spaceBeforeBracket = false,
   waveformRange,
+  initialSignalDisplayFormats,
+  initialSignalHierarchySelections,
+  onSignalSettingsChange,
 }: WaveformWindowProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -299,7 +309,13 @@ export function WaveformWindow({
   const [displayFormat, setDisplayFormat] = useState<'hex' | 'bin' | 'oct' | 'dec'>('hex');
   
   // 每个信号独立的显示格式（使用 unique_id 作为 key）
-  const [signalDisplayFormats, setSignalDisplayFormats] = useState<Map<number, 'hex' | 'bin' | 'oct' | 'dec'>>(new Map());
+  // 使用 initialSignalDisplayFormats 初始化
+  const [signalDisplayFormats, setSignalDisplayFormats] = useState<Map<number, 'hex' | 'bin' | 'oct' | 'dec'>>(() => {
+    if (initialSignalDisplayFormats) {
+      return new Map(Object.entries(initialSignalDisplayFormats).map(([k, v]) => [Number(k), v]));
+    }
+    return new Map();
+  });
   const signalDisplayFormatsRef = useRef<Map<number, 'hex' | 'bin' | 'oct' | 'dec'>>(signalDisplayFormats);
   
   // 用于强制触发 updateSignalValues 的计数器
@@ -317,11 +333,50 @@ export function WaveformWindow({
   
   // 每个信号的 hierarchy 显示选项（使用 unique_id 作为 key）
   // 存储用户选择的 hierarchy 部分索引
-  const [signalHierarchySelections, setSignalHierarchySelections] = useState<Map<number, Set<number>>>(new Map());
+  // 使用 initialSignalHierarchySelections 初始化
+  const [signalHierarchySelections, setSignalHierarchySelections] = useState<Map<number, Set<number>>>(() => {
+    if (initialSignalHierarchySelections) {
+      return new Map(Object.entries(initialSignalHierarchySelections).map(([k, v]) => [Number(k), new Set(v)]));
+    }
+    return new Map();
+  });
   
   // 当前显示 hierarchy 选择下拉菜单的信号 unique_id
   const [showHierarchyDropdown, setShowHierarchyDropdown] = useState<number | null>(null);
   const hierarchyDropdownRef = useRef<HTMLDivElement>(null);
+  
+  // 当信号设置变化时通知父组件
+  const prevFormatsRef = useRef<string>('');
+  const prevHierarchyRef = useRef<string>('');
+  
+  useEffect(() => {
+    if (onSignalSettingsChange) {
+      // 序列化当前值用于比较
+      const formatsObj: Record<number, 'hex' | 'bin' | 'oct' | 'dec'> = {};
+      signalDisplayFormats.forEach((value, key) => {
+        formatsObj[key] = value;
+      });
+      
+      const hierarchyObj: Record<number, number[]> = {};
+      signalHierarchySelections.forEach((value, key) => {
+        hierarchyObj[key] = Array.from(value);
+      });
+      
+      const formatsStr = JSON.stringify(formatsObj);
+      const hierarchyStr = JSON.stringify(hierarchyObj);
+      
+      // 只有当值真正变化时才调用回调
+      if (formatsStr !== prevFormatsRef.current || hierarchyStr !== prevHierarchyRef.current) {
+        prevFormatsRef.current = formatsStr;
+        prevHierarchyRef.current = hierarchyStr;
+        
+        onSignalSettingsChange({
+          signalDisplayFormats: formatsObj,
+          signalHierarchySelections: hierarchyObj,
+        });
+      }
+    }
+  }, [signalDisplayFormats, signalHierarchySelections, onSignalSettingsChange]);
   
   // 统一的信号值管理器
   const signalValueManagerRef = useRef<SignalValueManager | null>(null);

@@ -291,6 +291,10 @@ export interface Tab {
     start: number;  // LoD0Unit - total start time of waveform
     end: number;    // LoD0Unit - total end time of waveform
   };
+  // Signal display formats for session save/restore: unique_id -> format
+  signalDisplayFormats?: Record<number, 'hex' | 'bin' | 'oct' | 'dec'>;
+  // Signal hierarchy selections for session save/restore: unique_id -> selected indices
+  signalHierarchySelections?: Record<number, number[]>;
 }
 
 interface TabPanelProps {

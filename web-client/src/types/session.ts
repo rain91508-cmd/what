@@ -72,6 +72,10 @@ export interface Session {
       start: number;
       end: number;
     };
+    // Signal display formats: unique_id -> format
+    signalDisplayFormats?: Record<number, 'hex' | 'bin' | 'oct' | 'dec'>;
+    // Signal hierarchy selections: unique_id -> selected indices array
+    signalHierarchySelections?: Record<number, number[]>;
   }>;
   activeWaveformTabId?: string;
 
