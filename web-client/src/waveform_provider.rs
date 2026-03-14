@@ -124,11 +124,13 @@ pub struct ValueInfo {
     pub is_min_max: bool,           // True if this is a min/max bucket segment
 }
 
-/// Transition data point
+/// Transition data point (stores original server format)
 #[derive(Debug, Clone)]
 pub struct Transition {
-    pub time: u64,  // For LoD 0: absolute time; For LoD 1+: bucket offset (0-255)
-    pub value: String,
+    pub time: u64,       // For LoD 0: absolute time; For LoD 1+: bucket offset (0-255)
+    pub value_type: u8,  // Original value type from server (0=Numeric, 1=String, 2=Real, 3=BinaryCompressed)
+    pub value_len: u16,  // Original value length from server
+    pub value: Vec<u8>,  // Original value bytes from server
 }
 
 /// Bucket data for LoD 1+ (First/Last format)
@@ -137,6 +139,53 @@ pub struct BucketData {
     pub offset: u32,        // Bucket offset within tile (0-255)
     pub first: Transition,  // First transition in bucket
     pub last: Option<Transition>, // Last transition (None if only one transition)
+}
+
+/// Convert original server value format to display string
+fn server_value_to_string(value_type: u8, value_len: u16, value: &[u8]) -> String {
+    match value_type {
+        0 => {
+            // Numeric type: ASCII string
+            String::from_utf8_lossy(value).trim().to_string()
+        }
+        1 => {
+            // String type: ASCII string, trim null terminators
+            String::from_utf8_lossy(value).trim_end_matches('\0').to_string()
+        }
+        2 => {
+            // Real type: f64
+            if value_len == 8 && value.len() >= 8 {
+                let bytes = [value[0], value[1], value[2], value[3], value[4], value[5], value[6], value[7]];
+                let f = f64::from_le_bytes(bytes);
+                format!("{:.6}", f)
+            } else {
+                format!("Real({}bytes)", value_len)
+            }
+        }
+        3 => {
+            // BinaryCompressed type: hex format
+            value.iter().map(|b| format!("{:02X}", b)).collect()
+        }
+        _ => {
+            format!("Type{}:{:?}", value_type, &value[..value.len().min(8)])
+        }
+    }
+}
+
+/// Convert original server value format to u64 (for bit extraction)
+fn server_value_to_u64(value_type: u8, value_len: u16, value: &[u8]) -> Option<u64> {
+    match value_type {
+        0 => {
+            // Numeric type: ASCII string
+            let s = String::from_utf8_lossy(value).trim().to_string();
+            if s.starts_with("0x") || s.starts_with("0X") {
+                u64::from_str_radix(s.trim_start_matches("0x").trim_start_matches("0X"), 16).ok()
+            } else {
+                s.parse::<u64>().ok()
+            }
+        }
+        _ => None
+    }
 }
 
 impl BucketData {
@@ -148,8 +197,8 @@ impl BucketData {
     /// Get the value to continue after this bucket
     pub fn get_continue_value(&self) -> String {
         match &self.last {
-            Some(last) => last.value.clone(),
-            None => self.first.value.clone(),
+            Some(last) => server_value_to_string(last.value_type, last.value_len, &last.value),
+            None => server_value_to_string(self.first.value_type, self.first.value_len, &self.first.value),
         }
     }
 }
@@ -162,7 +211,7 @@ pub struct SignalWaveData {
     pub transitions: Vec<Transition>,
     /// Tile information for proper segment generation
     /// Each tuple: (tile_start, tile_end, start_value_time, start_value)
-    pub tile_info: Vec<(u64, u64, u64, String)>,
+    pub tile_info: Vec<(u64, u64, u64, Transition)>,
     /// LoD 1+ bucket data: (tile_start, buckets HashMap)
     pub bucket_data: Vec<(u64, HashMap<u32, BucketData>)>,
 }
@@ -525,30 +574,15 @@ impl WaveformDataProvider {
             };
             let group_id = OpfsCacheManager::get_group_id(draw_sig_id);
 
-            // Convert transitions to opfs_cache format
+            // Convert transitions to opfs_cache format (already have original server format
             let opfs_transitions: Vec<crate::opfs_cache::Transition> = transitions
                 .into_iter()
                 .map(|t| {
-                    // Convert string value to bytes
-                    let value_bytes = if t.value.starts_with("0x") || t.value.starts_with("0X") {
-                        // Hex value - parse and convert to bytes
-                        match u64::from_str_radix(&t.value[2..], 16) {
-                            Ok(v) => v.to_le_bytes().to_vec(),
-                            Err(_) => t.value.into_bytes(),
-                        }
-                    } else if t.value.chars().all(|c| c == '0' || c == '1') && t.value.len() <= 64 {
-                        // Binary value
-                        match u64::from_str_radix(&t.value, 2) {
-                            Ok(v) => v.to_le_bytes().to_vec(),
-                            Err(_) => t.value.into_bytes(),
-                        }
-                    } else {
-                        // String value
-                        t.value.into_bytes()
-                    };
                     crate::opfs_cache::Transition {
                         time: t.time,
-                        value: value_bytes,
+                        value_type: t.value_type,
+                        value_len: t.value_len,
+                        value: t.value,
                     }
                 })
                 .collect();
@@ -683,33 +717,14 @@ impl WaveformDataProvider {
                     value_idx += 3;
 
                     if value_idx + value_len <= data.len() {
-                        let start_value = match value_type {
-                            0 => String::from_utf8_lossy(&data[value_idx..value_idx + value_len]).trim().to_string(),
-                            1 => String::from_utf8_lossy(&data[value_idx..value_idx + value_len])
-                                .trim_end_matches('\0').to_string(),
-                            2 => {
-                                if value_len == 8 {
-                                    let bytes = &data[value_idx..value_idx + 8];
-                                    let f = f64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3],
-                                                                bytes[4], bytes[5], bytes[6], bytes[7]]);
-                                    format!("{:.6}", f)
-                                } else {
-                                    format!("Real({}bytes)", value_len)
-                                }
-                            }
-                            3 => {
-                                data[value_idx..value_idx + value_len]
-                                    .iter()
-                                    .map(|b| format!("{:02X}", b))
-                                    .collect()
-                            }
-                            _ => format!("Type{}:{:?}", value_type, &data[value_idx..value_idx + value_len.min(8)]),
-                        };
+                        let value = data[value_idx..value_idx + value_len].to_vec();
 
                         // Add start value transition with special time marker
                         transitions.push(Transition { 
-                            time: BOUNDARY_TIME_START, 
-                            value: start_value 
+                            time: BOUNDARY_TIME_START,
+                            value_type,
+                            value_len: value_len as u16,
+                            value,
                         });
                     }
                 }
@@ -751,31 +766,15 @@ impl WaveformDataProvider {
                 break;
             }
 
-            let value = match value_type {
-                0 => String::from_utf8_lossy(&data[value_idx..value_idx + value_len]).trim().to_string(),
-                1 => String::from_utf8_lossy(&data[value_idx..value_idx + value_len])
-                    .trim_end_matches('\0').to_string(),
-                2 => {
-                    if value_len == 8 {
-                        let bytes = &data[value_idx..value_idx + 8];
-                        let f = f64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3],
-                                                    bytes[4], bytes[5], bytes[6], bytes[7]]);
-                        format!("{:.6}", f)
-                    } else {
-                        format!("Real({}bytes)", value_len)
-                    }
-                }
-                3 => {
-                    data[value_idx..value_idx + value_len]
-                        .iter()
-                        .map(|b| format!("{:02X}", b))
-                        .collect()
-                }
-                _ => format!("Type{}:{:?}", value_type, &data[value_idx..value_idx + value_len.min(8)]),
-            };
-
+            let value = data[value_idx..value_idx + value_len].to_vec();
             value_idx += value_len;
-            transitions.push(Transition { time, value });
+
+            transitions.push(Transition { 
+                time,
+                value_type,
+                value_len: value_len as u16,
+                value,
+            });
         }
 
         Ok(transitions)
@@ -1175,18 +1174,14 @@ impl WaveformDataProvider {
                                     //         i, t.time, bucket_start_time, value_str, view_x);
                                     // }
                                     
-                                    // Convert cache transitions to our Transition format
+                                    // Convert cache transitions to our Transition format (already have original format
                                     let transitions: Vec<Transition> = signal_data.transitions
                                         .into_iter()
-                                        .map(|t| {
-                                            let value = if t.value.len() <= 8 {
-                                                let mut bytes = [0u8; 8];
-                                                bytes[..t.value.len()].copy_from_slice(&t.value);
-                                                format!("0x{:X}", u64::from_le_bytes(bytes))
-                                            } else {
-                                                format!("0x{}", t.value.iter().map(|b| format!("{:02X}", b)).collect::<String>())
-                                            };
-                                            Transition { time: t.time, value }
+                                        .map(|t| Transition {
+                                            time: t.time,
+                                            value_type: t.value_type,
+                                            value_len: t.value_len,
+                                            value: t.value,
                                         })
                                         .collect();
                                     
@@ -1545,14 +1540,14 @@ if tile_missing_signals.is_empty() {
                     existing_data.transitions.sort_by_key(|t| t.time);
                     // Store tile info
                     if let Some(sv) = start_value {
-                        existing_data.tile_info.push((tile_start, tile_end, sv.time, sv.value));
+                        existing_data.tile_info.push((tile_start, tile_end, sv.time, sv));
                     }
                 } else {
                     let mut signal_data = SignalWaveData::new(signal_name.clone(), width);
                     signal_data.transitions = filtered_transitions;
                     // Store tile info
                     if let Some(sv) = start_value {
-                        signal_data.tile_info.push((tile_start, tile_end, sv.time, sv.value));
+                        signal_data.tile_info.push((tile_start, tile_end, sv.time, sv));
                     }
                     self.signal_data.insert(signal_name.clone(), signal_data);
                 }
@@ -1763,33 +1758,14 @@ if tile_missing_signals.is_empty() {
                     value_idx += 3;
 
                     if value_idx + value_len <= data.len() {
-                        let start_value = match value_type {
-                            0 => String::from_utf8_lossy(&data[value_idx..value_idx + value_len]).trim().to_string(),
-                            1 => String::from_utf8_lossy(&data[value_idx..value_idx + value_len])
-                                .trim_end_matches('\0').to_string(),
-                            2 => {
-                                if value_len == 8 {
-                                    let bytes = &data[value_idx..value_idx + 8];
-                                    let f = f64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3],
-                                                                bytes[4], bytes[5], bytes[6], bytes[7]]);
-                                    format!("{:.6}", f)
-                                } else {
-                                    format!("Real({}bytes)", value_len)
-                                }
-                            }
-                            3 => {
-                                data[value_idx..value_idx + value_len]
-                                    .iter()
-                                    .map(|b| format!("{:02X}", b))
-                                    .collect()
-                            }
-                            _ => format!("Type{}:{:?}", value_type, &data[value_idx..value_idx + value_len.min(8)]),
-                        };
+                        let value = data[value_idx..value_idx + value_len].to_vec();
 
                         // Add start value transition with special time marker
                         transitions.push(Transition { 
-                            time: BOUNDARY_TIME_START, 
-                            value: start_value 
+                            time: BOUNDARY_TIME_START,
+                            value_type,
+                            value_len: value_len as u16,
+                            value,
                         });
                     }
                 }
@@ -1856,61 +1832,26 @@ if tile_missing_signals.is_empty() {
                 break;
             }
 
-            // Parse value based on type
-            // Type mapping (must match server SignalValueType):
-            // 0 = Numeric (wire/reg/logic/integer) - ASCII string like "0", "1", "b1010", "bX1Z0"
-            // 1 = String - null-terminated ASCII
-            // 2 = Real - IEEE 754 f64
-            // 3 = BinaryCompressed - compact binary bytes
-            let value = match value_type {
-                0 => {
-                    // Numeric type - read as UTF-8 string
-                    // Format: ASCII string like "0", "1", "b1010", "bX1Z0"
-                    String::from_utf8_lossy(&data[value_idx..value_idx + value_len]).trim().to_string()
-                }
-                1 => {
-                    // String type - null-terminated ASCII
-                    let s = String::from_utf8_lossy(&data[value_idx..value_idx + value_len]);
-                    s.trim_end_matches('\0').to_string()
-                }
-                2 => {
-                    // Real type (f64) - IEEE 754 format
-                    if value_len == 8 {
-                        let bytes = &data[value_idx..value_idx + 8];
-                        let f = f64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3],
-                                                    bytes[4], bytes[5], bytes[6], bytes[7]]);
-                        format!("{:.6}", f)
-                    } else {
-                        format!("Real({}bytes)", value_len)
-                    }
-                }
-                3 => {
-                    // Binary compressed - compact binary bytes, MSB first
-                    // Convert to hex string for display
-                    let hex: String = data[value_idx..value_idx + value_len]
-                        .iter()
-                        .map(|b| format!("{:02X}", b))
-                        .collect();
-                    hex
-                }
-                _ => {
-                    // Unknown type - show as hex
-                    let hex: String = data[value_idx..value_idx + value_len.min(8)]
-                        .iter()
-                        .map(|b| format!("{:02X}", b))
-                        .collect();
-                    format!("Type{}:{}", value_type, hex)
-                }
-            };
+            let value = data[value_idx..value_idx + value_len].to_vec();
 
             value_idx += value_len;
-            transitions.push(Transition { time, value });
+            transitions.push(Transition {
+                time,
+                value_type,
+                value_len: value_len as u16,
+                value,
+            });
         }
 
         if transitions.is_empty() {
             // Fallback: create at least one transition
             // console_log!("[WASM] Warning: No transitions parsed, using fallback");
-            transitions.push(Transition { time: chunk_header.time_start, value: "0".to_string() });
+            transitions.push(Transition {
+                time: chunk_header.time_start,
+                value_type: 0,
+                value_len: 1,
+                value: vec![b'0'],
+            });
         }
 
         // Debug: print all parsed transitions (disabled for performance)
@@ -1932,17 +1873,17 @@ if tile_missing_signals.is_empty() {
     fn parse_buckets_from_transitions(
         &self,
         transitions: &[Transition],
-    ) -> (Option<String>, HashMap<u32, BucketData>) {
+    ) -> (Option<Transition>, HashMap<u32, BucketData>) {
         const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
         
-        let mut start_value: Option<String> = None;
+        let mut start_value: Option<Transition> = None;
         let mut buckets: HashMap<u32, BucketData> = HashMap::new();
         let mut pending_first: Option<(u32, Transition)> = None;
         
         for transition in transitions {
             // Check for start value (boundary time)
             if transition.time == BOUNDARY_TIME_START {
-                start_value = Some(transition.value.clone());
+                start_value = Some(transition.clone());
                 continue;
             }
             
@@ -1952,10 +1893,7 @@ if tile_missing_signals.is_empty() {
             match pending_first {
                 None => {
                     // No pending first, this is a first transition
-                    pending_first = Some((offset, Transition {
-                        time: offset as u64,
-                        value: transition.value.clone(),
-                    }));
+                    pending_first = Some((offset, transition.clone()));
                 }
                 Some((pending_offset, first_trans)) => {
                     if offset == pending_offset {
@@ -1963,10 +1901,7 @@ if tile_missing_signals.is_empty() {
                         let bucket = BucketData {
                             offset: pending_offset,
                             first: first_trans,
-                            last: Some(Transition {
-                                time: offset as u64,
-                                value: transition.value.clone(),
-                            }),
+                            last: Some(transition.clone()),
                         };
                         buckets.insert(pending_offset, bucket);
                         pending_first = None;
@@ -1979,10 +1914,7 @@ if tile_missing_signals.is_empty() {
                         };
                         buckets.insert(pending_offset, bucket);
                         // This becomes the new first
-                        pending_first = Some((offset, Transition {
-                            time: offset as u64,
-                            value: transition.value.clone(),
-                        }));
+                        pending_first = Some((offset, transition.clone()));
                     }
                 }
             }
@@ -2257,31 +2189,27 @@ if tile_missing_signals.is_empty() {
         // console_log!("[WASM] extract_bits_from_transitions: msb={}, lsb={}, bit_count={}, mask={:#x}", msb, lsb, bit_count, mask);
         
         let mut result = Vec::new();
-        let mut last_value: Option<String> = None;
+        let mut last_value: Option<u64> = None;
         
         for t in transitions.iter() {
-            // Parse value string to u64, handling both decimal and hex formats
-            let value_u64 = if t.value.starts_with("0x") || t.value.starts_with("0X") {
-                match u64::from_str_radix(t.value.trim_start_matches("0x").trim_start_matches("0X"), 16) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                }
-            } else {
-                match t.value.parse::<u64>() {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                }
+            // Parse value to u64 using original server format
+            let value_u64 = match server_value_to_u64(t.value_type, t.value_len, &t.value) {
+                Some(v) => v,
+                None => continue,
             };
             let extracted_value = (value_u64 & mask) >> lsb;
             let extracted_str = format!("{}", extracted_value);
+            let extracted_bytes = extracted_str.into_bytes();
             
             // Only add transition if value changed (or it's the first one)
-            if last_value.as_ref() != Some(&extracted_str) {
+            if last_value != Some(extracted_value) {
                 result.push(Transition {
                     time: t.time,
-                    value: extracted_str.clone(),
+                    value_type: 0,
+                    value_len: extracted_bytes.len() as u16,
+                    value: extracted_bytes,
                 });
-                last_value = Some(extracted_str);
+                last_value = Some(extracted_value);
             }
         }
         
@@ -2312,48 +2240,38 @@ if tile_missing_signals.is_empty() {
             
             for (bucket_idx, bucket) in buckets.iter() {
                 // Extract bits from first value
-                let first_value_u64 = if bucket.first.value.starts_with("0x") || bucket.first.value.starts_with("0X") {
-                    match u64::from_str_radix(bucket.first.value.trim_start_matches("0x").trim_start_matches("0X"), 16) {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    }
-                } else {
-                    match bucket.first.value.parse::<u64>() {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    }
+                let first_value_u64 = match server_value_to_u64(bucket.first.value_type, bucket.first.value_len, &bucket.first.value) {
+                    Some(v) => v,
+                    None => continue,
                 };
                 let extracted_first = (first_value_u64 & mask) >> lsb;
                 let extracted_first_str = format!("{}", extracted_first);
+                let extracted_first_bytes = extracted_first_str.into_bytes();
                 
                 // Extract bits from last value if present
-                let extracted_last = bucket.last.as_ref().map(|last| {
-                    let last_value_u64 = if last.value.starts_with("0x") || last.value.starts_with("0X") {
-                        match u64::from_str_radix(last.value.trim_start_matches("0x").trim_start_matches("0X"), 16) {
-                            Ok(v) => v,
-                            Err(_) => return None,
-                        }
-                    } else {
-                        match last.value.parse::<u64>() {
-                            Ok(v) => v,
-                            Err(_) => return None,
-                        }
-                    };
+                let extracted_last = bucket.last.as_ref().and_then(|last| {
+                    let last_value_u64 = server_value_to_u64(last.value_type, last.value_len, &last.value)?;
                     let extracted = (last_value_u64 & mask) >> lsb;
-                    Some(format!("{}", extracted))
-                }).flatten();
+                    let extracted_str = format!("{}", extracted);
+                    let extracted_bytes = extracted_str.into_bytes();
+                    Some(Transition {
+                        time: last.time,
+                        value_type: 0,
+                        value_len: extracted_bytes.len() as u16,
+                        value: extracted_bytes,
+                    })
+                });
                 
                 // Create new bucket with extracted values
                 let extracted_bucket = BucketData {
                     offset: bucket.offset,
                     first: Transition {
                         time: bucket.first.time,
-                        value: extracted_first_str,
+                        value_type: 0,
+                        value_len: extracted_first_bytes.len() as u16,
+                        value: extracted_first_bytes,
                     },
-                    last: extracted_last.map(|v| Transition {
-                        time: bucket.last.as_ref().unwrap().time,
-                        value: v,
-                    }),
+                    last: extracted_last,
                 };
                 
                 extracted_buckets.insert(*bucket_idx, extracted_bucket);
@@ -2379,21 +2297,35 @@ if tile_missing_signals.is_empty() {
         // Separate start value (boundary) from normal transitions
         let start_value = transitions.iter()
             .find(|t| t.time == BOUNDARY_TIME_START)
-            .map(|t| t.value.clone());
+            .cloned();
 
         let normal_transitions: Vec<_> = transitions.iter()
             .filter(|t| t.time != BOUNDARY_TIME_START)
             .cloned()
             .collect();
 
+        // Helper to convert Transition to display string and classify value
+        let transition_to_display = |t: &Transition| -> (String, String, bool) {
+            let display_str = server_value_to_string(t.value_type, t.value_len, &t.value);
+            let (value_type_str, has_xz) = Self::classify_value(&display_str, width);
+            (display_str, value_type_str, has_xz)
+        };
+
+        // Helper to format multi-bit value
+        let format_multi_bit = |t: &Transition| -> String {
+            let display_str = server_value_to_string(t.value_type, t.value_len, &t.value);
+            self.format_multi_bit_value(&display_str, width)
+        };
+
         // If no normal transitions, draw start value across viewport
         if normal_transitions.is_empty() {
             if let Some(start_val) = start_value {
-                let (value_type, has_xz) = Self::classify_value(&start_val, width);
-                let display_str = if width > 1 {
-                    self.format_multi_bit_value(&start_val, width)
+                let display_str = server_value_to_string(start_val.value_type, start_val.value_len, &start_val.value);
+                let (value_type_str, has_xz) = Self::classify_value(&display_str, width);
+                let final_display_str = if width > 1 {
+                    format_multi_bit(&start_val)
                 } else {
-                    start_val.clone()
+                    display_str
                 };
 
                 segments.push(RenderSegment {
@@ -2401,8 +2333,8 @@ if tile_missing_signals.is_empty() {
                     x1: self.canvas_width,
                     y,
                     value: ValueInfo {
-                        value_type,
-                        display_str,
+                        value_type: value_type_str,
+                        display_str: final_display_str,
                         width,
                         has_xz,
                         min_value: None,
@@ -2429,15 +2361,15 @@ if tile_missing_signals.is_empty() {
             if first_trans_time > self.viewport.time_start {
                 // Determine the value for the initial segment
                 // Use the value from the transition just before viewport start, or start value
-                let initial_value = if first_visible_idx > 0 {
+                let initial_trans = if first_visible_idx > 0 {
                     // Use the previous transition's value
-                    normal_transitions[first_visible_idx - 1].value.clone()
+                    &normal_transitions[first_visible_idx - 1]
                 } else if let Some(ref sv) = start_value {
                     // Use start value
-                    sv.clone()
+                    sv
                 } else {
                     // Fallback: use first transition's value
-                    normal_transitions[first_visible_idx].value.clone()
+                    &normal_transitions[first_visible_idx]
                 };
 
                 let t0 = self.viewport.time_start;
@@ -2446,11 +2378,12 @@ if tile_missing_signals.is_empty() {
                 let x1 = ((t1 - self.viewport.time_start) / time_range) * self.canvas_width;
 
                 if x1 > x0 {
-                    let (value_type, has_xz) = Self::classify_value(&initial_value, width);
-                    let display_str = if width > 1 {
-                        self.format_multi_bit_value(&initial_value, width)
+                    let display_str = server_value_to_string(initial_trans.value_type, initial_trans.value_len, &initial_trans.value);
+                    let (value_type_str, has_xz) = Self::classify_value(&display_str, width);
+                    let final_display_str = if width > 1 {
+                        format_multi_bit(initial_trans)
                     } else {
-                        initial_value.clone()
+                        display_str
                     };
 
                     segments.push(RenderSegment {
@@ -2458,8 +2391,8 @@ if tile_missing_signals.is_empty() {
                         x1,
                         y,
                         value: ValueInfo {
-                            value_type,
-                            display_str,
+                            value_type: value_type_str,
+                            display_str: final_display_str,
                             width,
                             has_xz,
                             min_value: None,
@@ -2494,13 +2427,14 @@ if tile_missing_signals.is_empty() {
             let x0 = ((t0_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
             let x1 = ((t1_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
 
-            let value_str = &normal_transitions[i].value;
-            let (value_type, has_xz) = Self::classify_value(value_str, width);
+            let current_trans = &normal_transitions[i];
+            let display_str = server_value_to_string(current_trans.value_type, current_trans.value_len, &current_trans.value);
+            let (value_type_str, has_xz) = Self::classify_value(&display_str, width);
 
-            let display_str = if width > 1 {
-                self.format_multi_bit_value(value_str, width)
+            let final_display_str = if width > 1 {
+                format_multi_bit(current_trans)
             } else {
-                value_str.clone()
+                display_str
             };
 
             segments.push(RenderSegment {
@@ -2508,8 +2442,8 @@ if tile_missing_signals.is_empty() {
                 x1,
                 y,
                 value: ValueInfo {
-                    value_type,
-                    display_str,
+                    value_type: value_type_str,
+                    display_str: final_display_str,
                     width,
                     has_xz,
                     min_value: None,
@@ -2534,10 +2468,23 @@ if tile_missing_signals.is_empty() {
         // console_log!("[WASM] generate_min_max_segments: viewport={}-{}, transitions={}", 
             // self.viewport.time_start, self.viewport.time_end, transitions.len());
 
+        // Helper to convert Transition to display string and classify value
+        let transition_to_display = |t: &Transition| -> (String, String, bool) {
+            let display_str = server_value_to_string(t.value_type, t.value_len, &t.value);
+            let (value_type_str, has_xz) = Self::classify_value(&display_str, width);
+            (display_str, value_type_str, has_xz)
+        };
+
+        // Helper to format multi-bit value
+        let format_multi_bit = |t: &Transition| -> String {
+            let display_str = server_value_to_string(t.value_type, t.value_len, &t.value);
+            self.format_multi_bit_value(&display_str, width)
+        };
+
         // Separate start value (boundary) from normal transitions
         let start_value = transitions.iter()
             .find(|t| t.time == BOUNDARY_TIME_START)
-            .map(|t| t.value.clone());
+            .cloned();
 
         let normal_transitions: Vec<_> = transitions.iter()
             .filter(|t| t.time != BOUNDARY_TIME_START)
@@ -2547,11 +2494,11 @@ if tile_missing_signals.is_empty() {
         // If no normal transitions, draw start value across viewport
         if normal_transitions.is_empty() {
             if let Some(start_val) = start_value {
-                let (value_type, has_xz) = Self::classify_value(&start_val, width);
-                let display_str = if width > 1 {
-                    self.format_multi_bit_value(&start_val, width)
+                let (display_str, value_type_str, has_xz) = transition_to_display(&start_val);
+                let final_display_str = if width > 1 {
+                    format_multi_bit(&start_val)
                 } else {
-                    start_val.clone()
+                    display_str.clone()
                 };
 
                 segments.push(RenderSegment {
@@ -2559,12 +2506,12 @@ if tile_missing_signals.is_empty() {
                     x1: self.canvas_width,
                     y,
                     value: ValueInfo {
-                        value_type,
-                        display_str,
+                        value_type: value_type_str,
+                        display_str: final_display_str,
                         width,
                         has_xz,
-                        min_value: Some(start_val.clone()),
-                        max_value: Some(start_val),
+                        min_value: Some(display_str),
+                        max_value: Some(server_value_to_string(start_val.value_type, start_val.value_len, &start_val.value)),
                         is_min_max: false,
                     },
                     signal_name: signal_name.to_string(),
@@ -2587,15 +2534,15 @@ if tile_missing_signals.is_empty() {
             if first_trans_time > self.viewport.time_start {
                 // Determine the value for the initial segment
                 // Use the value from the transition just before viewport start, or start value
-                let initial_value = if first_visible_idx > 0 {
+                let initial_trans = if first_visible_idx > 0 {
                     // Use the previous transition's value
-                    normal_transitions[first_visible_idx - 1].value.clone()
+                    &normal_transitions[first_visible_idx - 1]
                 } else if let Some(ref sv) = start_value {
                     // Use start value
-                    sv.clone()
+                    sv
                 } else {
                     // Fallback: use first transition's value
-                    normal_transitions[first_visible_idx].value.clone()
+                    &normal_transitions[first_visible_idx]
                 };
 
                 let t0 = self.viewport.time_start;
@@ -2604,11 +2551,11 @@ if tile_missing_signals.is_empty() {
                 let x1 = ((t1 - self.viewport.time_start) / time_range) * self.canvas_width;
 
                 if x1 > x0 {
-                    let (_value_type, has_xz) = Self::classify_value(&initial_value, width);
-                    let display_str = if width > 1 {
-                        self.format_multi_bit_value(&initial_value, width)
+                    let (display_str, _value_type_str, has_xz) = transition_to_display(initial_trans);
+                    let final_display_str = if width > 1 {
+                        format_multi_bit(initial_trans)
                     } else {
-                        initial_value.clone()
+                        display_str.clone()
                     };
 
                     // For LoD > 0, always use 'min_max' type to ensure proper grouping
@@ -2618,11 +2565,11 @@ if tile_missing_signals.is_empty() {
                         y,
                         value: ValueInfo {
                             value_type: "min_max".to_string(),
-                            display_str,
+                            display_str: final_display_str,
                             width,
                             has_xz,
-                            min_value: Some(initial_value.clone()),
-                            max_value: Some(initial_value),
+                            min_value: Some(display_str.clone()),
+                            max_value: Some(display_str),
                             is_min_max: false,  // min == max
                         },
                         signal_name: signal_name.to_string(),
@@ -2635,12 +2582,12 @@ if tile_missing_signals.is_empty() {
         let mut i = 0;
         while i < normal_transitions.len() {
             let time = normal_transitions[i].time;
-            let mut values = vec![&normal_transitions[i].value];
+            let mut value_transitions = vec![&normal_transitions[i]];
 
             // Collect all values with the same timestamp (min/max pair)
             let mut j = i + 1;
             while j < normal_transitions.len() && normal_transitions[j].time == time {
-                values.push(&normal_transitions[j].value);
+                value_transitions.push(&normal_transitions[j]);
                 j += 1;
             }
 
@@ -2668,29 +2615,32 @@ if tile_missing_signals.is_empty() {
             let x1 = ((t1_clamped - self.viewport.time_start) / time_range) * self.canvas_width;
 
             // Extract min and max values (min first, max second)
-            let (min_val, max_val) = if values.len() >= 2 {
-                (values[0].clone(), values[1].clone())
+            let (min_trans, max_trans) = if value_transitions.len() >= 2 {
+                (value_transitions[0], value_transitions[1])
             } else {
-                (values[0].clone(), values[0].clone())
+                (value_transitions[0], value_transitions[0])
             };
+            
+            let min_val_str = server_value_to_string(min_trans.value_type, min_trans.value_len, &min_trans.value);
+            let max_val_str = server_value_to_string(max_trans.value_type, max_trans.value_len, &max_trans.value);
 
             // Check if min != max and neither is X/Z
-            let min_upper = min_val.to_uppercase();
-            let max_upper = max_val.to_uppercase();
+            let min_upper = min_val_str.to_uppercase();
+            let max_upper = max_val_str.to_uppercase();
             let has_xz = min_upper.contains('X') || min_upper.contains('Z') ||
                         max_upper.contains('X') || max_upper.contains('Z');
-            let is_changing = min_val != max_val && !has_xz;
+            let is_changing = min_val_str != max_val_str && !has_xz;
 
             // For LoD > 0, always use 'min_max' type to ensure proper grouping
             let display_str = if is_changing {
                 if width == 1 {
                     "toggling".to_string()
                 } else {
-                    format!("{}..{}", min_val, max_val)
+                    format!("{}..{}", min_val_str, max_val_str)
                 }
             } else {
                 // min == max or has X/Z
-                min_val.clone()
+                min_val_str.clone()
             };
 
             segments.push(RenderSegment {
@@ -2702,8 +2652,8 @@ if tile_missing_signals.is_empty() {
                     display_str,
                     width,
                     has_xz,
-                    min_value: Some(min_val),
-                    max_value: Some(max_val),
+                    min_value: Some(min_val_str),
+                    max_value: Some(max_val_str),
                     is_min_max: is_changing,
                 },
                 signal_name: signal_name.to_string(),
@@ -2730,11 +2680,24 @@ if tile_missing_signals.is_empty() {
     ) {
         const TILE_SPAN_MULTIPLIER: u32 = 256;
         
+        // Helper to convert Transition to display string and classify value
+        let transition_to_display = |t: &Transition| -> (String, String, bool) {
+            let display_str = server_value_to_string(t.value_type, t.value_len, &t.value);
+            let (value_type_str, has_xz) = Self::classify_value(&display_str, width);
+            (display_str, value_type_str, has_xz)
+        };
+
+        // Helper to format multi-bit value
+        let format_multi_bit = |t: &Transition| -> String {
+            let display_str = server_value_to_string(t.value_type, t.value_len, &t.value);
+            self.format_multi_bit_value(&display_str, width)
+        };
+        
         // console_log!("[WASM] generate_lod_segments_from_buckets: {} tiles, viewport={}-{}",
         //     bucket_data.len(), self.viewport.time_start, self.viewport.time_end);
         
         // Track current value across tiles for continuity
-        let mut cross_tile_value: Option<String> = None;
+        let mut cross_tile_value: Option<Transition> = None;
         
         for (tile_idx, (tile_start, buckets)) in bucket_data.iter().enumerate() {
             // Calculate bucket size from tile span
@@ -2755,7 +2718,14 @@ if tile_missing_signals.is_empty() {
                 self.find_value_at_time(signal_name, *tile_start, buckets, viewport_start_u64, lod, tile_idx, bucket_data)
             } else {
                 // Subsequent tiles: use value from previous tile's last bucket
-                cross_tile_value.clone().unwrap_or_else(|| "0".to_string())
+                cross_tile_value.clone().unwrap_or_else(|| {
+                    Transition {
+                        time: 0,
+                        value_type: 0,
+                        value_len: 1,
+                        value: vec![b'0'],
+                    }
+                })
             };
             
             let mut current_value = initial_value.clone();
@@ -2805,11 +2775,11 @@ if tile_missing_signals.is_empty() {
                 match buckets.get(&bucket_idx) {
                     None => {
                         // Empty bucket: draw current value
-                        let (value_type, has_xz) = Self::classify_value(&current_value, width);
-                        let display_str = if width > 1 {
-                            self.format_multi_bit_value(&current_value, width)
+                        let (display_str, value_type_str, has_xz) = transition_to_display(&current_value);
+                        let final_display_str = if width > 1 {
+                            format_multi_bit(&current_value)
                         } else {
-                            current_value.clone()
+                            display_str
                         };
                         
                         segments.push(RenderSegment {
@@ -2817,12 +2787,12 @@ if tile_missing_signals.is_empty() {
                             x1,
                             y,
                             value: ValueInfo {
-                                value_type,
-                                display_str,
+                                value_type: value_type_str,
+                                display_str: final_display_str,
                                 width,
                                 has_xz,
-                                min_value: Some(current_value.clone()),
-                                max_value: Some(current_value.clone()),
+                                min_value: Some(server_value_to_string(current_value.value_type, current_value.value_len, &current_value.value)),
+                                max_value: Some(server_value_to_string(current_value.value_type, current_value.value_len, &current_value.value)),
                                 is_min_max: false,
                             },
                             signal_name: signal_name.to_string(),
@@ -2831,13 +2801,15 @@ if tile_missing_signals.is_empty() {
                     Some(bucket) => {
                         if bucket.has_toggle() {
                             // First/Last pair: draw toggling
-                            let first_val = bucket.first.value.clone();
-                            let last_val = bucket.last.as_ref().unwrap().value.clone();
+                            let first_trans = &bucket.first;
+                            let last_trans = bucket.last.as_ref().unwrap();
+                            let first_val_str = server_value_to_string(first_trans.value_type, first_trans.value_len, &first_trans.value);
+                            let last_val_str = server_value_to_string(last_trans.value_type, last_trans.value_len, &last_trans.value);
                             
                             let display_str = if width == 1 {
                                 "toggling".to_string()
                             } else {
-                                format!("{}..{}", first_val, last_val)
+                                format!("{}..{}", first_val_str, last_val_str)
                             };
                             
                             segments.push(RenderSegment {
@@ -2849,23 +2821,23 @@ if tile_missing_signals.is_empty() {
                                     display_str,
                                     width,
                                     has_xz: false,
-                                    min_value: Some(first_val.clone()),
-                                    max_value: Some(last_val.clone()),
+                                    min_value: Some(first_val_str),
+                                    max_value: Some(last_val_str),
                                     is_min_max: true,  // This is a toggle bucket
                                 },
                                 signal_name: signal_name.to_string(),
                             });
                             
                             // Update current value to last
-                            current_value = last_val;
+                            current_value = last_trans.clone();
                         } else {
                             // Single transition: draw stable value
-                            let value = bucket.first.value.clone();
-                            let (value_type, has_xz) = Self::classify_value(&value, width);
-                            let display_str = if width > 1 {
-                                self.format_multi_bit_value(&value, width)
+                            let value_trans = &bucket.first;
+                            let (display_str, value_type_str, has_xz) = transition_to_display(value_trans);
+                            let final_display_str = if width > 1 {
+                                format_multi_bit(value_trans)
                             } else {
-                                value.clone()
+                                display_str
                             };
                             
                             segments.push(RenderSegment {
@@ -2873,19 +2845,19 @@ if tile_missing_signals.is_empty() {
                                 x1,
                                 y,
                                 value: ValueInfo {
-                                    value_type,
-                                    display_str,
+                                    value_type: value_type_str,
+                                    display_str: final_display_str,
                                     width,
                                     has_xz,
-                                    min_value: Some(value.clone()),
-                                    max_value: Some(value.clone()),
+                                    min_value: Some(server_value_to_string(value_trans.value_type, value_trans.value_len, &value_trans.value)),
+                                    max_value: Some(server_value_to_string(value_trans.value_type, value_trans.value_len, &value_trans.value)),
                                     is_min_max: false,
                                 },
                                 signal_name: signal_name.to_string(),
                             });
                             
                             // Update current value
-                            current_value = value;
+                            current_value = value_trans.clone();
                         }
                     }
                 }
@@ -2896,8 +2868,8 @@ if tile_missing_signals.is_empty() {
             // Store last value for cross-tile continuity
             cross_tile_value = Some(current_value.clone());
             
-            // console_log!("[WASM]   Tile {} complete: {} segments generated, last_value={}", 
-            //     tile_idx, segments_in_tile, current_value);
+            // console_log!("[WASM]   Tile {} complete: {} segments generated, last_value={:?}", 
+            //     tile_idx, segments_in_tile, current_value.value);
         }
         
         // Rule 3: If viewport extends beyond last bucket, draw to viewport_end
@@ -2910,29 +2882,35 @@ if tile_missing_signals.is_empty() {
             
             if (tile_end as f64) < self.viewport.time_end {
                 // Viewport extends beyond last tile, need to draw to viewport_end
-                let last_value = cross_tile_value.unwrap_or_else(|| "0".to_string());
+                let last_trans = cross_tile_value.unwrap_or_else(|| {
+                    Transition {
+                        time: 0,
+                        value_type: 0,
+                        value_len: 1,
+                        value: vec![b'0'],
+                    }
+                });
+                let (display_str, value_type_str, has_xz) = transition_to_display(&last_trans);
+                let final_display_str = if width > 1 {
+                    format_multi_bit(&last_trans)
+                } else {
+                    display_str.clone()
+                };
                 let x0 = ((tile_end as f64 - self.viewport.time_start) / time_range) * self.canvas_width;
                 let x1 = ((self.viewport.time_end - self.viewport.time_start) / time_range) * self.canvas_width;
                 
                 if x1 > x0 {
-                    let (value_type, has_xz) = Self::classify_value(&last_value, width);
-                    let display_str = if width > 1 {
-                        self.format_multi_bit_value(&last_value, width)
-                    } else {
-                        last_value.clone()
-                    };
-                    
                     segments.push(RenderSegment {
                         x0,
                         x1,
                         y,
                         value: ValueInfo {
-                            value_type,
-                            display_str,
+                            value_type: value_type_str,
+                            display_str: final_display_str,
                             width,
                             has_xz,
-                            min_value: Some(last_value.clone()),
-                            max_value: Some(last_value),
+                            min_value: Some(display_str),
+                            max_value: Some(server_value_to_string(last_trans.value_type, last_trans.value_len, &last_trans.value)),
                             is_min_max: false,
                         },
                         signal_name: signal_name.to_string(),
@@ -2996,9 +2974,17 @@ if tile_missing_signals.is_empty() {
         lod: u32,
         tile_idx: usize,
         all_bucket_data: &[(u64, HashMap<u32, BucketData>)],
-    ) -> String {
+    ) -> Transition {
         let bucket_size = 1u64 << lod;
         const TILE_SPAN_MULTIPLIER: u32 = 256;
+        
+        // Default transition
+        let default_transition = Transition {
+            time: 0,
+            value_type: 0,
+            value_len: 1,
+            value: vec![b'0'],
+        };
         
         // Debug log (disabled for performance)
         // console_log!("[WASM] find_value_at_time: signal={}, tile_start={}, target_time={}, lod={}", 
@@ -3014,21 +3000,21 @@ if tile_missing_signals.is_empty() {
                 // Search from last bucket to first bucket in previous tile
                 for bucket_idx in (0..TILE_SPAN_MULTIPLIER).rev() {
                     if let Some(bucket) = prev_buckets.get(&bucket_idx) {
-                        let value = if bucket.has_toggle() {
-                            bucket.last.as_ref().unwrap().value.clone()
+                        let trans = if bucket.has_toggle() {
+                            bucket.last.as_ref().unwrap().clone()
                         } else {
-                            bucket.first.value.clone()
+                            bucket.first.clone()
                         };
-                        // console_log!("[WASM]   Found value in previous tile {} bucket {}: {}",
-                        //     prev_tile_idx, bucket_idx, value);
-                        return value;
+                        // console_log!("[WASM]   Found value in previous tile {} bucket {}: {:?}",
+                        //     prev_tile_idx, bucket_idx, trans.value);
+                        return trans;
                     }
                 }
             }
             
             // No transitions found, use default
             // console_log!("[WASM]   No value found, returning default '0'");
-            return "0".to_string();
+            return default_transition;
         }
         
         // Calculate which bucket contains target_time
@@ -3048,45 +3034,45 @@ if tile_missing_signals.is_empty() {
                 // Bucket has transitions, determine which value to use
                 // For now, we use the first value (since we don't have per-transition timestamps in LoD 1+)
                 // In a more detailed implementation, we would check if target_time is before or after the transition
-                let value = if bucket.has_toggle() {
-                    bucket.last.as_ref().unwrap().value.clone()
+                let trans = if bucket.has_toggle() {
+                    bucket.last.as_ref().unwrap().clone()
                 } else {
-                    bucket.first.value.clone()
+                    bucket.first.clone()
                 };
-                // console_log!("[WASM]   Found value in bucket {}: {}", bucket_idx, value);
-                return value;
+                // console_log!("[WASM]   Found value in bucket {}: {:?}", bucket_idx, trans.value);
+                return trans;
             }
             
             // Bucket is empty, search backward for last transition in current tile
             for idx in (0..bucket_idx).rev() {
                 if let Some(bucket) = buckets.get(&idx) {
-                    let value = if bucket.has_toggle() {
-                        bucket.last.as_ref().unwrap().value.clone()
+                    let trans = if bucket.has_toggle() {
+                        bucket.last.as_ref().unwrap().clone()
                     } else {
-                        bucket.first.value.clone()
+                        bucket.first.clone()
                     };
-                    // console_log!("[WASM]   Found value in earlier bucket {}: {}", idx, value);
-                    return value;
+                    // console_log!("[WASM]   Found value in earlier bucket {}: {:?}", idx, trans.value);
+                    return trans;
                 }
             }
         } else {
             // Target is exactly at bucket boundary
             if let Some(bucket) = buckets.get(&bucket_idx) {
-                let value = bucket.first.value.clone();
-                // console_log!("[WASM]   Found value at bucket boundary {}: {}", bucket_idx, value);
-                return value;
+                let trans = bucket.first.clone();
+                // console_log!("[WASM]   Found value at bucket boundary {}: {:?}", bucket_idx, trans.value);
+                return trans;
             }
             
             // Empty bucket at boundary, search backward in current tile
             for idx in (0..bucket_idx).rev() {
                 if let Some(bucket) = buckets.get(&idx) {
-                    let value = if bucket.has_toggle() {
-                        bucket.last.as_ref().unwrap().value.clone()
+                    let trans = if bucket.has_toggle() {
+                        bucket.last.as_ref().unwrap().clone()
                     } else {
-                        bucket.first.value.clone()
+                        bucket.first.clone()
                     };
-                    // console_log!("[WASM]   Found value in earlier bucket {}: {}", idx, value);
-                    return value;
+                    // console_log!("[WASM]   Found value in earlier bucket {}: {:?}", idx, trans.value);
+                    return trans;
                 }
             }
         }
@@ -3105,14 +3091,14 @@ if tile_missing_signals.is_empty() {
             // Search from last bucket to first bucket in previous tile
             for bucket_idx in (0..TILE_SPAN_MULTIPLIER).rev() {
                 if let Some(bucket) = prev_buckets.get(&bucket_idx) {
-                    let value = if bucket.has_toggle() {
-                        bucket.last.as_ref().unwrap().value.clone()
+                    let trans = if bucket.has_toggle() {
+                        bucket.last.as_ref().unwrap().clone()
                     } else {
-                        bucket.first.value.clone()
+                        bucket.first.clone()
                     };
-                    // console_log!("[WASM]   Found value in previous tile {} bucket {}: {}",
-                    //     prev_tile_idx, bucket_idx, value);
-                    return value;
+                    // console_log!("[WASM]   Found value in previous tile {} bucket {}: {:?}",
+                    //     prev_tile_idx, bucket_idx, trans.value);
+                    return trans;
                 }
             }
         }
@@ -3122,9 +3108,9 @@ if tile_missing_signals.is_empty() {
             .and_then(|data| data.tile_info.iter()
                 .find(|(start, _, _, _)| *start == tile_start)
                 .map(|(_, _, _, value)| value.clone()))
-            .unwrap_or_else(|| "0".to_string());
+            .unwrap_or_else(|| default_transition);
         
-        // console_log!("[WASM]   Using tile start_value: {}", start_value);
+        // console_log!("[WASM]   Using tile start_value: {:?}", start_value.value);
         start_value
     }
 
@@ -3374,25 +3360,24 @@ if tile_missing_signals.is_empty() {
                 }
                 
                 // Find the transition that covers this time
-                let mut current_value = None;
-                let mut boundary_value = None;
+                let mut current_transition = None;
+                let mut boundary_transition = None;
                 
                 for transition in &parent_data.transitions {
                     if transition.time == BOUNDARY_TIME_START {
-                        boundary_value = Some(&transition.value);
+                        boundary_transition = Some(transition);
                     } else if transition.time <= time_u64 {
-                        current_value = Some(&transition.value);
+                        current_transition = Some(transition);
                     } else {
                         break;
                     }
                 }
                 
-                if let Some(value_str) = current_value.or(boundary_value) {
+                if let Some(value_trans) = current_transition.or(boundary_transition) {
                     // Parse and extract bits
-                    let value_u64 = if value_str.starts_with("0x") || value_str.starts_with("0X") {
-                        u64::from_str_radix(value_str.trim_start_matches("0x").trim_start_matches("0X"), 16).unwrap_or(0)
-                    } else {
-                        value_str.parse::<u64>().unwrap_or(0)
+                    let value_u64 = match server_value_to_u64(value_trans.value_type, value_trans.value_len, &value_trans.value) {
+                        Some(v) => v,
+                        None => 0,
                     };
                     
                     let bit_count = msb - lsb + 1;
@@ -3445,30 +3430,31 @@ if tile_missing_signals.is_empty() {
 
             // Find the transition that covers this time
             // The value is valid from transition.time until the next transition
-            let mut current_value = None;
-            let mut boundary_value = None; // Store boundary value separately
+            let mut current_transition = None;
+            let mut boundary_transition = None; // Store boundary value separately
 
             for transition in &data.transitions {
                 if transition.time == BOUNDARY_TIME_START {
                     // Boundary value represents the value at range start
-                    boundary_value = Some(&transition.value);
+                    boundary_transition = Some(transition);
                 } else if transition.time <= time_u64 {
-                    current_value = Some(&transition.value);
+                    current_transition = Some(transition);
                 } else {
                     break; // transition.time > time_u64, stop searching
                 }
             }
 
             // Use boundary value if no normal transition found before this time
-            let value_to_return = current_value.or(boundary_value);
+            let transition_to_return = current_transition.or(boundary_transition);
 
             // Return the value info
-            if let Some(value_str) = value_to_return {
-                let (value_type, has_xz) = Self::classify_value(value_str, data.width);
+            if let Some(value_trans) = transition_to_return {
+                let value_str = server_value_to_string(value_trans.value_type, value_trans.value_len, &value_trans.value);
+                let (value_type, has_xz) = Self::classify_value(&value_str, data.width);
 
                 // Format display string with prefix for multi-bit values
                 let display_str = if data.width > 1 {
-                    self.format_multi_bit_value(value_str, data.width)
+                    self.format_multi_bit_value(&value_str, data.width)
                 } else {
                     value_str.clone()
                 };
@@ -3522,24 +3508,24 @@ if tile_missing_signals.is_empty() {
                 let bucket_idx = offset_in_tile as u32;
                 
                 // Try to find the bucket at this index
-                let value_to_return = if let Some(bucket) = buckets.get(&bucket_idx) {
+                let value_transition = if let Some(bucket) = buckets.get(&bucket_idx) {
                     // Found bucket at exact index
                     // For toggle bucket, use last value; for single transition, use first value
                     if bucket.has_toggle() {
-                        bucket.last.as_ref().unwrap().value.clone()
+                        bucket.last.as_ref().unwrap().clone()
                     } else {
-                        bucket.first.value.clone()
+                        bucket.first.clone()
                     }
                 } else {
                     // Empty bucket - need to find previous non-empty bucket
                     // Search backwards from bucket_idx-1 to 0
-                    let mut found_value: Option<String> = None;
+                    let mut found_transition: Option<Transition> = None;
                     for prev_idx in (0..bucket_idx).rev() {
                         if let Some(prev_bucket) = buckets.get(&prev_idx) {
-                            found_value = Some(if prev_bucket.has_toggle() {
-                                prev_bucket.last.as_ref().unwrap().value.clone()
+                            found_transition = Some(if prev_bucket.has_toggle() {
+                                prev_bucket.last.as_ref().unwrap().clone()
                             } else {
-                                prev_bucket.first.value.clone()
+                                prev_bucket.first.clone()
                             });
                             break;
                         }
@@ -3547,34 +3533,49 @@ if tile_missing_signals.is_empty() {
                     
                     // If not found in current tile, use previous tile's last value
                     // or tile's start value
-                    found_value.unwrap_or_else(|| {
+                    found_transition.unwrap_or_else(|| {
                         if tile_idx > 0 {
                             // Use previous tile's last bucket value
                             let (prev_tile_start, prev_buckets) = sorted_bucket_data[tile_idx - 1];
-                            let mut last_value = "0".to_string();
+                            let mut last_transition = Transition {
+                                time: 0,
+                                value_type: 0,
+                                value_len: 1,
+                                value: vec![b'0'],
+                            };
                             for idx in 0..256u32 {
                                 if let Some(bucket) = prev_buckets.get(&idx) {
-                                    last_value = if bucket.has_toggle() {
-                                        bucket.last.as_ref().unwrap().value.clone()
+                                    last_transition = if bucket.has_toggle() {
+                                        bucket.last.as_ref().unwrap().clone()
                                     } else {
-                                        bucket.first.value.clone()
+                                        bucket.first.clone()
                                     };
                                 }
                             }
-                            last_value
+                            last_transition
                         } else {
                             // First tile - use start value from tile_info
                             data.tile_info.iter()
                                 .find(|(start, _, _, _)| start == tile_start)
                                 .map(|(_, _, _, value)| value.clone())
-                                .unwrap_or_else(|| "0".to_string())
+                                .unwrap_or_else(|| Transition {
+                                    time: 0,
+                                    value_type: 0,
+                                    value_len: 1,
+                                    value: vec![b'0'],
+                                })
                         }
                     })
                 };
                 
+                let value_str = server_value_to_string(value_transition.value_type, value_transition.value_len, &value_transition.value);
+                
                 // Apply bit extraction if needed
                 let final_value = if let Some((msb, lsb)) = bit_extract {
-                    let value_u64 = Self::parse_value_to_u64(&value_to_return);
+                    let value_u64 = match server_value_to_u64(value_transition.value_type, value_transition.value_len, &value_transition.value) {
+                        Some(v) => v,
+                        None => 0,
+                    };
                     
                     let bit_count = msb - lsb + 1;
                     let mask = if bit_count >= 64 {
@@ -3591,7 +3592,7 @@ if tile_missing_signals.is_empty() {
                         format!("0x{:X}", extracted_value)
                     }
                 } else {
-                    value_to_return
+                    value_str
                 };
                 
                 let (value_type, has_xz) = Self::classify_value(&final_value, width);
@@ -3638,12 +3639,12 @@ if tile_missing_signals.is_empty() {
         let mut i = 0;
         while i < normal_transitions.len() {
             let time = normal_transitions[i].time;
-            let mut values = vec![&normal_transitions[i].value];
+            let mut transitions_group = vec![normal_transitions[i]];
 
             // Collect all values with the same timestamp
             let mut j = i + 1;
             while j < normal_transitions.len() && normal_transitions[j].time == time {
-                values.push(&normal_transitions[j].value);
+                transitions_group.push(normal_transitions[j]);
                 j += 1;
             }
 
@@ -3657,19 +3658,21 @@ if tile_missing_signals.is_empty() {
             // Check if time_u64 falls within this bucket
             if time_u64 >= time && time_u64 < next_time {
                 // Extract min and max values
-                let (min_val, max_val) = if values.len() >= 2 {
-                    (values[0].clone(), values[1].clone())
+                let (min_trans, max_trans) = if transitions_group.len() >= 2 {
+                    (transitions_group[0], transitions_group[1])
                 } else {
-                    (values[0].clone(), values[0].clone())
+                    (transitions_group[0], transitions_group[0])
                 };
+                
+                let min_val_str = server_value_to_string(min_trans.value_type, min_trans.value_len, &min_trans.value);
+                let max_val_str = server_value_to_string(max_trans.value_type, max_trans.value_len, &max_trans.value);
 
                 // Apply bit extraction if needed
                 let (final_min, final_max) = if let Some((msb, lsb)) = bit_extract {
-                    let extract_bits = |val: &str| -> String {
-                        let value_u64 = if val.starts_with("0x") || val.starts_with("0X") {
-                            u64::from_str_radix(val.trim_start_matches("0x").trim_start_matches("0X"), 16).unwrap_or(0)
-                        } else {
-                            val.parse::<u64>().unwrap_or(0)
+                    let extract_bits = |t: &Transition| -> String {
+                        let value_u64 = match server_value_to_u64(t.value_type, t.value_len, &t.value) {
+                            Some(v) => v,
+                            None => 0,
                         };
                         
                         let bit_count = msb - lsb + 1;
@@ -3687,9 +3690,9 @@ if tile_missing_signals.is_empty() {
                         }
                     };
                     
-                    (extract_bits(&min_val), extract_bits(&max_val))
+                    (extract_bits(min_trans), extract_bits(max_trans))
                 } else {
-                    (min_val.clone(), max_val.clone())
+                    (min_val_str.clone(), max_val_str.clone())
                 };
 
                 // Check if min != max and neither is X/Z

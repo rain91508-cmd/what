@@ -102,11 +102,13 @@ impl DataBlock {
     }
 }
 
-/// Transition data point
+/// Transition data point (stores original server format)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transition {
     pub time: u64,
-    pub value: Vec<u8>,  // Binary value (variable length)
+    pub value_type: u8,   // Original value type from server (0=Numeric, 1=String, 2=Real, 3=BinaryCompressed)
+    pub value_len: u16,  // Original value length from server
+    pub value: Vec<u8>,  // Original value bytes from server
 }
 
 /// Signal data within a group
@@ -291,12 +293,13 @@ pub fn serialize_group_data_v2(group_data: &GroupData) -> Vec<u8> {
         directory.set(index_in_group, SignalDirectoryEntry::new(true, offset));
         actual_signal_count += 1;
 
-        // Serialize signal data: [draw_sig_id: u32][transition_count: u32] + [time: u64, value_len: u8, value: bytes] × count
+        // Serialize signal data: [draw_sig_id: u32][transition_count: u32] + [time: u64, value_type: u8, value_len: u16, value: bytes] × count
         signal_data_bytes.extend_from_slice(&signal.draw_sig_id.to_le_bytes());
         signal_data_bytes.extend_from_slice(&(signal.transitions.len() as u32).to_le_bytes());
         for transition in &signal.transitions {
             signal_data_bytes.extend_from_slice(&transition.time.to_le_bytes());
-            signal_data_bytes.push(transition.value.len() as u8);
+            signal_data_bytes.push(transition.value_type);
+            signal_data_bytes.extend_from_slice(&transition.value_len.to_le_bytes());
             signal_data_bytes.extend_from_slice(&transition.value);
         }
     }
@@ -369,7 +372,7 @@ pub fn deserialize_group_data_v2(data: &[u8]) -> Result<GroupData, String> {
         let mut pos = offset + 8;
 
         for _ in 0..transition_count {
-            if pos + 9 > data.len() {
+            if pos + 11 > data.len() {
                 break;
             }
 
@@ -379,8 +382,11 @@ pub fn deserialize_group_data_v2(data: &[u8]) -> Result<GroupData, String> {
             ]);
             pos += 8;
 
-            let value_len = data[pos] as usize;
+            let value_type = data[pos];
             pos += 1;
+
+            let value_len = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
+            pos += 2;
 
             if pos + value_len > data.len() {
                 break;
@@ -389,7 +395,7 @@ pub fn deserialize_group_data_v2(data: &[u8]) -> Result<GroupData, String> {
             let value = data[pos..pos + value_len].to_vec();
             pos += value_len;
 
-            transitions.push(Transition { time, value });
+            transitions.push(Transition { time, value_type, value_len: value_len as u16, value });
         }
 
         signals.push(SignalData {
@@ -450,31 +456,34 @@ pub fn read_signal_from_group_v2(data: &[u8], draw_sig_id: u32) -> Result<Option
     ]) as usize;
 
     let mut transitions = Vec::new();
-    let mut pos = offset + 8;
+        let mut pos = offset + 8;
 
-    for _ in 0..transition_count {
-        if pos + 9 > data.len() {
-            break;
+        for _ in 0..transition_count {
+            if pos + 11 > data.len() {
+                break;
+            }
+
+            let time = u64::from_le_bytes([
+                data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
+                data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
+            ]);
+            pos += 8;
+
+            let value_type = data[pos];
+            pos += 1;
+
+            let value_len = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
+            pos += 2;
+
+            if pos + value_len > data.len() {
+                break;
+            }
+
+            let value = data[pos..pos + value_len].to_vec();
+            pos += value_len;
+
+            transitions.push(Transition { time, value_type, value_len: value_len as u16, value });
         }
-
-        let time = u64::from_le_bytes([
-            data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
-            data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
-        ]);
-        pos += 8;
-
-        let value_len = data[pos] as usize;
-        pos += 1;
-
-        if pos + value_len > data.len() {
-            break;
-        }
-
-        let value = data[pos..pos + value_len].to_vec();
-        pos += value_len;
-
-        transitions.push(Transition { time, value });
-    }
 
     Ok(Some(SignalData {
         draw_sig_id,
