@@ -65,6 +65,7 @@ import { WaveformProviderProvider } from './contexts/WaveformProviderContext'
 
 // Bookmark
 import { bookmarkManager, type Bookmark } from './types/bookmark'
+import type { Wavemark } from './types/wavemark'
 
 // Session
 import { sessionManager } from './modules/session/sessionManager'
@@ -668,13 +669,57 @@ function App() {
   // Bookmark Management
   // ============================================
   
-  // Add bookmark at current source position
+  // Add bookmark at current source position or wavemark at current waveform position
   const handleAddBookmark = useCallback(async () => {
     // Check if there's an active source tab
     const activeSourceTab = tabs.find(t => t.type === 'source' && t.id === activeTab);
+    const activeWaveformTab = tabs.find(t => t.type === 'waveform' && t.id === activeTab);
     
+    // Handle waveform tab - create wavemark
+    if (activeWaveformTab) {
+      // Get current cursor position
+      const cursorPosition = activeWaveformTab.cursorPosition;
+      if (cursorPosition === undefined) {
+        addMessage('No cursor position to create wavemark');
+        return;
+      }
+      
+      // Get expanded groups
+      const groups = activeWaveformTab.groups || {};
+      const expandedGroups = Object.values(groups)
+        .filter(g => g.expanded)
+        .map(g => g.id);
+      
+      // Generate wavemark name (Wavemark N)
+      const existingWavemarks = activeWaveformTab.wavemarks || [];
+      const wavemarkNumber = existingWavemarks.length + 1;
+      const wavemarkName = `Wavemark ${wavemarkNumber}`;
+      
+      // Create wavemark with default color
+      const newWavemark: Wavemark = {
+        id: `wavemark_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        name: wavemarkName,
+        time: cursorPosition,
+        createdAt: Date.now(),
+        color: '#ff6600', // Default orange color
+        expandedGroups: expandedGroups,
+      };
+      
+      // Add to tab's wavemarks
+      setTabs(prev => prev.map(tab =>
+        tab.id === activeTab ? {
+          ...tab,
+          wavemarks: [...(tab.wavemarks || []), newWavemark],
+        } : tab
+      ));
+      
+      addMessage(`Added wavemark: ${newWavemark.name} at time ${cursorPosition}`);
+      return;
+    }
+    
+    // Handle source tab - create bookmark
     if (!activeSourceTab) {
-      addMessage('No active source tab to bookmark');
+      addMessage('No active source or waveform tab to bookmark');
       return;
     }
     
@@ -727,6 +772,90 @@ function App() {
     
     addMessage(`Added bookmark: ${bookmark.name}`);
   }, [activeTab, tabs, addMessage]);
+  
+  // Handle wavemark click - jump to waveform position and restore group expansion
+  const handleWavemarkClick = useCallback((wavemark: Wavemark) => {
+    const activeWaveformTab = tabs.find(t => t.type === 'waveform' && t.id === activeTab);
+    if (!activeWaveformTab) return;
+    
+    // Center the viewport on the wavemark time
+    const timeSpan = activeWaveformTab.viewport 
+      ? activeWaveformTab.viewport.timeEnd - activeWaveformTab.viewport.timeStart 
+      : 1000;
+    const newViewport = {
+      timeStart: wavemark.time - timeSpan / 2,
+      timeEnd: wavemark.time + timeSpan / 2,
+    };
+    
+    // Update groups expansion state
+    const groups = activeWaveformTab.groups || {};
+    const updatedGroups = Object.entries(groups).reduce((acc, [id, group]) => {
+      acc[id] = {
+        ...group,
+        expanded: wavemark.expandedGroups.includes(id),
+      };
+      return acc;
+    }, {} as Record<string, typeof groups[string]>);
+    
+    // Update tab with new viewport, cursor position, and group states
+    setTabs(prev => prev.map(tab =>
+      tab.id === activeTab ? {
+        ...tab,
+        viewport: newViewport,
+        cursorPosition: wavemark.time,
+        groups: updatedGroups,
+      } : tab
+    ));
+    
+    addMessage(`Jump to wavemark: ${wavemark.name} at time ${wavemark.time}`);
+  }, [activeTab, tabs, addMessage]);
+  
+  // Handle wavemark delete
+  const handleWavemarkDelete = useCallback((wavemarkId: string) => {
+    setTabs(prev => prev.map(tab =>
+      tab.id === activeTab ? {
+        ...tab,
+        wavemarks: (tab.wavemarks || []).filter(w => w.id !== wavemarkId),
+      } : tab
+    ));
+    addMessage('Wavemark deleted');
+  }, [activeTab, addMessage]);
+  
+  // Handle wavemark rename
+  const handleWavemarkRename = useCallback((wavemarkId: string, newName: string) => {
+    setTabs(prev => prev.map(tab =>
+      tab.id === activeTab ? {
+        ...tab,
+        wavemarks: (tab.wavemarks || []).map(w =>
+          w.id === wavemarkId ? { ...w, name: newName } : w
+        ),
+      } : tab
+    ));
+  }, [activeTab]);
+  
+  // Handle wavemark color change
+  const handleWavemarkColorChange = useCallback((wavemarkId: string, newColor: string) => {
+    setTabs(prev => prev.map(tab =>
+      tab.id === activeTab ? {
+        ...tab,
+        wavemarks: (tab.wavemarks || []).map(w =>
+          w.id === wavemarkId ? { ...w, color: newColor } : w
+        ),
+      } : tab
+    ));
+  }, [activeTab]);
+  
+  // Handle wavemark expanded groups change
+  const handleWavemarkGroupsChange = useCallback((wavemarkId: string, newGroups: string[]) => {
+    setTabs(prev => prev.map(tab =>
+      tab.id === activeTab ? {
+        ...tab,
+        wavemarks: (tab.wavemarks || []).map(w =>
+          w.id === wavemarkId ? { ...w, expandedGroups: newGroups } : w
+        ),
+      } : tab
+    ));
+  }, [activeTab]);
   
   // Handle bookmark click - jump to source
   const handleBookmarkClick = useCallback(async (bookmark: Bookmark) => {
@@ -2282,9 +2411,29 @@ function App() {
 
   // Update groups for a specific tab
   const handleGroupsUpdate = (tabId: string, groups: any) => {
-    setTabs(prev => prev.map(tab =>
-      tab.id === tabId ? { ...tab, groups } : tab
-    ))
+    setTabs(prev => prev.map(tab => {
+      if (tab.id !== tabId) return tab;
+      
+      // Check if any groups were removed
+      const oldGroupIds = tab.groups ? Object.keys(tab.groups) : [];
+      const newGroupIds = groups ? Object.keys(groups) : [];
+      const removedGroupIds = oldGroupIds.filter(id => !newGroupIds.includes(id));
+      
+      // If groups were removed, update wavemarks to remove references to deleted groups
+      let updatedWavemarks = tab.wavemarks;
+      if (removedGroupIds.length > 0 && tab.wavemarks) {
+        updatedWavemarks = tab.wavemarks.map(wavemark => ({
+          ...wavemark,
+          expandedGroups: wavemark.expandedGroups.filter(id => !removedGroupIds.includes(id))
+        }));
+      }
+      
+      return { 
+        ...tab, 
+        groups,
+        wavemarks: updatedWavemarks
+      };
+    }));
   }
 
   // Update selected group for a specific tab
@@ -2374,6 +2523,8 @@ function App() {
           signalPrefix: tab.signalPrefix ?? currentWaveSignalPrefix,
           serverPrefix: tab.serverPrefix ?? currentWaveSignalServerPrefix,
           spaceBeforeBracket: tab.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket,
+          // Wavemarks
+          wavemarks: tab.wavemarks || [],
         }))
 
       // Get bookmarks
@@ -2563,6 +2714,8 @@ function App() {
           signalPrefix: waveTab.signalPrefix,
           serverPrefix: waveTab.serverPrefix,
           spaceBeforeBracket: waveTab.spaceBeforeBracket,
+          // Restore wavemarks
+          wavemarks: waveTab.wavemarks || [],
         }
         
         restoredTabs.push(newTab)
@@ -2755,6 +2908,7 @@ function App() {
         onToggleAutoCheck={handleToggleAutoCheck}
         autoCheckEnabled={autoCheckEnabled}
         onAddBookmark={handleAddBookmark}
+        currentTabType={activeTabData?.type === 'waveform' ? 'waveform' : 'source'}
         viewportStart={activeTabData?.viewport?.timeStart}
         viewportEnd={activeTabData?.viewport?.timeEnd}
         cursorPosition={activeTabData?.cursorPosition}
@@ -2885,6 +3039,7 @@ function App() {
                     } : tab
                   ))
                 }}
+                wavemarks={activeTabData.wavemarks || []}
               />
             ) : null}
           </TabPanel>
@@ -2899,7 +3054,21 @@ function App() {
         className="bottom-panel"
         style={{ height: messageHeight, minHeight: 60 }}
       >
-        <MessageWindow messages={messages} onBookmarkClick={handleBookmarkClick} onDriverClick={handleDriverClick} />
+        <MessageWindow 
+          messages={messages} 
+          onBookmarkClick={handleBookmarkClick} 
+          onDriverClick={handleDriverClick}
+          wavemarks={activeTabData?.wavemarks || []}
+          onWavemarkClick={handleWavemarkClick}
+          onWavemarkDelete={handleWavemarkDelete}
+          onWavemarkRename={handleWavemarkRename}
+          onWavemarkColorChange={handleWavemarkColorChange}
+          onWavemarkGroupsChange={handleWavemarkGroupsChange}
+          availableGroups={activeTabData?.type === 'waveform' 
+            ? Object.values(activeTabData.groups || {}).map(g => ({ id: g.id, name: g.name }))
+            : []
+          }
+        />
       </div>
 
       {/* Connection Dialog */}

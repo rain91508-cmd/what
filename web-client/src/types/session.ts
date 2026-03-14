@@ -73,6 +73,14 @@ export interface Session {
     signalPrefix?: string;      // Local prefix (removed from local signal name)
     serverPrefix?: string;      // Server prefix (added to server signal name)
     spaceBeforeBracket?: boolean;
+    // Wavemarks for this tab
+    wavemarks?: Array<{
+      id: string;
+      name: string;
+      time: number;
+      createdAt: number;
+      expandedGroups: string[];
+    }>;
   }>;
   activeWaveformTabId?: string;
 

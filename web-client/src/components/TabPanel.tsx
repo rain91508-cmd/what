@@ -1,5 +1,6 @@
 import { ReactNode, useState, useRef, useEffect } from 'react';
 import type { Signal } from '../types';
+import type { Wavemark } from '../types/wavemark';
 
 export interface SignalGroup {
   id: string;
@@ -299,6 +300,8 @@ export interface Tab {
   signalPrefix?: string;        // Local signal prefix (removed from local signal name)
   serverPrefix?: string;        // Server signal prefix (added to server signal name)
   spaceBeforeBracket?: boolean; // Whether to add space before [msb:lsb]
+  // Wavemarks for waveform tabs
+  wavemarks?: Wavemark[];
 }
 
 interface TabPanelProps {

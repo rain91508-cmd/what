@@ -5,6 +5,7 @@ import type { Signal } from '../types';
 import type { WaveformSignal, ColumnWidths, TimeConfig } from './TabPanel';
 import { lod0ToDisplay, initTimeConfig } from './TabPanel';
 import type { SignalInfo, DisplayFormat } from '../types/dataProvider';
+import type { Wavemark } from '../types/wavemark';
 import { FilterInput } from './FilterInput';
 import { wildcardMatch } from '../utils/wildcardMatch';
 import { zoomIn, zoomOut } from '../utils/zoomHelpers';
@@ -120,6 +121,8 @@ interface WaveformWindowProps {
     signalDisplayFormats?: Record<number, 'hex' | 'bin' | 'oct' | 'dec'>;
     signalHierarchySelections?: Record<number, number[]>;
   }) => void;
+  // Wavemarks to display
+  wavemarks?: Wavemark[];
 }
 
 interface CursorState {
@@ -173,6 +176,7 @@ export function WaveformWindow({
   initialSignalDisplayFormats,
   initialSignalHierarchySelections,
   onSignalSettingsChange,
+  wavemarks = [],
 }: WaveformWindowProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -2776,6 +2780,70 @@ export function WaveformWindow({
             );
           })()}
 
+          {/* Wavemark info labels */}
+          {wavemarks.map((wavemark) => {
+            // Only show wavemark label if it's within the current viewport
+            if (wavemark.time < viewport.timeStart || wavemark.time > viewport.timeEnd) {
+              return null;
+            }
+            
+            const wavemarkTimeStr = Math.round(lod0ToDisplay(wavemark.time, timeConfig)).toString();
+            const line1 = wavemark.name;
+            const line2 = wavemarkTimeStr;
+            const charWidth = 8;
+            const textWidth = Math.max(line1.length, line2.length) * charWidth + 8;
+            
+            return (
+              <div
+                key={`wavemark-label-${wavemark.id}`}
+                style={{
+                  position: 'absolute',
+                  left: `${((wavemark.time - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * 100}%`,
+                  transform: (() => {
+                    const wavemarkX = ((wavemark.time - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * canvasWidth;
+                    const cursorX = cursor.visible 
+                      ? ((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * canvasWidth 
+                      : null;
+                    
+                    // Check if too close to right edge
+                    if (wavemarkX > canvasWidth - textWidth) {
+                      return 'translateX(-100%) translateX(-4px)';
+                    }
+                    
+                    // Check if cursor is visible and wavemark is close to cursor
+                    if (cursor.visible && cursorX !== null) {
+                      const distance = Math.abs(wavemarkX - cursorX);
+                      if (distance < textWidth + 10) { // 10px buffer
+                        // Wavemark is close to cursor, show on opposite side
+                        if (wavemarkX <= cursorX) {
+                          // Wavemark is on left of cursor (or exactly at cursor), show label on left
+                          return 'translateX(-100%) translateX(-4px)';
+                        } else {
+                          // Wavemark is on right of cursor, show label on right
+                          return 'translateX(4px)';
+                        }
+                      }
+                    }
+                    
+                    // Default: show on right
+                    return 'translateX(4px)';
+                  })(),
+                  color: '#cccccc', // Light gray for text
+                  fontWeight: 'bold',
+                  zIndex: 1,
+                  pointerEvents: 'none',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  lineHeight: '1.2',
+                  fontSize: '12px',
+                }}
+              >
+                <span>{line1}</span>
+                <span>{line2}</span>
+              </div>
+            );
+          })}
+
           {/* Mouse info - 两行显示：第一行差值，第二行时间 */}
           {displayMouseX !== null && mouseX !== null && (() => {
             const mouseTime = viewport.timeStart + (displayMouseX / (canvasWidth || 1)) * (viewport.timeEnd - viewport.timeStart);
@@ -2862,6 +2930,29 @@ export function WaveformWindow({
               pointerEvents: 'none',
             }} />
           )}
+          {/* Wavemark vertical lines - HTML overlay */}
+          {wavemarks.map((wavemark) => {
+            // Only show wavemark if it's within the current viewport
+            if (wavemark.time < viewport.timeStart || wavemark.time > viewport.timeEnd) {
+              return null;
+            }
+            return (
+              <div
+                key={wavemark.id}
+                style={{
+                  position: 'absolute',
+                  left: `${((wavemark.time - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * 100}%`,
+                  top: 0,
+                  bottom: 0,
+                  width: '1px',
+                  background: wavemark.color,
+                  zIndex: 9,
+                  pointerEvents: 'none',
+                }}
+                title={`${wavemark.name} @ ${wavemark.time}`}
+              />
+            );
+          })}
           {/* Mouse vertical line - HTML overlay for smooth rendering */}
           {renderMouseX !== null && (
             <div style={{

@@ -3,6 +3,8 @@ import { bookmarkManager, type Bookmark } from '../types/bookmark';
 import { driverManager } from '../modules/knowledge/driverManager';
 import { kdbManager } from '../modules/knowledge/kdbManager';
 import type { DriverGroup, DriverEntry } from '../types/driver';
+import type { Wavemark } from '../types/wavemark';
+import { WAVEMARK_COLORS } from '../types/wavemark';
 
 interface MessageWindowProps {
   messages: string[];
@@ -12,6 +14,15 @@ interface MessageWindowProps {
     line: number;
     fileId?: number;
   }) => void;
+  // Wavemarks props
+  wavemarks?: Wavemark[];
+  onWavemarkClick?: (wavemark: Wavemark) => void;
+  onWavemarkDelete?: (wavemarkId: string) => void;
+  onWavemarkRename?: (wavemarkId: string, newName: string) => void;
+  onWavemarkColorChange?: (wavemarkId: string, newColor: string) => void;
+  onWavemarkGroupsChange?: (wavemarkId: string, newGroups: string[]) => void;
+  // Available groups for editing
+  availableGroups?: Array<{ id: string; name: string }>;
 }
 
 // Component to display file name from module index or fileId
@@ -93,7 +104,7 @@ function DriverFileNameCell({ fileId, width }: { fileId?: number; width: number 
   );
 }
 
-type TabType = 'messages' | 'bookmarks' | 'drivers';
+type TabType = 'messages' | 'bookmarks' | 'wavemarks' | 'drivers';
 
 // Default column widths for bookmarks
 const DEFAULT_BOOKMARK_COL_WIDTHS = {
@@ -110,17 +121,34 @@ const DEFAULT_DRIVER_COL_WIDTHS = {
   line: 60,
 };
 
-export function MessageWindow({ messages, onBookmarkClick, onDriverClick }: MessageWindowProps) {
+// Default column widths for wavemarks
+const DEFAULT_WAVEMARK_COL_WIDTHS = {
+  color: 30,
+  name: 120,
+  time: 100,
+  groups: 100,
+  action: 40,
+};
+
+export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavemarks = [], onWavemarkClick, onWavemarkDelete, onWavemarkRename, onWavemarkColorChange, onWavemarkGroupsChange, availableGroups = [] }: MessageWindowProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<TabType>('messages');
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [driverGroups, setDriverGroups] = useState<DriverGroup[]>([]);
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
+  const [editingWavemark, setEditingWavemark] = useState<string | null>(null);
+  const [editWavemarkValue, setEditWavemarkValue] = useState('');
+  // Color picker state
+  const [showColorPicker, setShowColorPicker] = useState<string | null>(null);
+  // Group selector state
+  const [showGroupSelector, setShowGroupSelector] = useState<string | null>(null);
+  const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
   
   // Column widths state
   const [bookmarkColWidths, setBookmarkColWidths] = useState(DEFAULT_BOOKMARK_COL_WIDTHS);
   const [driverColWidths, setDriverColWidths] = useState(DEFAULT_DRIVER_COL_WIDTHS);
+  const [wavemarkColWidths, setWavemarkColWidths] = useState(DEFAULT_WAVEMARK_COL_WIDTHS);
   const [resizing, setResizing] = useState<{ tab: TabType; col: string } | null>(null);
   const resizeStartX = useRef(0);
   const resizeStartWidth = useRef(0);
@@ -150,12 +178,41 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick }: Mess
     }
   }, [messages, activeTab]);
 
+  // Close color picker and group selector when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // Check if click is inside color picker or group selector
+      const isInsideColorPicker = target.closest('[data-color-picker]');
+      const isInsideGroupSelector = target.closest('[data-group-selector]');
+      const isColorIndicator = target.closest('[data-color-indicator]');
+      const isGroupCount = target.closest('[data-group-count]');
+      
+      if (!isInsideColorPicker && !isColorIndicator) {
+        setShowColorPicker(null);
+      }
+      if (!isInsideGroupSelector && !isGroupCount) {
+        setShowGroupSelector(null);
+      }
+    };
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   // Resize handlers
   const handleResizeStart = (e: React.MouseEvent, tab: TabType, col: string) => {
     e.preventDefault();
     setResizing({ tab, col });
     resizeStartX.current = e.clientX;
-    const widths = tab === 'drivers' ? driverColWidths : bookmarkColWidths;
+    let widths;
+    if (tab === 'drivers') {
+      widths = driverColWidths;
+    } else if (tab === 'wavemarks') {
+      widths = wavemarkColWidths;
+    } else {
+      widths = bookmarkColWidths;
+    }
     resizeStartWidth.current = widths[col as keyof typeof widths] || 100;
   };
 
@@ -166,6 +223,8 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick }: Mess
     
     if (resizing.tab === 'drivers') {
       setDriverColWidths(prev => ({ ...prev, [resizing.col]: newWidth }));
+    } else if (resizing.tab === 'wavemarks') {
+      setWavemarkColWidths(prev => ({ ...prev, [resizing.col]: newWidth }));
     } else {
       setBookmarkColWidths(prev => ({ ...prev, [resizing.col]: newWidth }));
     }
@@ -301,6 +360,23 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick }: Mess
           }}
         >
           Bookmarks ({bookmarks.length})
+        </div>
+        <div
+          onClick={() => setActiveTab('wavemarks')}
+          style={{
+            padding: '2px 10px',
+            cursor: 'pointer',
+            fontSize: '11px',
+            fontWeight: 600,
+            borderRight: '1px solid #a0b0c0',
+            backgroundColor: activeTab === 'wavemarks' ? '#fff' : 'transparent',
+            color: activeTab === 'wavemarks' ? '#1976d2' : '#333',
+            height: '100%',
+            display: 'flex',
+            alignItems: 'center',
+          }}
+        >
+          Wavemarks ({wavemarks.length})
         </div>
         <div
           onClick={() => setActiveTab('drivers')}
@@ -493,6 +569,304 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick }: Mess
                   </button>
                 </div>
               ))
+            )}
+          </div>
+        ) : activeTab === 'wavemarks' ? (
+          // Wavemarks Tab
+          <div style={{ padding: '4px', overflow: 'auto', flex: 1 }}>
+            {wavemarks.length === 0 ? (
+              <div style={{ color: '#999', padding: '8px', fontSize: '12px' }}>
+                No wavemarks. Click the bookmark button in the toolbar to add a wavemark at the current cursor position.
+              </div>
+            ) : (
+              <div>
+                {/* Header with resize handles */}
+                <div style={{ 
+                  display: 'flex', 
+                  borderBottom: '2px solid #ddd',
+                  fontWeight: 'bold',
+                  fontSize: '11px',
+                  padding: '4px 0',
+                  marginBottom: '4px',
+                }}>
+                  <div style={{ width: wavemarkColWidths.color, minWidth: 20, paddingRight: '4px' }}>Color</div>
+                  <div 
+                    style={{ width: '4px', cursor: 'col-resize', background: '#ddd' }}
+                    onMouseDown={(e) => handleResizeStart(e, 'wavemarks', 'color')}
+                  />
+                  <div style={{ width: wavemarkColWidths.name, minWidth: 50, paddingRight: '4px' }}>Name</div>
+                  <div 
+                    style={{ width: '4px', cursor: 'col-resize', background: '#ddd' }}
+                    onMouseDown={(e) => handleResizeStart(e, 'wavemarks', 'name')}
+                  />
+                  <div style={{ width: wavemarkColWidths.time, minWidth: 50, paddingRight: '4px' }}>Time</div>
+                  <div 
+                    style={{ width: '4px', cursor: 'col-resize', background: '#ddd' }}
+                    onMouseDown={(e) => handleResizeStart(e, 'wavemarks', 'time')}
+                  />
+                  <div style={{ width: wavemarkColWidths.groups, minWidth: 50, paddingRight: '4px' }}>Groups</div>
+                  <div 
+                    style={{ width: '4px', cursor: 'col-resize', background: '#ddd' }}
+                    onMouseDown={(e) => handleResizeStart(e, 'wavemarks', 'groups')}
+                  />
+                  <div style={{ width: wavemarkColWidths.action, minWidth: 30 }} />
+                </div>
+                
+                {/* Wavemark List */}
+                {wavemarks.map((wavemark) => (
+                  <div
+                    key={wavemark.id}
+                    onDoubleClick={() => onWavemarkClick?.(wavemark)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '4px 0',
+                      borderBottom: '1px solid #eee',
+                      cursor: 'pointer',
+                      fontSize: '11px',
+                      position: 'relative',
+                    }}
+                  >
+                    {/* Color Indicator */}
+                    <div
+                      data-color-indicator
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowColorPicker(showColorPicker === wavemark.id ? null : wavemark.id);
+                      }}
+                      style={{
+                        width: wavemarkColWidths.color,
+                        minWidth: 20,
+                        paddingRight: '4px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: '16px',
+                          height: '16px',
+                          borderRadius: '3px',
+                          background: wavemark.color,
+                          cursor: 'pointer',
+                          border: '1px solid #ccc',
+                        }}
+                        title="Click to change color"
+                      />
+                    </div>
+                    
+                    {/* Resize handle */}
+                    <div style={{ width: '4px' }} />
+                    
+                    {/* Color Picker Dropdown */}
+                    {showColorPicker === wavemark.id && (
+                      <div
+                        data-color-picker
+                        style={{
+                          position: 'absolute',
+                          left: '0',
+                          top: '24px',
+                          background: '#fff',
+                          border: '1px solid #ddd',
+                          borderRadius: '4px',
+                          padding: '4px',
+                          zIndex: 100,
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          gap: '4px',
+                          width: '80px',
+                          boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                        }}
+                      >
+                        {WAVEMARK_COLORS.map((color) => (
+                          <div
+                            key={color}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onWavemarkColorChange?.(wavemark.id, color);
+                              setShowColorPicker(null);
+                            }}
+                            style={{
+                              width: '16px',
+                              height: '16px',
+                              borderRadius: '2px',
+                              background: color,
+                              cursor: 'pointer',
+                              border: wavemark.color === color ? '2px solid #333' : '1px solid #ccc',
+                            }}
+                            title={color}
+                          />
+                        ))}
+                      </div>
+                    )}
+                    
+                    {/* Name */}
+                    <div style={{ width: wavemarkColWidths.name, minWidth: 50, paddingRight: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {editingWavemark === wavemark.id ? (
+                        <input
+                          type="text"
+                          value={editWavemarkValue}
+                          onChange={(e) => setEditWavemarkValue(e.target.value)}
+                          onBlur={() => {
+                            onWavemarkRename?.(wavemark.id, editWavemarkValue);
+                            setEditingWavemark(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              onWavemarkRename?.(wavemark.id, editWavemarkValue);
+                              setEditingWavemark(null);
+                            }
+                          }}
+                          autoFocus
+                          style={{
+                            width: '100%',
+                            fontSize: '11px',
+                            padding: '2px 4px',
+                            border: '1px solid #1976d2',
+                            borderRadius: '2px',
+                          }}
+                        />
+                      ) : (
+                        <span
+                          onClick={() => {
+                            setEditingWavemark(wavemark.id);
+                            setEditWavemarkValue(wavemark.name);
+                          }}
+                          style={{ cursor: 'text' }}
+                          title="Click to edit"
+                        >
+                          {wavemark.name}
+                        </span>
+                      )}
+                    </div>
+                    
+                    {/* Resize handle */}
+                    <div style={{ width: '4px' }} />
+                    
+                    {/* Time */}
+                    <div style={{ width: wavemarkColWidths.time, minWidth: 50, paddingRight: '4px', color: '#666', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {wavemark.time}
+                    </div>
+                    
+                    {/* Resize handle */}
+                    <div style={{ width: '4px' }} />
+                    
+                    {/* Expanded Groups - Clickable */}
+                    <div 
+                      data-group-count
+                      style={{ 
+                        width: wavemarkColWidths.groups, 
+                        minWidth: 50, 
+                        paddingRight: '4px', 
+                        color: '#666', 
+                        cursor: 'pointer', 
+                        overflow: 'hidden', 
+                        textOverflow: 'ellipsis', 
+                        whiteSpace: 'nowrap',
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowGroupSelector(showGroupSelector === wavemark.id ? null : wavemark.id);
+                        setSelectedGroups(wavemark.expandedGroups);
+                      }}
+                      title="Click to edit expanded groups"
+                    >
+                      {/* Count groups excluding root */}
+                      {wavemark.expandedGroups.filter(id => id !== 'root').length} groups
+                    </div>
+                    
+                    {/* Group Selector Dropdown - positioned at row level */}
+                    {showGroupSelector === wavemark.id && (
+                      <div
+                        data-group-selector
+                        style={{
+                          position: 'absolute',
+                          left: `${30 + 4 + wavemarkColWidths.name + 4 + wavemarkColWidths.time + 4}px`,
+                          top: '24px',
+                          background: '#fff',
+                          border: '1px solid #ddd',
+                          borderRadius: '4px',
+                          padding: '8px',
+                          zIndex: 100,
+                          minWidth: '150px',
+                          maxHeight: '200px',
+                          overflow: 'auto',
+                          boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div style={{ fontWeight: 'bold', marginBottom: '4px', fontSize: '10px' }}>
+                          Select Expanded Groups:
+                        </div>
+                        {/* Filter out root group */}
+                        {availableGroups.filter(g => g.id !== 'root').length === 0 ? (
+                          <div style={{ color: '#999', fontSize: '10px' }}>No groups available</div>
+                        ) : (
+                          availableGroups.filter(g => g.id !== 'root').map((group) => (
+                            <label
+                              key={group.id}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                padding: '2px 0',
+                                cursor: 'pointer',
+                                fontSize: '10px',
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedGroups.includes(group.id)}
+                                onChange={(e) => {
+                                  const newSelected = e.target.checked
+                                    ? [...selectedGroups, group.id]
+                                    : selectedGroups.filter(id => id !== group.id);
+                                  setSelectedGroups(newSelected);
+                                  onWavemarkGroupsChange?.(wavemark.id, newSelected);
+                                }}
+                                style={{ marginRight: '4px' }}
+                              />
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {group.name}
+                              </span>
+                            </label>
+                          ))
+                        )}
+                      </div>
+                    )}
+                    
+                    {/* Delete Button - positioned at the right edge */}
+                    <div style={{ 
+                      width: wavemarkColWidths.action, 
+                      minWidth: 30, 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      justifyContent: 'center',
+                      marginLeft: 'auto', // Push to right
+                    }}>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onWavemarkDelete?.(wavemark.id);
+                        }}
+                        style={{
+                          width: '24px',
+                          padding: '2px 4px',
+                          fontSize: '10px',
+                          border: '1px solid #ddd',
+                          borderRadius: '2px',
+                          background: '#fff',
+                          cursor: 'pointer',
+                          color: '#d32f2f',
+                        }}
+                        title="Delete wavemark"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         ) : (
