@@ -2400,11 +2400,6 @@ function App() {
               useMockData,
             }
           : undefined,
-        waveformSettings: {
-          signalPrefix: currentWaveSignalPrefix,
-          serverPrefix: currentWaveSignalServerPrefix,
-          spaceBeforeBracket: currentWaveSignalSpaceBeforeBracket,
-        },
         sourceTabs: sourceTabsData,
         activeSourceTabId: activeTab,
         nextWaveformSignalId: nextWaveformSignalIdRef.current,
@@ -2496,13 +2491,6 @@ function App() {
             // Continue without waveform, user can load manually
           }
         }
-      }
-
-      // Step 4.5: Restore waveform settings
-      if (session.waveformSettings) {
-        setCurrentWaveSignalPrefix(session.waveformSettings.signalPrefix)
-        setCurrentWaveSignalServerPrefix(session.waveformSettings.serverPrefix || '')  // Backward compatibility
-        setCurrentWaveSignalSpaceBeforeBracket(session.waveformSettings.spaceBeforeBracket)
       }
 
       // Step 5: Restore source tabs

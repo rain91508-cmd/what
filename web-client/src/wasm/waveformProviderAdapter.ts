@@ -246,7 +246,8 @@ export class WaveformProviderAdapter {
       signals: newSignals,
       viewport,
       canvasConfig,
-      // 注意：不再传递全局 displayFormat，因为每个信号的 display_format 已经在 newSignals 中设置
+      // 使用全局 displayFormat，因为接口要求
+      displayFormat: this._displayFormat,
       timeConfig,
       devicePixelRatio: this.devicePixelRatio,
       signalPrefix,
