@@ -74,6 +74,12 @@ interface ToolBarProps {
   isHierarchySearchMode?: boolean;
   searchSignals?: boolean;
   onSearchSignalsChange?: (searchSignals: boolean) => void;
+  // Waveform search mode (when waveform tab active)
+  isWaveformSearchMode?: boolean;
+  waveformSearchType?: 'value' | 'transition';
+  onWaveformSearchTypeChange?: (type: 'value' | 'transition') => void;
+  onWaveformSearchForward?: () => void;
+  onWaveformSearchBackward?: () => void;
 }
 
 export function ToolBar({ 
@@ -115,6 +121,12 @@ export function ToolBar({
   isHierarchySearchMode = false,
   searchSignals = false,
   onSearchSignalsChange,
+  // Waveform search mode
+  isWaveformSearchMode = false,
+  waveformSearchType = 'value',
+  onWaveformSearchTypeChange,
+  onWaveformSearchForward,
+  onWaveformSearchBackward,
 }: ToolBarProps) {
   // Local state for display unit input value (only committed on Enter)
   const [inputValue, setInputValue] = useState<string>('');
@@ -588,112 +600,179 @@ export function ToolBar({
       
       {/* Search Section */}
       <div ref={searchContainerRef} style={{ display: 'flex', alignItems: 'center', gap: '4px', position: 'relative' }}>
-        {/* Signal/Instance Checkbox (only in hierarchy search mode) */}
-        {isHierarchySearchMode && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: '2px', fontSize: '11px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+        {/* Waveform Search Mode */}
+        {isWaveformSearchMode ? (
+          <>
+            {/* Search Type Dropdown */}
+            <select
+              value={waveformSearchType}
+              onChange={(e) => onWaveformSearchTypeChange?.(e.target.value as 'value' | 'transition')}
+              style={{
+                padding: '4px 6px',
+                fontSize: '11px',
+                border: '1px solid #c0c0c0',
+                borderRadius: '3px',
+                height: '24px',
+                width: '80px',
+              }}
+            >
+              <option value="value">Value</option>
+              <option value="transition">Transition</option>
+            </select>
+            
+            {/* Search Input */}
             <input
-              type="checkbox"
-              checked={searchSignals}
-              onChange={(e) => onSearchSignalsChange?.(e.target.checked)}
-              style={{ margin: 0 }}
+              ref={searchInputRef}
+              type="text"
+              value={localSearchPattern}
+              onChange={(e) => {
+                setLocalSearchPattern(e.target.value);
+                onSearchPatternChange?.(e.target.value);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  onWaveformSearchForward?.();
+                }
+              }}
+              placeholder="Pattern..."
+              style={{
+                width: '100px',
+                padding: '4px 6px',
+                fontSize: '12px',
+                border: '1px solid #c0c0c0',
+                borderRadius: '3px',
+                height: '24px',
+              }}
             />
-            <span>Signals</span>
-          </label>
-        )}
-        
-        {/* Search Input */}
-        <div style={{ position: 'relative' }}>
-          <input
-            ref={searchInputRef}
-            type="text"
-            value={localSearchPattern}
-            onChange={(e) => {
-              setLocalSearchPattern(e.target.value);
-              onSearchPatternChange?.(e.target.value);
-            }}
-            onFocus={() => setShowSearchHistory(true)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                setShowSearchHistory(false);
+            
+            {/* Search Backward Button */}
+            <button
+              className="tool-bar-button"
+              title="Search Backward"
+              onClick={() => onWaveformSearchBackward?.()}
+            >
+              ◀
+            </button>
+            
+            {/* Search Forward Button */}
+            <button
+              className="tool-bar-button"
+              title="Search Forward"
+              onClick={() => onWaveformSearchForward?.()}
+            >
+              ▶
+            </button>
+          </>
+        ) : (
+          <>
+            {/* Signal/Instance Checkbox (only in hierarchy search mode) */}
+            {isHierarchySearchMode && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: '2px', fontSize: '11px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                <input
+                  type="checkbox"
+                  checked={searchSignals}
+                  onChange={(e) => onSearchSignalsChange?.(e.target.checked)}
+                  style={{ margin: 0 }}
+                />
+                <span>Signals</span>
+              </label>
+            )}
+            
+            {/* Search Input */}
+            <div style={{ position: 'relative' }}>
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={localSearchPattern}
+                onChange={(e) => {
+                  setLocalSearchPattern(e.target.value);
+                  onSearchPatternChange?.(e.target.value);
+                }}
+                onFocus={() => setShowSearchHistory(true)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    setShowSearchHistory(false);
+                    if (isSearching) {
+                      onSearchCancel?.();
+                    } else {
+                      onSearchExecute?.();
+                    }
+                  }
+                }}
+                placeholder="Search..."
+                style={{
+                  width: '120px',
+                  padding: '4px 6px',
+                  fontSize: '12px',
+                  border: '1px solid #c0c0c0',
+                  borderRadius: '3px',
+                  height: '24px',
+                }}
+              />
+              
+              {/* Search History Dropdown */}
+              {showSearchHistory && searchHistory.length > 0 && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: 0,
+                    marginTop: '2px',
+                    background: '#fff',
+                    border: '1px solid #ddd',
+                    borderRadius: '4px',
+                    padding: '4px 0',
+                    zIndex: 1000,
+                    minWidth: '150px',
+                    maxHeight: '200px',
+                    overflow: 'auto',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                  }}
+                >
+                  {searchHistory.map((pattern, index) => (
+                    <div
+                      key={index}
+                      onClick={() => {
+                        setLocalSearchPattern(pattern);
+                        onSearchPatternChange?.(pattern);
+                        setShowSearchHistory(false);
+                      }}
+                      style={{
+                        padding: '4px 8px',
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                        hover: { background: '#f0f0f0' },
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      {pattern}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            
+            {/* Search/Cancel Button */}
+            <button
+              className="tool-bar-button"
+              title={isSearching ? 'Cancel Search' : 'Search'}
+              onClick={() => {
                 if (isSearching) {
                   onSearchCancel?.();
                 } else {
                   onSearchExecute?.();
                 }
-              }
-            }}
-            placeholder="Search..."
-            style={{
-              width: '120px',
-              padding: '4px 6px',
-              fontSize: '12px',
-              border: '1px solid #c0c0c0',
-              borderRadius: '3px',
-              height: '24px',
-            }}
-          />
-          
-          {/* Search History Dropdown */}
-          {showSearchHistory && searchHistory.length > 0 && (
-            <div
+              }}
               style={{
-                position: 'absolute',
-                top: '100%',
-                left: 0,
-                marginTop: '2px',
-                background: '#fff',
-                border: '1px solid #ddd',
-                borderRadius: '4px',
-                padding: '4px 0',
-                zIndex: 1000,
-                minWidth: '150px',
-                maxHeight: '200px',
-                overflow: 'auto',
-                boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                background: isSearching ? '#ffebee' : undefined,
+                color: isSearching ? '#d32f2f' : undefined,
               }}
             >
-              {searchHistory.map((pattern, index) => (
-                <div
-                  key={index}
-                  onClick={() => {
-                    setLocalSearchPattern(pattern);
-                    onSearchPatternChange?.(pattern);
-                    setShowSearchHistory(false);
-                  }}
-                  style={{
-                    padding: '4px 8px',
-                    cursor: 'pointer',
-                    fontSize: '12px',
-                    hover: { background: '#f0f0f0' },
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                >
-                  {pattern}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        
-        {/* Search/Cancel Button */}
-        <button
-          className="tool-bar-button"
-          title={isSearching ? 'Cancel Search' : 'Search'}
-          onClick={() => {
-            if (isSearching) {
-              onSearchCancel?.();
-            } else {
-              onSearchExecute?.();
-            }
-          }}
-          style={{
-            background: isSearching ? '#ffebee' : undefined,
-            color: isSearching ? '#d32f2f' : undefined,
-          }}
-        >
-          {isSearching ? '✕' : '🔍'}
-        </button>
+              {isSearching ? '✕' : '🔍'}
+            </button>
+          </>
+        )}
       </div>
       
       <div className="tool-bar-separator"></div>

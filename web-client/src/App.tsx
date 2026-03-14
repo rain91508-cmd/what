@@ -34,6 +34,7 @@ import { kdbManager } from './modules/knowledge/kdbManager'
 import { waveManager } from './modules/wSignal'
 import { searchManager } from './modules/search/searchManager'
 import { performHierarchySearch, CancelToken } from './modules/search/searchService'
+import { waveformSearchService, type WaveformSearchType, type WaveformSearchDirection } from './modules/search/waveformSearchService'
 
 // Utils
 import { zoomIn, zoomOut } from './utils/zoomHelpers'
@@ -228,13 +229,17 @@ function App() {
   const [signalWidth, setSignalWidth] = useState(200)
   const [messageHeight, setMessageHeight] = useState(100)
 
-  // Search state
+  // Hierarchy Search state
   const [searchPattern, setSearchPattern] = useState('')
   const [searchHistory, setSearchHistory] = useState<string[]>([])
   const [isSearching, setIsSearching] = useState(false)
   const [searchSignals, setSearchSignals] = useState(false)
   const [searchResults, setSearchResults] = useState<SearchResultGroup[]>([])
   const cancelTokenRef = useRef<CancelToken | null>(null)
+
+  // Waveform Search state
+  const [waveformSearchType, setWaveformSearchType] = useState<WaveformSearchType>('value')
+  const [isWaveformSearching, setIsWaveformSearching] = useState(false)
 
   // Track if OPFS warning has been shown (to prevent double alert in StrictMode)
   const opfsWarningShown = useRef(false)
@@ -1041,6 +1046,109 @@ function App() {
     searchManager.deleteSearchResult(searchId);
     setSearchResults(searchManager.getSearchResults());
   }, []);
+
+  // ============================================
+  // Waveform Search Functionality
+  // ============================================
+
+  // Perform waveform pattern search
+  const handleWaveformSearch = useCallback(async (direction: WaveformSearchDirection) => {
+    // Check if active tab is waveform
+    if (activeTabData?.type !== 'waveform') {
+      addMessage('Waveform search is only available in waveform tabs');
+      return;
+    }
+
+    // Check if pattern is provided
+    if (!searchPattern.trim()) {
+      addMessage('Please enter a search pattern');
+      return;
+    }
+
+    // Get selected signal from Signal Panel
+    const selectedSignal = activeTabData.selectedSignal;
+    if (!selectedSignal) {
+      addMessage('Please select a signal in the Signal Panel');
+      return;
+    }
+
+    // Get waveform name
+    const waveformName = activeTabData.waveformName;
+    if (!waveformName) {
+      addMessage('No waveform loaded');
+      return;
+    }
+
+    // Get current cursor position as start time
+    const cursorPosition = activeTabData.cursorPosition || 0;
+
+    // Get signal radix (display format)
+    const signalFormat = activeTabData.signalDisplayFormats?.get(selectedSignal.id);
+    const radix = signalFormat?.radix || 'binary';
+
+    setIsWaveformSearching(true);
+
+    try {
+      addMessage(`Searching ${direction} for "${searchPattern}" in ${selectedSignal.name}...`);
+
+      // Perform search
+      const results = await waveformSearchService.search(
+        waveformName,
+        selectedSignal.name,
+        waveformSearchType,
+        searchPattern,
+        radix,
+        cursorPosition,
+        direction,
+        100
+      );
+
+      if (results.length === 0) {
+        addMessage(`No matches found for "${searchPattern}"`);
+        setIsWaveformSearching(false);
+        return;
+      }
+
+      // Find closest result to cursor
+      const closestResult = waveformSearchService.findClosestResult(
+        results,
+        cursorPosition,
+        direction
+      );
+
+      if (!closestResult) {
+        addMessage(`No ${direction} matches found from current position`);
+        setIsWaveformSearching(false);
+        return;
+      }
+
+      // Move cursor and viewport to the result
+      const newTime = closestResult.time;
+
+      // Update cursor position
+      handleCursorPositionChange(newTime);
+
+      // Center viewport on the result
+      const viewport = activeTabData.viewport;
+      if (viewport) {
+        const viewportWidth = viewport.timeEnd - viewport.timeStart;
+        const newStart = newTime - viewportWidth / 2;
+        const newEnd = newTime + viewportWidth / 2;
+
+        handleViewportChange(activeTab, {
+          ...viewport,
+          timeStart: newStart,
+          timeEnd: newEnd,
+        });
+      }
+
+      addMessage(`Found match at time ${newTime}: ${closestResult.value}`);
+    } catch (error) {
+      addMessage(`Search error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsWaveformSearching(false);
+    }
+  }, [activeTabData, searchPattern, waveformSearchType, addMessage, handleCursorPositionChange, activeTab, handleViewportChange]);
 
   // Handle bookmark click - jump to source
   const handleBookmarkClick = useCallback(async (bookmark: Bookmark) => {
@@ -3109,6 +3217,12 @@ function App() {
         isHierarchySearchMode={tabs.length === 0 || activeTabData?.type === 'source'}
         searchSignals={searchSignals}
         onSearchSignalsChange={setSearchSignals}
+        // Waveform search functionality
+        isWaveformSearchMode={activeTabData?.type === 'waveform'}
+        waveformSearchType={waveformSearchType}
+        onWaveformSearchTypeChange={setWaveformSearchType}
+        onWaveformSearchForward={() => handleWaveformSearch('forward')}
+        onWaveformSearchBackward={() => handleWaveformSearch('backward')}
       />
 
       {/* Main Content */}
