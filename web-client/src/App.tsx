@@ -1712,16 +1712,16 @@ function App() {
     }
   }
 
-  const handleSignalSelect = (signal: Signal) => {
+  const handleSignalSelect = async (signal: Signal) => {
     console.log('[App] handleSignalSelect called:', signal?.name, 'activeTab:', activeTab);
-    
+
     // Update MenuBar info text with signal's full hierarchy name
     setMenuBarInfoText(signal.fullName)
-    
+
     // Store selected signal in active tab for waveform search
     const currentTab = tabs.find(t => t.id === activeTab)
     console.log('[App] Current tab:', currentTab?.type, currentTab?.id);
-    
+
     if (currentTab?.type === 'waveform') {
       console.log('[App] Storing selected signal in tab:', signal.name);
       setTabs(prev => prev.map(tab =>
@@ -1731,8 +1731,8 @@ function App() {
         } : tab
       ))
     } else if (currentTab?.type === 'tableview') {
-      // Add signal to tableview
-      addSignalToTableView(signal)
+      // Add signal to tableview (async)
+      await addSignalToTableView(signal)
     } else {
       console.log('[App] Not a waveform/tableview tab, skipping selectedSignal storage');
     }
@@ -1765,16 +1765,46 @@ function App() {
   }
 
   // Add signal to TableView tab (similar to addSignalToWaveform)
-  const addSignalToTableView = (signal: Signal) => {
+  const addSignalToTableView = async (signal: Signal) => {
     // Generate unique_id for this signal instance
     const unique_id = nextWaveformSignalIdRef.current++
-    
-    // Get current tab and prefix settings
+
+    // Get current tab
     const currentTab = tabs.find(t => t.id === activeTab)
-    const signalPrefix = currentTab?.signalPrefix ?? currentWaveSignalPrefix
-    const serverPrefix = currentTab?.serverPrefix ?? currentWaveSignalServerPrefix
-    const spaceBeforeBracket = currentTab?.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket
-    
+
+    // Search signal on server to get prefix information (same as WaveformWindow)
+    let signalPrefix = currentTab?.signalPrefix ?? currentWaveSignalPrefix
+    let serverPrefix = currentTab?.serverPrefix ?? currentWaveSignalServerPrefix
+    let spaceBeforeBracket = currentTab?.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket
+
+    if (currentWaveName) {
+      const searchResult = await searchSignalOnServer(currentWaveName, signal.fullName, signalPrefix)
+      if (searchResult.found) {
+        // Update prefix settings from search result
+        if (searchResult.localPrefix !== undefined) {
+          signalPrefix = searchResult.localPrefix
+        }
+        if (searchResult.serverPrefix !== undefined) {
+          serverPrefix = searchResult.serverPrefix
+        }
+        if (searchResult.spaceBeforeBracket !== undefined) {
+          spaceBeforeBracket = searchResult.spaceBeforeBracket
+        }
+
+        // Update tab's prefix settings
+        setTabs(prev => prev.map(tab =>
+          tab.id === activeTab ? {
+            ...tab,
+            signalPrefix,
+            serverPrefix,
+            spaceBeforeBracket,
+          } : tab
+        ))
+
+        console.log(`[App] TableView signal search found: localPrefix='${signalPrefix}', serverPrefix='${serverPrefix}', spaceBeforeBracket=${spaceBeforeBracket}`)
+      }
+    }
+
     // Convert signal name for server
     const serverSignalName = convertSignalNameForServer(
       signal.fullName,
@@ -1782,7 +1812,7 @@ function App() {
       serverPrefix,
       spaceBeforeBracket
     )
-    
+
     // Add signal to the active tableview tab
     setTabs(prev => prev.map(tab => {
       if (tab.id === activeTab && tab.type === 'tableview') {
@@ -1804,7 +1834,7 @@ function App() {
       }
       return tab
     }))
-    
+
     addMessage(`Added signal to tableview: ${signal.name} -> ${serverSignalName} (ID: ${unique_id})`)
   }
 
