@@ -104,6 +104,10 @@ export function TableViewWindow({
   }>({});
   // Track which column's metadata filter dropdown is open
   const [openMetadataFilterColumn, setOpenMetadataFilterColumn] = useState<string | null>(null);
+  // Per-column radix (display format) selection: { [columnId]: 'hex' | 'bin' | 'oct' | 'dec' }
+  const [columnRadix, setColumnRadix] = useState<{
+    [columnId: string]: 'hex' | 'bin' | 'oct' | 'dec';
+  }>({});
 
   // Create adapter when provider is ready (same pattern as WaveformWindow)
   useEffect(() => {
@@ -343,13 +347,14 @@ export function TableViewWindow({
 
     try {
       // Build WASM signals with proper draw_sig_id (same as WaveformWindow)
+      // Use columnRadix if set, otherwise fall back to signal's default displayFormat
       const wasmSignals = await buildWasmSignals(
         signals.map(s => ({
           global_id: s.globalId,
           name: s.name,
           row: s.row,
           width: s.width,
-          displayFormat: s.displayFormat,
+          displayFormat: columnRadix[s.name] || s.displayFormat,
         })),
         _waveformName || 'unknown'
       );
@@ -594,6 +599,40 @@ export function TableViewWindow({
                                 marginTop: '4px',
                               }}
                             >
+                              {/* Radix Selection Section */}
+                              <div style={{ marginBottom: '8px', fontWeight: 'bold', fontSize: '11px' }}>
+                                Radix
+                              </div>
+                              {(() => {
+                                const columnId = header.column.id;
+                                const currentRadix = columnRadix[columnId] || 'hex';
+                                return (
+                                  <div style={{ display: 'flex', gap: '4px', marginBottom: '12px' }}>
+                                    {(['bin', 'oct', 'dec', 'hex'] as const).map((radix) => (
+                                      <button
+                                        key={radix}
+                                        onClick={() => {
+                                          setColumnRadix(prev => ({ ...prev, [columnId]: radix }));
+                                        }}
+                                        style={{
+                                          padding: '2px 6px',
+                                          fontSize: '10px',
+                                          backgroundColor: currentRadix === radix ? '#2196f3' : '#f0f0f0',
+                                          color: currentRadix === radix ? 'white' : '#333',
+                                          border: '1px solid #ccc',
+                                          borderRadius: '3px',
+                                          cursor: 'pointer',
+                                        }}
+                                      >
+                                        {radix.toUpperCase()}
+                                      </button>
+                                    ))}
+                                  </div>
+                                );
+                              })()}
+
+                              <div style={{ borderTop: '1px solid #eee', marginBottom: '8px' }}></div>
+
                               <div style={{ marginBottom: '6px', fontWeight: 'bold', fontSize: '11px' }}>
                                 Metadata Filter (OR)
                               </div>
