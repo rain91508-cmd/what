@@ -177,6 +177,9 @@ export function ToolBar({
   const waveformSearchInputRef = useRef<HTMLInputElement>(null);
   const fromValueInputRef = useRef<HTMLInputElement>(null);
   const toValueInputRef = useRef<HTMLInputElement>(null);
+  const waveformSearchContainerRef = useRef<HTMLDivElement>(null);
+  const fromValueContainerRef = useRef<HTMLDivElement>(null);
+  const toValueContainerRef = useRef<HTMLDivElement>(null);
 
   // 获取 fs 乘数（根据 waveformTimeUnit）
   const getFsPerLod0Unit = (): number => {
@@ -236,6 +239,15 @@ export function ToolBar({
     const handleClickOutside = (e: MouseEvent) => {
       if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
         setShowSearchHistory(false);
+      }
+      if (waveformSearchContainerRef.current && !waveformSearchContainerRef.current.contains(e.target as Node)) {
+        setShowWaveformSearchHistory(false);
+      }
+      if (fromValueContainerRef.current && !fromValueContainerRef.current.contains(e.target as Node)) {
+        setShowFromValueHistory(false);
+      }
+      if (toValueContainerRef.current && !toValueContainerRef.current.contains(e.target as Node)) {
+        setShowToValueHistory(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -651,7 +663,7 @@ export function ToolBar({
             
             {/* Value Mode: Single input with history */}
             {waveformSearchType === 'value' && (
-              <div style={{ position: 'relative' }}>
+              <div ref={waveformSearchContainerRef} style={{ position: 'relative' }}>
                 <input
                   ref={searchInputRef}
                   type="text"
@@ -742,7 +754,7 @@ export function ToolBar({
             {/* Transition Mode: From and To inputs with history */}
             {waveformSearchType === 'transition' && (
               <>
-                <div style={{ position: 'relative' }}>
+                <div ref={fromValueContainerRef} style={{ position: 'relative' }}>
                   <input
                     ref={fromValueInputRef}
                     type="text"
@@ -804,7 +816,7 @@ export function ToolBar({
                   )}
                 </div>
                 <span style={{ fontSize: '11px', color: '#666' }}>→</span>
-                <div style={{ position: 'relative' }}>
+                <div ref={toValueContainerRef} style={{ position: 'relative' }}>
                   <input
                     ref={toValueInputRef}
                     type="text"
