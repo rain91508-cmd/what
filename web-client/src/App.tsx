@@ -218,7 +218,12 @@ function App() {
   // Initialize with empty tabs - no default source or waveform tabs
   const [tabs, setTabs] = useState<Tab[]>([])
   const [activeTab, setActiveTab] = useState<string>('')
-  const tabCounter = useRef(1)
+  // Separate counters for each tab type to ensure correct numbering
+  const tabCounters = useRef({
+    source: 1,
+    waveform: 1,
+    tableview: 1,
+  })
   
   // Global counter for waveform signal unique_id (starts from 1, increments forever)
   const nextWaveformSignalIdRef = useRef(1)
@@ -587,10 +592,11 @@ function App() {
       }
     } else {
       // Create new tab
-      const newId = `source-${tabCounter.current++}`;
+      const sourceCounter = tabCounters.current.source++
+      const newId = `source-${sourceCounter}`;
       const newTab: Tab = {
         id: newId,
-        label: 'Source',
+        label: `Source ${sourceCounter}`,
         type: 'source',
         moduleIndex: selectedModuleId ?? displayModuleId,
         displayModuleIndex: displayModuleId,
@@ -1694,10 +1700,11 @@ function App() {
       addMessage(`Jump to ${signal.name} declaration (line ${line})`)
     } else {
       // No active source tab, create one
-      const newId = `source-${tabCounter.current++}`
+      const sourceCounter = tabCounters.current.source++
+      const newId = `source-${sourceCounter}`
       const newTab: Tab = {
         id: newId,
-        label: 'Source',
+        label: `Source ${sourceCounter}`,
         type: 'source',
         moduleIndex: displayModuleIndex,
         displayModuleIndex: displayModuleIndex,  // Set display module to signal's parent
@@ -2657,7 +2664,9 @@ function App() {
   // Tab management functions
   // For waveform tabs, optional customRange can be provided by user
   const handleAddTab = (type: 'source' | 'waveform' | 'tableview', customRange?: { start: number; end: number }) => {
-    const newId = `${type}-${tabCounter.current++}`
+    // Get the counter for this tab type and increment it
+    const counter = tabCounters.current[type]++
+    const newId = `${type}-${counter}`
 
     // For waveform tabs, use current waveform's time settings
     const isWaveform = type === 'waveform'
@@ -2684,9 +2693,9 @@ function App() {
 
     const newTab: Tab = {
       id: newId,
-      label: type === 'source' ? `Source ${tabCounter.current - 1}` : 
-             type === 'waveform' ? `Waveform ${tabCounter.current - 1}` :
-             `Table ${tabCounter.current - 1}`,
+      label: type === 'source' ? `Source ${counter}` :
+             type === 'waveform' ? `Waveform ${counter}` :
+             `Table ${counter}`,
       type,
       moduleIndex: type === 'source' ? null : undefined,
       signals: isWaveform ? [] : undefined,
