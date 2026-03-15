@@ -1,12 +1,12 @@
 # WHAT - Web-based HDL Analysis Toolkit
 
-WHAT 是一款基于 Web 的 HDL（硬件描述语言）代码和波形分析工具，支持 Verilog/SystemVerilog 设计的源代码查看、设计层次浏览和仿真波形分析。
+WHAT 是一款基于 Web 的 HDL（硬件描述语言）代码和波形分析工具。
 
 ## 项目动机
 
 本项目最初的动机是测试 AI 辅助编程的能力。作为一名硬件工程师，在日常工作中经常需要同时查看源代码和仿真波形来进行调试分析，但市面上缺乏一款开源的、能够将源码和波形紧密结合的分析工具。商业工具价格昂贵且不够灵活，而现有的开源方案往往功能分散，无法形成完整的工作流。
 
-因此，我萌生了利用 AI 开发一款符合自己使用习惯的分析工具的想法。令人惊讶的是，这个项目的主要代码全部由 AI 编写完成——从架构设计到具体实现，从界面布局到功能逻辑。主要功能开发耗时约 2 周，后续的 bug 修复和功能优化又花费了约 2 周时间。这样的开发效率在传统编程模式下是难以想象的，充分展示了 AI 编程效率的飞跃式提升。
+因此，我萌生了利用 AI 开发一款符合自己使用习惯的分析工具的想法。令人惊讶的是，这个项目的主要代码全部由 AI 编写完成——从主体架构设计到具体实现，从界面布局到功能逻辑。主要功能开发耗时约 2 周，后续的 bug 修复和功能架构优化又花费了约 2 周时间。这样的开发效率在传统编程模式下是难以想象的，充分展示了 AI 编程效率的飞跃式提升。
 
 在此特别感谢：
 - **Trae IDE** 提供优秀的开发环境和免费的 AI 算力支持
@@ -140,22 +140,50 @@ sudo apt-get install -y python3 python3-pip pkg-config
 
 #### 4.1.3 编译
 
+**步骤1：克隆仓库**
 ```bash
-# 进入项目目录
-cd /path/to/webhwd
-
-# 运行编译脚本
-./build.sh
-
-# 编译完成后，可执行文件位于：
-# - interpreter: build_new/interpreter/hwda_interpreter
-# - viewer: build_new/interpreter/kdb_viewer
+cd /path/to/your/workspace
+git clone <repository-url>
+cd webhwd
 ```
 
-编译选项：
-- 编译过程会自动下载和编译 Surelog（SystemVerilog 解析器）
+**步骤2：安装依赖**
+```bash
+# 更新包列表
+sudo apt-get update
+
+# 安装基础编译工具
+sudo apt-get install -y build-essential cmake git
+
+# 安装 Protocol Buffers
+sudo apt-get install -y protobuf-compiler libprotobuf-dev
+
+# 安装 zstd（可选，用于压缩）
+sudo apt-get install -y libzstd-dev
+```
+
+**步骤3：编译项目**
+```bash
+# 运行编译脚本
+./build.sh
+```
+
+编译过程说明：
+- 编译脚本会自动下载和编译 Surelog（SystemVerilog 解析器）
 - 首次编译可能需要 10-20 分钟（取决于机器性能）
 - 编译结果会缓存，后续编译会更快
+- 编译完成后，可执行文件位于：
+  - `build_new/interpreter/hwda_interpreter`
+  - `build_new/interpreter/kdb_viewer`
+
+**步骤4：验证安装**
+```bash
+# 检查 interpreter 是否可用
+./build_new/interpreter/hwda_interpreter --help
+
+# 检查 kdb_viewer 是否可用
+./build_new/interpreter/kdb_viewer --help
+```
 
 #### 4.1.4 基本使用
 
@@ -222,19 +250,16 @@ KDB（Knowledge Database）是自定义的二进制格式，包含：
 
 KDB 文件使用 Protocol Buffers 序列化，可选择使用 zstd 压缩。
 
-#### 4.1.7 完整示例
+#### 4.1.7 使用示例
 
 ```bash
-# 1. 编译项目
-./build.sh
-
-# 2. 解析 Verilog 文件
+# 解析 Verilog 文件生成 KDB
 ./build_new/interpreter/hwda_interpreter tests/simple.v --output tests/simple.kdb
 
-# 3. 查看生成的 KDB
+# 查看生成的 KDB 文件信息
 ./build_new/interpreter/kdb_viewer tests/simple.kdb
 
-# 4. 查看特定信号的 driver
+# 查看特定信号的 driver 信息
 ./build_new/interpreter/kdb_viewer tests/simple.kdb --driver work@top.sum
 ```
 
@@ -530,13 +555,24 @@ Server 提供以下主要 API：
 | Close Waveform | 关闭当前波形 |
 | Save Session | 保存当前工作状态 |
 | Restore Session | 恢复已保存的工作状态 |
-| **Edit** | |
-| Undo | 撤销 |
-| Redo | 重做 |
 | **View** | |
+| Zoom In | 放大波形时间轴 |
+| Zoom Out | 缩小波形时间轴 |
+| Zoom Full | 波形适应窗口宽度 |
+| **Navigate** | |
+| History Back | 导航到上一个代码位置 |
+| History Forward | 导航到下一个代码位置 |
 | Add Bookmark | 添加书签到当前位置 |
+| Find Driver | 查找选中信号的驱动源（需在代码中选中信号） |
+| Find Definition | 查找选中实例的定义（需在代码中选中实例） |
+| **Waveform** | |
+| Add Signal | 添加信号到波形窗口（需在 Signal Panel 双击信号） |
+| Remove Signal | 从波形窗口移除信号 |
+| OPFS Cache | 切换 OPFS 缓存开关 |
+| Memory Cache | 切换内存缓存开关 |
 | **Help** | |
-| About | 关于信息 |
+| KDB Debug Tool | 打开 KDB 调试工具 |
+| About | 打开项目 GitHub 页面 |
 
 #### 4.3.9 工具栏
 
@@ -549,6 +585,7 @@ Server 提供以下主要 API：
 | ← | 导航后退 |
 | → | 导航前进 |
 | + | 添加新标签页 |
+| 📍 | 添加书签 |
 
 ## 常见问题
 
