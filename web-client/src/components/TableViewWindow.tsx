@@ -93,20 +93,17 @@ export function TableViewWindow({
   const [showColumnVisibility, setShowColumnVisibility] = useState(false);
   // Loading state for data fetch
   const [isFetching, setIsFetching] = useState(false);
-  // Metadata filter state (OR relationship between selected metadata types)
-  const [metadataFilters, setMetadataFilters] = useState<{
-    hasX: boolean;
-    hasZ: boolean;
-    mixed: boolean;
-    hasTransition: boolean;
-  }>({
-    hasX: false,
-    hasZ: false,
-    mixed: false,
-    hasTransition: false,
-  });
-  // Show/hide metadata filter dropdown
-  const [showMetadataFilter, setShowMetadataFilter] = useState(false);
+  // Per-column metadata filter state: { [columnId]: { hasX, hasZ, mixed, hasTransition } }
+  const [columnMetadataFilters, setColumnMetadataFilters] = useState<{
+    [columnId: string]: {
+      hasX: boolean;
+      hasZ: boolean;
+      mixed: boolean;
+      hasTransition: boolean;
+    };
+  }>({});
+  // Track which column's metadata filter dropdown is open
+  const [openMetadataFilterColumn, setOpenMetadataFilterColumn] = useState<string | null>(null);
 
   // Create adapter when provider is ready (same pattern as WaveformWindow)
   useEffect(() => {
@@ -147,40 +144,50 @@ export function TableViewWindow({
     });
   }, [data, signals]);
 
-  // Apply metadata filter to table data
-  // Metadata filters use OR relationship among selected types
-  // AND relationship with column filters (handled by react-table)
+  // Apply per-column metadata filter to table data
+  // For each column, if it has metadata filters, the row must match at least one
+  // Across columns, metadata filters use AND relationship
   const filteredTableData = useMemo(() => {
-    // Check if any metadata filter is active
-    const hasActiveMetadataFilter = metadataFilters.hasX || metadataFilters.hasZ ||
-                                     metadataFilters.mixed || metadataFilters.hasTransition;
+    // Check if any column has active metadata filter
+    const hasActiveMetadataFilter = Object.values(columnMetadataFilters).some(
+      (filter) => filter.hasX || filter.hasZ || filter.mixed || filter.hasTransition
+    );
 
     if (!hasActiveMetadataFilter) {
       return tableData; // No metadata filter active, return all data
     }
 
     return tableData.filter((row) => {
-      // Check each signal value in the row
-      for (const signal of signals) {
-        const value = row[signal.name] as RawValue | undefined;
-        if (!value) continue;
+      // Check each column that has metadata filters
+      for (const [columnId, filter] of Object.entries(columnMetadataFilters)) {
+        // Skip if this column has no active filters
+        if (!filter.hasX && !filter.hasZ && !filter.mixed && !filter.hasTransition) {
+          continue;
+        }
 
-        // Check if this value matches any selected metadata filter (OR relationship)
-        const matchesHasX = metadataFilters.hasX && value.valueType === 'has_x';
-        const matchesHasZ = metadataFilters.hasZ && value.valueType === 'has_z';
-        const matchesMixed = metadataFilters.mixed && value.valueType === 'mixed';
-        const matchesTransition = metadataFilters.hasTransition && value.hasTransition;
+        // Get the value for this column in the current row
+        const value = row[columnId] as RawValue | undefined;
+        if (!value) {
+          // If no value but filter is active, row doesn't match
+          return false;
+        }
 
-        // If any metadata filter matches, include this row
-        if (matchesHasX || matchesHasZ || matchesMixed || matchesTransition) {
-          return true;
+        // Check if this value matches any selected metadata filter for this column (OR relationship within column)
+        const matchesHasX = filter.hasX && value.valueType === 'has_x';
+        const matchesHasZ = filter.hasZ && value.valueType === 'has_z';
+        const matchesMixed = filter.mixed && value.valueType === 'mixed';
+        const matchesTransition = filter.hasTransition && value.hasTransition;
+
+        // If no metadata filter matches for this column, exclude the row (AND relationship across columns)
+        if (!matchesHasX && !matchesHasZ && !matchesMixed && !matchesTransition) {
+          return false;
         }
       }
 
-      // No signal in this row matches the metadata filters
-      return false;
+      // Row matches all column metadata filters
+      return true;
     });
-  }, [tableData, metadataFilters, signals]);
+  }, [tableData, columnMetadataFilters]);
 
   // Define columns
   const columns = useMemo<ColumnDef<TableRow>[]>(() => {
@@ -433,80 +440,6 @@ export function TableViewWindow({
           </span>
         )}
 
-        {/* Metadata Filter Toggle */}
-        <div style={{ position: 'relative' }}>
-          <button
-            onClick={() => setShowMetadataFilter(!showMetadataFilter)}
-            style={{
-              padding: '6px 12px',
-              fontSize: '12px',
-              backgroundColor: '#ff9800',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-            }}
-          >
-            Metadata Filter
-          </button>
-
-          {showMetadataFilter && (
-            <div
-              style={{
-                position: 'absolute',
-                top: '100%',
-                left: 0,
-                zIndex: 100,
-                backgroundColor: 'white',
-                border: '1px solid #ccc',
-                borderRadius: '4px',
-                padding: '8px',
-                minWidth: '180px',
-                boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
-              }}
-            >
-              <div style={{ marginBottom: '8px', fontWeight: 'bold', fontSize: '12px' }}>
-                Filter by Metadata (OR)
-              </div>
-              <div style={{ fontSize: '11px', color: '#666', marginBottom: '8px' }}>
-                Show rows matching any selected type
-              </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', fontSize: '12px', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={metadataFilters.hasX}
-                  onChange={(e) => setMetadataFilters(prev => ({ ...prev, hasX: e.target.checked }))}
-                />
-                <span style={{ color: '#ff6b6b' }}>Has X (Unknown)</span>
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', fontSize: '12px', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={metadataFilters.hasZ}
-                  onChange={(e) => setMetadataFilters(prev => ({ ...prev, hasZ: e.target.checked }))}
-                />
-                <span style={{ color: '#4ecdc4' }}>Has Z (High-Z)</span>
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', fontSize: '12px', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={metadataFilters.mixed}
-                  onChange={(e) => setMetadataFilters(prev => ({ ...prev, mixed: e.target.checked }))}
-                />
-                <span style={{ color: '#ffe66d' }}>Mixed Values</span>
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={metadataFilters.hasTransition}
-                  onChange={(e) => setMetadataFilters(prev => ({ ...prev, hasTransition: e.target.checked }))}
-                />
-                <span style={{ fontWeight: 'bold' }}>Has Transition</span>
-              </label>
-            </div>
-          )}
-        </div>
-
         {/* Column Visibility Toggle */}
         <div style={{ position: 'relative' }}>
           <button
@@ -592,26 +525,143 @@ export function TableViewWindow({
                       fontSize: '12px',
                       fontWeight: 'bold',
                       whiteSpace: 'nowrap',
+                      verticalAlign: 'bottom', // Ensure all filter bars align at bottom
                     }}
                   >
                     <div>{flexRender(header.column.columnDef.header, header.getContext())}</div>
-                    {/* Column Filter Input */}
-                    {header.column.getCanFilter() && (
-                      <input
-                        type="text"
-                        value={(header.column.getFilterValue() as string) ?? ''}
-                        onChange={(e) => header.column.setFilterValue(e.target.value)}
-                        placeholder="Filter..."
-                        style={{
-                          width: '100%',
-                          marginTop: '4px',
-                          padding: '2px 4px',
-                          fontSize: '11px',
-                          border: '1px solid #ccc',
-                          borderRadius: '3px',
-                        }}
-                      />
-                    )}
+                    {/* Filter bar container - aligned at bottom */}
+                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: '4px', marginTop: '4px' }}>
+                      {/* Column Filter Input */}
+                      {header.column.getCanFilter() && (
+                        <input
+                          type="text"
+                          value={(header.column.getFilterValue() as string) ?? ''}
+                          onChange={(e) => header.column.setFilterValue(e.target.value)}
+                          placeholder="Filter..."
+                          style={{
+                            flex: 1,
+                            padding: '2px 4px',
+                            fontSize: '11px',
+                            border: '1px solid #ccc',
+                            borderRadius: '3px',
+                          }}
+                        />
+                      )}
+                      {/* Metadata Filter Button (small triangle) - only for signal columns */}
+                      {header.column.id !== 'time' && (
+                        <div style={{ position: 'relative' }}>
+                          <button
+                            onClick={() => setOpenMetadataFilterColumn(
+                              openMetadataFilterColumn === header.column.id ? null : header.column.id
+                            )}
+                            style={{
+                              padding: '2px 4px',
+                              fontSize: '10px',
+                              backgroundColor: (columnMetadataFilters[header.column.id]?.hasX ||
+                                                columnMetadataFilters[header.column.id]?.hasZ ||
+                                                columnMetadataFilters[header.column.id]?.mixed ||
+                                                columnMetadataFilters[header.column.id]?.hasTransition)
+                                                ? '#ff9800' : '#f0f0f0',
+                              color: (columnMetadataFilters[header.column.id]?.hasX ||
+                                      columnMetadataFilters[header.column.id]?.hasZ ||
+                                      columnMetadataFilters[header.column.id]?.mixed ||
+                                      columnMetadataFilters[header.column.id]?.hasTransition)
+                                      ? 'white' : '#666',
+                              border: '1px solid #ccc',
+                              borderRadius: '3px',
+                              cursor: 'pointer',
+                              lineHeight: 1,
+                            }}
+                            title="Filter by metadata"
+                          >
+                            ▼
+                          </button>
+
+                          {/* Metadata Filter Dropdown */}
+                          {openMetadataFilterColumn === header.column.id && (
+                            <div
+                              style={{
+                                position: 'absolute',
+                                top: '100%',
+                                right: 0,
+                                zIndex: 100,
+                                backgroundColor: 'white',
+                                border: '1px solid #ccc',
+                                borderRadius: '4px',
+                                padding: '8px',
+                                minWidth: '160px',
+                                boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                                marginTop: '4px',
+                              }}
+                            >
+                              <div style={{ marginBottom: '6px', fontWeight: 'bold', fontSize: '11px' }}>
+                                Metadata Filter (OR)
+                              </div>
+                              {(() => {
+                                const columnId = header.column.id;
+                                const filters = columnMetadataFilters[columnId] || { hasX: false, hasZ: false, mixed: false, hasTransition: false };
+                                return (
+                                  <>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '4px', fontSize: '11px', cursor: 'pointer' }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={filters.hasX}
+                                        onChange={(e) => {
+                                          setColumnMetadataFilters(prev => ({
+                                            ...prev,
+                                            [columnId]: { ...filters, hasX: e.target.checked }
+                                          }));
+                                        }}
+                                      />
+                                      <span style={{ color: '#ff6b6b' }}>Has X</span>
+                                    </label>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '4px', fontSize: '11px', cursor: 'pointer' }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={filters.hasZ}
+                                        onChange={(e) => {
+                                          setColumnMetadataFilters(prev => ({
+                                            ...prev,
+                                            [columnId]: { ...filters, hasZ: e.target.checked }
+                                          }));
+                                        }}
+                                      />
+                                      <span style={{ color: '#4ecdc4' }}>Has Z</span>
+                                    </label>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '4px', fontSize: '11px', cursor: 'pointer' }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={filters.mixed}
+                                        onChange={(e) => {
+                                          setColumnMetadataFilters(prev => ({
+                                            ...prev,
+                                            [columnId]: { ...filters, mixed: e.target.checked }
+                                          }));
+                                        }}
+                                      />
+                                      <span style={{ color: '#ffa500' }}>Mixed</span>
+                                    </label>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', cursor: 'pointer' }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={filters.hasTransition}
+                                        onChange={(e) => {
+                                          setColumnMetadataFilters(prev => ({
+                                            ...prev,
+                                            [columnId]: { ...filters, hasTransition: e.target.checked }
+                                          }));
+                                        }}
+                                      />
+                                      <span style={{ fontWeight: 'bold' }}>Transition</span>
+                                    </label>
+                                  </>
+                                );
+                              })()}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </th>
                 ))}
               </tr>
