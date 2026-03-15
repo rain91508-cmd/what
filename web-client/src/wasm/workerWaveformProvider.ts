@@ -86,9 +86,9 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
       this._isOpfsEnabled = config.enableOpfs ?? false;
       this._isMemoryCacheEnabled = config.enableMemoryCache ?? true;
 
-      console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Initialized: OPFS=${this._isOpfsEnabled}, MemoryCache=${this._isMemoryCacheEnabled}`);
+      // Debug: console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Initialized: OPFS=${this._isOpfsEnabled}, MemoryCache=${this._isMemoryCacheEnabled}`);
     } catch (error) {
-      console.error(`[WorkerWaveformProvider][Inst${this.instanceId}] Initialization failed:`, error);
+      // Debug: console.error(`[WorkerWaveformProvider][Inst${this.instanceId}] Initialization failed:`, error);
       throw new WaveformProviderError('Failed to initialize Worker provider', error);
     }
   }
@@ -138,7 +138,7 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
       [canvas]
     );
 
-    console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Canvas registered: ${canvasId}, dpr=${devicePixelRatio}`);
+    // Debug: console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Canvas registered: ${canvasId}, dpr=${devicePixelRatio}`);
   }
 
   /**
@@ -151,7 +151,7 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
 
     await this.sendMessage('UNREGISTER_CANVAS', { canvasId });
 
-    console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Canvas unregistered: ${canvasId}`);
+    // Debug: console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Canvas unregistered: ${canvasId}`);
   }
 
   // ==================== 数据获取（参数化）====================
@@ -251,8 +251,8 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
     const { canvasId, signals, viewport, canvasConfig, timeConfig, devicePixelRatio, signalPrefix, serverPrefix, spaceBeforeBracket } = params;
     // 注意：不再传递全局 displayFormat，因为每个信号的 display_format 已经在 signals 中设置
 
-    console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Rendering: canvasId=${canvasId}, viewport=${viewport.startTime}-${viewport.endTime}, signals=${signals.length}, dpr=${devicePixelRatio}`);
-    console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Prefix settings: signalPrefix="${signalPrefix}", serverPrefix="${serverPrefix}", spaceBeforeBracket=${spaceBeforeBracket}`);
+    // Debug: console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Rendering: canvasId=${canvasId}, viewport=${viewport.startTime}-${viewport.endTime}, signals=${signals.length}, dpr=${devicePixelRatio}`);
+    // Debug: console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Prefix settings: signalPrefix="${signalPrefix}", serverPrefix="${serverPrefix}", spaceBeforeBracket=${spaceBeforeBracket}`);
 
     await this.sendMessage(
       'RENDER_WAVEFORM',

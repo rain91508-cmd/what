@@ -22,7 +22,7 @@ export async function initWasm(): Promise<void> {
   
   await init();
   wasmInitialized = true;
-  console.log('[WASM] Module initialized');
+  // Debug: console.log('[WASM] Module initialized');
 }
 
 /**
@@ -42,9 +42,9 @@ export function setOpfsEnabled(enabled: boolean): void {
   // If provider exists, update it dynamically
   if (provider) {
     provider.set_opfs_enabled(opfsEnabled);
-    console.log(`[WaveformProvider] OPFS cache ${opfsEnabled ? 'enabled' : 'disabled'} (dynamic)`);
+    // Debug: console.log(`[WaveformProvider] OPFS cache ${opfsEnabled ? 'enabled' : 'disabled'} (dynamic)`);
   } else {
-    console.log(`[WaveformProvider] OPFS cache ${opfsEnabled ? 'enabled' : 'disabled'} (will apply on create)`);
+    // Debug: console.log(`[WaveformProvider] OPFS cache ${opfsEnabled ? 'enabled' : 'disabled'} (will apply on create)`);
   }
 }
 
@@ -66,9 +66,9 @@ export function isOpfsEnabled(): boolean {
 export function setMemoryCacheEnabled(enabled: boolean): void {
   if (provider) {
     provider.set_memory_cache_enabled(enabled);
-    console.log(`[WaveformProvider] Memory cache ${enabled ? 'enabled' : 'disabled'}`);
+    // Debug: console.log(`[WaveformProvider] Memory cache ${enabled ? 'enabled' : 'disabled'}`);
   } else {
-    console.warn('[WaveformProvider] Cannot set memory cache: provider not created');
+    // Debug: console.warn('[WaveformProvider] Cannot set memory cache: provider not created');
   }
 }
 
@@ -143,9 +143,9 @@ export async function createProvider(
     existsCallback as any,
     enableOpfs
   );
-  
-  console.log(`[WaveformProvider] Created provider for ${waveformName}, OPFS=${enableOpfs}`);
-  
+
+  // Debug: console.log(`[WaveformProvider] Created provider for ${waveformName}, OPFS=${enableOpfs}`);
+
   return provider;
 }
 

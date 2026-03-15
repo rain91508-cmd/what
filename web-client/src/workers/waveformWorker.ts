@@ -20,7 +20,7 @@ import {
 import type { RenderSegment } from '../core/waveformProviderInterface';
 
 // Worker 启动日志
-console.log('[WaveformWorker] Worker started');
+// Debug: console.log('[WaveformWorker] Worker started');
 
 // ==================== Worker 状态 ====================
 
@@ -256,7 +256,7 @@ function handleRegisterCanvas(payload: any, id: number): void {
   }
 
   canvasManager.set(canvasId, { canvas, ctx, devicePixelRatio });
-  console.log(`[WaveformWorker] Canvas registered: ${canvasId}, dpr=${devicePixelRatio}`);
+  // Debug: console.log(`[WaveformWorker] Canvas registered: ${canvasId}, dpr=${devicePixelRatio}`);
 
   sendSuccess(id, null);
 }
@@ -269,7 +269,7 @@ function handleUnregisterCanvas(payload: any, id: number): void {
   const { canvasId } = payload;
 
   canvasManager.delete(canvasId);
-  console.log(`[WaveformWorker] Canvas unregistered: ${canvasId}`);
+  // Debug: console.log(`[WaveformWorker] Canvas unregistered: ${canvasId}`);
 
   sendSuccess(id, null);
 }
@@ -367,7 +367,7 @@ async function handleFetchAndGetSegments(payload: any, id: number): Promise<void
 async function handleRenderWaveform(payload: any, id: number): Promise<void> {
   if (!wasmProvider) throw new Error('Provider not initialized');
 
-  console.log('[WaveformWorker] handleRenderWaveform called with:', payload);
+  // Debug: console.log('[WaveformWorker] handleRenderWaveform called with:', payload);
 
   const {
     canvasId,
@@ -385,15 +385,15 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
   // Update WASM provider prefix settings if provided
   if (signalPrefix !== undefined) {
     wasmProvider.signal_prefix = signalPrefix;
-    console.log('[WaveformWorker] Set signal_prefix:', signalPrefix);
+    // Debug: console.log('[WaveformWorker] Set signal_prefix:', signalPrefix);
   }
   if (serverPrefix !== undefined) {
     wasmProvider.server_prefix = serverPrefix;
-    console.log('[WaveformWorker] Set server_prefix:', serverPrefix);
+    // Debug: console.log('[WaveformWorker] Set server_prefix:', serverPrefix);
   }
   if (spaceBeforeBracket !== undefined) {
     wasmProvider.space_before_bracket = spaceBeforeBracket;
-    console.log('[WaveformWorker] Set space_before_bracket:', spaceBeforeBracket);
+    // Debug: console.log('[WaveformWorker] Set space_before_bracket:', spaceBeforeBracket);
   }
 
   // 获取 Canvas
@@ -418,14 +418,14 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
       if (canvas.width !== canvasConfig.width || canvas.height !== canvasConfig.height) {
         canvas.width = canvasConfig.width;
         canvas.height = canvasConfig.height;
-        console.log('[WaveformWorker] Resized canvas to:', canvasConfig.width, 'x', canvasConfig.height);
+        // Debug: console.log('[WaveformWorker] Resized canvas to:', canvasConfig.width, 'x', canvasConfig.height);
       }
     }
 
     // 1. 设置视口（参数传递）
     if (viewport) {
       wasmProvider.set_viewport(viewport.startTime, viewport.endTime);
-      console.log('[WaveformWorker] Set viewport:', viewport.startTime, viewport.endTime);
+      // Debug: console.log('[WaveformWorker] Set viewport:', viewport.startTime, viewport.endTime);
     }
 
     // 2. 设置画布尺寸（参数传递）
@@ -435,7 +435,7 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
         canvasConfig.height,
         canvasConfig.rowHeight
       );
-      console.log('[WaveformWorker] Set canvas config:', canvasConfig);
+      // Debug: console.log('[WaveformWorker] Set canvas config:', canvasConfig);
     }
 
     // 3. 设置信号列表（参数传递）
@@ -456,35 +456,21 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
         display_format: sig.displayFormat,
       }));
       wasmProvider.set_draw_list(wasmSignals);
-      console.log('[WaveformWorker] Set draw list with', wasmSignals.length, 'signals:', wasmSignals);
+      // Debug: console.log('[WaveformWorker] Set draw list with', wasmSignals.length, 'signals:', wasmSignals);
     }
 
     // 4. 注意：不设置全局 display_format，因为每个信号的 display_format 已经在 set_draw_list 中设置
 
     // 5. 获取信号名称列表
     const signalNames = signals?.map((sig: any) => sig.name) || [];
-    console.log('[WaveformWorker] Fetching segments for signals:', signalNames);
+    // Debug: console.log('[WaveformWorker] Fetching segments for signals:', signalNames);
 
     // 6. 获取 segments
     const segments = await wasmProvider.fetch_and_get_segments(signalNames);
-    
-    // 打印第一个和最后几个 segments 的坐标，以便调试缩放问题
-    if (segments.length > 0) {
-      const firstSeg = segments[0];
-      const lastSeg = segments[segments.length - 1];
-      console.log('[WaveformWorker] Got segments:', segments.length, 
-        'first seg:', { x0: firstSeg.x0, x1: firstSeg.x1, y: firstSeg.y },
-        'last seg:', { x0: lastSeg.x0, x1: lastSeg.x1, y: lastSeg.y },
-        'viewport:', { startTime: viewport.startTime, endTime: viewport.endTime },
-        'canvas config:', canvasConfig
-      );
-    } else {
-      console.log('[WaveformWorker] Got segments:', segments.length, segments);
-    }
 
     // 检查任务是否已过期（被新任务覆盖）
     if (currentRenderTask?.id !== id) {
-      console.log(`[WaveformWorker] Render task ${id} cancelled`);
+      // Debug: console.log(`[WaveformWorker] Render task ${id} cancelled`);
       return;
     }
 
@@ -492,7 +478,7 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
     // CSS 尺寸和 canvas 物理尺寸保持 1:1，不需要任何缩放
     // canvasConfig 是逻辑尺寸（CSS像素）
     // WASM 返回的 segments 也是逻辑坐标
-    
+
     const renderSegments: RenderSegment[] = segments.map((seg: any) => ({
       x0: seg.x0,
       x1: seg.x1,
@@ -500,16 +486,6 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
       value: seg.value as FormattedValue,
       signalName: seg.signal_name,
     }));
-
-    // 打印前几个segments的详细信息用于调试
-    if (renderSegments.length > 0) {
-      const firstSeg = renderSegments[0];
-      console.log('[WaveformWorker] First segment full value:', JSON.stringify(firstSeg.value));
-      console.log('[WaveformWorker] First segment value keys:', Object.keys(firstSeg.value || {}));
-    }
-
-    console.log('[WaveformWorker] Rendering', renderSegments.length, 'segments to canvas (1:1 mapping)');
-    console.log('[WaveformWorker] Canvas size:', canvasConfig.width, 'x', canvasConfig.height, 'rowHeight:', canvasConfig.rowHeight);
 
     // 转换 viewport 为 TimeRangeOnly 格式
     const timeRangeOnlyViewport: TimeRangeOnly = {
@@ -529,7 +505,7 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
     );
 
     // 8. 返回成功
-    console.log('[WaveformWorker] Render complete');
+    // Debug: console.log('[WaveformWorker] Render complete');
     sendSuccess(id, { rendered: true, segmentCount: segments.length });
   } catch (error) {
     console.error('[WaveformWorker] Error in handleRenderWaveform:', error);

@@ -2627,15 +2627,27 @@ if tile_missing_signals.is_empty() {
                 (value_transitions[0], value_transitions[0])
             };
             
-            let min_val_str = server_value_to_string(min_trans.value_type, min_trans.value_len, &min_trans.value);
-            let max_val_str = server_value_to_string(max_trans.value_type, max_trans.value_len, &max_trans.value);
+            let min_val_raw = server_value_to_string(min_trans.value_type, min_trans.value_len, &min_trans.value);
+            let max_val_raw = server_value_to_string(max_trans.value_type, max_trans.value_len, &max_trans.value);
 
-            // Check if min != max and neither is X/Z
-            let min_upper = min_val_str.to_uppercase();
-            let max_upper = max_val_str.to_uppercase();
+            // Format min/max values according to display_format
+            let min_val_str = if width > 1 {
+                self.format_multi_bit_value(&min_val_raw, width, display_format)
+            } else {
+                min_val_raw.clone()
+            };
+            let max_val_str = if width > 1 {
+                self.format_multi_bit_value(&max_val_raw, width, display_format)
+            } else {
+                max_val_raw.clone()
+            };
+
+            // Check if min != max and neither is X/Z (use raw values for comparison)
+            let min_upper = min_val_raw.to_uppercase();
+            let max_upper = max_val_raw.to_uppercase();
             let has_xz = min_upper.contains('X') || min_upper.contains('Z') ||
                         max_upper.contains('X') || max_upper.contains('Z');
-            let is_changing = min_val_str != max_val_str && !has_xz;
+            let is_changing = min_val_raw != max_val_raw && !has_xz;
 
             // For LoD > 0, always use 'min_max' type to ensure proper grouping
             let display_str = if is_changing {
@@ -2786,9 +2798,16 @@ if tile_missing_signals.is_empty() {
                         let final_display_str = if width > 1 {
                             format_multi_bit(&current_value)
                         } else {
+                            display_str.clone()
+                        };
+
+                        // Format min/max values according to display_format
+                        let min_max_val = if width > 1 {
+                            format_multi_bit(&current_value)
+                        } else {
                             display_str
                         };
-                        
+
                         segments.push(RenderSegment {
                             x0,
                             x1,
@@ -2798,8 +2817,8 @@ if tile_missing_signals.is_empty() {
                                 display_str: final_display_str,
                                 width,
                                 has_xz,
-                                min_value: Some(server_value_to_string(current_value.value_type, current_value.value_len, &current_value.value)),
-                                max_value: Some(server_value_to_string(current_value.value_type, current_value.value_len, &current_value.value)),
+                                min_value: Some(min_max_val.clone()),
+                                max_value: Some(min_max_val),
                                 is_min_max: false,
                             },
                             signal_name: signal_name.to_string(),
@@ -2810,15 +2829,27 @@ if tile_missing_signals.is_empty() {
                             // First/Last pair: draw toggling
                             let first_trans = &bucket.first;
                             let last_trans = bucket.last.as_ref().unwrap();
-                            let first_val_str = server_value_to_string(first_trans.value_type, first_trans.value_len, &first_trans.value);
-                            let last_val_str = server_value_to_string(last_trans.value_type, last_trans.value_len, &last_trans.value);
-                            
+                            let first_val_raw = server_value_to_string(first_trans.value_type, first_trans.value_len, &first_trans.value);
+                            let last_val_raw = server_value_to_string(last_trans.value_type, last_trans.value_len, &last_trans.value);
+
+                            // Format min/max values according to display_format
+                            let first_val_str = if width > 1 {
+                                self.format_multi_bit_value(&first_val_raw, width, display_format)
+                            } else {
+                                first_val_raw.clone()
+                            };
+                            let last_val_str = if width > 1 {
+                                self.format_multi_bit_value(&last_val_raw, width, display_format)
+                            } else {
+                                last_val_raw.clone()
+                            };
+
                             let display_str = if width == 1 {
                                 "toggling".to_string()
                             } else {
                                 format!("{}..{}", first_val_str, last_val_str)
                             };
-                            
+
                             segments.push(RenderSegment {
                                 x0,
                                 x1,
@@ -2834,7 +2865,7 @@ if tile_missing_signals.is_empty() {
                                 },
                                 signal_name: signal_name.to_string(),
                             });
-                            
+
                             // Update current value to last
                             current_value = last_trans.clone();
                         } else {
@@ -2844,9 +2875,16 @@ if tile_missing_signals.is_empty() {
                             let final_display_str = if width > 1 {
                                 format_multi_bit(value_trans)
                             } else {
+                                display_str.clone()
+                            };
+
+                            // Format min/max values according to display_format
+                            let min_max_val = if width > 1 {
+                                format_multi_bit(value_trans)
+                            } else {
                                 display_str
                             };
-                            
+
                             segments.push(RenderSegment {
                                 x0,
                                 x1,
@@ -2856,13 +2894,13 @@ if tile_missing_signals.is_empty() {
                                     display_str: final_display_str,
                                     width,
                                     has_xz,
-                                    min_value: Some(server_value_to_string(value_trans.value_type, value_trans.value_len, &value_trans.value)),
-                                    max_value: Some(server_value_to_string(value_trans.value_type, value_trans.value_len, &value_trans.value)),
+                                    min_value: Some(min_max_val.clone()),
+                                    max_value: Some(min_max_val),
                                     is_min_max: false,
                                 },
                                 signal_name: signal_name.to_string(),
                             });
-                            
+
                             // Update current value
                             current_value = value_trans.clone();
                         }
