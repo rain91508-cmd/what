@@ -192,6 +192,8 @@ export function WaveformWindow({
   const wasmProviderRef = useRef<WaveformProviderAdapter | null>(null);
   // Canvas ID - 每个 Tab 唯一
   const canvasIdRef = useRef<string>(`canvas-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
+  // 用于跟踪 Adapter 是否已创建，触发重新渲染
+  const [adapterCreated, setAdapterCreated] = useState(false);
   // 用于跟踪 Provider 是否已准备好
   const providerReady = !providerLoading && sharedProvider !== null && wasmProviderRef.current !== null;
 
@@ -206,6 +208,7 @@ export function WaveformWindow({
     if (!useMockData && sharedProvider && !wasmProviderRef.current) {
       const adapter = new WaveformProviderAdapter(sharedProvider, canvasIdRef.current);
       wasmProviderRef.current = adapter;
+      setAdapterCreated(true); // 触发重新渲染
       console.log(`[WaveformWindow] Created adapter for canvas: ${canvasIdRef.current}`);
     }
 
@@ -614,7 +617,7 @@ export function WaveformWindow({
     return () => {
       waveformRenderer.dispose();
     };
-  }, [useMockData, providerReady, viewport.timeStart, viewport.timeEnd]);  // 依赖 providerReady 和 viewport，当任一个准备好时重新执行
+  }, [useMockData, providerReady, adapterCreated, viewport.timeStart, viewport.timeEnd]);  // 依赖 providerReady 和 viewport，当任一个准备好时重新执行
 
   // 使用 ref 存储上一次的 canvas 尺寸，避免循环依赖
   // @ts-ignore - 暂时未使用但保留以备将来
