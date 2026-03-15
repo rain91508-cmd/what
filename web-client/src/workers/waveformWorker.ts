@@ -353,10 +353,11 @@ async function handleGetSignalValuesAtTransitions(payload: any, id: number): Pro
   }));
 
   // Call WASM function
+  // Convert time values to BigInt as required by WASM
   const result = await wasmProvider.get_signal_values_at_transitions(
     signalNames,
-    searchStartTime,
-    searchEndTime,
+    BigInt(searchStartTime),
+    BigInt(searchEndTime),
     resultMax,
     wasmSignals
   );

@@ -1462,7 +1462,7 @@ if tile_missing_signals.is_empty() {
         signals_with_format: JsValue,
     ) -> Result<JsValue, JsValue> {
         // Parse signals_with_format from JS
-        let signals_format: Vec<SignalWithFormat> = serde_wasm_bindgen::from_value(&signals_with_format)
+        let signals_format: Vec<SignalWithFormat> = serde_wasm_bindgen::from_value(signals_with_format)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse signals_with_format: {:?}", e)))?;
         
         // Build format lookup map by signal name
