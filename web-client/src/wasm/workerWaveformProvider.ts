@@ -254,6 +254,11 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
     // Debug: console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Rendering: canvasId=${canvasId}, viewport=${viewport.startTime}-${viewport.endTime}, signals=${signals.length}, dpr=${devicePixelRatio}`);
     // Debug: console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Prefix settings: signalPrefix="${signalPrefix}", serverPrefix="${serverPrefix}", spaceBeforeBracket=${spaceBeforeBracket}`);
 
+    // 转换 timeConfig 格式以匹配 waveformDrawing.ts 中的 TimeConfig 接口
+    const adaptedTimeConfig = {
+      DisplayUnitPerLoD0Unit: timeConfig.displayUnitPerLoD0Unit
+    };
+
     await this.sendMessage(
       'RENDER_WAVEFORM',
       {
@@ -262,7 +267,7 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
         viewport,
         canvasConfig,
         // 注意：不再传递全局 displayFormat，因为每个信号的 display_format 已经在 signals 中设置
-        timeConfig,
+        timeConfig: adaptedTimeConfig,
         devicePixelRatio,
         signalPrefix,
         serverPrefix,
