@@ -1778,17 +1778,19 @@ function App() {
     let spaceBeforeBracket = currentTab?.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket
 
     if (currentWaveName) {
-      const searchResult = await searchSignalOnServer(currentWaveName, signal.fullName, signalPrefix)
-      if (searchResult.found) {
+      // Use tryFindSignalWithPrefixRemoval for hierarchical prefix removal (same as WaveformWindow)
+      const result = await tryFindSignalWithPrefixRemoval(currentWaveName, signal.fullName)
+
+      if (result.found) {
         // Update prefix settings from search result
-        if (searchResult.localPrefix !== undefined) {
-          signalPrefix = searchResult.localPrefix
+        if (result.localPrefix !== undefined) {
+          signalPrefix = result.localPrefix
         }
-        if (searchResult.serverPrefix !== undefined) {
-          serverPrefix = searchResult.serverPrefix
+        if (result.serverPrefix !== undefined) {
+          serverPrefix = result.serverPrefix
         }
-        if (searchResult.spaceBeforeBracket !== undefined) {
-          spaceBeforeBracket = searchResult.spaceBeforeBracket
+        if (result.spaceBeforeBracket !== undefined) {
+          spaceBeforeBracket = result.spaceBeforeBracket
         }
 
         // Update tab's prefix settings
@@ -1802,6 +1804,10 @@ function App() {
         ))
 
         console.log(`[App] TableView signal search found: localPrefix='${signalPrefix}', serverPrefix='${serverPrefix}', spaceBeforeBracket=${spaceBeforeBracket}`)
+      } else {
+        console.log(`[App] TableView signal search failed: signal not found even after prefix removal`)
+        addMessage(`Warning: Signal not found on server: ${signal.name}`)
+        return
       }
     }
 
