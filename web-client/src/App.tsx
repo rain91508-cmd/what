@@ -3272,6 +3272,32 @@ function App() {
           wavemarks: tab.wavemarks || [],
         }))
 
+      // Build tableview tabs data
+      const tableviewTabsData = tabs
+        .filter(tab => tab.type === 'tableview')
+        .map(tab => ({
+          id: tab.id,
+          label: tab.label,
+          signals: (tab.tableSignals || []).map(s => ({
+            globalId: s.globalId,
+            drawSigId: s.drawSigId,
+            name: s.name,
+            row: s.row,
+            width: s.width,
+            radix: s.displayFormat || 'hex',
+          })),
+          startTime: tab.tableStartTime || 0,
+          endTime: tab.tableEndTime || 0,
+          currentPage: tab.tableCurrentPage || 0,
+          columnFilters: tab.tableColumnFilters || [],
+          columnMetadataFilters: tab.tableColumnMetadataFilters || {},
+          columnRadix: tab.tableColumnRadix || {},
+          // Per-tab prefix settings
+          signalPrefix: tab.signalPrefix ?? currentWaveSignalPrefix,
+          serverPrefix: tab.serverPrefix ?? currentWaveSignalServerPrefix,
+          spaceBeforeBracket: tab.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket,
+        }))
+
       // Get bookmarks
       const bookmarksData = bookmarkManager.getBookmarks().map(b => ({
         name: b.name,
@@ -3301,6 +3327,8 @@ function App() {
         nextWaveformSignalId: nextWaveformSignalIdRef.current,
         waveformTabs: waveformTabsData,
         activeWaveformTabId: activeTab,
+        tableviewTabs: tableviewTabsData,
+        activeTableviewTabId: activeTab,
         bookmarks: bookmarksData,
         hierarchy: {
           expandedModules: Array.from(expandedModules),
@@ -3473,10 +3501,43 @@ function App() {
         restoredTabs.push(newTab)
       }
 
+      // Step 6b: Restore tableview tabs
+      setSessionLoadingMessage('Restoring tableview tabs...')
+      for (const tableTab of session.tableviewTabs || []) {
+        // Rebuild signals from saved data
+        const restoredSignals: SignalWithFormat[] = tableTab.signals.map(sig => ({
+          globalId: sig.globalId,
+          name: sig.name,
+          row: sig.row,
+          width: sig.width,
+          drawSigId: sig.drawSigId,
+          displayFormat: sig.radix,
+        }))
+
+        const newTab: Tab = {
+          id: tableTab.id,
+          label: tableTab.label,
+          type: 'tableview',
+          tableStartTime: tableTab.startTime,
+          tableEndTime: tableTab.endTime,
+          tableSignals: restoredSignals,
+          tableCurrentPage: tableTab.currentPage,
+          tableColumnFilters: tableTab.columnFilters,
+          tableColumnMetadataFilters: tableTab.columnMetadataFilters,
+          tableColumnRadix: tableTab.columnRadix,
+          // Restore per-tab prefix settings
+          signalPrefix: tableTab.signalPrefix,
+          serverPrefix: tableTab.serverPrefix,
+          spaceBeforeBracket: tableTab.spaceBeforeBracket,
+        }
+
+        restoredTabs.push(newTab)
+      }
+
       setTabs(restoredTabs)
 
       // Step 7: Restore active tab
-      const activeTabId = session.activeSourceTabId || session.activeWaveformTabId
+      const activeTabId = session.activeSourceTabId || session.activeWaveformTabId || session.activeTableviewTabId
       if (activeTabId && restoredTabs.find(t => t.id === activeTabId)) {
         setActiveTab(activeTabId)
       } else if (restoredTabs.length > 0) {
@@ -3826,6 +3887,25 @@ function App() {
                 waveformName={currentWaveName || ''}
                 refreshTrigger={tableViewRefreshTrigger}
                 displayUnitPerLoD0Unit={currentWaveDisplayUnitPerLoD0}
+                // Session restore props
+                initialColumnFilters={activeTabData.tableColumnFilters}
+                initialColumnMetadataFilters={activeTabData.tableColumnMetadataFilters}
+                initialColumnRadix={activeTabData.tableColumnRadix}
+                onColumnFiltersChange={(filters) => {
+                  setTabs(prev => prev.map(tab =>
+                    tab.id === activeTabData.id ? { ...tab, tableColumnFilters: filters } : tab
+                  ))
+                }}
+                onColumnMetadataFiltersChange={(filters) => {
+                  setTabs(prev => prev.map(tab =>
+                    tab.id === activeTabData.id ? { ...tab, tableColumnMetadataFilters: filters } : tab
+                  ))
+                }}
+                onColumnRadixChange={(radix) => {
+                  setTabs(prev => prev.map(tab =>
+                    tab.id === activeTabData.id ? { ...tab, tableColumnRadix: radix } : tab
+                  ))
+                }}
               />
             ) : activeTabData ? (
               <WaveformWindow

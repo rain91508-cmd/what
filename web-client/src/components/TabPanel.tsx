@@ -311,6 +311,20 @@ export interface Tab {
   tableSignals?: SignalWithFormat[];  // For tableview tabs - signals to display
   tableData?: RawSignalValuesResult;  // For tableview tabs - fetched data
   tableCurrentPage?: number;    // For tableview tabs - current page number
+  // TableView column filters for session save/restore
+  tableColumnFilters?: Array<{
+    id: string;
+    value: string;
+  }>;
+  // TableView metadata filters per column for session save/restore
+  tableColumnMetadataFilters?: Record<string, {
+    hasX: boolean;
+    hasZ: boolean;
+    mixed: boolean;
+    hasTransition: boolean;
+  }>;
+  // TableView radix selection per column for session save/restore
+  tableColumnRadix?: Record<string, 'hex' | 'bin' | 'oct' | 'dec'>;
 }
 
 interface TabPanelProps {

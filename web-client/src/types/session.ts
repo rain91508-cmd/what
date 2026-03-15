@@ -84,6 +84,42 @@ export interface Session {
   }>;
   activeWaveformTabId?: string;
 
+  // TableView Tabs
+  tableviewTabs: Array<{
+    id: string;
+    label: string;
+    signals: Array<{
+      globalId: number;
+      drawSigId: number;
+      name: string;
+      row: number;
+      width: number;
+      radix: 'hex' | 'bin' | 'oct' | 'dec';
+    }>;
+    startTime: number;
+    endTime: number;
+    currentPage: number;
+    // Column filters (text filter values)
+    columnFilters?: Array<{
+      id: string;
+      value: string;
+    }>;
+    // Metadata filters per column
+    columnMetadataFilters?: Record<string, {
+      hasX: boolean;
+      hasZ: boolean;
+      mixed: boolean;
+      hasTransition: boolean;
+    }>;
+    // Radix selection per column
+    columnRadix?: Record<string, 'hex' | 'bin' | 'oct' | 'dec'>;
+    // Per-tab signal prefix settings
+    signalPrefix?: string;
+    serverPrefix?: string;
+    spaceBeforeBracket?: boolean;
+  }>;
+  activeTableviewTabId?: string;
+
   // Bookmarks
   bookmarks: Array<{
     name: string;

@@ -49,6 +49,16 @@ interface TableViewWindowProps {
   refreshTrigger?: number;
   // Time unit conversion factor (display unit / LoD0 unit)
   displayUnitPerLoD0Unit?: number;
+  // Initial column filters for session restore
+  initialColumnFilters?: Array<{ id: string; value: string }>;
+  // Initial metadata filters for session restore
+  initialColumnMetadataFilters?: Record<string, { hasX: boolean; hasZ: boolean; mixed: boolean; hasTransition: boolean }>;
+  // Initial radix selection for session restore
+  initialColumnRadix?: Record<string, 'hex' | 'bin' | 'oct' | 'dec'>;
+  // Callbacks to save state for session
+  onColumnFiltersChange?: (filters: Array<{ id: string; value: string }>) => void;
+  onColumnMetadataFiltersChange?: (filters: Record<string, { hasX: boolean; hasZ: boolean; mixed: boolean; hasTransition: boolean }>) => void;
+  onColumnRadixChange?: (radix: Record<string, 'hex' | 'bin' | 'oct' | 'dec'>) => void;
 }
 
 // Row data structure for the table
@@ -74,19 +84,27 @@ export function TableViewWindow({
   waveformName: _waveformName = '',
   refreshTrigger = 0,
   displayUnitPerLoD0Unit: _displayUnitPerLoD0Unit = 1.0,
+  initialColumnFilters,
+  initialColumnMetadataFilters,
+  initialColumnRadix,
+  onColumnFiltersChange,
+  onColumnMetadataFiltersChange,
+  onColumnRadixChange,
 }: TableViewWindowProps) {
   // Get shared provider from context (same as WaveformWindow)
   const { provider: sharedProvider, isLoading: providerLoading } = useWaveformProvider();
-  
+
   // Create adapter ref (same as WaveformWindow)
   const adapterRef = useRef<WaveformProviderAdapter | null>(null);
   const [adapterCreated, setAdapterCreated] = useState(false);
-  
+
   // Provider ready state (same as WaveformWindow)
   const providerReady = !providerLoading && sharedProvider !== null && adapterRef.current !== null;
 
-  // Column filters state
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  // Column filters state - initialize from session if provided
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(
+    initialColumnFilters?.map(f => ({ id: f.id, value: f.value })) || []
+  );
   // Column visibility state
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   // Show/hide column visibility dropdown
@@ -94,6 +112,7 @@ export function TableViewWindow({
   // Loading state for data fetch
   const [isFetching, setIsFetching] = useState(false);
   // Per-column metadata filter state: { [columnId]: { hasX, hasZ, mixed, hasTransition } }
+  // Initialize from session if provided
   const [columnMetadataFilters, setColumnMetadataFilters] = useState<{
     [columnId: string]: {
       hasX: boolean;
@@ -101,13 +120,14 @@ export function TableViewWindow({
       mixed: boolean;
       hasTransition: boolean;
     };
-  }>({});
+  }>(initialColumnMetadataFilters || {});
   // Track which column's metadata filter dropdown is open
   const [openMetadataFilterColumn, setOpenMetadataFilterColumn] = useState<string | null>(null);
   // Per-column radix (display format) selection: { [columnId]: 'hex' | 'bin' | 'oct' | 'dec' }
+  // Initialize from session if provided
   const [columnRadix, setColumnRadix] = useState<{
     [columnId: string]: 'hex' | 'bin' | 'oct' | 'dec';
-  }>({});
+  }>(initialColumnRadix || {});
 
   // Create adapter when provider is ready (same pattern as WaveformWindow)
   useEffect(() => {
@@ -126,6 +146,27 @@ export function TableViewWindow({
       handleFetchData();
     }
   }, [refreshTrigger, providerReady, signals.length]);
+
+  // Notify parent component when column filters change (for session save)
+  useEffect(() => {
+    if (onColumnFiltersChange) {
+      onColumnFiltersChange(columnFilters.map(f => ({ id: f.id, value: f.value as string })));
+    }
+  }, [columnFilters, onColumnFiltersChange]);
+
+  // Notify parent component when metadata filters change (for session save)
+  useEffect(() => {
+    if (onColumnMetadataFiltersChange) {
+      onColumnMetadataFiltersChange(columnMetadataFilters);
+    }
+  }, [columnMetadataFilters, onColumnMetadataFiltersChange]);
+
+  // Notify parent component when radix selection changes (for session save)
+  useEffect(() => {
+    if (onColumnRadixChange) {
+      onColumnRadixChange(columnRadix);
+    }
+  }, [columnRadix, onColumnRadixChange]);
 
   // Transform data into table rows
   const tableData = useMemo(() => {
