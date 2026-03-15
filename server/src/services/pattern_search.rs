@@ -328,8 +328,14 @@ pub fn value_matches(
 /// 解析信号值字符串（支持二进制、十六进制、八进制、十进制）
 /// 
 /// 支持带前缀的格式（如 0b1010, 0xA5）和不带前缀的纯数字字符串
+/// 处理 FST 中的特殊值（x, z），将其视为 0
 fn parse_value_string(value: &str) -> Result<u64> {
     let value = value.trim();
+    
+    // 如果值包含 x 或 z（FST 中的未知状态），返回 0
+    if value.chars().any(|c| c == 'x' || c == 'X' || c == 'z' || c == 'Z') {
+        return Ok(0);
+    }
     
     // 尝试不同的进制
     if value.starts_with("0b") || value.starts_with("0B") {
