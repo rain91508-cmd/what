@@ -1811,25 +1811,19 @@ function App() {
       }
     }
 
-    // Convert signal name for server
-    const serverSignalName = convertSignalNameForServer(
-      signal.fullName,
-      signalPrefix,
-      serverPrefix,
-      spaceBeforeBracket
-    )
-
     // Add signal to the active tableview tab
+    // Store original signal name (not converted), WASM will handle conversion using prefix settings
     setTabs(prev => prev.map(tab => {
       if (tab.id === activeTab && tab.type === 'tableview') {
         const currentSignals = tab.tableSignals || []
-        // Check if signal already exists (by server name)
-        const exists = currentSignals.some(s => s.name === serverSignalName)
+        // Check if signal already exists (by original full name)
+        const exists = currentSignals.some(s => s.name === signal.fullName)
         if (!exists) {
           // Create SignalWithFormat for TableView
+          // Store original name, WASM will convert using tab's prefix settings
           const newSignal = {
             globalId: signal.globalId,
-            name: serverSignalName, // Use converted server name
+            name: signal.fullName, // Store original name, WASM will convert
             row: currentSignals.length,
             width: Math.abs(signal.msb - signal.lsb) + 1,
             drawSigId: signal.globalId, // Will be updated by buildWasmSignals
@@ -1841,7 +1835,7 @@ function App() {
       return tab
     }))
 
-    addMessage(`Added signal to tableview: ${signal.name} -> ${serverSignalName} (ID: ${unique_id})`)
+    addMessage(`Added signal to tableview: ${signal.name} (ID: ${unique_id})`)
   }
 
   // Handle word click in source code editor
