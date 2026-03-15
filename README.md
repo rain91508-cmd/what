@@ -1,5 +1,7 @@
 # WHAT - Web-based HDL Analysis Toolkit
 
+[中文](README.md) | [English](README_EN.md) | [日本語](README_JA.md) | [Français](README_FR.md) | [Deutsch](README_DE.md) | [Русский](README_RU.md)
+
 WHAT 是一款基于 Web 的 HDL（硬件描述语言）代码和波形分析工具。
 
 ## 项目动机

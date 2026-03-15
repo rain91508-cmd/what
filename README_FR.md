@@ -1,6 +1,6 @@
 # WHAT - Boîte à Outils d'Analyse HDL Web
 
-[中文](README.md) | [English](README_EN.md) | [日本語](README_JA.md) | [Français](README_FR.md) | [Deutsch](README_DE.md)
+[中文](README.md) | [English](README_EN.md) | [日本語](README_JA.md) | [Français](README_FR.md) | [Deutsch](README_DE.md) | [Русский](README_RU.md)
 
 WHAT est un outil d'analyse de code et de formes d'onde HDL (Langage de Description Matériel) basé sur le Web.
 
