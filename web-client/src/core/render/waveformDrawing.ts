@@ -690,25 +690,14 @@ export function drawTimeRuler(
       displayValue = tick;
     }
 
-    // 格式化标签
+    // 格式化标签 - 每3位加逗号
     const intValue = Math.floor(displayValue);
+    const formattedNumber = intValue.toLocaleString('en-US');
     let labelText: string;
     if (unitLabel) {
-      if (intValue >= 1_000) {
-        const high = Math.floor(intValue / 1_000);
-        const low = intValue % 1_000;
-        labelText = `${high},${low.toString().padStart(3, '0')}${unitLabel}`;
-      } else {
-        labelText = intValue.toString() + unitLabel;
-      }
+      labelText = formattedNumber + unitLabel;
     } else {
-      if (intValue >= 1_000) {
-        const high = Math.floor(intValue / 1_000);
-        const low = intValue % 1_000;
-        labelText = `${high},${low.toString().padStart(3, '0')}`;
-      } else {
-        labelText = intValue.toString();
-      }
+      labelText = formattedNumber;
     }
 
     if (!isFirstTick && labelText === lastLabelText) {

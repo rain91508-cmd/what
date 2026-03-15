@@ -2650,12 +2650,9 @@ if tile_missing_signals.is_empty() {
             let is_changing = min_val_raw != max_val_raw && !has_xz;
 
             // For LoD > 0, always use 'min_max' type to ensure proper grouping
+            // For multi-bit signals that are changing, display "toggling" instead of min..max
             let display_str = if is_changing {
-                if width == 1 {
-                    "toggling".to_string()
-                } else {
-                    format!("{}..{}", min_val_str, max_val_str)
-                }
+                "toggling".to_string()
             } else {
                 // min == max or has X/Z
                 min_val_str.clone()
@@ -2844,11 +2841,8 @@ if tile_missing_signals.is_empty() {
                                 last_val_raw.clone()
                             };
 
-                            let display_str = if width == 1 {
-                                "toggling".to_string()
-                            } else {
-                                format!("{}..{}", first_val_str, last_val_str)
-                            };
+                            // For toggle buckets, always display "toggling" for both single and multi-bit signals
+                            let display_str = "toggling".to_string();
 
                             segments.push(RenderSegment {
                                 x0,
