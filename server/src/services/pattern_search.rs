@@ -56,6 +56,7 @@ pub enum Radix {
     Binary,
     Hex,
     Octal,
+    Decimal,
 }
 
 impl Radix {
@@ -83,6 +84,12 @@ impl Radix {
                 let oct_width = ((signal_width + 2) / 3) as usize;
                 format!("{:0width$o}", value, width = oct_width)
             }
+            Radix::Decimal => {
+                // 十进制：根据信号最大值确定宽度
+                let max_value = (1u64 << signal_width) - 1;
+                let dec_width = max_value.to_string().len();
+                format!("{:0width$}", value, width = dec_width)
+            }
         }
     }
 
@@ -96,6 +103,8 @@ impl Radix {
                 .map_err(|e| ServerError::InvalidRequest(format!("Invalid hex value: {}", e))),
             Radix::Octal => u64::from_str_radix(&value, 8)
                 .map_err(|e| ServerError::InvalidRequest(format!("Invalid octal value: {}", e))),
+            Radix::Decimal => value.parse::<u64>()
+                .map_err(|e| ServerError::InvalidRequest(format!("Invalid decimal value: {}", e))),
         }
     }
 }
