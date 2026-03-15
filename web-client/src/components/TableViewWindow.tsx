@@ -37,7 +37,7 @@ interface TableViewWindowProps {
   onSignalsChange: (signals: SignalWithFormat[]) => void;
   onStartTimeChange: (time: number) => void;
   onEndTimeChange: (time: number) => void;
-  onFetchData: () => void;
+  onFetchData: (data: RawSignalValuesResult) => void;
   currentPage: number;
   onPageChange: (page: number) => void;
   // Prefix settings (same as WaveformWindow)
@@ -45,6 +45,8 @@ interface TableViewWindowProps {
   serverPrefix?: string;
   spaceBeforeBracket?: boolean;
   waveformName?: string;
+  // Refresh trigger to force data refetch
+  refreshTrigger?: number;
 }
 
 // Row data structure for the table
@@ -68,6 +70,7 @@ export function TableViewWindow({
   serverPrefix: _serverPrefix = '',
   spaceBeforeBracket: _spaceBeforeBracket = false,
   waveformName: _waveformName = '',
+  refreshTrigger = 0,
 }: TableViewWindowProps) {
   // Get shared provider from context (same as WaveformWindow)
   const { provider: sharedProvider, isLoading: providerLoading } = useWaveformProvider();
@@ -97,6 +100,14 @@ export function TableViewWindow({
       console.log(`[TableViewWindow] Created adapter for tab: ${tabId}`);
     }
   }, [sharedProvider, tabId]);
+
+  // Auto-fetch data when refreshTrigger changes (e.g., when Toolbar Apply is clicked)
+  useEffect(() => {
+    if (refreshTrigger > 0 && providerReady && signals.length > 0) {
+      console.log('[TableViewWindow] Refresh triggered, fetching data...');
+      handleFetchData();
+    }
+  }, [refreshTrigger, providerReady, signals.length]);
 
   // Transform data into table rows
   const tableData = useMemo(() => {
@@ -240,8 +251,8 @@ export function TableViewWindow({
       });
 
       // Update parent with fetched data
-      onFetchData();
-      
+      onFetchData(result);
+
       console.log(`[TableViewWindow] Fetched ${result.data.length} rows`);
     } catch (error) {
       console.error('[TableViewWindow] Failed to fetch data:', error);

@@ -81,7 +81,7 @@ import { SESSION_VERSION } from './types/session'
 import type { Signal } from './types/kdb'
 import type { WaveformInfo, ColumnWidths, TimeConfig, Tab, NavigationHistoryEntry, SignalGroup } from './components/TabPanel'
 import { initTimeConfig, parseTimeUnitStr } from './components/TabPanel'
-import type { SignalWithFormat } from './core/waveformProviderInterface'
+import type { SignalWithFormat, RawSignalValuesResult } from './core/waveformProviderInterface'
 
 // 默认时间配置
 // DisplayUnitPerLoD0Unit = 1 表示 1 DisplayUnit = 1 LoD0Unit
@@ -121,6 +121,7 @@ function App() {
   const [currentWaveEndTime, setCurrentWaveEndTime] = useState<number>(1000000)  // Waveform end time in LoD0 units (time_unit)
   const [currentWaveDisplayUnitPerLoD0, setCurrentWaveDisplayUnitPerLoD0] = useState<number>(1)  // DisplayUnit per LoD0Unit
   const [currentWaveCustomRange, setCurrentWaveCustomRange] = useState<{ start: number; end: number } | undefined>(undefined)  // User custom time range
+  const [tableViewRefreshTrigger, setTableViewRefreshTrigger] = useState<number>(0)  // Trigger TableView data refresh
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(false)
   const autoCheckIntervalRef = useRef<NodeJS.Timeout | null>(null)
   
@@ -2652,10 +2653,21 @@ function App() {
   // Fetch TableView data from WASM
   // Note: This is now handled by TableViewWindow itself using adapter
   // This function is called as a callback when data is fetched
-  const handleFetchTableData = useCallback(() => {
-    // TableViewWindow handles the actual data fetching
-    // This function is called after data is fetched to update UI state if needed
-    console.log('[App] TableView data fetch initiated')
+  const handleFetchTableData = useCallback((data: RawSignalValuesResult) => {
+    // Update tab with fetched data
+    setTabs(prev => prev.map(tab =>
+      tab.id === activeTab ? { ...tab, tableData: data, tableCurrentPage: 0 } : tab
+    ))
+    addMessage(`Fetched ${data.data.length} rows for TableView`)
+  }, [activeTab, addMessage])
+
+  // Ref to trigger TableView data fetch from Toolbar
+  const tableViewFetchRef = useRef<() => void>()
+
+  // Handle TableView Apply button click from Toolbar
+  const handleTableTimeApply = useCallback(() => {
+    // Increment refresh trigger to notify TableViewWindow to fetch data
+    setTableViewRefreshTrigger(prev => prev + 1)
   }, [])
 
   // ============================================
@@ -3516,7 +3528,7 @@ function App() {
         tableEndTime={activeTabData?.type === 'tableview' ? activeTabData.tableEndTime : undefined}
         onTableStartTimeChange={handleTableStartTimeChange}
         onTableEndTimeChange={handleTableEndTimeChange}
-        onTableTimeApply={handleFetchTableData}
+        onTableTimeApply={handleTableTimeApply}
         viewportStart={activeTabData?.viewport?.timeStart}
         viewportEnd={activeTabData?.viewport?.timeEnd}
         cursorPosition={activeTabData?.cursorPosition}
@@ -3641,6 +3653,7 @@ function App() {
                 serverPrefix={activeTabData.serverPrefix ?? currentWaveSignalServerPrefix}
                 spaceBeforeBracket={activeTabData.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket}
                 waveformName={currentWaveName || ''}
+                refreshTrigger={tableViewRefreshTrigger}
               />
             ) : activeTabData ? (
               <WaveformWindow
