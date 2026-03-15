@@ -239,6 +239,9 @@ function App() {
 
   // Waveform Search state
   const [waveformSearchType, setWaveformSearchType] = useState<WaveformSearchType>('value')
+  const [waveformEdgeType, setWaveformEdgeType] = useState<'rising' | 'falling' | 'any'>('any')
+  const [waveformFromValue, setWaveformFromValue] = useState('')
+  const [waveformToValue, setWaveformToValue] = useState('')
   const [isWaveformSearching, setIsWaveformSearching] = useState(false)
 
   // Track if OPFS warning has been shown (to prevent double alert in StrictMode)
@@ -2538,7 +2541,7 @@ function App() {
 
   // Perform waveform pattern search
   const handleWaveformSearch = useCallback(async (direction: WaveformSearchDirection) => {
-    console.log('[WaveformSearch] Starting search:', { direction, searchPattern, waveformSearchType });
+    console.log('[WaveformSearch] Starting search:', { direction, searchPattern, waveformSearchType, waveformEdgeType, waveformFromValue, waveformToValue });
     
     // Check if active tab is waveform
     if (activeTabData?.type !== 'waveform') {
@@ -2546,9 +2549,13 @@ function App() {
       return;
     }
 
-    // Check if pattern is provided
-    if (!searchPattern.trim()) {
+    // Validate input based on search type
+    if (waveformSearchType === 'value' && !searchPattern.trim()) {
       addMessage('Please enter a search pattern');
+      return;
+    }
+    if (waveformSearchType === 'transition' && (!waveformFromValue.trim() || !waveformToValue.trim())) {
+      addMessage('Please enter both From and To values');
       return;
     }
 
@@ -2567,8 +2574,8 @@ function App() {
       return;
     }
 
-    // Get waveform name
-    const waveformName = activeTabData.waveformName;
+    // Get waveform name from global state
+    const waveformName = currentWaveName;
     if (!waveformName) {
       addMessage('No waveform loaded');
       return;
@@ -2579,22 +2586,75 @@ function App() {
     console.log('[WaveformSearch] Cursor position:', cursorPosition);
 
     // Get signal radix (display format)
-    const signalFormat = activeTabData.signalDisplayFormats?.get(selectedSignal.id);
-    const radix = signalFormat?.radix || 'binary';
-    console.log('[WaveformSearch] Signal format:', { signalFormat, radix });
+    // signalDisplayFormats is a Record<number, SignalDisplayFormat>, not a Map
+    const signalFormatKey = selectedSignal.unique_id || selectedSignal.id;
+    const signalFormat = signalFormatKey !== undefined ? activeTabData.signalDisplayFormats?.[signalFormatKey] : undefined;
+    
+    // Convert display format to API radix format
+    // Display: 'bin' | 'hex' | 'oct' | 'dec'
+    // API: 'binary' | 'hex' | 'octal' | 'decimal'
+    const radixMap: Record<string, string> = {
+      'bin': 'binary',
+      'hex': 'hex',
+      'oct': 'octal',
+      'dec': 'decimal',
+    };
+    const radix = radixMap[signalFormat || 'bin'] || 'binary';
+    console.log('[WaveformSearch] Signal format:', { signalFormatKey, signalFormat, radix });
 
     setIsWaveformSearching(true);
 
     try {
-      addMessage(`Searching ${direction} for "${searchPattern}" in ${selectedSignal.name}...`);
+      // Build server signal name from fullName and prefixes
+      // fullName is like "work@picorv32_wb.pcpi_insn[31:0]"
+      // We need to convert it to server signal name like "testbench.top.uut.pcpi_insn[31:0]"
+      const localPrefix = activeTabData.signalPrefix ?? currentWaveSignalPrefix;
+      const serverPrefix = activeTabData.serverPrefix ?? currentWaveSignalServerPrefix;
+      const spaceBeforeBracket = activeTabData.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket;
+      
+      let serverSignalName = selectedSignal.fullName;
+      if (localPrefix && serverSignalName.startsWith(localPrefix)) {
+        // Remove local prefix and add server prefix
+        const sharedName = serverSignalName.substring(localPrefix.length);
+        serverSignalName = serverPrefix + sharedName;
+      }
+      
+      // Handle space before bracket for multi-bit signals
+      // Local name: "pcpi_insn[31:0]" or "pcpi_insn [31:0]"
+      // Server name may need space: "testbench.top.uut.pcpi_insn[31:0]" or "testbench.top.uut.pcpi_insn [31:0]"
+      if (spaceBeforeBracket && serverSignalName.includes('[') && !serverSignalName.includes(' [')) {
+        // Add space before bracket if needed
+        serverSignalName = serverSignalName.replace('[', ' [');
+      } else if (!spaceBeforeBracket && serverSignalName.includes(' [')) {
+        // Remove space before bracket if not needed
+        serverSignalName = serverSignalName.replace(' [', '[');
+      }
+      
+      console.log('[WaveformSearch] Server signal name:', serverSignalName, { localPrefix, serverPrefix, spaceBeforeBracket });
+
+      const searchParams: import('./modules/search/waveformSearchService').WaveformSearchParams = {
+        signalName: serverSignalName,
+        searchType: waveformSearchType,
+        radix: radix,
+      };
+
+      // Set type-specific parameters
+      if (waveformSearchType === 'value') {
+        searchParams.valuePattern = searchPattern;
+        addMessage(`Searching ${direction} for "${searchPattern}" in ${selectedSignal.name}...`);
+      } else if (waveformSearchType === 'edge') {
+        searchParams.edgeType = waveformEdgeType;
+        addMessage(`Searching ${direction} for ${waveformEdgeType} edge in ${selectedSignal.name}...`);
+      } else if (waveformSearchType === 'transition') {
+        searchParams.fromValue = waveformFromValue;
+        searchParams.toValue = waveformToValue;
+        addMessage(`Searching ${direction} for ${waveformFromValue}→${waveformToValue} in ${selectedSignal.name}...`);
+      }
 
       // Perform search
       const results = await waveformSearchService.search(
         waveformName,
-        selectedSignal.name,
-        waveformSearchType,
-        searchPattern,
-        radix,
+        searchParams,
         cursorPosition,
         direction,
         100
@@ -2649,11 +2709,49 @@ function App() {
       addMessage(`Found match at time ${newTime}: ${closestResult.value}`);
     } catch (error) {
       console.error('[WaveformSearch] Error:', error);
-      addMessage(`Search error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      
+      // Extract error message from API response
+      let errorMessage = 'Unknown error';
+      if (error instanceof Error) {
+        // error.message might be an object string like "[object Object]"
+        // Try to get detailed error info
+        const msg = error.message;
+        if (msg === '[object Object]') {
+          // Try to stringify the error object itself
+          try {
+            const errorStr = JSON.stringify(error);
+            const errorData = JSON.parse(errorStr);
+            if (errorData.error && errorData.error.message) {
+              errorMessage = errorData.error.message;
+            } else if (errorData.message) {
+              errorMessage = errorData.message;
+            } else {
+              errorMessage = 'Request failed';
+            }
+          } catch {
+            errorMessage = 'Request failed';
+          }
+        } else {
+          errorMessage = msg;
+          // Try to parse JSON error response
+          try {
+            const errorData = JSON.parse(msg);
+            if (errorData.error && errorData.error.message) {
+              errorMessage = errorData.error.message;
+            } else if (errorData.message) {
+              errorMessage = errorData.message;
+            }
+          } catch {
+            // Not JSON, use original message
+          }
+        }
+      }
+      
+      addMessage(`Search failed: ${errorMessage}`);
     } finally {
       setIsWaveformSearching(false);
     }
-  }, [activeTabData, searchPattern, waveformSearchType, addMessage, activeTab, setTabs]);
+  }, [activeTabData, searchPattern, waveformSearchType, waveformEdgeType, waveformFromValue, waveformToValue, currentWaveName, currentWaveSignalPrefix, currentWaveSignalServerPrefix, currentWaveSignalSpaceBeforeBracket, addMessage, activeTab, setTabs]);
 
   // Zoom in: move timeStart and timeEnd towards cursor (half distance)
   const handleZoomIn = () => {
@@ -3259,6 +3357,12 @@ function App() {
         isWaveformSearchMode={activeTabData?.type === 'waveform'}
         waveformSearchType={waveformSearchType}
         onWaveformSearchTypeChange={setWaveformSearchType}
+        waveformEdgeType={waveformEdgeType}
+        onWaveformEdgeTypeChange={setWaveformEdgeType}
+        waveformFromValue={waveformFromValue}
+        onWaveformFromValueChange={setWaveformFromValue}
+        waveformToValue={waveformToValue}
+        onWaveformToValueChange={setWaveformToValue}
         onWaveformSearchForward={() => handleWaveformSearch('forward')}
         onWaveformSearchBackward={() => handleWaveformSearch('backward')}
       />
@@ -3387,6 +3491,16 @@ function App() {
                   ))
                 }}
                 wavemarks={activeTabData.wavemarks || []}
+                onSignalSelect={(signal) => {
+                  console.log('[App] WaveformWindow onSignalSelect:', signal.name);
+                  // Store selected signal in active tab for waveform search
+                  setTabs(prev => prev.map(tab =>
+                    tab.id === activeTab ? {
+                      ...tab,
+                      selectedSignal: signal
+                    } : tab
+                  ));
+                }}
               />
             ) : null}
           </TabPanel>

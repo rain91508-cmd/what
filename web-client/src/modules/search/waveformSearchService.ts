@@ -4,7 +4,8 @@
 
 import { apiService } from '../../services/api';
 
-export type WaveformSearchType = 'value' | 'transition';
+export type WaveformSearchType = 'value' | 'edge' | 'transition';
+export type EdgeType = 'rising' | 'falling' | 'any';
 export type WaveformSearchDirection = 'forward' | 'backward';
 
 export interface WaveformSearchResult {
@@ -12,11 +13,18 @@ export interface WaveformSearchResult {
   value: string;
 }
 
-export interface WaveformSearchCache {
+export interface WaveformSearchParams {
   signalName: string;
   searchType: WaveformSearchType;
-  patternValue: string;
+  valuePattern?: string;      // For value mode
+  edgeType?: EdgeType;        // For edge mode
+  fromValue?: string;         // For transition mode
+  toValue?: string;           // For transition mode
   radix: string;
+}
+
+export interface WaveformSearchCache {
+  params: WaveformSearchParams;
   results: WaveformSearchResult[];
   minTime: number;
   maxTime: number;
@@ -30,32 +38,43 @@ class WaveformSearchService {
    */
   async search(
     waveformName: string,
-    signalName: string,
-    searchType: WaveformSearchType,
-    patternValue: string,
-    radix: string,
+    params: WaveformSearchParams,
     startTime: number,
     direction: WaveformSearchDirection,
     maxResults: number = 100
   ): Promise<WaveformSearchResult[]> {
     // Check if we can use cached results
-    if (this.canUseCache(signalName, searchType, patternValue, radix, startTime)) {
+    if (this.canUseCache(params, startTime)) {
       console.log('[WaveformSearchService] Using cached results');
       return this.findFromCache(startTime, direction);
     }
 
     // Build pattern based on search type
-    const pattern = this.buildPattern(searchType, patternValue, radix);
+    const pattern = this.buildPattern(params);
+
+    // Build request body
+    const requestBody: Record<string, unknown> = {
+      start_time: startTime,
+      direction: direction,
+      pattern: pattern,
+      max_results: maxResults,
+    };
+
+    // Add time_range if available (optional optimization)
+    // This helps limit the search range on the server side
+    // requestBody.time_range = {
+    //   start: 0,
+    //   end: waveformEndTime,
+    // };
+
+    // Encode signal name using Base64 (required by API)
+    // Format: b64:base64encodedstring
+    const encodedSignalName = 'b64:' + btoa(params.signalName);
 
     // Call API
     const response = await apiService.post(
-      `/api/wave/${encodeURIComponent(waveformName)}/signals/${encodeURIComponent(signalName)}/pattern-search`,
-      {
-        start_time: startTime,
-        direction: direction,
-        pattern: pattern,
-        max_results: maxResults,
-      }
+      `/api/wave/${encodeURIComponent(waveformName)}/signals/${encodedSignalName}/pattern-search`,
+      requestBody
     );
 
     if (response.error) {
@@ -68,10 +87,7 @@ class WaveformSearchService {
     if (matches.length > 0) {
       const times = matches.map(m => m.time);
       this.cache = {
-        signalName,
-        searchType,
-        patternValue,
-        radix,
+        params,
         results: matches,
         minTime: Math.min(...times),
         maxTime: Math.max(...times),
@@ -84,35 +100,35 @@ class WaveformSearchService {
   /**
    * Build pattern object for API
    */
-  private buildPattern(
-    searchType: WaveformSearchType,
-    patternValue: string,
-    radix: string
-  ): object {
-    if (searchType === 'value') {
-      return {
-        type: 'value',
-        value: patternValue,
-        radix: radix,
-      };
-    } else {
-      // transition
-      // Parse "0->1" or "0 1" format
-      const parts = patternValue.split(/->|\s+/).filter(p => p.trim());
-      if (parts.length >= 2) {
+  private buildPattern(params: WaveformSearchParams): object {
+    switch (params.searchType) {
+      case 'value':
+        return {
+          type: 'value',
+          value: params.valuePattern || '',
+          radix: params.radix,
+        };
+      
+      case 'edge':
+        return {
+          type: 'edge',
+          edge_type: params.edgeType || 'any',
+        };
+      
+      case 'transition':
         return {
           type: 'transition',
-          from_value: parts[0],
-          to_value: parts[1],
-          radix: radix,
+          from_value: params.fromValue || '',
+          to_value: params.toValue || '',
+          radix: params.radix,
         };
-      }
-      // Fallback to value search if parsing fails
-      return {
-        type: 'value',
-        value: patternValue,
-        radix: radix,
-      };
+      
+      default:
+        return {
+          type: 'value',
+          value: params.valuePattern || '',
+          radix: params.radix,
+        };
     }
   }
 
@@ -120,21 +136,31 @@ class WaveformSearchService {
    * Check if cached results can be used
    */
   private canUseCache(
-    signalName: string,
-    searchType: WaveformSearchType,
-    patternValue: string,
-    radix: string,
+    params: WaveformSearchParams,
     startTime: number
   ): boolean {
     if (!this.cache) return false;
 
+    const cached = this.cache.params;
+
     // Check if search parameters match
     if (
-      this.cache.signalName !== signalName ||
-      this.cache.searchType !== searchType ||
-      this.cache.patternValue !== patternValue ||
-      this.cache.radix !== radix
+      cached.signalName !== params.signalName ||
+      cached.searchType !== params.searchType ||
+      cached.radix !== params.radix
     ) {
+      return false;
+    }
+
+    // Check type-specific parameters
+    if (params.searchType === 'value' && cached.valuePattern !== params.valuePattern) {
+      return false;
+    }
+    if (params.searchType === 'edge' && cached.edgeType !== params.edgeType) {
+      return false;
+    }
+    if (params.searchType === 'transition' && 
+        (cached.fromValue !== params.fromValue || cached.toValue !== params.toValue)) {
       return false;
     }
 

@@ -76,8 +76,14 @@ interface ToolBarProps {
   onSearchSignalsChange?: (searchSignals: boolean) => void;
   // Waveform search mode (when waveform tab active)
   isWaveformSearchMode?: boolean;
-  waveformSearchType?: 'value' | 'transition';
-  onWaveformSearchTypeChange?: (type: 'value' | 'transition') => void;
+  waveformSearchType?: 'value' | 'edge' | 'transition';
+  onWaveformSearchTypeChange?: (type: 'value' | 'edge' | 'transition') => void;
+  waveformEdgeType?: 'rising' | 'falling' | 'any';
+  onWaveformEdgeTypeChange?: (type: 'rising' | 'falling' | 'any') => void;
+  waveformFromValue?: string;
+  onWaveformFromValueChange?: (value: string) => void;
+  waveformToValue?: string;
+  onWaveformToValueChange?: (value: string) => void;
   onWaveformSearchForward?: () => void;
   onWaveformSearchBackward?: () => void;
 }
@@ -125,6 +131,12 @@ export function ToolBar({
   isWaveformSearchMode = false,
   waveformSearchType = 'value',
   onWaveformSearchTypeChange,
+  waveformEdgeType = 'any',
+  onWaveformEdgeTypeChange,
+  waveformFromValue = '',
+  onWaveformFromValueChange,
+  waveformToValue = '',
+  onWaveformToValueChange,
   onWaveformSearchForward,
   onWaveformSearchBackward,
 }: ToolBarProps) {
@@ -606,44 +618,102 @@ export function ToolBar({
             {/* Search Type Dropdown */}
             <select
               value={waveformSearchType}
-              onChange={(e) => onWaveformSearchTypeChange?.(e.target.value as 'value' | 'transition')}
+              onChange={(e) => onWaveformSearchTypeChange?.(e.target.value as 'value' | 'edge' | 'transition')}
               style={{
                 padding: '4px 6px',
                 fontSize: '11px',
                 border: '1px solid #c0c0c0',
                 borderRadius: '3px',
                 height: '24px',
-                width: '80px',
+                width: '90px',
               }}
             >
               <option value="value">Value</option>
+              <option value="edge">Edge</option>
               <option value="transition">Transition</option>
             </select>
             
-            {/* Search Input */}
-            <input
-              ref={searchInputRef}
-              type="text"
-              value={localSearchPattern}
-              onChange={(e) => {
-                setLocalSearchPattern(e.target.value);
-                onSearchPatternChange?.(e.target.value);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  onWaveformSearchForward?.();
-                }
-              }}
-              placeholder="Pattern..."
-              style={{
-                width: '100px',
-                padding: '4px 6px',
-                fontSize: '12px',
-                border: '1px solid #c0c0c0',
-                borderRadius: '3px',
-                height: '24px',
-              }}
-            />
+            {/* Value Mode: Single input */}
+            {waveformSearchType === 'value' && (
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={localSearchPattern}
+                onChange={(e) => {
+                  setLocalSearchPattern(e.target.value);
+                  onSearchPatternChange?.(e.target.value);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    onWaveformSearchForward?.();
+                  }
+                }}
+                placeholder="Pattern..."
+                style={{
+                  width: '80px',
+                  padding: '4px 6px',
+                  fontSize: '12px',
+                  border: '1px solid #c0c0c0',
+                  borderRadius: '3px',
+                  height: '24px',
+                }}
+              />
+            )}
+            
+            {/* Edge Mode: Edge type dropdown */}
+            {waveformSearchType === 'edge' && (
+              <select
+                value={waveformEdgeType}
+                onChange={(e) => onWaveformEdgeTypeChange?.(e.target.value as 'rising' | 'falling' | 'any')}
+                style={{
+                  padding: '4px 6px',
+                  fontSize: '11px',
+                  border: '1px solid #c0c0c0',
+                  borderRadius: '3px',
+                  height: '24px',
+                  width: '70px',
+                }}
+              >
+                <option value="rising">Rising</option>
+                <option value="falling">Falling</option>
+                <option value="any">Any</option>
+              </select>
+            )}
+            
+            {/* Transition Mode: From and To inputs */}
+            {waveformSearchType === 'transition' && (
+              <>
+                <input
+                  type="text"
+                  value={waveformFromValue}
+                  onChange={(e) => onWaveformFromValueChange?.(e.target.value)}
+                  placeholder="From..."
+                  style={{
+                    width: '60px',
+                    padding: '4px 6px',
+                    fontSize: '12px',
+                    border: '1px solid #c0c0c0',
+                    borderRadius: '3px',
+                    height: '24px',
+                  }}
+                />
+                <span style={{ fontSize: '11px', color: '#666' }}>→</span>
+                <input
+                  type="text"
+                  value={waveformToValue}
+                  onChange={(e) => onWaveformToValueChange?.(e.target.value)}
+                  placeholder="To..."
+                  style={{
+                    width: '60px',
+                    padding: '4px 6px',
+                    fontSize: '12px',
+                    border: '1px solid #c0c0c0',
+                    borderRadius: '3px',
+                    height: '24px',
+                  }}
+                />
+              </>
+            )}
             
             {/* Search Backward Button */}
             <button

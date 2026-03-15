@@ -81,15 +81,30 @@ class ApiService {
       });
 
       if (!response.ok) {
+        // Try to get detailed error message from response body
+        let errorMessage = response.statusText;
+        try {
+          const errorData = await response.json();
+          if (errorData && errorData.message) {
+            errorMessage = errorData.message;
+          } else if (errorData && errorData.error) {
+            errorMessage = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData.error);
+          }
+        } catch {
+          // If JSON parsing fails, use statusText
+        }
+        
         const error: ApiError = {
           code: `HTTP_${response.status}`,
-          message: response.statusText,
+          message: errorMessage,
         };
         return { status: 'error', data: null, error };
       }
 
       const data = await response.json();
-      return { status: 'success', data: data.data, error: null };
+      // Support both { data: ... } wrapper and direct response
+      const responseData = data.data !== undefined ? data.data : data;
+      return { status: 'success', data: responseData, error: null };
     } catch (error) {
       const apiError: ApiError = {
         code: 'NETWORK_ERROR',
@@ -301,6 +316,14 @@ class ApiService {
       this.connected = false;
       return false;
     }
+  }
+
+  // POST request
+  async post<T>(endpoint: string, body: unknown): Promise<ApiResponse<T>> {
+    return this.request<T>(endpoint, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
   }
 }
 

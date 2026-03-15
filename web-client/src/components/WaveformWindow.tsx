@@ -123,6 +123,8 @@ interface WaveformWindowProps {
   }) => void;
   // Wavemarks to display
   wavemarks?: Wavemark[];
+  // Signal selection callback
+  onSignalSelect?: (signal: Signal & { unique_id: number }) => void;
 }
 
 interface CursorState {
@@ -177,6 +179,7 @@ export function WaveformWindow({
   initialSignalHierarchySelections,
   onSignalSettingsChange,
   wavemarks = [],
+  onSignalSelect,
 }: WaveformWindowProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -2399,7 +2402,14 @@ export function WaveformWindow({
                         {signal.msb !== signal.lsb ? (expandedSignals.has(signal.unique_id) ? '▼' : '▶') : ''}
                       </span>
                       
-                      <span className="waveform-signal-name">
+                      <span
+                        className="waveform-signal-name"
+                        onClick={() => {
+                          console.log('[WaveformWindow] Signal name clicked:', signal.name);
+                          onSignalSelect?.(signal);
+                        }}
+                        style={{ cursor: 'pointer' }}
+                      >
                         {getSignalDisplayName(signal)}
                       </span>
                     </span>
@@ -2623,7 +2633,14 @@ export function WaveformWindow({
                             }}>
                               {renderTreeConnectors([...node.parentNodes, { level: node.level, isLast: i === Math.min(signal.msb - signal.lsb + 1, 32) - 1 }])}
                               <span style={{ width: '14px' }}></span>
-                              <span className="waveform-signal-name">
+                              <span
+                                className="waveform-signal-name"
+                                onClick={() => {
+                                  console.log('[WaveformWindow] Hierarchy signal name clicked:', signal.name);
+                                  onSignalSelect?.(signal);
+                                }}
+                                style={{ cursor: 'pointer' }}
+                              >
                                 {signal.name}[{bitIndex}]
                               </span>
                             </span>
