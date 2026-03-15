@@ -207,6 +207,27 @@ export function TableViewWindow({
     table.setPageIndex(newPage);
   }, [onPageChange, table]);
 
+  // Convert local signal name to server signal name (same logic as App.tsx)
+  const convertSignalNameForServer = useCallback((localName: string): string => {
+    // Step 1: Remove local prefix (e.g., "work@tb_top.u_dut.signal" -> "tb_top.u_dut.signal")
+    let serverName = localName;
+    if (_signalPrefix && localName.startsWith(_signalPrefix)) {
+      serverName = localName.slice(_signalPrefix.length);
+    }
+    
+    // Step 2: Add server prefix (e.g., "tb_top.u_dut.signal" -> "server@tb_top.u_dut.signal")
+    if (_serverPrefix) {
+      serverName = _serverPrefix + serverName;
+    }
+    
+    // Step 3: Add space before bracket if needed (e.g., "signal[7:0]" -> "signal [7:0]")
+    if (_spaceBeforeBracket) {
+      serverName = serverName.replace(/\[/g, ' [').replace(/\]\]/g, ']');
+    }
+    
+    return serverName;
+  }, [_signalPrefix, _serverPrefix, _spaceBeforeBracket]);
+
   // Handle data fetch using adapter (similar to WaveformWindow)
   const handleFetchData = useCallback(async () => {
     if (!adapterRef.current) {
@@ -241,9 +262,13 @@ export function TableViewWindow({
       }));
       onSignalsChange(updatedSignals);
 
+      // Convert signal names for server
+      const serverSignalNames = signals.map(s => convertSignalNameForServer(s.name));
+      console.log('[TableViewWindow] Signal names for server:', serverSignalNames);
+
       // Fetch data using adapter (use underscore format method name)
       const result = await adapterRef.current.get_signal_values_at_transitions({
-        signalNames: wasmSignals.map(s => s.name),
+        signalNames: serverSignalNames,
         searchStartTime: startTime,
         searchEndTime: endTime,
         resultMax: 100, // 100 rows per page
@@ -259,7 +284,7 @@ export function TableViewWindow({
     } finally {
       setIsFetching(false);
     }
-  }, [adapterRef, signals, startTime, endTime, onSignalsChange, onFetchData, _waveformName]);
+  }, [adapterRef, signals, startTime, endTime, onSignalsChange, onFetchData, _waveformName, convertSignalNameForServer]);
 
   // Get total pages
   const totalPages = table.getPageCount();
