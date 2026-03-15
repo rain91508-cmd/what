@@ -485,6 +485,8 @@ pub struct SignalInfo {
     pub width: u32,
     /// 方向 (输入/输出/内部)
     pub direction: String,
+    /// 是否是 alias 信号
+    pub is_alias: bool,
 }
 
 /// FST 读取后端枚举
@@ -901,6 +903,7 @@ impl WaveService {
                             signal_type: "logic".to_string(),  // fst-reader 不提供类型信息
                             width: length.to_owned(),
                             direction: "internal".to_string(),
+                            is_alias: false,  // fst-reader 不提供 alias 信息
                         });
                     }
                     _ => {}
@@ -942,10 +945,10 @@ impl WaveService {
                         ServerError::Internal(format!("读取变量失败: {}", e))
                     })?;
 
-                // 跳过别名
-                if var.is_alias() {
+                // 记录别名，但不跳过（alias 信号也应该在列表中显示）
+                let is_alias = var.is_alias();
+                if is_alias {
                     alias_count += 1;
-                    continue;
                 }
 
                 // 转换信号类型
@@ -1000,6 +1003,7 @@ impl WaveService {
                     signal_type: signal_type.to_string(),
                     width: var.length(),
                     direction: direction.to_string(),
+                    is_alias,
                 });
             }
 
