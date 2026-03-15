@@ -1054,6 +1054,11 @@ impl WaveformDataProvider {
             }
         }
 
+        web_sys::console::log_1(&JsValue::from_str(&format!(
+            "[WASM] build_server_signal_name: local_name='{}' -> server_name='{}' (signal_prefix='{}', server_prefix='{}', space_before_bracket={})",
+            local_name, server_name, self.signal_prefix, self.server_prefix, self.space_before_bracket
+        )));
+
         server_name
     }
 
@@ -1461,6 +1466,16 @@ if tile_missing_signals.is_empty() {
         result_max: usize,
         signals_with_format: JsValue,
     ) -> Result<JsValue, JsValue> {
+        // Debug: Log input parameters
+        web_sys::console::log_1(&JsValue::from_str(&format!(
+            "[WASM] get_signal_values_at_transitions called with signal_names: {:?}, search_start_time: {}, search_end_time: {}, result_max: {}",
+            signal_names, search_start_time, search_end_time, result_max
+        )));
+        web_sys::console::log_1(&JsValue::from_str(&format!(
+            "[WASM] Current prefix settings - signal_prefix: {:?}, server_prefix: {:?}, space_before_bracket: {:?}",
+            self.signal_prefix, self.server_prefix, self.space_before_bracket
+        )));
+        
         // Parse signals_with_format from JS
         let signals_format: Vec<SignalWithFormat> = serde_wasm_bindgen::from_value(signals_with_format)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse signals_with_format: {:?}", e)))?;
