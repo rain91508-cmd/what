@@ -1,6 +1,6 @@
 # WHAT - Web-basiertes HDL-Analyse-Toolkit
 
-[中文](README.md) | [English](README_EN.md) | [日本語](README_JA.md) | [Français](README_FR.md) | [Deutsch](README_DE.md)
+[中文](README.md) | [English](README_EN.md) | [日本語](README_JA.md) | [Français](README_FR.md) | [Deutsch](README_DE.md) | [Русский](README_RU.md)
 
 WHAT ist ein webbasiertes HDL (Hardware Description Language) Code- und Wellenformanalyse-Tool.
 
