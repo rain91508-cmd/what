@@ -227,18 +227,18 @@ export class WaveformProviderAdapter {
     // 使用逻辑尺寸（CSS像素）传递给WASM
     // WASM计算segments时使用逻辑尺寸
     // Worker中使用ctx.scale(dpr, dpr)来缩放绘制
-    console.log('[WaveformProviderAdapter] render_waveform called with:', {
-      canvasId: this.canvasId,
-      currentSignals: currentSignals,
-      newSignals,
-      viewport,
-      canvasConfig,
-      dpr: this.devicePixelRatio,
-      timeConfig,
-      signalPrefix,
-      serverPrefix,
-      spaceBeforeBracket,
-    });
+    // Debug: console.log('[WaveformProviderAdapter] render_waveform called with:', {
+    //   canvasId: this.canvasId,
+    //   currentSignals: currentSignals,
+    //   newSignals,
+    //   viewport,
+    //   canvasConfig,
+    //   dpr: this.devicePixelRatio,
+    //   timeConfig,
+    //   signalPrefix,
+    //   serverPrefix,
+    //   spaceBeforeBracket,
+    // });
 
     await this.provider.renderWaveform({
       canvasId: this.canvasId,
