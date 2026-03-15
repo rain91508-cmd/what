@@ -343,6 +343,8 @@ async function handleGetSignalValuesAtTransitions(payload: any, id: number): Pro
     signalPrefix,
     serverPrefix,
     spaceBeforeBracket,
+    // Time unit conversion factor
+    displayUnitPerLoD0Unit,
   } = payload;
 
   console.log('[WaveformWorker] GET_SIGNAL_VALUES_AT_TRANSITIONS payload:', {
@@ -354,6 +356,7 @@ async function handleGetSignalValuesAtTransitions(payload: any, id: number): Pro
     signalPrefix,
     serverPrefix,
     spaceBeforeBracket,
+    displayUnitPerLoD0Unit,
   });
 
   // Update WASM provider prefix settings if provided
@@ -396,6 +399,15 @@ async function handleGetSignalValuesAtTransitions(payload: any, id: number): Pro
     searchEndTime,
     resultMax,
     wasmSignalsCount: wasmSignals.length,
+  });
+
+  // Set display unit conversion factor if provided
+  if (displayUnitPerLoD0Unit !== undefined) {
+    wasmProvider.display_unit_per_lod0_unit = displayUnitPerLoD0Unit;
+  }
+
+  console.log('[WaveformWorker] WASM provider time settings:', {
+    display_unit_per_lod0_unit: wasmProvider.display_unit_per_lod0_unit,
   });
 
   // Call WASM function

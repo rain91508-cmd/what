@@ -3739,6 +3739,7 @@ function App() {
                 spaceBeforeBracket={activeTabData.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket}
                 waveformName={currentWaveName || ''}
                 refreshTrigger={tableViewRefreshTrigger}
+                displayUnitPerLoD0Unit={currentWaveDisplayUnitPerLoD0}
               />
             ) : activeTabData ? (
               <WaveformWindow

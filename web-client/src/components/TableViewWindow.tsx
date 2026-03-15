@@ -47,6 +47,8 @@ interface TableViewWindowProps {
   waveformName?: string;
   // Refresh trigger to force data refetch
   refreshTrigger?: number;
+  // Time unit conversion factor (display unit / LoD0 unit)
+  displayUnitPerLoD0Unit?: number;
 }
 
 // Row data structure for the table
@@ -71,6 +73,7 @@ export function TableViewWindow({
   spaceBeforeBracket: _spaceBeforeBracket = false,
   waveformName: _waveformName = '',
   refreshTrigger = 0,
+  displayUnitPerLoD0Unit: _displayUnitPerLoD0Unit = 1.0,
 }: TableViewWindowProps) {
   // Get shared provider from context (same as WaveformWindow)
   const { provider: sharedProvider, isLoading: providerLoading } = useWaveformProvider();
@@ -253,6 +256,8 @@ export function TableViewWindow({
         signalPrefix: _signalPrefix,
         serverPrefix: _serverPrefix,
         spaceBeforeBracket: _spaceBeforeBracket,
+        // Pass time unit conversion factor
+        displayUnitPerLoD0Unit: _displayUnitPerLoD0Unit,
       });
 
       // Update parent with fetched data

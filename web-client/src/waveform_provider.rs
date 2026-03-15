@@ -489,6 +489,7 @@ pub struct WaveformDataProvider {
     signals_with_id: Vec<SignalWithId>,  // Signals with draw_sig_id
     enable_opfs: bool,  // OPFS cache enabled flag
     current_lod: Option<u32>,  // Current LoD level for bucket size calculation
+    display_unit_per_lod0_unit: f64,  // Time unit conversion factor (display unit / LoD0 unit)
 }
 
 #[wasm_bindgen]
@@ -523,6 +524,7 @@ impl WaveformDataProvider {
             signals_with_id: Vec::new(),
             enable_opfs: false,  // Disabled by default
             current_lod: None,  // Will be set when fetching data
+            display_unit_per_lod0_unit: 1.0,  // Default to 1.0 (no conversion)
         }
     }
 
@@ -891,6 +893,22 @@ impl WaveformDataProvider {
     pub fn set_space_before_bracket(&mut self, space: bool) {
         // console_log!("[WASM] Updated space_before_bracket: {} -> {}", self.space_before_bracket, space);
         self.space_before_bracket = space;
+    }
+
+    /// Get display unit per LoD0 unit (time conversion factor)
+    #[wasm_bindgen(getter)]
+    pub fn display_unit_per_lod0_unit(&self) -> f64 {
+        self.display_unit_per_lod0_unit
+    }
+
+    /// Set display unit per LoD0 unit (time conversion factor)
+    #[wasm_bindgen(setter)]
+    pub fn set_display_unit_per_lod0_unit(&mut self, factor: f64) {
+        web_sys::console::log_1(&JsValue::from_str(&format!(
+            "[WASM] Updated display_unit_per_lod0_unit: {} -> {}",
+            self.display_unit_per_lod0_unit, factor
+        )));
+        self.display_unit_per_lod0_unit = factor;
     }
 
     /// Get display format
@@ -1557,17 +1575,24 @@ if tile_missing_signals.is_empty() {
                 });
             }
             
-            result_data.push(RawSignalValuesAtTime { time, values });
+            // Convert time from LoD0 units to display units
+            let display_time = (time as f64 * self.display_unit_per_lod0_unit) as u64;
+            
+            result_data.push(RawSignalValuesAtTime { time: display_time, values });
         }
         
         // Step 6: Restore state
         self.viewport = saved_viewport;
         self.current_lod = saved_lod;
         
-        // Step 7: Build and return result
+        // Step 7: Convert search range times to display units
+        let display_search_start_time = (search_start_time as f64 * self.display_unit_per_lod0_unit) as u64;
+        let display_search_end_time = (search_end_time as f64 * self.display_unit_per_lod0_unit) as u64;
+        
+        // Step 8: Build and return result with display unit times
         let result = RawSignalValuesResult {
-            search_start_time,
-            search_end_time,
+            search_start_time: display_search_start_time,
+            search_end_time: display_search_end_time,
             data: result_data,
         };
         

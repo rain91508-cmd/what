@@ -226,6 +226,8 @@ export class WaveformProviderAdapter {
       signalPrefix: params.signalPrefix,
       serverPrefix: params.serverPrefix,
       spaceBeforeBracket: params.spaceBeforeBracket,
+      // Pass time unit conversion factor
+      displayUnitPerLoD0Unit: params.displayUnitPerLoD0Unit,
     });
   }
 
