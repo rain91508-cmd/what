@@ -333,7 +333,28 @@ async function handleFindTransitionsAround(payload: any, id: number): Promise<vo
 async function handleGetSignalValuesAtTransitions(payload: any, id: number): Promise<void> {
   if (!wasmProvider) throw new Error('Provider not initialized');
 
-  const { signalNames, searchStartTime, searchEndTime, resultMax, signals } = payload;
+  const {
+    signalNames,
+    searchStartTime,
+    searchEndTime,
+    resultMax,
+    signals,
+    // Prefix settings for signal name conversion
+    signalPrefix,
+    serverPrefix,
+    spaceBeforeBracket,
+  } = payload;
+
+  // Update WASM provider prefix settings if provided
+  if (signalPrefix !== undefined) {
+    wasmProvider.signal_prefix = signalPrefix;
+  }
+  if (serverPrefix !== undefined) {
+    wasmProvider.server_prefix = serverPrefix;
+  }
+  if (spaceBeforeBracket !== undefined) {
+    wasmProvider.space_before_bracket = spaceBeforeBracket;
+  }
 
   // Convert signals to WASM format
   const wasmSignals = signals.map((sig: any) => ({

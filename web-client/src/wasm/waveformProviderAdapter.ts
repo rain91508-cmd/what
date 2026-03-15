@@ -222,6 +222,10 @@ export class WaveformProviderAdapter {
       searchEndTime: params.searchEndTime,
       resultMax: params.resultMax,
       signals: signalsWithFormat,
+      // Pass prefix settings for signal name conversion
+      signalPrefix: params.signalPrefix,
+      serverPrefix: params.serverPrefix,
+      spaceBeforeBracket: params.spaceBeforeBracket,
     });
   }
 

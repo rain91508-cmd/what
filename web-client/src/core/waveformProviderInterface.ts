@@ -107,6 +107,10 @@ export interface GetSignalValuesAtTransitionsParams {
   searchEndTime: number;
   resultMax: number;
   signals: SignalWithFormat[];
+  // Prefix settings for signal name conversion (optional)
+  signalPrefix?: string;
+  serverPrefix?: string;
+  spaceBeforeBracket?: boolean;
 }
 
 /**
