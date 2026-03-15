@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
+    "@tanstack/react-table": "^8.21.3",
     "comlink": "^4.4.1",
     "idb": "^8.0.0",
     "monaco-editor": "^0.55.1",

@@ -9,7 +9,7 @@ interface SignalPanelProps {
   onSignalAddToWaveform?: (signal: Signal) => void;
   onSignalDoubleClick?: (signal: Signal, moduleIndex: number) => void;
   onSignalSelect?: (signal: Signal) => void;  // Called when a signal is selected
-  activeTabType?: 'source' | 'waveform' | null;  // Current active tab type
+  activeTabType?: 'source' | 'waveform' | 'tableview' | null;  // Current active tab type
 }
 
 const DEFAULT_PAGE_SIZE = 50;

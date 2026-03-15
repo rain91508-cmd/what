@@ -1,6 +1,7 @@
 import { ReactNode, useState, useRef, useEffect } from 'react';
 import type { Signal } from '../types';
 import type { Wavemark } from '../types/wavemark';
+import type { SignalWithFormat, RawSignalValuesResult } from '../core/waveformProviderInterface';
 
 export interface SignalGroup {
   id: string;
@@ -262,7 +263,7 @@ export interface NavigationHistoryEntry {
 export interface Tab {
   id: string;
   label: string;
-  type: 'source' | 'waveform';
+  type: 'source' | 'waveform' | 'tableview';
   // Tab-specific data
   moduleIndex?: number | null;  // For source tabs - 1-based module index (selected instance)
   displayModuleIndex?: number | null; // For source tabs - 1-based module index (displayed instance, e.g., def_module)
@@ -304,6 +305,12 @@ export interface Tab {
   wavemarks?: Wavemark[];
   // Selected signal for waveform search
   selectedSignal?: Signal;
+  // TableView specific data
+  tableStartTime?: number;      // For tableview tabs - start time (LoD0Unit)
+  tableEndTime?: number;        // For tableview tabs - end time (LoD0Unit)
+  tableSignals?: SignalWithFormat[];  // For tableview tabs - signals to display
+  tableData?: RawSignalValuesResult;  // For tableview tabs - fetched data
+  tableCurrentPage?: number;    // For tableview tabs - current page number
 }
 
 interface TabPanelProps {

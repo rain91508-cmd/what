@@ -50,6 +50,7 @@ import { DesignBrowser } from './components/DesignBrowser'
 import { SignalPanel } from './components/SignalPanel'
 import { TabPanel } from './components/TabPanel'
 import { WaveformWindow } from './components/WaveformWindow'
+import { TableViewWindow } from './components/TableViewWindow'
 import { MessageWindow } from './components/MessageWindow'
 import { ConnectionDialog } from './components/ConnectionDialog'
 import { KdbSelectionDialog } from './components/KdbSelectionDialog'
@@ -64,7 +65,7 @@ import { SessionLoadingOverlay } from './components/SessionLoadingOverlay'
 const MonacoSourceCodeWindow = lazy(() => import('./components/MonacoSourceCodeWindow'))
 
 // Contexts
-import { WaveformProviderProvider } from './contexts/WaveformProviderContext'
+import { WaveformProviderProvider, useWaveformProvider } from './contexts/WaveformProviderContext'
 
 // Bookmark
 import { bookmarkManager, type Bookmark } from './types/bookmark'
@@ -80,6 +81,7 @@ import { SESSION_VERSION } from './types/session'
 import type { Signal } from './types/kdb'
 import type { WaveformInfo, ColumnWidths, TimeConfig, Tab, NavigationHistoryEntry, SignalGroup } from './components/TabPanel'
 import { initTimeConfig, parseTimeUnitStr } from './components/TabPanel'
+import type { SignalWithFormat } from './core/waveformProviderInterface'
 
 // 默认时间配置
 // DisplayUnitPerLoD0Unit = 1 表示 1 DisplayUnit = 1 LoD0Unit
@@ -223,6 +225,9 @@ function App() {
 
   // Get current active tab data
   const activeTabData = tabs.find(t => t.id === activeTab)
+
+  // Get shared waveform provider
+  const { provider: waveformProvider, isLoading: isProviderLoading } = useWaveformProvider()
   
   // Panel sizes
   const [hierarchyWidth, setHierarchyWidth] = useState(220)
@@ -2416,12 +2421,13 @@ function App() {
 
   // Tab management functions
   // For waveform tabs, optional customRange can be provided by user
-  const handleAddTab = (type: 'source' | 'waveform', customRange?: { start: number; end: number }) => {
+  const handleAddTab = (type: 'source' | 'waveform' | 'tableview', customRange?: { start: number; end: number }) => {
     const newId = `${type}-${tabCounter.current++}`
 
     // For waveform tabs, use current waveform's time settings
     const isWaveform = type === 'waveform'
-    const timeConfig = isWaveform
+    const isTableView = type === 'tableview'
+    const timeConfig = isWaveform || isTableView
       ? initTimeConfig(currentWaveDisplayUnitPerLoD0)
       : undefined
 
@@ -2443,7 +2449,9 @@ function App() {
 
     const newTab: Tab = {
       id: newId,
-      label: type === 'source' ? `Source ${tabCounter.current - 1}` : `Waveform ${tabCounter.current - 1}`,
+      label: type === 'source' ? `Source ${tabCounter.current - 1}` : 
+             type === 'waveform' ? `Waveform ${tabCounter.current - 1}` :
+             `Table ${tabCounter.current - 1}`,
       type,
       moduleIndex: type === 'source' ? null : undefined,
       signals: isWaveform ? [] : undefined,
@@ -2456,6 +2464,12 @@ function App() {
         : undefined, // Default cursor at middle of range
       waveformTimeUnit: isWaveform ? currentWaveTimeUnit : undefined,
       waveformRange, // Save the total range for sanity checks
+      // TableView specific
+      tableStartTime: isTableView ? 0 : undefined,
+      tableEndTime: isTableView ? 0 : undefined,
+      tableSignals: isTableView ? [] : undefined,
+      tableData: undefined,
+      tableCurrentPage: isTableView ? 0 : undefined,
     }
     setTabs(prev => [...prev, newTab])
     setActiveTab(newId)
@@ -2536,6 +2550,68 @@ function App() {
       }
     }
   }
+
+  // ============================================
+  // TableView Functionality
+  // ============================================
+
+  // Handle TableView start time change
+  const handleTableStartTimeChange = (newStart: number) => {
+    setTabs(prev => prev.map(tab =>
+      tab.id === activeTab ? { ...tab, tableStartTime: newStart } : tab
+    ))
+  }
+
+  // Handle TableView end time change
+  const handleTableEndTimeChange = (newEnd: number) => {
+    setTabs(prev => prev.map(tab =>
+      tab.id === activeTab ? { ...tab, tableEndTime: newEnd } : tab
+    ))
+  }
+
+  // Handle TableView page change
+  const handleTablePageChange = (newPage: number) => {
+    setTabs(prev => prev.map(tab =>
+      tab.id === activeTab ? { ...tab, tableCurrentPage: newPage } : tab
+    ))
+  }
+
+  // Fetch TableView data from WASM
+  const handleFetchTableData = useCallback(async () => {
+    const currentTab = tabs.find(t => t.id === activeTab)
+    if (!currentTab || currentTab.type !== 'tableview') {
+      addMessage('TableView data fetch is only available in tableview tabs')
+      return
+    }
+
+    if (!currentTab.tableSignals || currentTab.tableSignals.length === 0) {
+      addMessage('Please add signals to the table first')
+      return
+    }
+
+    if (!waveformProvider) {
+      addMessage('Waveform provider not initialized')
+      return
+    }
+
+    try {
+      const result = await waveformProvider.getSignalValuesAtTransitions({
+        signalNames: currentTab.tableSignals.map(s => s.name),
+        searchStartTime: currentTab.tableStartTime || 0,
+        searchEndTime: currentTab.tableEndTime || 0,
+        resultMax: 100, // 100 rows per page
+        signals: currentTab.tableSignals,
+      })
+
+      setTabs(prev => prev.map(tab =>
+        tab.id === activeTab ? { ...tab, tableData: result, tableCurrentPage: 0 } : tab
+      ))
+      addMessage(`Fetched ${result.data.length} rows for TableView`)
+    } catch (error) {
+      console.error('[App] Failed to fetch TableView data:', error)
+      addMessage('Failed to fetch TableView data')
+    }
+  }, [activeTab, tabs, waveformProvider, addMessage])
 
   // ============================================
   // Waveform Search Functionality
@@ -3388,7 +3464,14 @@ function App() {
         onToggleAutoCheck={handleToggleAutoCheck}
         autoCheckEnabled={autoCheckEnabled}
         onAddBookmark={handleAddBookmark}
-        currentTabType={activeTabData?.type === 'waveform' ? 'waveform' : 'source'}
+        onAddTableViewTab={() => handleAddTab('tableview')}
+        currentTabType={activeTabData?.type || 'source'}
+        // TableView time range
+        tableStartTime={activeTabData?.type === 'tableview' ? activeTabData.tableStartTime : undefined}
+        tableEndTime={activeTabData?.type === 'tableview' ? activeTabData.tableEndTime : undefined}
+        onTableStartTimeChange={handleTableStartTimeChange}
+        onTableEndTimeChange={handleTableEndTimeChange}
+        onTableTimeApply={handleFetchTableData}
         viewportStart={activeTabData?.viewport?.timeStart}
         viewportEnd={activeTabData?.viewport?.timeEnd}
         cursorPosition={activeTabData?.cursorPosition}
@@ -3490,6 +3573,26 @@ function App() {
                   onWordClick={handleWordClick}
                 />
               </Suspense>
+            ) : activeTabData?.type === 'tableview' ? (
+              <TableViewWindow
+                key={activeTabData.id}
+                tabId={activeTabData.id}
+                signals={activeTabData.tableSignals || []}
+                startTime={activeTabData.tableStartTime || 0}
+                endTime={activeTabData.tableEndTime || 0}
+                data={activeTabData.tableData || null}
+                timeConfig={activeTabData.timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0)}
+                onSignalsChange={(signals) => {
+                  setTabs(prev => prev.map(tab =>
+                    tab.id === activeTabData.id ? { ...tab, tableSignals: signals } : tab
+                  ))
+                }}
+                onStartTimeChange={handleTableStartTimeChange}
+                onEndTimeChange={handleTableEndTimeChange}
+                onFetchData={handleFetchTableData}
+                currentPage={activeTabData.tableCurrentPage || 0}
+                onPageChange={handleTablePageChange}
+              />
             ) : activeTabData ? (
               <WaveformWindow
                 key={activeTabData.id}

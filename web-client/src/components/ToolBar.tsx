@@ -55,8 +55,6 @@ interface ToolBarProps {
   autoCheckEnabled?: boolean;
   // Bookmark
   onAddBookmark?: () => void;
-  // Current tab type for bookmark behavior
-  currentTabType?: 'source' | 'waveform';
   // Viewport and cursor for time display
   viewportStart?: number;  // viewport timeStart in LoD0 units
   viewportEnd?: number;    // viewport timeEnd in LoD0 units
@@ -90,6 +88,16 @@ interface ToolBarProps {
   waveformSearchHistory?: string[];
   waveformFromValueHistory?: string[];
   waveformToValueHistory?: string[];
+  // TableView
+  onAddTableViewTab?: () => void;
+  // TableView time range (shown when tableview tab is active)
+  tableStartTime?: number;  // LoD0 units
+  tableEndTime?: number;    // LoD0 units
+  onTableStartTimeChange?: (time: number) => void;
+  onTableEndTimeChange?: (time: number) => void;
+  onTableTimeApply?: () => void;  // Apply time range and fetch data
+  // Current tab type to show appropriate controls
+  currentTabType?: 'source' | 'waveform' | 'tableview';
 }
 
 export function ToolBar({ 
@@ -147,6 +155,14 @@ export function ToolBar({
   waveformSearchHistory = [],
   waveformFromValueHistory = [],
   waveformToValueHistory = [],
+  // TableView
+  onAddTableViewTab,
+  tableStartTime,
+  tableEndTime,
+  onTableStartTimeChange,
+  onTableEndTimeChange,
+  onTableTimeApply,
+  currentTabType = 'source',
 }: ToolBarProps) {
   // Local state for display unit input value (only committed on Enter)
   const [inputValue, setInputValue] = useState<string>('');
@@ -163,6 +179,12 @@ export function ToolBar({
   const [cursorInputValue, setCursorInputValue] = useState<string>('');
   const [isCursorEditing, setIsCursorEditing] = useState(false);
   const cursorInputRef = useRef<HTMLInputElement>(null);
+
+  // Local state for TableView time inputs
+  const [tableStartInputValue, setTableStartInputValue] = useState<string>('0');
+  const [tableEndInputValue, setTableEndInputValue] = useState<string>('0');
+  const tableStartInputRef = useRef<HTMLInputElement>(null);
+  const tableEndInputRef = useRef<HTMLInputElement>(null);
 
   // Search state
   const [showSearchHistory, setShowSearchHistory] = useState(false);
@@ -473,6 +495,97 @@ export function ToolBar({
     setIsCursorEditing(false);
   };
 
+  // ==================== TableView Time Handlers ====================
+
+  // Update TableView input values when props change
+  useEffect(() => {
+    if (tableStartTime !== undefined && timeConfig) {
+      const displayValue = lod0ToDisplay(tableStartTime, timeConfig);
+      setTableStartInputValue(displayValue.toString());
+    }
+  }, [tableStartTime, timeConfig]);
+
+  useEffect(() => {
+    if (tableEndTime !== undefined && timeConfig) {
+      const displayValue = lod0ToDisplay(tableEndTime, timeConfig);
+      setTableEndInputValue(displayValue.toString());
+    }
+  }, [tableEndTime, timeConfig]);
+
+  const handleTableStartInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setTableStartInputValue(e.target.value);
+  };
+
+  const handleTableEndInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setTableEndInputValue(e.target.value);
+  };
+
+  const handleTableStartInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      commitTableStartValue();
+    } else if (e.key === 'Escape') {
+      // Restore original value
+      if (tableStartTime !== undefined && timeConfig) {
+        const displayValue = lod0ToDisplay(tableStartTime, timeConfig);
+        setTableStartInputValue(displayValue.toString());
+      }
+    }
+  };
+
+  const handleTableEndInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      commitTableEndValue();
+    } else if (e.key === 'Escape') {
+      // Restore original value
+      if (tableEndTime !== undefined && timeConfig) {
+        const displayValue = lod0ToDisplay(tableEndTime, timeConfig);
+        setTableEndInputValue(displayValue.toString());
+      }
+    }
+  };
+
+  const commitTableStartValue = () => {
+    if (!timeConfig || !onTableStartTimeChange) return;
+
+    const numValue = parseFloat(tableStartInputValue);
+    if (isNaN(numValue) || numValue < 0) {
+      // Invalid input, restore original value
+      if (tableStartTime !== undefined) {
+        const displayValue = lod0ToDisplay(tableStartTime, timeConfig);
+        setTableStartInputValue(displayValue.toString());
+      }
+      return;
+    }
+
+    // Convert display unit value to LoD0 units
+    const newStartLod0 = displayToLod0(numValue, timeConfig);
+    onTableStartTimeChange(newStartLod0);
+  };
+
+  const commitTableEndValue = () => {
+    if (!timeConfig || !onTableEndTimeChange) return;
+
+    const numValue = parseFloat(tableEndInputValue);
+    if (isNaN(numValue) || numValue < 0) {
+      // Invalid input, restore original value
+      if (tableEndTime !== undefined) {
+        const displayValue = lod0ToDisplay(tableEndTime, timeConfig);
+        setTableEndInputValue(displayValue.toString());
+      }
+      return;
+    }
+
+    // Convert display unit value to LoD0 units
+    const newEndLod0 = displayToLod0(numValue, timeConfig);
+    onTableEndTimeChange(newEndLod0);
+  };
+
+  const handleTableTimeApply = () => {
+    commitTableStartValue();
+    commitTableEndValue();
+    onTableTimeApply?.();
+  };
+
   // Calculate step size based on current unit
   const getStepSize = (): string => {
     switch (selectedUnit) {
@@ -634,6 +747,75 @@ export function ToolBar({
             title={`Cursor position (${selectedUnit}, press Enter to confirm)`}
           />
         </div>
+      )}
+
+      {/* TableView Time Range Input */}
+      {currentTabType === 'tableview' && (
+        <>
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '4px',
+            padding: '0 4px',
+          }}>
+            <span style={{ fontSize: '11px', color: '#666' }}>Start:</span>
+            <input
+              ref={tableStartInputRef}
+              type="number"
+              value={tableStartInputValue}
+              onChange={handleTableStartInputChange}
+              onKeyDown={handleTableStartInputKeyDown}
+              style={{
+                width: '70px',
+                padding: '4px 6px',
+                fontSize: '12px',
+                border: '1px solid #c0c0c0',
+                borderRadius: '3px',
+                height: '24px',
+              }}
+              min="0"
+              step={getStepSize()}
+              title={`Table start time (${selectedUnit}, press Enter to confirm)`}
+            />
+          </div>
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '4px',
+            padding: '0 4px',
+          }}>
+            <span style={{ fontSize: '11px', color: '#666' }}>End:</span>
+            <input
+              ref={tableEndInputRef}
+              type="number"
+              value={tableEndInputValue}
+              onChange={handleTableEndInputChange}
+              onKeyDown={handleTableEndInputKeyDown}
+              style={{
+                width: '70px',
+                padding: '4px 6px',
+                fontSize: '12px',
+                border: '1px solid #c0c0c0',
+                borderRadius: '3px',
+                height: '24px',
+              }}
+              min="0"
+              step={getStepSize()}
+              title={`Table end time (${selectedUnit}, press Enter to confirm)`}
+            />
+          </div>
+          <button
+            className="tool-bar-button"
+            title="Apply time range and fetch data"
+            onClick={handleTableTimeApply}
+            style={{
+              padding: '4px 8px',
+              fontSize: '11px',
+            }}
+          >
+            Apply
+          </button>
+        </>
       )}
       
       <div className="tool-bar-separator"></div>
@@ -1017,6 +1199,9 @@ export function ToolBar({
       </button>
       <button className="tool-bar-button" title="Add Waveform Tab" onClick={onAddWaveformTab}>
         <span style={{ fontSize: '12px', fontFamily: 'monospace' }}>⌇+</span>
+      </button>
+      <button className="tool-bar-button" title="Add TableView Tab" onClick={onAddTableViewTab}>
+        <span style={{ fontSize: '12px', fontFamily: 'monospace' }}>📊+</span>
       </button>
       <button className="tool-bar-button" title="Add Bookmark" onClick={onAddBookmark}>
         🔖
