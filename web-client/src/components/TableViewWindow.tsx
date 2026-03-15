@@ -151,7 +151,8 @@ export function TableViewWindow({
     // Signal columns
     const signalColumns: ColumnDef<TableRow>[] = signals.map((signal) => ({
       id: signal.name,
-      accessorKey: signal.name,
+      // Use accessorFn instead of accessorKey to handle signal names with dots
+      accessorFn: (row) => row[signal.name],
       header: signal.name,
       cell: ({ getValue }) => {
         const value = getValue<RawValue | undefined>();
