@@ -232,14 +232,14 @@ class WaveformRenderer {
    */
   private detectMinMaxGroups(segments: RenderSegment[]): Map<number, { isContinuous: boolean; groupSize: number; groupIndex: number }> {
     const result = new Map<number, { isContinuous: boolean; groupSize: number; groupIndex: number }>();
-    
-    // Find all single-bit segments with is_min_max=true (min≠max, toggling)
+
+    // Find all segments with is_min_max=true (min≠max, toggling) - supports both single and multi-bit
     const minMaxSegments: { index: number; x0: number; x1: number }[] = [];
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
       const isMinMax = seg.value.isMinMax || seg.value.is_min_max;
-      // Only include segments where min≠max (toggling)
-      if (seg.value.type === 'min_max' && seg.value.width === 1 && isMinMax) {
+      // Only include segments where min≠max (toggling) - supports both single and multi-bit
+      if (seg.value.type === 'min_max' && isMinMax) {
         minMaxSegments.push({ index: i, x0: seg.x0, x1: seg.x1 });
       }
     }

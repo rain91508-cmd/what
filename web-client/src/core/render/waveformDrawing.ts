@@ -55,13 +55,14 @@ export function detectMinMaxGroups(
 ): Map<number, { isContinuous: boolean; groupSize: number; groupIndex: number }> {
   const result = new Map<number, { isContinuous: boolean; groupSize: number; groupIndex: number }>();
 
-  // 找到所有单bit且 is_min_max=true 的 segment
+  // 找到所有 is_min_max=true 的 segment（包括单bit和多bit）
   const minMaxSegments: { index: number; x0: number; x1: number }[] = [];
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
     const isMinMax = seg.value.isMinMax || seg.value.is_min_max;
     const valueType = seg.value.type || seg.value.valueType || seg.value.value_type;
-    if (valueType === 'min_max' && seg.value.width === 1 && isMinMax) {
+    // 支持单bit和多bit信号的min_max类型
+    if (valueType === 'min_max' && isMinMax) {
       minMaxSegments.push({ index: i, x0: seg.x0, x1: seg.x1 });
     }
   }

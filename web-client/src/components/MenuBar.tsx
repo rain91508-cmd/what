@@ -132,7 +132,7 @@ export function MenuBar({
       items: [
         { label: 'KDB Debug Tool', onClick: onOpenDebugTool },
         { separator: true, label: '' },
-        { label: 'About' },
+        { label: 'About', onClick: () => window.open('https://github.com/rain91508-cmd/what', '_blank') },
       ],
     },
   ];
