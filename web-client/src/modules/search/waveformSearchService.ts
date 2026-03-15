@@ -78,7 +78,9 @@ class WaveformSearchService {
     );
 
     if (response.error) {
-      throw new Error(response.error);
+      // Serialize error object to preserve detailed error info
+      const errorStr = JSON.stringify(response.error);
+      throw new Error(errorStr);
     }
 
     const matches: WaveformSearchResult[] = response.data?.matches || [];

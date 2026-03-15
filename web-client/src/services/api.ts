@@ -83,19 +83,30 @@ class ApiService {
       if (!response.ok) {
         // Try to get detailed error message from response body
         let errorMessage = response.statusText;
+        let errorCode = `HTTP_${response.status}`;
         try {
           const errorData = await response.json();
-          if (errorData && errorData.message) {
+          // Priority: error.message > message > error (string) > error (object)
+          if (errorData && errorData.error) {
+            if (errorData.error.message) {
+              errorMessage = errorData.error.message;
+              if (errorData.error.code) {
+                errorCode = errorData.error.code;
+              }
+            } else if (typeof errorData.error === 'string') {
+              errorMessage = errorData.error;
+            } else {
+              errorMessage = JSON.stringify(errorData.error);
+            }
+          } else if (errorData && errorData.message) {
             errorMessage = errorData.message;
-          } else if (errorData && errorData.error) {
-            errorMessage = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData.error);
           }
         } catch {
           // If JSON parsing fails, use statusText
         }
         
         const error: ApiError = {
-          code: `HTTP_${response.status}`,
+          code: errorCode,
           message: errorMessage,
         };
         return { status: 'error', data: null, error };
