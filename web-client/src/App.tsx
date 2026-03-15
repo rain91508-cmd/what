@@ -41,7 +41,7 @@ import { zoomIn, zoomOut } from './utils/zoomHelpers'
 import { sanitizeTimeRange } from './utils/viewport'
 
 // WASM
-import { initWasm, updateProviderSettings, setOpfsEnabled, checkOpfsSupport, setMemoryCacheEnabled as setWasmMemoryCacheEnabled } from './wasm/waveformProvider'
+import { initWasm, updateProviderSettings, setOpfsEnabled, checkOpfsSupport, setMemoryCacheEnabled as setWasmMemoryCacheEnabled, buildWasmSignals } from './wasm/waveformProvider'
 
 // Components
 import { MenuBar } from './components/MenuBar'
@@ -1729,9 +1729,82 @@ function App() {
           selectedSignal: signal
         } : tab
       ))
+    } else if (currentTab?.type === 'tableview') {
+      // Add signal to tableview
+      addSignalToTableView(signal)
     } else {
-      console.log('[App] Not a waveform tab, skipping selectedSignal storage');
+      console.log('[App] Not a waveform/tableview tab, skipping selectedSignal storage');
     }
+  }
+
+  // Convert local signal name to server signal name (similar to WASM local_to_server_name)
+  const convertSignalNameForServer = (
+    localName: string,
+    signalPrefix: string,
+    serverPrefix: string,
+    spaceBeforeBracket: boolean
+  ): string => {
+    // Step 1: Remove local prefix (e.g., "work@tb_top.u_dut.signal" -> "tb_top.u_dut.signal")
+    let serverName = localName
+    if (signalPrefix && localName.startsWith(signalPrefix)) {
+      serverName = localName.slice(signalPrefix.length)
+    }
+    
+    // Step 2: Add server prefix (e.g., "tb_top.u_dut.signal" -> "server@tb_top.u_dut.signal")
+    if (serverPrefix) {
+      serverName = serverPrefix + serverName
+    }
+    
+    // Step 3: Add space before bracket if needed (e.g., "signal[7:0]" -> "signal [7:0]")
+    if (spaceBeforeBracket) {
+      serverName = serverName.replace(/\[/g, ' [').replace(/\]\]/g, ']')
+    }
+    
+    return serverName
+  }
+
+  // Add signal to TableView tab (similar to addSignalToWaveform)
+  const addSignalToTableView = (signal: Signal) => {
+    // Generate unique_id for this signal instance
+    const unique_id = nextWaveformSignalIdRef.current++
+    
+    // Get current tab and prefix settings
+    const currentTab = tabs.find(t => t.id === activeTab)
+    const signalPrefix = currentTab?.signalPrefix ?? currentWaveSignalPrefix
+    const serverPrefix = currentTab?.serverPrefix ?? currentWaveSignalServerPrefix
+    const spaceBeforeBracket = currentTab?.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket
+    
+    // Convert signal name for server
+    const serverSignalName = convertSignalNameForServer(
+      signal.fullName,
+      signalPrefix,
+      serverPrefix,
+      spaceBeforeBracket
+    )
+    
+    // Add signal to the active tableview tab
+    setTabs(prev => prev.map(tab => {
+      if (tab.id === activeTab && tab.type === 'tableview') {
+        const currentSignals = tab.tableSignals || []
+        // Check if signal already exists (by server name)
+        const exists = currentSignals.some(s => s.name === serverSignalName)
+        if (!exists) {
+          // Create SignalWithFormat for TableView
+          const newSignal = {
+            globalId: signal.globalId,
+            name: serverSignalName, // Use converted server name
+            row: currentSignals.length,
+            width: Math.abs(signal.msb - signal.lsb) + 1,
+            drawSigId: signal.globalId, // Will be updated by buildWasmSignals
+            displayFormat: 'hex' as const, // Default format
+          }
+          return { ...tab, tableSignals: [...currentSignals, newSignal] }
+        }
+      }
+      return tab
+    }))
+    
+    addMessage(`Added signal to tableview: ${signal.name} -> ${serverSignalName} (ID: ${unique_id})`)
   }
 
   // Handle word click in source code editor
@@ -2595,12 +2668,35 @@ function App() {
     }
 
     try {
+      // Build WASM signals with proper draw_sig_id (similar to WaveformWindow)
+      const wasmSignals = await buildWasmSignals(
+        currentTab.tableSignals.map(s => ({
+          global_id: s.globalId,
+          name: s.name,
+          row: s.row,
+          width: s.width,
+          displayFormat: s.displayFormat,
+        })),
+        currentWaveName || 'unknown'
+      )
+
+      // Update tableSignals with correct drawSigId from buildWasmSignals
+      const updatedSignals = currentTab.tableSignals.map((s, idx) => ({
+        ...s,
+        drawSigId: wasmSignals[idx]?.draw_sig_id || s.drawSigId,
+      }))
+
+      // Update tab with corrected signals
+      setTabs(prev => prev.map(tab =>
+        tab.id === activeTab ? { ...tab, tableSignals: updatedSignals } : tab
+      ))
+
       const result = await waveformProvider.getSignalValuesAtTransitions({
-        signalNames: currentTab.tableSignals.map(s => s.name),
+        signalNames: wasmSignals.map(s => s.name),
         searchStartTime: currentTab.tableStartTime || 0,
         searchEndTime: currentTab.tableEndTime || 0,
         resultMax: 100, // 100 rows per page
-        signals: currentTab.tableSignals,
+        signals: updatedSignals,
       })
 
       setTabs(prev => prev.map(tab =>
@@ -2611,7 +2707,7 @@ function App() {
       console.error('[App] Failed to fetch TableView data:', error)
       addMessage('Failed to fetch TableView data')
     }
-  }, [activeTab, tabs, waveformProvider, addMessage])
+  }, [activeTab, tabs, waveformProvider, addMessage, currentWaveName])
 
   // ============================================
   // Waveform Search Functionality
