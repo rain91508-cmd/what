@@ -123,6 +123,8 @@ export function TableViewWindow({
   }>(initialColumnMetadataFilters || {});
   // Track which column's metadata filter dropdown is open
   const [openMetadataFilterColumn, setOpenMetadataFilterColumn] = useState<string | null>(null);
+  // Ref for the currently open dropdown to detect clicks outside
+  const metadataFilterDropdownRef = useRef<HTMLDivElement | null>(null);
   // Per-column radix (display format) selection: { [columnId]: 'hex' | 'bin' | 'oct' | 'dec' }
   // Initialize from session if provided
   const [columnRadix, setColumnRadix] = useState<{
@@ -167,6 +169,24 @@ export function TableViewWindow({
       onColumnRadixChange(columnRadix);
     }
   }, [columnRadix, onColumnRadixChange]);
+
+  // Close metadata filter dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        openMetadataFilterColumn &&
+        metadataFilterDropdownRef.current &&
+        !metadataFilterDropdownRef.current.contains(event.target as Node)
+      ) {
+        setOpenMetadataFilterColumn(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [openMetadataFilterColumn]);
 
   // Transform data into table rows
   const tableData = useMemo(() => {
@@ -626,6 +646,7 @@ export function TableViewWindow({
                           {/* Metadata Filter Dropdown */}
                           {openMetadataFilterColumn === header.column.id && (
                             <div
+                              ref={metadataFilterDropdownRef}
                               style={{
                                 position: 'absolute',
                                 top: '100%',
