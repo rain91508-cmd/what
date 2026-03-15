@@ -256,8 +256,11 @@ pub struct BitExtractInfo {
 /// Raw value at a specific time point for a single signal
 #[derive(Debug, Clone, Serialize)]
 pub struct RawValue {
+    #[serde(rename = "displayStr")]
     pub display_str: String,
+    #[serde(rename = "valueType")]
     pub value_type: String, // "has_x" | "has_z" | "mixed" | "numeric"
+    #[serde(rename = "hasTransition")]
     pub has_transition: bool,
 }
 
@@ -271,7 +274,9 @@ pub struct RawSignalValuesAtTime {
 /// Complete result for get_signal_values_at_transitions
 #[derive(Debug, Clone, Serialize)]
 pub struct RawSignalValuesResult {
+    #[serde(rename = "searchStartTime")]
     pub search_start_time: u64,
+    #[serde(rename = "searchEndTime")]
     pub search_end_time: u64,
     pub data: Vec<RawSignalValuesAtTime>,
 }
