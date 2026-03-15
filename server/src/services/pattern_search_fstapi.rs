@@ -3,7 +3,7 @@
 use crate::error::{Result, ServerError};
 use crate::services::pattern_search::{
     Match, PatternSearchRequest, PatternSearchResponse, PatternType, SearchDirection,
-    value_matches,
+    value_matches, format_fst_value, get_pattern_radix, Radix,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -221,13 +221,36 @@ pub async fn pattern_search_fstapi(
         
         let search_completed = matches.len() < req.max_results;
         
+        // 格式化所有匹配结果中的信号值
+        let radix = get_pattern_radix(&req.pattern);
+        let signal_info_map: HashMap<_, _> = signal_infos.iter()
+            .map(|info| (info.name.clone(), info.width))
+            .collect();
+        
+        let formatted_matches: Result<Vec<_>> = matches.into_iter()
+            .map(|mut m| {
+                let mut formatted_signal_values = HashMap::new();
+                for (name, raw_value) in m.signal_values {
+                    let width = signal_info_map.get(&name).copied().unwrap_or(1);
+                    let formatted_value = format_fst_value(&raw_value, radix, width)?;
+                    formatted_signal_values.insert(name, formatted_value);
+                }
+                Ok(Match {
+                    time: m.time,
+                    signal_values: formatted_signal_values,
+                })
+            })
+            .collect();
+        
+        let formatted_matches = formatted_matches?;
+        
         Ok(PatternSearchResponse {
             waveform: waveform_name,
             signals: signal_infos.iter().map(|info| info.name.clone()).collect(),
             pattern: req.pattern.clone(),
             direction: req.direction,
-            total_matches: matches.len(),
-            matches,
+            total_matches: formatted_matches.len(),
+            matches: formatted_matches,
             search_completed,
         })
     }).await.map_err(|e| ServerError::Internal(format!("Task failed: {}", e)))?

@@ -226,6 +226,30 @@ fn wildcard_match_internal(
     }
 }
 
+/// 格式化 FST 原始值为指定 radix 的字符串
+/// 
+/// # 参数
+/// - `raw_value`: FST 原始二进制字符串
+/// - `radix`: 目标进制
+/// - `signal_width`: 信号位宽
+pub fn format_fst_value(
+    raw_value: &str,
+    radix: Radix,
+    signal_width: u32,
+) -> Result<String> {
+    let value_u64 = parse_value_string(raw_value)?;
+    Ok(radix.format_value(value_u64, signal_width))
+}
+
+/// 从模式中提取 radix
+pub fn get_pattern_radix(pattern: &PatternType) -> Radix {
+    match pattern {
+        PatternType::Value { radix, .. } => *radix,
+        PatternType::Edge { .. } => Radix::Binary, // Edge 默认用 binary
+        PatternType::Transition { radix, .. } => *radix,
+    }
+}
+
 /// 检查值是否匹配模式
 /// 
 /// # 参数
@@ -302,6 +326,8 @@ pub fn value_matches(
 }
 
 /// 解析信号值字符串（支持二进制、十六进制、八进制、十进制）
+/// 
+/// 支持带前缀的格式（如 0b1010, 0xA5）和不带前缀的纯数字字符串
 fn parse_value_string(value: &str) -> Result<u64> {
     let value = value.trim();
     
@@ -318,6 +344,10 @@ fn parse_value_string(value: &str) -> Result<u64> {
         // 八进制
         u64::from_str_radix(&value[2..], 8)
             .map_err(|e| ServerError::InvalidRequest(format!("Invalid octal value: {}", e)))
+    } else if value.chars().all(|c| c == '0' || c == '1') && value.len() > 1 {
+        // 纯二进制字符串（只包含0和1，且长度大于1）
+        u64::from_str_radix(value, 2)
+            .map_err(|e| ServerError::InvalidRequest(format!("Invalid binary value: {}", e)))
     } else {
         // 尝试十进制
         value.parse::<u64>()
