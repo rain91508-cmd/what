@@ -3323,6 +3323,37 @@ function App() {
         onToggleOpfs={handleToggleOpfs}
         memoryCacheEnabled={memoryCacheEnabled}
         onToggleMemoryCache={handleToggleMemoryCache}
+        // View menu
+        onZoomIn={handleZoomIn}
+        onZoomOut={handleZoomOut}
+        onZoomFull={handleZoomFull}
+        canZoom={activeTabData?.type === 'waveform' && !!currentWaveName}
+        // Navigate menu
+        onHistoryBack={navigatePrevious}
+        onHistoryForward={navigateNext}
+        canGoBack={canNavigatePrevious()}
+        canGoForward={canNavigateNext()}
+        onAddBookmark={handleAddBookmark}
+        onFindDriver={() => addMessage('Find Driver: Please double-click a signal in source code view')}
+        onFindDefinition={() => addMessage('Find Definition: Please double-click an instance in source code view')}
+        hasSelectedWord={false}
+        // Waveform menu
+        onAddSignal={() => {
+          if (activeTabData?.type === 'waveform') {
+            addMessage('Add Signal: Please double-click a signal in the Signal Panel')
+          } else {
+            addMessage('Please open a waveform tab first')
+          }
+        }}
+        onRemoveSignal={() => {
+          if (activeTabData?.type === 'waveform' && activeTabData.signals && activeTabData.signals.length > 0) {
+            handleSignalRemove(activeTabData.signals[activeTabData.signals.length - 1] as Signal & { unique_id: number })
+          } else {
+            addMessage('No signal to remove')
+          }
+        }}
+        canAddSignal={activeTabData?.type === 'waveform' && !!currentWaveName}
+        canRemoveSignal={activeTabData?.type === 'waveform' && !!activeTabData?.signals && activeTabData.signals.length > 0}
       />
 
       {/* Tool Bar */}

@@ -18,6 +18,25 @@ interface MenuBarProps {
   onToggleOpfs?: () => void;     // Toggle OPFS cache
   memoryCacheEnabled?: boolean;  // Memory LRU cache enabled state
   onToggleMemoryCache?: () => void; // Toggle Memory LRU cache
+  // View menu
+  onZoomIn?: () => void;         // Zoom in
+  onZoomOut?: () => void;        // Zoom out
+  onZoomFull?: () => void;       // Zoom full
+  canZoom?: boolean;             // Whether zoom is available
+  // Navigate menu
+  onHistoryBack?: () => void;    // History back
+  onHistoryForward?: () => void; // History forward
+  canGoBack?: boolean;           // Whether can go back in history
+  canGoForward?: boolean;        // Whether can go forward in history
+  onAddBookmark?: () => void;    // Add bookmark
+  onFindDriver?: () => void;     // Find driver (for selected word)
+  onFindDefinition?: () => void; // Find definition (for selected word)
+  hasSelectedWord?: boolean;     // Whether a word is selected
+  // Waveform menu
+  onAddSignal?: () => void;      // Add signal to waveform
+  onRemoveSignal?: () => void;   // Remove signal from waveform
+  canAddSignal?: boolean;        // Whether can add signal
+  canRemoveSignal?: boolean;     // Whether can remove signal
 }
 
 interface MenuItem {
@@ -32,7 +51,16 @@ interface Menu {
   items: MenuItem[];
 }
 
-export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onOpenWaveList, onCloseKdb, onCloseWave, hasKdbLoaded, hasWaveLoaded, infoText, onOpenDebugTool, onSaveSession, onRestoreSession, opfsEnabled, onToggleOpfs, memoryCacheEnabled, onToggleMemoryCache }: MenuBarProps) {
+export function MenuBar({
+  connected, onConnect, onDisconnect, onOpenKdbList, onOpenWaveList, onCloseKdb, onCloseWave, hasKdbLoaded, hasWaveLoaded, infoText,
+  onOpenDebugTool, onSaveSession, onRestoreSession, opfsEnabled, onToggleOpfs, memoryCacheEnabled, onToggleMemoryCache,
+  // View menu
+  onZoomIn, onZoomOut, onZoomFull, canZoom,
+  // Navigate menu
+  onHistoryBack, onHistoryForward, canGoBack, canGoForward, onAddBookmark, onFindDriver, onFindDefinition, hasSelectedWord,
+  // Waveform menu
+  onAddSignal, onRemoveSignal, canAddSignal, canRemoveSignal
+}: MenuBarProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const menuBarRef = useRef<HTMLDivElement>(null);
 
@@ -64,46 +92,39 @@ export function MenuBar({ connected, onConnect, onDisconnect, onOpenKdbList, onO
       ],
     },
     {
-      label: 'Edit',
-      items: [
-        { label: 'Copy' },
-        { label: 'Paste' },
-      ],
-    },
-    {
       label: 'View',
       items: [
-        { label: 'Zoom In' },
-        { label: 'Zoom Out' },
+        { label: 'Zoom In', onClick: onZoomIn, disabled: !canZoom },
+        { label: 'Zoom Out', onClick: onZoomOut, disabled: !canZoom },
+        { label: 'Zoom Full', onClick: onZoomFull, disabled: !canZoom },
       ],
     },
     {
       label: 'Navigate',
       items: [
-        { label: 'Go to Definition' },
-        { label: 'Find References' },
+        { label: 'History Back', onClick: onHistoryBack, disabled: !canGoBack },
+        { label: 'History Forward', onClick: onHistoryForward, disabled: !canGoForward },
+        { separator: true, label: '' },
+        { label: 'Add Bookmark', onClick: onAddBookmark },
+        { separator: true, label: '' },
+        { label: 'Find Driver', onClick: onFindDriver, disabled: !hasSelectedWord },
+        { label: 'Find Definition', onClick: onFindDefinition, disabled: !hasSelectedWord },
       ],
     },
     {
       label: 'Waveform',
       items: [
-        { label: 'Add Signal' },
-        { label: 'Remove Signal' },
+        { label: 'Add Signal', onClick: onAddSignal, disabled: !canAddSignal },
+        { label: 'Remove Signal', onClick: onRemoveSignal, disabled: !canRemoveSignal },
         { separator: true, label: '' },
-        { 
-          label: opfsEnabled ? '✓ OPFS Cache' : '  OPFS Cache', 
+        {
+          label: opfsEnabled ? '✓ OPFS Cache' : '  OPFS Cache',
           onClick: onToggleOpfs,
         },
-        { 
-          label: memoryCacheEnabled ? '✓ Memory Cache' : '  Memory Cache', 
+        {
+          label: memoryCacheEnabled ? '✓ Memory Cache' : '  Memory Cache',
           onClick: onToggleMemoryCache,
         },
-      ],
-    },
-    {
-      label: 'Tools',
-      items: [
-        { label: 'Settings' },
       ],
     },
     {
