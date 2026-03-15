@@ -73,7 +73,7 @@ class WaveformSearchService {
     const encodedSignalName = 'b64:' + btoa(params.signalName);
 
     // Call API
-    const response = await apiService.post(
+    const response = await apiService.post<{ matches: WaveformSearchResult[] }>(
       `/api/wave/${encodeURIComponent(waveformName)}/signals/${encodedSignalName}/pattern-search`,
       requestBody
     );

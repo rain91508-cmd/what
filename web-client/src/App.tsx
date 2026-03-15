@@ -861,7 +861,7 @@ function App() {
       tab.id === activeTab ? {
         ...tab,
         wavemarks: (tab.wavemarks || []).map(w =>
-          w.id === wavemarkId ? { ...w, color: newColor } : w
+          w.id === wavemarkId ? { ...w, color: newColor as import('./types/wavemark').WavemarkColor } : w
         ),
       } : tab
     ));
@@ -2560,11 +2560,11 @@ function App() {
     }
 
     // Get selected signal from Signal Panel or use first signal in waveform
-    let selectedSignal = activeTabData.selectedSignal;
+    let selectedSignal = activeTabData.selectedSignal as (Signal & { unique_id?: number }) | undefined;
 
     // If no selected signal, try to get first signal from waveform
     if (!selectedSignal && activeTabData.signals && activeTabData.signals.length > 0) {
-      selectedSignal = activeTabData.signals[0];
+      selectedSignal = activeTabData.signals[0] as Signal & { unique_id?: number };
     }
     
     if (!selectedSignal) {
@@ -2584,7 +2584,7 @@ function App() {
 
     // Get signal radix (display format)
     // signalDisplayFormats is a Record<number, SignalDisplayFormat>, not a Map
-    const signalFormatKey = selectedSignal.unique_id || selectedSignal.id;
+    const signalFormatKey = (selectedSignal as Signal & { unique_id?: number }).unique_id || selectedSignal.globalId;
     const signalFormat = signalFormatKey !== undefined ? activeTabData.signalDisplayFormats?.[signalFormatKey] : undefined;
     
     // Convert display format to API radix format
@@ -2629,6 +2629,7 @@ function App() {
       const searchParams: import('./modules/search/waveformSearchService').WaveformSearchParams = {
         signalName: serverSignalName,
         searchType: waveformSearchType,
+        radix: radix,
       };
 
       // Set type-specific parameters
@@ -3156,7 +3157,14 @@ function App() {
           serverPrefix: waveTab.serverPrefix,
           spaceBeforeBracket: waveTab.spaceBeforeBracket,
           // Restore wavemarks
-          wavemarks: waveTab.wavemarks || [],
+          wavemarks: (waveTab.wavemarks || []).map(w => ({
+            id: w.id,
+            name: w.name,
+            time: w.time,
+            createdAt: w.createdAt,
+            expandedGroups: w.expandedGroups,
+            color: '#ff6600' as import('./types/wavemark').WavemarkColor,
+          })),
         }
         
         restoredTabs.push(newTab)

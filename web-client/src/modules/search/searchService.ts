@@ -40,7 +40,7 @@ export async function performHierarchySearch(
 
   // Get start module info
   const startModule = kdbManager.getModuleById(startModuleIndex);
-  console.log(`[SearchService] Start module:`, startModule ? { id: startModule.id, name: startModule.name, isInstance: startModule.isInstance } : 'NOT FOUND');
+  console.log(`[SearchService] Start module:`, startModule ? { id: startModuleIndex, name: startModule.name, isInstance: startModule.isInstance } : 'NOT FOUND');
 
   if (!startModule) {
     console.error(`[SearchService] Start module ${startModuleIndex} not found`);
@@ -112,7 +112,7 @@ export async function performHierarchySearch(
                 fullName: signalFullName,
                 type: 'signal',
                 parentModuleIndex: moduleIndex,
-                lineNumber: signal.line,
+                lineNumber: signal.declaration?.line,
               });
 
               if (results.length >= maxResults) {
@@ -131,7 +131,7 @@ export async function performHierarchySearch(
       const allChildren = moduleInfo.childModuleIds
         .map(id => {
           const m = kdbManager.getModuleById(id);
-          console.log(`[SearchService]   Child ${id}:`, m ? { id: m.id, name: m.name, isInstance: m.isInstance } : 'NOT FOUND');
+          console.log(`[SearchService]   Child ${id}:`, m ? { id: id, name: m.name, isInstance: m.isInstance } : 'NOT FOUND');
           return m;
         });
       const childModules = allChildren.filter(m => m && m.isInstance) as Array<NonNullable<ReturnType<typeof kdbManager.getModuleById>>>;
@@ -151,7 +151,7 @@ export async function performHierarchySearch(
             fullName: fullName,
             type: 'module',
             parentModuleIndex: moduleInfo.parentModuleId,
-            lineNumber: definition?.line,
+            lineNumber: definition?.startLine,
           });
 
           if (results.length >= maxResults) {
@@ -165,11 +165,17 @@ export async function performHierarchySearch(
         if (shouldCancel?.()) break;
 
         const childFullName = `${fullName}.${child.name}`;
-
-        stack.push({
-          moduleIndex: child.id,
-          fullName: childFullName,
+        // Find child module index from childModuleIds
+        const childIndex = moduleInfo.childModuleIds.findIndex(id => {
+          const m = kdbManager.getModuleById(id);
+          return m === child;
         });
+        if (childIndex >= 0) {
+          stack.push({
+            moduleIndex: moduleInfo.childModuleIds[childIndex],
+            fullName: childFullName,
+          });
+        }
       }
 
       // Report progress periodically

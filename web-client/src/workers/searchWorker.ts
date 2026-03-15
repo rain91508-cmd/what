@@ -29,7 +29,7 @@ async function performHierarchySearch(
 
   try {
     // Get module info for start module
-    const startModule = await kdbManager.getModule(startModuleIndex, kdbFileId);
+    const startModule = await kdbManager.getModule(startModuleIndex);
     if (!startModule) {
       return results;
     }
@@ -50,7 +50,7 @@ async function performHierarchySearch(
       visited.add(moduleIndex);
 
       // Get module details
-      const moduleInfo = await kdbManager.getModule(moduleIndex, kdbFileId);
+      const moduleInfo = await kdbManager.getModule(moduleIndex);
       if (!moduleInfo) {
         continue;
       }
@@ -58,7 +58,7 @@ async function performHierarchySearch(
       // Check if searching signals
       if (isSignalSearch) {
         // Get signals in this module
-        const signals = await kdbManager.getModuleSignals(moduleIndex, kdbFileId);
+        const signals = await kdbManager.getModuleSignals(moduleIndex);
 
         for (const signal of signals) {
           if (shouldCancel) break;
@@ -72,7 +72,7 @@ async function performHierarchySearch(
               fullName: signalFullName,
               type: 'signal',
               parentModuleIndex: moduleIndex,
-              lineNumber: signal.line,
+              lineNumber: signal.declaration?.line,
             });
 
             if (results.length >= maxResults) {
@@ -83,7 +83,7 @@ async function performHierarchySearch(
       }
 
       // Get child instances
-      const instances = await kdbManager.getModuleInstances(moduleIndex, kdbFileId);
+      const instances = await kdbManager.getModuleInstances(moduleIndex);
 
       // If no children and not searching signals, check this module
       if (instances.length === 0 && !isSignalSearch) {
@@ -106,7 +106,7 @@ async function performHierarchySearch(
         if (!isSignalSearch) {
           if (wildcardMatch(childFullName, pattern)) {
             results.push({
-              globalId: instance.moduleIndex,
+              globalId: moduleIndex,
               fullName: childFullName,
               type: 'module',
             });
@@ -117,10 +117,17 @@ async function performHierarchySearch(
           }
         }
 
-        stack.push({
-          moduleIndex: instance.moduleIndex,
-          fullName: childFullName,
+        // Find child module index from childModuleIds
+        const childIndex = moduleInfo.childModuleIds.findIndex(id => {
+          const m = kdbManager.getModuleById(id);
+          return m?.name === instance.name;
         });
+        if (childIndex >= 0) {
+          stack.push({
+            moduleIndex: moduleInfo.childModuleIds[childIndex],
+            fullName: childFullName,
+          });
+        }
       }
 
       // Report progress periodically

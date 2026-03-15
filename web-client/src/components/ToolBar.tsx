@@ -186,10 +186,10 @@ export function ToolBar({
 
   // 根据 waveformTimeUnit 更新选中单位
   useEffect(() => {
-    const unit = TIME_UNIT_ENUM_TO_STR[waveformTimeUnit] ?? 'ns';
+    const unit = TIME_UNIT_ENUM_TO_STR[waveformTimeUnit ?? 2] ?? 'ns';
     // 只更新为有效的单位选项
-    if (TIME_UNIT_MULTIPLIERS[unit]) {
-      setSelectedUnit(unit as TimeUnit);
+    if (unit in TIME_UNIT_MULTIPLIERS) {
+      setSelectedUnit(unit);
     }
   }, [waveformTimeUnit]);
 
@@ -966,7 +966,6 @@ export function ToolBar({
                         padding: '4px 8px',
                         cursor: 'pointer',
                         fontSize: '12px',
-                        hover: { background: '#f0f0f0' },
                       }}
                       onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
