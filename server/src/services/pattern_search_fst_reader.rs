@@ -45,6 +45,9 @@ pub async fn pattern_search_fst_reader(
             return Err(ServerError::SignalNotFound(signals.join(", ")));
         }
         
+        // 获取第一个信号的宽度用于 Value 和 Transition 模式
+        let signal_width = signal_infos[0].width;
+        
         let handles: Vec<FstSignalHandle> = signal_infos.iter()
             .map(|info| info.handle.clone())
             .collect();
@@ -127,7 +130,7 @@ pub async fn pattern_search_fst_reader(
                     }
                     
                     let prev = prev_values.get(&signal_name);
-                    if value_matches(&req.pattern, &value, prev.map(|v| v.as_str())) {
+                    if value_matches(&req.pattern, &value, prev.map(|v| v.as_str()), signal_width) {
                         current_values.insert(signal_name.clone(), value.clone());
                         
                         let mut match_values = HashMap::new();
@@ -140,7 +143,7 @@ pub async fn pattern_search_fst_reader(
                             
                             if matches!(req.pattern, PatternType::Value { .. }) {
                                 let signal_prev = prev_values.get(&info.name).map(|v| v.as_str());
-                                if !value_matches(&req.pattern, &match_values[&info.name], signal_prev) {
+                                if !value_matches(&req.pattern, &match_values[&info.name], signal_prev, info.width) {
                                     all_match = false;
                                 }
                             }
@@ -171,7 +174,7 @@ pub async fn pattern_search_fst_reader(
                     }
                     
                     let prev = prev_values.get(&signal_name);
-                    if value_matches(&req.pattern, &value, prev.map(|v| v.as_str())) {
+                    if value_matches(&req.pattern, &value, prev.map(|v| v.as_str()), signal_width) {
                         current_values.insert(signal_name.clone(), value.clone());
                         
                         let mut match_values = HashMap::new();
@@ -184,7 +187,7 @@ pub async fn pattern_search_fst_reader(
                             
                             if matches!(req.pattern, PatternType::Value { .. }) {
                                 let signal_prev = prev_values.get(&info.name).map(|v| v.as_str());
-                                if !value_matches(&req.pattern, &match_values[&info.name], signal_prev) {
+                                if !value_matches(&req.pattern, &match_values[&info.name], signal_prev, info.width) {
                                     all_match = false;
                                 }
                             }

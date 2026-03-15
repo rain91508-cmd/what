@@ -8,6 +8,14 @@ use crate::services::pattern_search::{
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+/// 信号信息
+#[derive(Debug, Clone)]
+struct SignalInfo {
+    name: String,
+    handle: fstapi::Handle,
+    width: u32,
+}
+
 /// 使用 fstapi 进行 pattern search
 pub async fn pattern_search_fstapi(
     wave_path: &PathBuf,
@@ -24,24 +32,31 @@ pub async fn pattern_search_fstapi(
             .map_err(|e| ServerError::Internal(format!("无法打开 FST 文件: {}", e)))?;
         
         // 查找信号
-        let mut signal_handles: Vec<(String, fstapi::Handle)> = Vec::new();
+        let mut signal_infos: Vec<SignalInfo> = Vec::new();
         
         for var_result in reader.vars() {
             let (name, var) = var_result
                 .map_err(|e| ServerError::Internal(format!("读取变量失败: {}", e)))?;
             
             if signals.contains(&name) {
-                signal_handles.push((name, var.handle()));
+                signal_infos.push(SignalInfo {
+                    name,
+                    handle: var.handle(),
+                    width: var.length() as u32,
+                });
             }
         }
         
-        if signal_handles.is_empty() {
+        if signal_infos.is_empty() {
             return Err(ServerError::SignalNotFound(signals.join(", ")));
         }
         
+        // 获取第一个信号的宽度用于 Value 和 Transition 模式
+        let signal_width = signal_infos[0].width;
+        
         // 设置信号 mask
-        for (_, handle) in &signal_handles {
-            reader.set_mask(*handle);
+        for info in &signal_infos {
+            reader.set_mask(info.handle);
         }
         
         // 获取时间范围
@@ -72,8 +87,8 @@ pub async fn pattern_search_fstapi(
             let mut pre_reader = fstapi::Reader::open(path.as_path())
                 .map_err(|e| ServerError::Internal(format!("无法打开 FST 文件: {}", e)))?;
             
-            for (_, handle) in &signal_handles {
-                pre_reader.set_mask(*handle);
+            for info in &signal_infos {
+                pre_reader.set_mask(info.handle);
             }
             
             pre_reader.set_time_range_limit(0, req.start_time);
@@ -81,9 +96,9 @@ pub async fn pattern_search_fstapi(
             let mut temp_values: HashMap<String, String> = HashMap::new();
             
             pre_reader.for_each_block(|time, h, value, _var_len| {
-                for (name, handle) in &signal_handles {
-                    if h == *handle {
-                        temp_values.insert(name.clone(), String::from_utf8_lossy(value).to_string());
+                for info in &signal_infos {
+                    if h == info.handle {
+                        temp_values.insert(info.name.clone(), String::from_utf8_lossy(value).to_string());
                         break;
                     }
                 }
@@ -95,9 +110,9 @@ pub async fn pattern_search_fstapi(
         
         // 读取搜索范围内的 transitions
         reader.for_each_block(|time, h, value, _var_len| {
-            for (name, handle) in &signal_handles {
-                if h == *handle {
-                    all_transitions.push((time, name.clone(), String::from_utf8_lossy(value).to_string()));
+            for info in &signal_infos {
+                if h == info.handle {
+                    all_transitions.push((time, info.name.clone(), String::from_utf8_lossy(value).to_string()));
                     break;
                 }
             }
@@ -121,26 +136,26 @@ pub async fn pattern_search_fstapi(
                     
                     // 检查是否匹配
                     let prev = prev_values.get(&signal_name);
-                    if value_matches(&req.pattern, &value, prev.map(|v| v.as_str())) {
+                    if value_matches(&req.pattern, &value, prev.map(|v| v.as_str()), signal_width) {
                         current_values.insert(signal_name.clone(), value.clone());
                         
                         let mut match_values = HashMap::new();
                         let mut all_match = true;
                         
-                        for (name, _) in &signal_handles {
-                            let val = current_values.get(name).cloned()
+                        for info in &signal_infos {
+                            let val = current_values.get(&info.name).cloned()
                                 .unwrap_or_else(|| "0".to_string());
-                            match_values.insert(name.clone(), val);
+                            match_values.insert(info.name.clone(), val);
                             
                             if matches!(req.pattern, PatternType::Value { .. }) {
-                                let signal_prev = prev_values.get(name).map(|v| v.as_str());
-                                if !value_matches(&req.pattern, &match_values[name], signal_prev) {
+                                let signal_prev = prev_values.get(&info.name).map(|v| v.as_str());
+                                if !value_matches(&req.pattern, &match_values[&info.name], signal_prev, info.width) {
                                     all_match = false;
                                 }
                             }
                         }
                         
-                        if all_match || signal_handles.len() == 1 {
+                        if all_match || signal_infos.len() == 1 {
                             matches.push(Match {
                                 time,
                                 signal_values: match_values,
@@ -166,26 +181,26 @@ pub async fn pattern_search_fstapi(
                     }
                     
                     let prev = prev_values.get(&signal_name);
-                    if value_matches(&req.pattern, &value, prev.map(|v| v.as_str())) {
+                    if value_matches(&req.pattern, &value, prev.map(|v| v.as_str()), signal_width) {
                         current_values.insert(signal_name.clone(), value.clone());
                         
                         let mut match_values = HashMap::new();
                         let mut all_match = true;
                         
-                        for (name, _) in &signal_handles {
-                            let val = current_values.get(name).cloned()
+                        for info in &signal_infos {
+                            let val = current_values.get(&info.name).cloned()
                                 .unwrap_or_else(|| "0".to_string());
-                            match_values.insert(name.clone(), val);
+                            match_values.insert(info.name.clone(), val);
                             
                             if matches!(req.pattern, PatternType::Value { .. }) {
-                                let signal_prev = prev_values.get(name).map(|v| v.as_str());
-                                if !value_matches(&req.pattern, &match_values[name], signal_prev) {
+                                let signal_prev = prev_values.get(&info.name).map(|v| v.as_str());
+                                if !value_matches(&req.pattern, &match_values[&info.name], signal_prev, info.width) {
                                     all_match = false;
                                 }
                             }
                         }
                         
-                        if all_match || signal_handles.len() == 1 {
+                        if all_match || signal_infos.len() == 1 {
                             matches.push(Match {
                                 time,
                                 signal_values: match_values,
@@ -208,7 +223,7 @@ pub async fn pattern_search_fstapi(
         
         Ok(PatternSearchResponse {
             waveform: waveform_name,
-            signals: signal_handles.iter().map(|(n, _)| n.clone()).collect(),
+            signals: signal_infos.iter().map(|info| info.name.clone()).collect(),
             pattern: req.pattern.clone(),
             direction: req.direction,
             total_matches: matches.len(),
