@@ -261,6 +261,18 @@ export function TableViewWindow({
         displayUnitPerLoD0Unit: _displayUnitPerLoD0Unit,
       });
 
+      // Debug: Log WASM returned data
+      console.log('[TableViewWindow] WASM returned data:', {
+        searchStartTime: result.searchStartTime,
+        searchEndTime: result.searchEndTime,
+        rowCount: result.data.length,
+        firstRow: result.data[0] ? {
+          time: result.data[0].time,
+          values: result.data[0].values.map(v => ({ displayStr: v.displayStr, valueType: v.valueType, hasTransition: v.hasTransition }))
+        } : null,
+        allRowTimes: result.data.map(r => r.time)
+      });
+
       // Update parent with fetched data
       onFetchData(result);
 

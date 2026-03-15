@@ -1733,8 +1733,8 @@ function App() {
         } : tab
       ))
     } else if (currentTab?.type === 'tableview') {
-      // Add signal to tableview (async)
-      await handleSignalAddToTableView(signal)
+      // For tableview, only select the signal on click (add is on double-click via onSignalAddToTableView)
+      console.log('[App] Tableview tab selected signal:', signal.name);
     } else {
       console.log('[App] Not a waveform/tableview tab, skipping selectedSignal storage');
     }
@@ -3755,6 +3755,7 @@ function App() {
           <SignalPanel
             selectedModuleIndex={selectedModuleIndex}
             onSignalAddToWaveform={handleSignalAddToWaveform}
+            onSignalAddToTableView={handleSignalAddToTableView}
             onSignalDoubleClick={handleSignalDoubleClick}
             onSignalSelect={handleSignalSelect}
             activeTabType={tabs.find(t => t.id === activeTab)?.type}
@@ -4079,8 +4080,8 @@ function App() {
                     // Handle confirm action
                     // Update current tab's prefix settings instead of global settings
                     const updateTabPrefixSettings = (localPrefix: string, serverPrefix: string, spaceBeforeBracket: boolean) => {
-                      // Check if current active tab is a waveform tab
-                      const activeTabData = tabs.find(t => t.id === activeTab && t.type === 'waveform')
+                      // Check if current active tab is a waveform or tableview tab
+                      const activeTabData = tabs.find(t => t.id === activeTab && (t.type === 'waveform' || t.type === 'tableview'))
                       if (activeTabData) {
                         // Update tab's settings
                         setTabs(prev => prev.map(tab =>

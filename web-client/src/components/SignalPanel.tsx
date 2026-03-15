@@ -7,6 +7,7 @@ import { FilterInput } from './FilterInput';
 interface SignalPanelProps {
   selectedModuleIndex: number | null;  // 1-based module index
   onSignalAddToWaveform?: (signal: Signal) => void;
+  onSignalAddToTableView?: (signal: Signal) => void;  // Called when double-click to add to tableview
   onSignalDoubleClick?: (signal: Signal, moduleIndex: number) => void;
   onSignalSelect?: (signal: Signal) => void;  // Called when a signal is selected
   activeTabType?: 'source' | 'waveform' | 'tableview' | null;  // Current active tab type
@@ -14,7 +15,7 @@ interface SignalPanelProps {
 
 const DEFAULT_PAGE_SIZE = 50;
 
-export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSignalDoubleClick, onSignalSelect, activeTabType }: SignalPanelProps) {
+export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSignalAddToTableView, onSignalDoubleClick, onSignalSelect, activeTabType }: SignalPanelProps) {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -615,7 +616,11 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
                 onClick={(e) => {
                   setSelectedSignalGlobalId(signal.globalId);
                   // Notify parent component about signal selection
-                  if (onSignalSelect) {
+                  // For tableview tab, only select on click, don't add (add is on double-click)
+                  if (activeTabType === 'tableview') {
+                    // Just select the signal, don't add to tableview
+                    console.log('[SignalPanel] Signal selected (tableview):', signal.name);
+                  } else if (onSignalSelect) {
                     onSignalSelect(signal);
                   } else {
                     console.log('[SignalPanel] onSignalSelect is not defined');
@@ -628,9 +633,9 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
                   } else if (activeTabType === 'waveform' && onSignalAddToWaveform) {
                     // Only add to waveform when waveform tab is explicitly active
                     onSignalAddToWaveform(signal);
-                  } else if (activeTabType === 'tableview' && onSignalSelect) {
-                    // Add to tableview when tableview tab is active
-                    onSignalSelect(signal);
+                  } else if (activeTabType === 'tableview' && onSignalAddToTableView) {
+                    // Add to tableview when tableview tab is active (double-click)
+                    onSignalAddToTableView(signal);
                   }
                 }}
                 title={activeTabType === 'waveform' ? 'Double-click to add to waveform' : 'Double-click to jump to declaration'}
