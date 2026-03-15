@@ -1173,32 +1173,32 @@ export function WaveformWindow({
         const wasmProvider = wasmProviderRef.current;
         const signalName = targetNode.signal.fullName || targetNode.signal.name;
 
-        console.log(`[WaveformWindow] Cursor snap: signal=${signalName}, clickTime=${clickTime}, threshold=${snapThreshold}, nodeIndex=${nodeIndex}`);
+        // Debug: console.log(`[WaveformWindow] Cursor snap: signal=${signalName}, clickTime=${clickTime}, threshold=${snapThreshold}, nodeIndex=${nodeIndex}`);
 
         try {
           const transitions = await wasmProvider.find_transitions_around(signalName, clickTime);
-          console.log(`[WaveformWindow] Cursor snap: transitions=`, transitions);
+          // Debug: console.log(`[WaveformWindow] Cursor snap: transitions=`, transitions);
           if (transitions && Array.isArray(transitions) && transitions.length >= 2) {
             const prev = transitions[0] as number | null;
             const next = transitions[1] as number | null;
 
-            console.log(`[WaveformWindow] Cursor snap: prev=${prev}, next=${next}, clickTime=${clickTime}`);
+            // Debug: console.log(`[WaveformWindow] Cursor snap: prev=${prev}, next=${next}, clickTime=${clickTime}`);
 
             if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
               finalTime = prev;
-              console.log(`[WaveformWindow] Cursor snap: snapped to prev=${prev}`);
+              // Debug: console.log(`[WaveformWindow] Cursor snap: snapped to prev=${prev}`);
             } else if (next !== null && Math.abs(next - clickTime) <= snapThreshold) {
               finalTime = next;
-              console.log(`[WaveformWindow] Cursor snap: snapped to next=${next}`);
+              // Debug: console.log(`[WaveformWindow] Cursor snap: snapped to next=${next}`);
             } else {
-              console.log(`[WaveformWindow] Cursor snap: no snap, distances: prev=${prev !== null ? Math.abs(clickTime - prev) : 'null'}, next=${next !== null ? Math.abs(next - clickTime) : 'null'}`);
+              // Debug: console.log(`[WaveformWindow] Cursor snap: no snap, distances: prev=${prev !== null ? Math.abs(clickTime - prev) : 'null'}, next=${next !== null ? Math.abs(next - clickTime) : 'null'}`);
             }
           }
         } catch (error) {
           console.error('[WaveformWindow] Failed to find transitions:', error);
         }
       } else if (targetNode?.type === 'group') {
-        console.log(`[WaveformWindow] Cursor snap: clicked on group row, no snap`);
+        // Debug: console.log(`[WaveformWindow] Cursor snap: clicked on group row, no snap`);
       }
 
       setCursor({ position: Math.round(finalTime), visible: true });
