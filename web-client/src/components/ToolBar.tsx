@@ -650,8 +650,9 @@ export function ToolBar({
               className="tool-bar-button"
               title="Search Backward"
               onClick={() => onWaveformSearchBackward?.()}
+              style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '1px' }}
             >
-              ◀
+              <span>🔍</span><span>◀</span>
             </button>
             
             {/* Search Forward Button */}
@@ -659,8 +660,9 @@ export function ToolBar({
               className="tool-bar-button"
               title="Search Forward"
               onClick={() => onWaveformSearchForward?.()}
+              style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '1px' }}
             >
-              ▶
+              <span>▶</span><span>🔍</span>
             </button>
           </>
         ) : (

@@ -302,6 +302,8 @@ export interface Tab {
   spaceBeforeBracket?: boolean; // Whether to add space before [msb:lsb]
   // Wavemarks for waveform tabs
   wavemarks?: Wavemark[];
+  // Selected signal for waveform search
+  selectedSignal?: Signal;
 }
 
 interface TabPanelProps {

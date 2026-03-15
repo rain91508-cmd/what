@@ -599,6 +599,7 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
           </div>
         ) : (
           <div>
+            {console.log('[SignalPanel] Rendering signals:', signals.length)}
             {signals.map((signal, index) => (
               <div
                 key={`${signal.globalId}-${index}`}
@@ -612,11 +613,15 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
                   userSelect: 'none',
                   backgroundColor: selectedSignalGlobalId === signal.globalId ? '#e3f2fd' : 'transparent',
                 }}
-                onClick={() => {
+                onClick={(e) => {
+                  console.log('[SignalPanel] Signal clicked:', signal.name, 'target:', e.target, 'currentTarget:', e.currentTarget);
                   setSelectedSignalGlobalId(signal.globalId);
                   // Notify parent component about signal selection
                   if (onSignalSelect) {
+                    console.log('[SignalPanel] Calling onSignalSelect with:', signal.name);
                     onSignalSelect(signal);
+                  } else {
+                    console.log('[SignalPanel] onSignalSelect is not defined');
                   }
                 }}
                 onDoubleClick={() => {

@@ -1047,109 +1047,6 @@ function App() {
     setSearchResults(searchManager.getSearchResults());
   }, []);
 
-  // ============================================
-  // Waveform Search Functionality
-  // ============================================
-
-  // Perform waveform pattern search
-  const handleWaveformSearch = useCallback(async (direction: WaveformSearchDirection) => {
-    // Check if active tab is waveform
-    if (activeTabData?.type !== 'waveform') {
-      addMessage('Waveform search is only available in waveform tabs');
-      return;
-    }
-
-    // Check if pattern is provided
-    if (!searchPattern.trim()) {
-      addMessage('Please enter a search pattern');
-      return;
-    }
-
-    // Get selected signal from Signal Panel
-    const selectedSignal = activeTabData.selectedSignal;
-    if (!selectedSignal) {
-      addMessage('Please select a signal in the Signal Panel');
-      return;
-    }
-
-    // Get waveform name
-    const waveformName = activeTabData.waveformName;
-    if (!waveformName) {
-      addMessage('No waveform loaded');
-      return;
-    }
-
-    // Get current cursor position as start time
-    const cursorPosition = activeTabData.cursorPosition || 0;
-
-    // Get signal radix (display format)
-    const signalFormat = activeTabData.signalDisplayFormats?.get(selectedSignal.id);
-    const radix = signalFormat?.radix || 'binary';
-
-    setIsWaveformSearching(true);
-
-    try {
-      addMessage(`Searching ${direction} for "${searchPattern}" in ${selectedSignal.name}...`);
-
-      // Perform search
-      const results = await waveformSearchService.search(
-        waveformName,
-        selectedSignal.name,
-        waveformSearchType,
-        searchPattern,
-        radix,
-        cursorPosition,
-        direction,
-        100
-      );
-
-      if (results.length === 0) {
-        addMessage(`No matches found for "${searchPattern}"`);
-        setIsWaveformSearching(false);
-        return;
-      }
-
-      // Find closest result to cursor
-      const closestResult = waveformSearchService.findClosestResult(
-        results,
-        cursorPosition,
-        direction
-      );
-
-      if (!closestResult) {
-        addMessage(`No ${direction} matches found from current position`);
-        setIsWaveformSearching(false);
-        return;
-      }
-
-      // Move cursor and viewport to the result
-      const newTime = closestResult.time;
-
-      // Update cursor position
-      handleCursorPositionChange(newTime);
-
-      // Center viewport on the result
-      const viewport = activeTabData.viewport;
-      if (viewport) {
-        const viewportWidth = viewport.timeEnd - viewport.timeStart;
-        const newStart = newTime - viewportWidth / 2;
-        const newEnd = newTime + viewportWidth / 2;
-
-        handleViewportChange(activeTab, {
-          ...viewport,
-          timeStart: newStart,
-          timeEnd: newEnd,
-        });
-      }
-
-      addMessage(`Found match at time ${newTime}: ${closestResult.value}`);
-    } catch (error) {
-      addMessage(`Search error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    } finally {
-      setIsWaveformSearching(false);
-    }
-  }, [activeTabData, searchPattern, waveformSearchType, addMessage, handleCursorPositionChange, activeTab, handleViewportChange]);
-
   // Handle bookmark click - jump to source
   const handleBookmarkClick = useCallback(async (bookmark: Bookmark) => {
     // Use stored moduleIndex from bookmark as both selected and display module
@@ -1804,8 +1701,26 @@ function App() {
   }
 
   const handleSignalSelect = (signal: Signal) => {
+    console.log('[App] handleSignalSelect called:', signal?.name, 'activeTab:', activeTab);
+    
     // Update MenuBar info text with signal's full hierarchy name
     setMenuBarInfoText(signal.fullName)
+    
+    // Store selected signal in active tab for waveform search
+    const currentTab = tabs.find(t => t.id === activeTab)
+    console.log('[App] Current tab:', currentTab?.type, currentTab?.id);
+    
+    if (currentTab?.type === 'waveform') {
+      console.log('[App] Storing selected signal in tab:', signal.name);
+      setTabs(prev => prev.map(tab =>
+        tab.id === activeTab ? {
+          ...tab,
+          selectedSignal: signal
+        } : tab
+      ))
+    } else {
+      console.log('[App] Not a waveform tab, skipping selectedSignal storage');
+    }
   }
 
   // Handle word click in source code editor
@@ -2616,6 +2531,129 @@ function App() {
       }
     }
   }
+
+  // ============================================
+  // Waveform Search Functionality
+  // ============================================
+
+  // Perform waveform pattern search
+  const handleWaveformSearch = useCallback(async (direction: WaveformSearchDirection) => {
+    console.log('[WaveformSearch] Starting search:', { direction, searchPattern, waveformSearchType });
+    
+    // Check if active tab is waveform
+    if (activeTabData?.type !== 'waveform') {
+      addMessage('Waveform search is only available in waveform tabs');
+      return;
+    }
+
+    // Check if pattern is provided
+    if (!searchPattern.trim()) {
+      addMessage('Please enter a search pattern');
+      return;
+    }
+
+    // Get selected signal from Signal Panel or use first signal in waveform
+    let selectedSignal = activeTabData.selectedSignal;
+    console.log('[WaveformSearch] Selected signal from tab:', selectedSignal);
+    
+    // If no selected signal, try to get first signal from waveform
+    if (!selectedSignal && activeTabData.signals && activeTabData.signals.length > 0) {
+      selectedSignal = activeTabData.signals[0];
+      console.log('[WaveformSearch] Using first signal from waveform:', selectedSignal.name);
+    }
+    
+    if (!selectedSignal) {
+      addMessage('Please select a signal in the Signal Panel');
+      return;
+    }
+
+    // Get waveform name
+    const waveformName = activeTabData.waveformName;
+    if (!waveformName) {
+      addMessage('No waveform loaded');
+      return;
+    }
+
+    // Get current cursor position as start time
+    const cursorPosition = activeTabData.cursorPosition || 0;
+    console.log('[WaveformSearch] Cursor position:', cursorPosition);
+
+    // Get signal radix (display format)
+    const signalFormat = activeTabData.signalDisplayFormats?.get(selectedSignal.id);
+    const radix = signalFormat?.radix || 'binary';
+    console.log('[WaveformSearch] Signal format:', { signalFormat, radix });
+
+    setIsWaveformSearching(true);
+
+    try {
+      addMessage(`Searching ${direction} for "${searchPattern}" in ${selectedSignal.name}...`);
+
+      // Perform search
+      const results = await waveformSearchService.search(
+        waveformName,
+        selectedSignal.name,
+        waveformSearchType,
+        searchPattern,
+        radix,
+        cursorPosition,
+        direction,
+        100
+      );
+
+      console.log('[WaveformSearch] Search results:', results);
+
+      if (results.length === 0) {
+        addMessage(`No matches found for "${searchPattern}"`);
+        setIsWaveformSearching(false);
+        return;
+      }
+
+      // Find closest result to cursor
+      const closestResult = waveformSearchService.findClosestResult(
+        results,
+        cursorPosition,
+        direction
+      );
+
+      if (!closestResult) {
+        addMessage(`No ${direction} matches found from current position`);
+        setIsWaveformSearching(false);
+        return;
+      }
+
+      // Move cursor and viewport to the result
+      const newTime = closestResult.time;
+
+      // Update cursor position
+      handleCursorPositionChange(newTime);
+
+      // Center viewport on the result
+      const viewport = activeTabData.viewport;
+      if (viewport) {
+        const viewportWidth = viewport.timeEnd - viewport.timeStart;
+        const newStart = newTime - viewportWidth / 2;
+        const newEnd = newTime + viewportWidth / 2;
+
+        setTabs(prev => prev.map(tab =>
+          tab.id === activeTab ? {
+            ...tab,
+            viewport: {
+              ...viewport,
+              timeStart: newStart,
+              timeEnd: newEnd,
+            }
+          } : tab
+        ));
+      }
+
+      addMessage(`Found match at time ${newTime}: ${closestResult.value}`);
+    } catch (error) {
+      console.error('[WaveformSearch] Error:', error);
+      addMessage(`Search error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsWaveformSearching(false);
+    }
+  }, [activeTabData, searchPattern, waveformSearchType, addMessage, activeTab, setTabs]);
 
   // Zoom in: move timeStart and timeEnd towards cursor (half distance)
   const handleZoomIn = () => {
