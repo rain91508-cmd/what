@@ -286,12 +286,6 @@ async function handleGetSignalValueAtTime(payload: any, id: number): Promise<voi
   // 因为 signals 中的 displayFormat 可能不是最新的
   const signalDisplayFormat = displayFormat;
 
-  console.log('[WaveformWorker] get_signal_value_at_time:', {
-    signalName,
-    time,
-    signalDisplayFormat,
-  });
-
   const value = wasmProvider.get_signal_value_at_time(signalName, time, signalDisplayFormat);
   sendSuccess(id, value);
 }

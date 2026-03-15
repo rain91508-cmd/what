@@ -898,15 +898,6 @@ export function WaveformWindow({
       }
 
       // 调用 Adapter 的 render_waveform 并传递完整参数
-      console.log('[WaveformWindow] Calling render_waveform with viewport:', {
-        timeStart: viewport.timeStart,
-        timeEnd: viewport.timeEnd,
-        width,
-        height,
-        signalPrefix: _signalPrefix,
-        serverPrefix: _serverPrefix,
-        spaceBeforeBracket: _spaceBeforeBracket,
-      });
       await wasmProviderRef.current.render_waveform({
         signals: wasmSignals,
         viewport: {
@@ -1886,20 +1877,7 @@ export function WaveformWindow({
   // Note: This must be after treeNodes is defined
   useEffect(() => {
     const updateSignalValues = async () => {
-      console.log('[WaveformWindow] updateSignalValues called:', {
-        cursorVisible: cursor.visible,
-        cursorPosition: cursor.position,
-        signalFormatVersion,
-        signalDisplayFormatsSize: signalDisplayFormats.size,
-        signalDisplayFormatsEntries: Array.from(signalDisplayFormats.entries()),
-        treeNodesCount: treeNodes.length,
-      });
-      
       if (!cursor.visible || !signalValueManagerRef.current) {
-        console.log('[WaveformWindow] updateSignalValues early return:', {
-          cursorVisible: cursor.visible,
-          hasSignalValueManager: !!signalValueManagerRef.current,
-        });
         return;
       }
 
@@ -1919,13 +1897,7 @@ export function WaveformWindow({
           const signal = node.signal as Signal & { unique_id: number };
           // 获取信号的显示格式
           const signalDisplayFormat = getSignalDisplayFormat(signal);
-          
-          console.log('[WaveformWindow] Processing signal:', {
-            signalName: signal.name,
-            signalUniqueId: signal.unique_id,
-            signalDisplayFormat,
-          });
-          
+
           try {
             const signalName = signal.fullName || signal.name;
             // 传递 displayFormat 参数
@@ -2405,7 +2377,6 @@ export function WaveformWindow({
                       <span
                         className="waveform-signal-name"
                         onClick={() => {
-                          console.log('[WaveformWindow] Signal name clicked:', signal.name);
                           onSignalSelect?.(signal);
                         }}
                         style={{ cursor: 'pointer' }}

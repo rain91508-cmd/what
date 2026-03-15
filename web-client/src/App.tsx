@@ -2533,7 +2533,6 @@ function App() {
             viewport: { timeStart: sanitized.timeStart, timeEnd: sanitized.timeEnd }
           } : tab
         ))
-        console.log(`[App] Cursor position changed to ${clampedPosition}, viewport centered: ${sanitized.timeStart} - ${sanitized.timeEnd}`)
       }
     }
   }
@@ -2544,8 +2543,6 @@ function App() {
 
   // Perform waveform pattern search
   const handleWaveformSearch = useCallback(async (direction: WaveformSearchDirection) => {
-    console.log('[WaveformSearch] Starting search:', { direction, searchPattern, waveformSearchType, waveformEdgeType, waveformFromValue, waveformToValue });
-    
     // Check if active tab is waveform
     if (activeTabData?.type !== 'waveform') {
       addMessage('Waveform search is only available in waveform tabs');
@@ -2564,12 +2561,10 @@ function App() {
 
     // Get selected signal from Signal Panel or use first signal in waveform
     let selectedSignal = activeTabData.selectedSignal;
-    console.log('[WaveformSearch] Selected signal from tab:', selectedSignal);
-    
+
     // If no selected signal, try to get first signal from waveform
     if (!selectedSignal && activeTabData.signals && activeTabData.signals.length > 0) {
       selectedSignal = activeTabData.signals[0];
-      console.log('[WaveformSearch] Using first signal from waveform:', selectedSignal.name);
     }
     
     if (!selectedSignal) {
@@ -2586,7 +2581,6 @@ function App() {
 
     // Get current cursor position as start time
     const cursorPosition = activeTabData.cursorPosition || 0;
-    console.log('[WaveformSearch] Cursor position:', cursorPosition);
 
     // Get signal radix (display format)
     // signalDisplayFormats is a Record<number, SignalDisplayFormat>, not a Map
@@ -2603,7 +2597,6 @@ function App() {
       'dec': 'decimal',
     };
     const radix = radixMap[signalFormat || 'bin'] || 'binary';
-    console.log('[WaveformSearch] Signal format:', { signalFormatKey, signalFormat, radix });
 
     setIsWaveformSearching(true);
 
@@ -2632,8 +2625,6 @@ function App() {
         // Remove space before bracket if not needed
         serverSignalName = serverSignalName.replace(' [', '[');
       }
-      
-      console.log('[WaveformSearch] Server signal name:', serverSignalName, { localPrefix, serverPrefix, spaceBeforeBracket });
 
       const searchParams: import('./modules/search/waveformSearchService').WaveformSearchParams = {
         signalName: serverSignalName,
@@ -2664,8 +2655,6 @@ function App() {
         direction,
         100
       );
-
-      console.log('[WaveformSearch] Search results:', results);
 
       if (results.length === 0) {
         addMessage(`No matches found for "${searchPattern}"`);
@@ -3519,7 +3508,6 @@ function App() {
                 }}
                 wavemarks={activeTabData.wavemarks || []}
                 onSignalSelect={(signal) => {
-                  console.log('[App] WaveformWindow onSignalSelect:', signal.name);
                   // Store selected signal in active tab for waveform search
                   setTabs(prev => prev.map(tab =>
                     tab.id === activeTab ? {

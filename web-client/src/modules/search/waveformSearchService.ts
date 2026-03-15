@@ -45,7 +45,6 @@ class WaveformSearchService {
   ): Promise<WaveformSearchResult[]> {
     // Check if we can use cached results
     if (this.canUseCache(params, startTime)) {
-      console.log('[WaveformSearchService] Using cached results');
       return this.findFromCache(startTime, direction);
     }
 
@@ -72,12 +71,6 @@ class WaveformSearchService {
     // Encode signal name using Base64 (required by API)
     // Format: b64:base64encodedstring
     const encodedSignalName = 'b64:' + btoa(params.signalName);
-
-    // Debug: log request details
-    console.log('[WaveformSearchService] Request URL:', `/api/wave/${encodeURIComponent(waveformName)}/signals/${encodedSignalName}/pattern-search`);
-    console.log('[WaveformSearchService] Request Body:', JSON.stringify(requestBody, null, 2));
-    console.log('[WaveformSearchService] Signal Name:', params.signalName);
-    console.log('[WaveformSearchService] Encoded Signal:', encodedSignalName);
 
     // Call API
     const response = await apiService.post(
