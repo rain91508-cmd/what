@@ -93,6 +93,20 @@ export function TableViewWindow({
   const [showColumnVisibility, setShowColumnVisibility] = useState(false);
   // Loading state for data fetch
   const [isFetching, setIsFetching] = useState(false);
+  // Metadata filter state (OR relationship between selected metadata types)
+  const [metadataFilters, setMetadataFilters] = useState<{
+    hasX: boolean;
+    hasZ: boolean;
+    mixed: boolean;
+    hasTransition: boolean;
+  }>({
+    hasX: false,
+    hasZ: false,
+    mixed: false,
+    hasTransition: false,
+  });
+  // Show/hide metadata filter dropdown
+  const [showMetadataFilter, setShowMetadataFilter] = useState(false);
 
   // Create adapter when provider is ready (same pattern as WaveformWindow)
   useEffect(() => {
@@ -115,12 +129,12 @@ export function TableViewWindow({
   // Transform data into table rows
   const tableData = useMemo(() => {
     if (!data || !data.data) return [];
-    
+
     return data.data.map((row) => {
       const tableRow: TableRow = {
         time: row.time,
       };
-      
+
       // Map signal values by signal name
       row.values.forEach((value, index) => {
         const signalName = signals[index]?.name;
@@ -128,10 +142,45 @@ export function TableViewWindow({
           tableRow[signalName] = value;
         }
       });
-      
+
       return tableRow;
     });
   }, [data, signals]);
+
+  // Apply metadata filter to table data
+  // Metadata filters use OR relationship among selected types
+  // AND relationship with column filters (handled by react-table)
+  const filteredTableData = useMemo(() => {
+    // Check if any metadata filter is active
+    const hasActiveMetadataFilter = metadataFilters.hasX || metadataFilters.hasZ ||
+                                     metadataFilters.mixed || metadataFilters.hasTransition;
+
+    if (!hasActiveMetadataFilter) {
+      return tableData; // No metadata filter active, return all data
+    }
+
+    return tableData.filter((row) => {
+      // Check each signal value in the row
+      for (const signal of signals) {
+        const value = row[signal.name] as RawValue | undefined;
+        if (!value) continue;
+
+        // Check if this value matches any selected metadata filter (OR relationship)
+        const matchesHasX = metadataFilters.hasX && value.valueType === 'has_x';
+        const matchesHasZ = metadataFilters.hasZ && value.valueType === 'has_z';
+        const matchesMixed = metadataFilters.mixed && value.valueType === 'mixed';
+        const matchesTransition = metadataFilters.hasTransition && value.hasTransition;
+
+        // If any metadata filter matches, include this row
+        if (matchesHasX || matchesHasZ || matchesMixed || matchesTransition) {
+          return true;
+        }
+      }
+
+      // No signal in this row matches the metadata filters
+      return false;
+    });
+  }, [tableData, metadataFilters, signals]);
 
   // Define columns
   const columns = useMemo<ColumnDef<TableRow>[]>(() => {
@@ -148,12 +197,71 @@ export function TableViewWindow({
       filterFn: 'includesString',
     };
 
+    // Helper function to split signal name into chunks for multi-line display
+    // Minimum 8 characters per line, try to break at dots
+    const splitSignalName = (name: string): string[] => {
+      const minCharsPerLine = 8;
+      const lines: string[] = [];
+      let remaining = name;
+
+      while (remaining.length > 0) {
+        if (remaining.length <= minCharsPerLine) {
+          lines.push(remaining);
+          break;
+        }
+
+        // Try to find a dot after minCharsPerLine to break
+        let breakPoint = remaining.length;
+        for (let i = minCharsPerLine; i < remaining.length; i++) {
+          if (remaining[i] === '.') {
+            breakPoint = i;
+            break;
+          }
+        }
+
+        // If no dot found, try to find an underscore
+        if (breakPoint === remaining.length) {
+          for (let i = minCharsPerLine; i < remaining.length; i++) {
+            if (remaining[i] === '_') {
+              breakPoint = i;
+              break;
+            }
+          }
+        }
+
+        // If still no good breakpoint, just break at minCharsPerLine
+        if (breakPoint === remaining.length) {
+          breakPoint = minCharsPerLine;
+        }
+
+        lines.push(remaining.substring(0, breakPoint));
+        remaining = remaining.substring(breakPoint);
+        // Remove leading dot/underscore from remaining if present
+        if (remaining.startsWith('.') || remaining.startsWith('_')) {
+          remaining = remaining.substring(1);
+        }
+      }
+
+      return lines;
+    };
+
     // Signal columns
     const signalColumns: ColumnDef<TableRow>[] = signals.map((signal) => ({
       id: signal.name,
       // Use accessorFn instead of accessorKey to handle signal names with dots
       accessorFn: (row) => row[signal.name],
-      header: signal.name,
+      header: () => {
+        const lines = splitSignalName(signal.name);
+        return (
+          <div style={{ textAlign: 'center', lineHeight: '1.2' }}>
+            {lines.map((line, index) => (
+              <div key={index} style={{ fontSize: '11px', whiteSpace: 'nowrap' }}>
+                {line}
+              </div>
+            ))}
+          </div>
+        );
+      },
       cell: ({ getValue }) => {
         const value = getValue<RawValue | undefined>();
         if (!value) return '-';
@@ -162,8 +270,9 @@ export function TableViewWindow({
             style={{
               color: value.valueType === 'has_x' ? '#ff6b6b' :
                      value.valueType === 'has_z' ? '#4ecdc4' :
-                     value.valueType === 'mixed' ? '#ffe66d' : '#333',
-              fontWeight: value.hasTransition ? 'bold' : 'normal',
+                     value.valueType === 'mixed' ? '#ffe66d' :
+                     value.hasTransition ? '#000' : '#666', // 有跳变黑色，无跳变深灰色
+              fontWeight: value.hasTransition ? 'bold' : 'normal', // 有跳变加粗
             }}
           >
             {value.displayStr}
@@ -187,7 +296,7 @@ export function TableViewWindow({
 
   // Create table instance
   const table = useReactTable({
-    data: tableData,
+    data: filteredTableData,
     columns,
     state: {
       columnFilters,
@@ -324,6 +433,80 @@ export function TableViewWindow({
           </span>
         )}
 
+        {/* Metadata Filter Toggle */}
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={() => setShowMetadataFilter(!showMetadataFilter)}
+            style={{
+              padding: '6px 12px',
+              fontSize: '12px',
+              backgroundColor: '#ff9800',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+            }}
+          >
+            Metadata Filter
+          </button>
+
+          {showMetadataFilter && (
+            <div
+              style={{
+                position: 'absolute',
+                top: '100%',
+                left: 0,
+                zIndex: 100,
+                backgroundColor: 'white',
+                border: '1px solid #ccc',
+                borderRadius: '4px',
+                padding: '8px',
+                minWidth: '180px',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+              }}
+            >
+              <div style={{ marginBottom: '8px', fontWeight: 'bold', fontSize: '12px' }}>
+                Filter by Metadata (OR)
+              </div>
+              <div style={{ fontSize: '11px', color: '#666', marginBottom: '8px' }}>
+                Show rows matching any selected type
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', fontSize: '12px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={metadataFilters.hasX}
+                  onChange={(e) => setMetadataFilters(prev => ({ ...prev, hasX: e.target.checked }))}
+                />
+                <span style={{ color: '#ff6b6b' }}>Has X (Unknown)</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', fontSize: '12px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={metadataFilters.hasZ}
+                  onChange={(e) => setMetadataFilters(prev => ({ ...prev, hasZ: e.target.checked }))}
+                />
+                <span style={{ color: '#4ecdc4' }}>Has Z (High-Z)</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', fontSize: '12px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={metadataFilters.mixed}
+                  onChange={(e) => setMetadataFilters(prev => ({ ...prev, mixed: e.target.checked }))}
+                />
+                <span style={{ color: '#ffe66d' }}>Mixed Values</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={metadataFilters.hasTransition}
+                  onChange={(e) => setMetadataFilters(prev => ({ ...prev, hasTransition: e.target.checked }))}
+                />
+                <span style={{ fontWeight: 'bold' }}>Has Transition</span>
+              </label>
+            </div>
+          )}
+        </div>
+
         {/* Column Visibility Toggle */}
         <div style={{ position: 'relative' }}>
           <button
@@ -340,7 +523,7 @@ export function TableViewWindow({
           >
             Columns
           </button>
-          
+
           {showColumnVisibility && (
             <div
               style={{
@@ -389,7 +572,7 @@ export function TableViewWindow({
         </div>
 
         <div style={{ marginLeft: 'auto', fontSize: '12px', color: '#666' }}>
-          Total: {tableData.length} rows
+          Total: {filteredTableData.length} / {tableData.length} rows
         </div>
       </div>
 
