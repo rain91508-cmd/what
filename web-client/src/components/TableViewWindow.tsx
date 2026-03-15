@@ -9,7 +9,7 @@
  * - Column visibility control
  */
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -23,6 +23,9 @@ import {
 import type { SignalWithFormat, RawSignalValuesResult, RawValue } from '../core/waveformProviderInterface';
 import type { TimeConfig } from './TabPanel';
 import { lod0ToDisplay } from './TabPanel';
+import { useWaveformProvider } from '../contexts/WaveformProviderContext';
+import { WaveformProviderAdapter } from '../wasm/waveformProviderAdapter';
+import { buildWasmSignals } from '../wasm/waveformProvider';
 
 interface TableViewWindowProps {
   tabId: string;
@@ -37,6 +40,11 @@ interface TableViewWindowProps {
   onFetchData: () => void;
   currentPage: number;
   onPageChange: (page: number) => void;
+  // Prefix settings (same as WaveformWindow)
+  signalPrefix?: string;
+  serverPrefix?: string;
+  spaceBeforeBracket?: boolean;
+  waveformName?: string;
 }
 
 // Row data structure for the table
@@ -46,19 +54,49 @@ interface TableRow {
 }
 
 export function TableViewWindow({
+  tabId,
   signals,
+  startTime,
+  endTime,
   data,
   timeConfig,
+  onSignalsChange,
   onFetchData,
   currentPage,
   onPageChange,
+  signalPrefix: _signalPrefix = '',
+  serverPrefix: _serverPrefix = '',
+  spaceBeforeBracket: _spaceBeforeBracket = false,
+  waveformName: _waveformName = '',
 }: TableViewWindowProps) {
+  // Get shared provider from context (same as WaveformWindow)
+  const { provider: sharedProvider, isLoading: providerLoading } = useWaveformProvider();
+  
+  // Create adapter ref (same as WaveformWindow)
+  const adapterRef = useRef<WaveformProviderAdapter | null>(null);
+  const [adapterCreated, setAdapterCreated] = useState(false);
+  
+  // Provider ready state (same as WaveformWindow)
+  const providerReady = !providerLoading && sharedProvider !== null && adapterRef.current !== null;
+
   // Column filters state
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   // Column visibility state
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   // Show/hide column visibility dropdown
   const [showColumnVisibility, setShowColumnVisibility] = useState(false);
+  // Loading state for data fetch
+  const [isFetching, setIsFetching] = useState(false);
+
+  // Create adapter when provider is ready (same pattern as WaveformWindow)
+  useEffect(() => {
+    if (sharedProvider && !adapterRef.current) {
+      const adapter = new WaveformProviderAdapter(sharedProvider, tabId);
+      adapterRef.current = adapter;
+      setAdapterCreated(true);
+      console.log(`[TableViewWindow] Created adapter for tab: ${tabId}`);
+    }
+  }, [sharedProvider, tabId]);
 
   // Transform data into table rows
   const tableData = useMemo(() => {
@@ -158,6 +196,60 @@ export function TableViewWindow({
     table.setPageIndex(newPage);
   }, [onPageChange, table]);
 
+  // Handle data fetch using adapter (similar to WaveformWindow)
+  const handleFetchData = useCallback(async () => {
+    if (!adapterRef.current) {
+      console.error('[TableViewWindow] Adapter not ready');
+      return;
+    }
+
+    if (signals.length === 0) {
+      console.log('[TableViewWindow] No signals to fetch');
+      return;
+    }
+
+    setIsFetching(true);
+    
+    try {
+      // Build WASM signals with proper draw_sig_id (same as WaveformWindow)
+      const wasmSignals = await buildWasmSignals(
+        signals.map(s => ({
+          global_id: s.globalId,
+          name: s.name,
+          row: s.row,
+          width: s.width,
+          displayFormat: s.displayFormat,
+        })),
+        _waveformName || 'unknown'
+      );
+
+      // Update signals with correct drawSigId
+      const updatedSignals = signals.map((s, idx) => ({
+        ...s,
+        drawSigId: wasmSignals[idx]?.draw_sig_id || s.drawSigId,
+      }));
+      onSignalsChange(updatedSignals);
+
+      // Fetch data using adapter (use underscore format method name)
+      const result = await adapterRef.current.get_signal_values_at_transitions({
+        signalNames: wasmSignals.map(s => s.name),
+        searchStartTime: startTime,
+        searchEndTime: endTime,
+        resultMax: 100, // 100 rows per page
+        signals: updatedSignals,
+      });
+
+      // Update parent with fetched data
+      onFetchData();
+      
+      console.log(`[TableViewWindow] Fetched ${result.data.length} rows`);
+    } catch (error) {
+      console.error('[TableViewWindow] Failed to fetch data:', error);
+    } finally {
+      setIsFetching(false);
+    }
+  }, [adapterRef, signals, startTime, endTime, onSignalsChange, onFetchData, _waveformName]);
+
   // Get total pages
   const totalPages = table.getPageCount();
   const canPreviousPage = table.getCanPreviousPage();
@@ -177,19 +269,26 @@ export function TableViewWindow({
         }}
       >
         <button
-          onClick={onFetchData}
+          onClick={handleFetchData}
+          disabled={!providerReady || isFetching}
           style={{
             padding: '6px 12px',
             fontSize: '12px',
-            backgroundColor: '#4caf50',
+            backgroundColor: providerReady ? '#4caf50' : '#ccc',
             color: 'white',
             border: 'none',
             borderRadius: '4px',
-            cursor: 'pointer',
+            cursor: providerReady ? 'pointer' : 'not-allowed',
           }}
         >
-          Refresh Data
+          {isFetching ? 'Fetching...' : 'Refresh Data'}
         </button>
+
+        {!providerReady && (
+          <span style={{ fontSize: '11px', color: '#999' }}>
+            {providerLoading ? 'Loading provider...' : 'Provider not ready'}
+          </span>
+        )}
 
         {/* Column Visibility Toggle */}
         <div style={{ position: 'relative' }}>

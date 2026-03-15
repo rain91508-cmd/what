@@ -2650,64 +2650,13 @@ function App() {
   }
 
   // Fetch TableView data from WASM
-  const handleFetchTableData = useCallback(async () => {
-    const currentTab = tabs.find(t => t.id === activeTab)
-    if (!currentTab || currentTab.type !== 'tableview') {
-      addMessage('TableView data fetch is only available in tableview tabs')
-      return
-    }
-
-    if (!currentTab.tableSignals || currentTab.tableSignals.length === 0) {
-      addMessage('Please add signals to the table first')
-      return
-    }
-
-    if (!waveformProvider) {
-      addMessage('Waveform provider not initialized')
-      return
-    }
-
-    try {
-      // Build WASM signals with proper draw_sig_id (similar to WaveformWindow)
-      const wasmSignals = await buildWasmSignals(
-        currentTab.tableSignals.map(s => ({
-          global_id: s.globalId,
-          name: s.name,
-          row: s.row,
-          width: s.width,
-          displayFormat: s.displayFormat,
-        })),
-        currentWaveName || 'unknown'
-      )
-
-      // Update tableSignals with correct drawSigId from buildWasmSignals
-      const updatedSignals = currentTab.tableSignals.map((s, idx) => ({
-        ...s,
-        drawSigId: wasmSignals[idx]?.draw_sig_id || s.drawSigId,
-      }))
-
-      // Update tab with corrected signals
-      setTabs(prev => prev.map(tab =>
-        tab.id === activeTab ? { ...tab, tableSignals: updatedSignals } : tab
-      ))
-
-      const result = await waveformProvider.getSignalValuesAtTransitions({
-        signalNames: wasmSignals.map(s => s.name),
-        searchStartTime: currentTab.tableStartTime || 0,
-        searchEndTime: currentTab.tableEndTime || 0,
-        resultMax: 100, // 100 rows per page
-        signals: updatedSignals,
-      })
-
-      setTabs(prev => prev.map(tab =>
-        tab.id === activeTab ? { ...tab, tableData: result, tableCurrentPage: 0 } : tab
-      ))
-      addMessage(`Fetched ${result.data.length} rows for TableView`)
-    } catch (error) {
-      console.error('[App] Failed to fetch TableView data:', error)
-      addMessage('Failed to fetch TableView data')
-    }
-  }, [activeTab, tabs, waveformProvider, addMessage, currentWaveName])
+  // Note: This is now handled by TableViewWindow itself using adapter
+  // This function is called as a callback when data is fetched
+  const handleFetchTableData = useCallback(() => {
+    // TableViewWindow handles the actual data fetching
+    // This function is called after data is fetched to update UI state if needed
+    console.log('[App] TableView data fetch initiated')
+  }, [])
 
   // ============================================
   // Waveform Search Functionality
@@ -3688,6 +3637,10 @@ function App() {
                 onFetchData={handleFetchTableData}
                 currentPage={activeTabData.tableCurrentPage || 0}
                 onPageChange={handleTablePageChange}
+                signalPrefix={activeTabData.signalPrefix ?? currentWaveSignalPrefix}
+                serverPrefix={activeTabData.serverPrefix ?? currentWaveSignalServerPrefix}
+                spaceBeforeBracket={activeTabData.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket}
+                waveformName={currentWaveName || ''}
               />
             ) : activeTabData ? (
               <WaveformWindow
