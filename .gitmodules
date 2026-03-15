@@ -1,3 +1,11 @@
 [submodule "third_party/fst-reader"]
 	path = third_party/fst-reader
 	url = git@github.com:rain91508-cmd/fst-reader.git
+
+[submodule "third_party/fst-tools"]
+	path = third_party/fst-tools
+	url = git@github.com:rain91508-cmd/fst-tools.git
+
+[submodule "third_party/Surelog"]
+	path = third_party/Surelog
+	url = git@github.com:chipsalliance/Surelog.git
