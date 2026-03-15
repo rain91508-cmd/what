@@ -243,6 +243,9 @@ function App() {
   const [waveformFromValue, setWaveformFromValue] = useState('')
   const [waveformToValue, setWaveformToValue] = useState('')
   const [isWaveformSearching, setIsWaveformSearching] = useState(false)
+  // Waveform search history
+  const [waveformFromValueHistory, setWaveformFromValueHistory] = useState<string[]>([])
+  const [waveformToValueHistory, setWaveformToValueHistory] = useState<string[]>([])
 
   // Track if OPFS warning has been shown (to prevent double alert in StrictMode)
   const opfsWarningShown = useRef(false)
@@ -2635,19 +2638,21 @@ function App() {
       const searchParams: import('./modules/search/waveformSearchService').WaveformSearchParams = {
         signalName: serverSignalName,
         searchType: waveformSearchType,
-        radix: radix,
       };
 
       // Set type-specific parameters
       if (waveformSearchType === 'value') {
         searchParams.valuePattern = searchPattern;
+        searchParams.radix = radix;
         addMessage(`Searching ${direction} for "${searchPattern}" in ${selectedSignal.name}...`);
       } else if (waveformSearchType === 'edge') {
         searchParams.edgeType = waveformEdgeType;
+        // Edge mode doesn't need radix
         addMessage(`Searching ${direction} for ${waveformEdgeType} edge in ${selectedSignal.name}...`);
       } else if (waveformSearchType === 'transition') {
         searchParams.fromValue = waveformFromValue;
         searchParams.toValue = waveformToValue;
+        searchParams.radix = radix;
         addMessage(`Searching ${direction} for ${waveformFromValue}→${waveformToValue} in ${selectedSignal.name}...`);
       }
 
@@ -2707,6 +2712,24 @@ function App() {
       }
 
       addMessage(`Found match at time ${newTime}: ${closestResult.value}`);
+
+      // Add to search history based on search type
+      if (waveformSearchType === 'value' && searchPattern) {
+        searchManager.addToHistory(searchPattern, false);
+      } else if (waveformSearchType === 'transition') {
+        if (waveformFromValue) {
+          setWaveformFromValueHistory(prev => {
+            const newHistory = [waveformFromValue, ...prev.filter(v => v !== waveformFromValue)].slice(0, 10);
+            return newHistory;
+          });
+        }
+        if (waveformToValue) {
+          setWaveformToValueHistory(prev => {
+            const newHistory = [waveformToValue, ...prev.filter(v => v !== waveformToValue)].slice(0, 10);
+            return newHistory;
+          });
+        }
+      }
     } catch (error) {
       console.error('[WaveformSearch] Error:', error);
       
@@ -3365,6 +3388,10 @@ function App() {
         onWaveformToValueChange={setWaveformToValue}
         onWaveformSearchForward={() => handleWaveformSearch('forward')}
         onWaveformSearchBackward={() => handleWaveformSearch('backward')}
+        // Waveform search history
+        waveformSearchHistory={searchHistory}
+        waveformFromValueHistory={waveformFromValueHistory}
+        waveformToValueHistory={waveformToValueHistory}
       />
 
       {/* Main Content */}

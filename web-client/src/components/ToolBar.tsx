@@ -86,6 +86,10 @@ interface ToolBarProps {
   onWaveformToValueChange?: (value: string) => void;
   onWaveformSearchForward?: () => void;
   onWaveformSearchBackward?: () => void;
+  // Waveform search history
+  waveformSearchHistory?: string[];
+  waveformFromValueHistory?: string[];
+  waveformToValueHistory?: string[];
 }
 
 export function ToolBar({ 
@@ -139,6 +143,10 @@ export function ToolBar({
   onWaveformToValueChange,
   onWaveformSearchForward,
   onWaveformSearchBackward,
+  // Waveform search history
+  waveformSearchHistory = [],
+  waveformFromValueHistory = [],
+  waveformToValueHistory = [],
 }: ToolBarProps) {
   // Local state for display unit input value (only committed on Enter)
   const [inputValue, setInputValue] = useState<string>('');
@@ -161,6 +169,14 @@ export function ToolBar({
   const [localSearchPattern, setLocalSearchPattern] = useState(searchPattern);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
+
+  // Waveform search history state
+  const [showWaveformSearchHistory, setShowWaveformSearchHistory] = useState(false);
+  const [showFromValueHistory, setShowFromValueHistory] = useState(false);
+  const [showToValueHistory, setShowToValueHistory] = useState(false);
+  const waveformSearchInputRef = useRef<HTMLInputElement>(null);
+  const fromValueInputRef = useRef<HTMLInputElement>(null);
+  const toValueInputRef = useRef<HTMLInputElement>(null);
 
   // 获取 fs 乘数（根据 waveformTimeUnit）
   const getFsPerLod0Unit = (): number => {
@@ -633,31 +649,74 @@ export function ToolBar({
               <option value="transition">Transition</option>
             </select>
             
-            {/* Value Mode: Single input */}
+            {/* Value Mode: Single input with history */}
             {waveformSearchType === 'value' && (
-              <input
-                ref={searchInputRef}
-                type="text"
-                value={localSearchPattern}
-                onChange={(e) => {
-                  setLocalSearchPattern(e.target.value);
-                  onSearchPatternChange?.(e.target.value);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    onWaveformSearchForward?.();
-                  }
-                }}
-                placeholder="Pattern..."
-                style={{
-                  width: '80px',
-                  padding: '4px 6px',
-                  fontSize: '12px',
-                  border: '1px solid #c0c0c0',
-                  borderRadius: '3px',
-                  height: '24px',
-                }}
-              />
+              <div style={{ position: 'relative' }}>
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  value={localSearchPattern}
+                  onChange={(e) => {
+                    setLocalSearchPattern(e.target.value);
+                    onSearchPatternChange?.(e.target.value);
+                  }}
+                  onFocus={() => setShowWaveformSearchHistory(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      setShowWaveformSearchHistory(false);
+                      onWaveformSearchForward?.();
+                    }
+                  }}
+                  placeholder="Pattern..."
+                  style={{
+                    width: '80px',
+                    padding: '4px 6px',
+                    fontSize: '12px',
+                    border: '1px solid #c0c0c0',
+                    borderRadius: '3px',
+                    height: '24px',
+                  }}
+                />
+                {showWaveformSearchHistory && searchHistory.length > 0 && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: '100%',
+                      left: 0,
+                      marginTop: '2px',
+                      background: '#fff',
+                      border: '1px solid #ddd',
+                      borderRadius: '4px',
+                      padding: '4px 0',
+                      zIndex: 1000,
+                      minWidth: '150px',
+                      maxHeight: '200px',
+                      overflow: 'auto',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                    }}
+                  >
+                    {searchHistory.map((pattern, index) => (
+                      <div
+                        key={index}
+                        onClick={() => {
+                          setLocalSearchPattern(pattern);
+                          onSearchPatternChange?.(pattern);
+                          setShowWaveformSearchHistory(false);
+                        }}
+                        style={{
+                          padding: '4px 8px',
+                          cursor: 'pointer',
+                          fontSize: '12px',
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        {pattern}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
             
             {/* Edge Mode: Edge type dropdown */}
@@ -680,38 +739,132 @@ export function ToolBar({
               </select>
             )}
             
-            {/* Transition Mode: From and To inputs */}
+            {/* Transition Mode: From and To inputs with history */}
             {waveformSearchType === 'transition' && (
               <>
-                <input
-                  type="text"
-                  value={waveformFromValue}
-                  onChange={(e) => onWaveformFromValueChange?.(e.target.value)}
-                  placeholder="From..."
-                  style={{
-                    width: '60px',
-                    padding: '4px 6px',
-                    fontSize: '12px',
-                    border: '1px solid #c0c0c0',
-                    borderRadius: '3px',
-                    height: '24px',
-                  }}
-                />
+                <div style={{ position: 'relative' }}>
+                  <input
+                    ref={fromValueInputRef}
+                    type="text"
+                    value={waveformFromValue}
+                    onChange={(e) => onWaveformFromValueChange?.(e.target.value)}
+                    onFocus={() => setShowFromValueHistory(true)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        setShowFromValueHistory(false);
+                      }
+                    }}
+                    placeholder="From..."
+                    style={{
+                      width: '60px',
+                      padding: '4px 6px',
+                      fontSize: '12px',
+                      border: '1px solid #c0c0c0',
+                      borderRadius: '3px',
+                      height: '24px',
+                    }}
+                  />
+                  {showFromValueHistory && waveformFromValueHistory.length > 0 && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '100%',
+                        left: 0,
+                        marginTop: '2px',
+                        background: '#fff',
+                        border: '1px solid #ddd',
+                        borderRadius: '4px',
+                        padding: '4px 0',
+                        zIndex: 1000,
+                        minWidth: '120px',
+                        maxHeight: '200px',
+                        overflow: 'auto',
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                      }}
+                    >
+                      {waveformFromValueHistory.map((value, index) => (
+                        <div
+                          key={index}
+                          onClick={() => {
+                            onWaveformFromValueChange?.(value);
+                            setShowFromValueHistory(false);
+                          }}
+                          style={{
+                            padding: '4px 8px',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                        >
+                          {value}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <span style={{ fontSize: '11px', color: '#666' }}>→</span>
-                <input
-                  type="text"
-                  value={waveformToValue}
-                  onChange={(e) => onWaveformToValueChange?.(e.target.value)}
-                  placeholder="To..."
-                  style={{
-                    width: '60px',
-                    padding: '4px 6px',
-                    fontSize: '12px',
-                    border: '1px solid #c0c0c0',
-                    borderRadius: '3px',
-                    height: '24px',
-                  }}
-                />
+                <div style={{ position: 'relative' }}>
+                  <input
+                    ref={toValueInputRef}
+                    type="text"
+                    value={waveformToValue}
+                    onChange={(e) => onWaveformToValueChange?.(e.target.value)}
+                    onFocus={() => setShowToValueHistory(true)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        setShowToValueHistory(false);
+                      }
+                    }}
+                    placeholder="To..."
+                    style={{
+                      width: '60px',
+                      padding: '4px 6px',
+                      fontSize: '12px',
+                      border: '1px solid #c0c0c0',
+                      borderRadius: '3px',
+                      height: '24px',
+                    }}
+                  />
+                  {showToValueHistory && waveformToValueHistory.length > 0 && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '100%',
+                        left: 0,
+                        marginTop: '2px',
+                        background: '#fff',
+                        border: '1px solid #ddd',
+                        borderRadius: '4px',
+                        padding: '4px 0',
+                        zIndex: 1000,
+                        minWidth: '120px',
+                        maxHeight: '200px',
+                        overflow: 'auto',
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                      }}
+                    >
+                      {waveformToValueHistory.map((value, index) => (
+                        <div
+                          key={index}
+                          onClick={() => {
+                            onWaveformToValueChange?.(value);
+                            setShowToValueHistory(false);
+                          }}
+                          style={{
+                            padding: '4px 8px',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f0f0')}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                        >
+                          {value}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </>
             )}
             
