@@ -1805,90 +1805,166 @@ function App() {
       return
     }
 
-    // Get current tab
-    const currentTab = tabs.find(t => t.id === activeTab)
+    // Get current active tab's prefix settings
+    const activeTabData = tabs.find(t => t.id === activeTab && t.type === 'tableview')
+    const tabSignalPrefix = activeTabData?.signalPrefix
+    const tabServerPrefix = activeTabData?.serverPrefix
+    const tabSpaceBeforeBracket = activeTabData?.spaceBeforeBracket
 
-    // Search signal on server to get prefix information (same as WaveformWindow)
-    const result = await tryFindSignalWithPrefixRemoval(currentWaveName, signal.fullName)
+    // Check if this tab has its own prefix settings
+    const hasTabPrefixSettings = tabSignalPrefix !== undefined && tabSignalPrefix !== ''
 
-    if (!result.found) {
-      // Signal not found - show error dialog
-      const firstSignalResponse = await apiService.getWaveformSignals(currentWaveName, {
-        limit: 1
-      })
-      const firstSignalName = firstSignalResponse.status === 'success' &&
-        firstSignalResponse.data &&
-        firstSignalResponse.data.signals.length > 0
-        ? firstSignalResponse.data.signals[0].name
-        : 'N/A'
+    // If waveform is loaded from server, verify signal exists
+    if (currentWaveName && apiService.isConnected()) {
+      try {
+        // If this tab already has its own prefix settings, use them directly
+        if (hasTabPrefixSettings) {
+          console.log(`[Signal Search] TableView using tab's existing local prefix "${tabSignalPrefix}", server prefix "${tabServerPrefix}"`)
 
-      setSignalNotFoundInfo({
-        attempted: signal.fullName,
-        matched: '',
-        prefix: '',
-        serverPrefix: '',
-        spaceBeforeBracket: false,
-        firstAvailable: firstSignalName,
-        success: false
-      })
-      setPendingSignalToAdd(signal)
-      setPendingSignalTabType('tableview')  // Set tab type for tableview
-      setShowSignalNotFoundDialog(true)
-      return
+          const result = await searchSignalOnServer(currentWaveName, signal.fullName, tabSignalPrefix)
+
+          if (result.found) {
+            console.log(`[Signal Search] TableView found with existing prefix! spaceBeforeBracket=${result.spaceBeforeBracket}`)
+
+            // Check if multiple server prefixes found
+            if (result.multipleServerPrefixes && result.matchedNames && result.matchedNames.length > 0) {
+              // Multiple server prefixes - need to check if our saved one is among them
+              const savedServerPrefix = tabServerPrefix
+              const matchingWithSavedPrefix = result.matchedNames.filter(name =>
+                savedServerPrefix ? name.startsWith(savedServerPrefix) : true
+              )
+
+              if (matchingWithSavedPrefix.length === 0) {
+                // Saved server prefix doesn't match any found signals
+                console.warn(`[Signal Search] TableView saved server prefix "${savedServerPrefix}" doesn't match any found signals`)
+              }
+            }
+
+            // Signal found with existing prefix - AUTO ADD (no confirmation needed)
+            // Only update spaceBeforeBracket if this signal has bit width (has '[')
+            const signalHasBitWidth = signal.fullName.includes('[')
+            if (signalHasBitWidth && result.spaceBeforeBracket !== undefined && result.spaceBeforeBracket !== tabSpaceBeforeBracket) {
+              console.log(`[Signal Search] TableView updating spaceBeforeBracket: ${tabSpaceBeforeBracket} -> ${result.spaceBeforeBracket}`)
+              // Update tab's settings
+              setTabs(prev => prev.map(tab =>
+                tab.id === activeTab ? { ...tab, spaceBeforeBracket: result.spaceBeforeBracket } : tab
+              ))
+            } else if (!signalHasBitWidth) {
+              console.log(`[Signal Search] TableView single-bit signal, not updating spaceBeforeBracket (keep: ${tabSpaceBeforeBracket})`)
+            }
+
+            // Auto add signal without confirmation
+            addSignalToTableViewDirect(signal)
+            return
+          }
+          console.log(`[Signal Search] TableView not found with existing prefix, trying prefix removal...`)
+          // If not found with existing prefix, fall through to try finding new prefix
+        }
+
+        // Try to find signal with prefix removal
+        const result = await tryFindSignalWithPrefixRemoval(currentWaveName, signal.fullName)
+
+        if (result.found) {
+          // Check if multiple server prefixes found - need user selection
+          if (result.multipleServerPrefixes && result.allMatches && result.allMatches.length > 1) {
+            console.log(`[Signal Search] TableView multiple server prefixes found, showing selection dialog`)
+
+            // Show selection dialog with all matches
+            const firstSignalResponse = await apiService.getWaveformSignals(currentWaveName, {
+              limit: 1
+            })
+            const firstSignalName = firstSignalResponse.status === 'success' &&
+              firstSignalResponse.data &&
+              firstSignalResponse.data.signals.length > 0
+              ? firstSignalResponse.data.signals[0].name
+              : 'N/A'
+
+            const allMatchesForDialog = result.allMatches.map((match, index) => ({
+              index,
+              name: match.matchedNames[0] || '',
+              localPrefix: match.localPrefix,
+              serverPrefix: match.serverPrefix,
+              spaceBeforeBracket: match.spaceBeforeBracket,
+              matchedNames: match.matchedNames
+            }))
+
+            setSignalNotFoundInfo({
+              attempted: signal.fullName,
+              matched: result.matchedNames?.[0] || '',
+              prefix: '',  // Will be set after user selection
+              serverPrefix: '',  // Will be set after user selection
+              spaceBeforeBracket: false,  // Will be set after user selection
+              firstAvailable: firstSignalName,
+              success: true,
+              allMatches: allMatchesForDialog,
+              selectedMatchIndex: undefined  // User needs to select
+            })
+            setPendingSignalToAdd(signal)
+            setPendingSignalTabType('tableview')
+            setShowSignalNotFoundDialog(true)
+
+            // Wait for user selection in the dialog, then add signal
+            return
+          }
+
+          // Signal found with single server prefix - always show dialog for user confirmation
+          const firstSignalResponse = await apiService.getWaveformSignals(currentWaveName, {
+            limit: 1
+          })
+          const firstSignalName = firstSignalResponse.status === 'success' &&
+            firstSignalResponse.data &&
+            firstSignalResponse.data.signals.length > 0
+            ? firstSignalResponse.data.signals[0].name
+            : 'N/A'
+
+          setSignalNotFoundInfo({
+            attempted: signal.fullName,
+            matched: result.matchedNames?.[0] || '',
+            prefix: result.localPrefix || '',
+            serverPrefix: result.serverPrefix || '',
+            spaceBeforeBracket: result.spaceBeforeBracket ?? false,
+            firstAvailable: firstSignalName,
+            success: true
+          })
+          setPendingSignalToAdd(signal)
+          setPendingSignalTabType('tableview')
+          setShowSignalNotFoundDialog(true)
+          return
+        }
+
+        // Signal not found - show error dialog
+        const firstSignalResponse = await apiService.getWaveformSignals(currentWaveName, {
+          limit: 1
+        })
+        const firstSignalName = firstSignalResponse.status === 'success' &&
+          firstSignalResponse.data &&
+          firstSignalResponse.data.signals.length > 0
+          ? firstSignalResponse.data.signals[0].name
+          : 'N/A'
+
+        setSignalNotFoundInfo({
+          attempted: signal.fullName,
+          matched: '',
+          prefix: '',
+          serverPrefix: '',
+          spaceBeforeBracket: false,
+          firstAvailable: firstSignalName,
+          success: false
+        })
+        setPendingSignalToAdd(signal)
+        setPendingSignalTabType('tableview')
+        setShowSignalNotFoundDialog(true)
+        return
+
+      } catch (error) {
+        console.error('[Signal Search] TableView error searching signal:', error)
+        addMessage(`Error searching signal: ${signal.name}`)
+        return
+      }
     }
 
-    // Check if multiple server prefixes found
-    if (result.allMatches && result.allMatches.length > 1) {
-      // Multiple matches found - show dialog for user to select
-      const allMatchesForDialog = result.allMatches.map((match, index) => ({
-        index,
-        name: match.matchedNames[0] || '',
-        localPrefix: match.localPrefix,
-        serverPrefix: match.serverPrefix,
-        spaceBeforeBracket: match.spaceBeforeBracket,
-        matchedNames: match.matchedNames
-      }))
-
-      setSignalNotFoundInfo({
-        attempted: signal.fullName,
-        matched: result.matchedNames?.[0] || '',
-        prefix: result.localPrefix || '',
-        serverPrefix: result.serverPrefix || '',
-        spaceBeforeBracket: result.spaceBeforeBracket ?? false,
-        firstAvailable: result.matchedNames?.[0] || '',
-        success: true,
-        allMatches: allMatchesForDialog
-      })
-      setPendingSignalToAdd(signal)
-      setPendingSignalTabType('tableview')  // Set tab type for tableview
-      setShowSignalNotFoundDialog(true)
-
-      // Wait for user selection in the dialog, then add signal
-      return
-    }
-
-    // Signal found with single server prefix - always show dialog for user confirmation
-    const firstSignalResponse = await apiService.getWaveformSignals(currentWaveName, {
-      limit: 1
-    })
-    const firstSignalName = firstSignalResponse.status === 'success' &&
-      firstSignalResponse.data &&
-      firstSignalResponse.data.signals.length > 0
-      ? firstSignalResponse.data.signals[0].name
-      : 'N/A'
-
-    setSignalNotFoundInfo({
-      attempted: signal.fullName,
-      matched: result.matchedNames?.[0] || '',
-      prefix: result.localPrefix || '',
-      serverPrefix: result.serverPrefix || '',
-      spaceBeforeBracket: result.spaceBeforeBracket ?? false,
-      firstAvailable: firstSignalName,
-      success: true
-    })
-    setPendingSignalToAdd(signal)
-    setPendingSignalTabType('tableview')  // Set tab type for tableview
-    setShowSignalNotFoundDialog(true)
+    // If using mock data or not connected, just add the signal directly
+    addSignalToTableViewDirect(signal)
   }
 
   // Handle word click in source code editor

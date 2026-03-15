@@ -628,6 +628,9 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
                   } else if (activeTabType === 'waveform' && onSignalAddToWaveform) {
                     // Only add to waveform when waveform tab is explicitly active
                     onSignalAddToWaveform(signal);
+                  } else if (activeTabType === 'tableview' && onSignalSelect) {
+                    // Add to tableview when tableview tab is active
+                    onSignalSelect(signal);
                   }
                 }}
                 title={activeTabType === 'waveform' ? 'Double-click to add to waveform' : 'Double-click to jump to declaration'}
