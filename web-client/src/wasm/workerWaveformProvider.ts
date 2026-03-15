@@ -21,6 +21,8 @@ import {
   WaveformProviderError,
   TimeConfig,
   DisplayFormat,
+  GetSignalValuesAtTransitionsParams,
+  RawSignalValuesResult,
 } from '../core/waveformProviderInterface';
 
 interface PendingMessage {
@@ -195,6 +197,26 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
     } catch (error) {
       console.warn('[WorkerWaveformProvider] findTransitionsAround failed:', error);
       return { prev: null, next: null };
+    }
+  }
+
+  /**
+   * 获取所有信号在跳变时间点的值
+   */
+  async getSignalValuesAtTransitions(
+    params: GetSignalValuesAtTransitionsParams
+  ): Promise<RawSignalValuesResult> {
+    try {
+      const result = await this.sendMessage('GET_SIGNAL_VALUES_AT_TRANSITIONS', params);
+
+      if (!result || typeof result !== 'object') {
+        throw new Error('Invalid result data from Worker');
+      }
+
+      return result as RawSignalValuesResult;
+    } catch (error) {
+      console.error('[WorkerWaveformProvider] getSignalValuesAtTransitions failed:', error);
+      throw new WaveformProviderError('Failed to get signal values at transitions', error);
     }
   }
 

@@ -104,6 +104,11 @@ self.onmessage = async (event) => {
         break;
       }
 
+      case 'GET_SIGNAL_VALUES_AT_TRANSITIONS': {
+        await enqueueRequest(() => handleGetSignalValuesAtTransitions(payload, id));
+        break;
+      }
+
       // ==================== 渲染（参数化）====================
 
       case 'FETCH_AND_GET_SEGMENTS': {
@@ -320,6 +325,43 @@ async function handleFindTransitionsAround(payload: any, id: number): Promise<vo
 
   const transitions = wasmProvider.find_transitions_around(signalName, time);
   sendSuccess(id, transitions);
+}
+
+/**
+ * 处理 GET_SIGNAL_VALUES_AT_TRANSITIONS
+ */
+async function handleGetSignalValuesAtTransitions(payload: any, id: number): Promise<void> {
+  if (!wasmProvider) throw new Error('Provider not initialized');
+
+  const { signalNames, searchStartTime, searchEndTime, resultMax, signals } = payload;
+
+  // Convert signals to WASM format
+  const wasmSignals = signals.map((sig: any) => ({
+    global_id: sig.globalId,
+    name: sig.name,
+    row: sig.row,
+    width: sig.width,
+    draw_sig_id: sig.drawSigId,
+    bit_extract: sig.bitExtract
+      ? {
+          parent_name: sig.bitExtract.parentName,
+          msb: sig.bitExtract.msb,
+          lsb: sig.bitExtract.lsb,
+        }
+      : undefined,
+    display_format: sig.displayFormat,
+  }));
+
+  // Call WASM function
+  const result = await wasmProvider.get_signal_values_at_transitions(
+    signalNames,
+    searchStartTime,
+    searchEndTime,
+    resultMax,
+    wasmSignals
+  );
+
+  sendSuccess(id, result);
 }
 
 /**

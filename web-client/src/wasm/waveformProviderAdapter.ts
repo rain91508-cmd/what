@@ -19,6 +19,8 @@ import type {
   ViewportConfig,
   CanvasConfig,
   TimeConfig,
+  GetSignalValuesAtTransitionsParams,
+  RawSignalValuesResult,
 } from '../core/waveformProviderInterface';
 
 /**
@@ -188,6 +190,39 @@ export class WaveformProviderAdapter {
     }
 
     return [result.prev ?? null, result.next ?? null];
+  }
+
+  /**
+   * 获取所有信号在跳变时间点的值
+   * @param params 查询参数
+   */
+  async get_signal_values_at_transitions(
+    params: GetSignalValuesAtTransitionsParams
+  ): Promise<RawSignalValuesResult> {
+    // Convert signals to new format with display format
+    const signalsWithFormat = params.signals.map(sig => ({
+      globalId: sig.globalId,
+      name: sig.name,
+      row: sig.row,
+      width: sig.width,
+      drawSigId: sig.drawSigId,
+      bitExtract: sig.bitExtract
+        ? {
+            parentName: sig.bitExtract.parentName,
+            msb: sig.bitExtract.msb,
+            lsb: sig.bitExtract.lsb,
+          }
+        : undefined,
+      displayFormat: sig.displayFormat,
+    }));
+
+    return this.provider.getSignalValuesAtTransitions({
+      signalNames: params.signalNames,
+      searchStartTime: params.searchStartTime,
+      searchEndTime: params.searchEndTime,
+      resultMax: params.resultMax,
+      signals: signalsWithFormat,
+    });
   }
 
   async render_waveform(options?: {

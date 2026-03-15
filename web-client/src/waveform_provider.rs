@@ -229,6 +229,53 @@ impl SignalWaveData {
     }
 }
 
+// ============================================================================
+// Get Signal Values at Transitions - Data Structures
+// ============================================================================
+
+/// Signal information with display format for get_signal_values_at_transitions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalWithFormat {
+    pub global_id: u32,
+    pub name: String,
+    pub row: u32,
+    pub width: u32,
+    pub draw_sig_id: u32,
+    pub bit_extract: Option<BitExtractInfo>,
+    pub display_format: String, // "hex" | "bin" | "oct" | "dec"
+}
+
+/// Bit extraction information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BitExtractInfo {
+    pub parent_name: String,
+    pub msb: u32,
+    pub lsb: u32,
+}
+
+/// Raw value at a specific time point for a single signal
+#[derive(Debug, Clone, Serialize)]
+pub struct RawValue {
+    pub display_str: String,
+    pub value_type: String, // "has_x" | "has_z" | "mixed" | "numeric"
+    pub has_transition: bool,
+}
+
+/// All signal values at a specific time point
+#[derive(Debug, Clone, Serialize)]
+pub struct RawSignalValuesAtTime {
+    pub time: u64,
+    pub values: Vec<RawValue>,
+}
+
+/// Complete result for get_signal_values_at_transitions
+#[derive(Debug, Clone, Serialize)]
+pub struct RawSignalValuesResult {
+    pub search_start_time: u64,
+    pub search_end_time: u64,
+    pub data: Vec<RawSignalValuesAtTime>,
+}
+
 /// LoD (Level of Detail) configuration
 /// resolution = time units per bucket (each transition represents this many time units)
 /// Based on server API: resolution = 2^lod, max level = 32
@@ -1049,7 +1096,19 @@ impl WaveformDataProvider {
     /// 3. Store fetched data in cache using supplement_data
     /// 
     /// This is an internal function, use fetch_and_get_segments for JS calls
+    /// Uses automatic LoD selection based on viewport
     async fn fetch_signals_data_batch(&mut self, signal_names: Vec<String>) -> Result<(), JsValue> {
+        // Calculate appropriate LoD based on current viewport and canvas
+        let lod = select_lod(&self.viewport, self.canvas_width);
+        self.fetch_signals_data_batch_internal(signal_names, lod).await
+    }
+
+    /// Internal version with explicit LoD parameter
+    /// 
+    /// # Arguments
+    /// * `signal_names` - List of signal names to fetch
+    /// * `lod` - Level of Detail to use (0 for raw data)
+    async fn fetch_signals_data_batch_internal(&mut self, signal_names: Vec<String>, lod: u32) -> Result<(), JsValue> {
         // Clear signal_data cache for new viewport
         // signal_data is temporary cache for current viewport only
         self.signal_data.clear();
@@ -1057,9 +1116,6 @@ impl WaveformDataProvider {
         const MAX_BATCH_SIZE: usize = 256;
         
         let total_signals = signal_names.len();
-        
-        // Calculate appropriate LoD based on current viewport and canvas
-        let lod = select_lod(&self.viewport, self.canvas_width);
         
         // Store current LoD for bucket size calculation
         self.current_lod = Some(lod);
@@ -1376,6 +1432,225 @@ if tile_missing_signals.is_empty() {
         // console_log!("[WASM] 5. finish draw segments");
         
         result
+    }
+
+    // ============================================================================
+    // Get Signal Values at Transitions - Main Implementation
+    // ============================================================================
+
+    /// Get raw signal values at all transition points within a time range
+    /// 
+    /// This function fetches LoD 0 data for the specified signals and time range,
+    /// then returns all signal values at each transition point.
+    /// 
+    /// # Arguments
+    /// * `signal_names` - List of signal names to query
+    /// * `search_start_time` - Start of search range (inclusive)
+    /// * `search_end_time` - End of search range (inclusive)
+    /// * `result_max` - Maximum number of time points to return
+    /// * `signals_with_format` - Signal list with display format for each signal
+    /// 
+    /// # Returns
+    /// * Serialized RawSignalValuesResult
+    #[wasm_bindgen]
+    pub async fn get_signal_values_at_transitions(
+        &mut self,
+        signal_names: Vec<String>,
+        search_start_time: u64,
+        search_end_time: u64,
+        result_max: usize,
+        signals_with_format: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        // Parse signals_with_format from JS
+        let signals_format: Vec<SignalWithFormat> = serde_wasm_bindgen::from_value(&signals_with_format)
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse signals_with_format: {:?}", e)))?;
+        
+        // Build format lookup map by signal name
+        let format_map: HashMap<String, String> = signals_format
+            .iter()
+            .map(|s| (s.name.clone(), s.display_format.clone()))
+            .collect();
+        
+        // Build width lookup map
+        let width_map: HashMap<String, u32> = signals_format
+            .iter()
+            .map(|s| (s.name.clone(), s.width))
+            .collect();
+        
+        // Step 1: Save current state
+        let saved_viewport = self.viewport;
+        let saved_lod = self.current_lod;
+        
+        // Step 2: Set independent viewport for this query
+        self.viewport = Viewport {
+            time_start: search_start_time as f64,
+            time_end: search_end_time as f64,
+        };
+        self.current_lod = Some(0); // Force LoD 0 for raw data
+        
+        // Step 3: Clear existing signal_data and fetch fresh data
+        self.signal_data.clear();
+        
+        // Use the internal fetch function with forced LoD 0
+        if let Err(e) = self.fetch_signals_data_batch_internal(signal_names.clone(), 0).await {
+            // Restore state before returning error
+            self.viewport = saved_viewport;
+            self.current_lod = saved_lod;
+            return Err(e);
+        }
+        
+        // Step 4: Collect all transition times
+        let mut all_times: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+        all_times.insert(search_start_time); // Always include start time
+        
+        for name in &signal_names {
+            if let Some(data) = self.signal_data.get(name) {
+                for t in &data.transitions {
+                    if t.time >= search_start_time && t.time <= search_end_time {
+                        all_times.insert(t.time);
+                    }
+                }
+            }
+        }
+        
+        // Step 5: Build result for each time point (limited by result_max)
+        let times: Vec<u64> = all_times.into_iter().take(result_max).collect();
+        let mut result_data = Vec::new();
+        
+        for time in times {
+            let mut values = Vec::new();
+            
+            for name in &signal_names {
+                let (transition, has_transition) = self.find_value_at_time_in_signal(name, time);
+                
+                // Get signal width
+                let width = *width_map.get(name).unwrap_or(&1);
+                
+                // Get display format
+                let display_format = format_map.get(name).map(|s| s.as_str()).unwrap_or("hex");
+                
+                // Format the value
+                let display_str = self.format_value_with_format(&transition, width, display_format);
+                
+                // Classify value type
+                let value_type = Self::classify_value_type(&display_str);
+                
+                values.push(RawValue {
+                    display_str,
+                    value_type: value_type.to_string(),
+                    has_transition,
+                });
+            }
+            
+            result_data.push(RawSignalValuesAtTime { time, values });
+        }
+        
+        // Step 6: Restore state
+        self.viewport = saved_viewport;
+        self.current_lod = saved_lod;
+        
+        // Step 7: Build and return result
+        let result = RawSignalValuesResult {
+            search_start_time,
+            search_end_time,
+            data: result_data,
+        };
+        
+        serde_wasm_bindgen::to_value(&result)
+            .map_err(|e| JsValue::from_str(&format!("Failed to serialize result: {:?}", e)))
+    }
+
+    /// Find the value of a signal at a specific time
+    /// Returns (transition, has_transition_at_exact_time)
+    fn find_value_at_time_in_signal(
+        &self,
+        signal_name: &str,
+        target_time: u64,
+    ) -> (Transition, bool) {
+        let default_transition = Transition {
+            time: 0,
+            value_type: 0,
+            value_len: 1,
+            value: vec![b'0'],
+        };
+        
+        let signal_data = match self.signal_data.get(signal_name) {
+            Some(data) => data,
+            None => return (default_transition, false),
+        };
+        
+        // Check for exact match
+        if let Ok(idx) = signal_data.transitions.binary_search_by_key(&target_time, |t| t.time) {
+            return (signal_data.transitions[idx].clone(), true);
+        }
+        
+        // Find most recent transition before target_time
+        if let Some(trans) = signal_data.transitions.iter().filter(|t| t.time < target_time).last() {
+            return (trans.clone(), false);
+        }
+        
+        // Use tile start value
+        for (tile_start, tile_end, _start_time, start_value) in &signal_data.tile_info {
+            if target_time >= *tile_start && target_time <= *tile_end {
+                return (start_value.clone(), false);
+            }
+        }
+        
+        // Default to '0'
+        (default_transition, false)
+    }
+
+    /// Format a transition value with the specified display format
+    fn format_value_with_format(
+        &self,
+        transition: &Transition,
+        width: u32,
+        display_format: &str,
+    ) -> String {
+        // Convert raw bytes to string
+        let raw_str = server_value_to_string(
+            transition.value_type,
+            transition.value_len,
+            &transition.value,
+        );
+        
+        // For single-bit signals, return as-is
+        if width == 1 {
+            return raw_str;
+        }
+        
+        // For multi-bit signals, apply display format
+        // Parse the raw string as a numeric value
+        let numeric_value = if raw_str.starts_with("0x") || raw_str.starts_with("0X") {
+            u64::from_str_radix(&raw_str[2..], 16).unwrap_or(0)
+        } else if raw_str.starts_with("0b") || raw_str.starts_with("0B") {
+            u64::from_str_radix(&raw_str[2..], 2).unwrap_or(0)
+        } else if raw_str.starts_with("0o") || raw_str.starts_with("0O") {
+            u64::from_str_radix(&raw_str[2..], 8).unwrap_or(0)
+        } else {
+            raw_str.parse::<u64>().unwrap_or(0)
+        };
+        
+        match display_format {
+            "hex" | "h" => format!("0x{:0width$X}", numeric_value, width = ((width + 3) / 4) as usize),
+            "bin" | "b" => format!("0b{:0width$b}", numeric_value, width = width as usize),
+            "oct" | "o" => format!("0o{:0width$o}", numeric_value, width = ((width + 2) / 3) as usize),
+            "dec" | "d" => numeric_value.to_string(),
+            _ => format!("0x{:0width$X}", numeric_value, width = ((width + 3) / 4) as usize), // Default to hex
+        }
+    }
+
+    /// Classify value type based on display string
+    fn classify_value_type(display_str: &str) -> &'static str {
+        let has_x = display_str.contains('X') || display_str.contains('x');
+        let has_z = display_str.contains('Z') || display_str.contains('z');
+        
+        match (has_x, has_z) {
+            (true, true) => "mixed",
+            (true, false) => "has_x",
+            (false, true) => "has_z",
+            (false, false) => "numeric",
+        }
     }
 
     /// Parse multi-tile response and process each tile

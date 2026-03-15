@@ -53,6 +53,62 @@ export interface WasmSignalInfo {
   displayFormat?: DisplayFormat;
 }
 
+// ==================== Get Signal Values at Transitions Types ====================
+
+/**
+ * Signal with display format for getSignalValuesAtTransitions
+ */
+export interface SignalWithFormat {
+  globalId: number;
+  name: string;
+  row: number;
+  width: number;
+  drawSigId: number;
+  bitExtract?: {
+    parentName: string;
+    msb: number;
+    lsb: number;
+  };
+  displayFormat: DisplayFormat;
+}
+
+/**
+ * Raw value at a specific time for a single signal
+ */
+export interface RawValue {
+  displayStr: string;
+  valueType: 'has_x' | 'has_z' | 'mixed' | 'numeric';
+  hasTransition: boolean;
+}
+
+/**
+ * All signal values at a specific time point
+ */
+export interface RawSignalValuesAtTime {
+  time: number;
+  values: RawValue[];
+}
+
+/**
+ * Complete result for getSignalValuesAtTransitions
+ */
+export interface RawSignalValuesResult {
+  searchStartTime: number;
+  searchEndTime: number;
+  data: RawSignalValuesAtTime[];
+}
+
+/**
+ * Parameters for getSignalValuesAtTransitions
+ */
+export interface GetSignalValuesAtTransitionsParams {
+  signalNames: string[];
+  searchStartTime: number;
+  searchEndTime: number;
+  resultMax: number;
+  signals: SignalWithFormat[];
+}
+
 /**
  * 视口配置
  */
@@ -177,6 +233,14 @@ export interface WaveformProviderInterface {
     time: number,
     signals: WasmSignalInfo[]
   ): Promise<{ prev: number | null; next: number | null }>;
+
+  /**
+   * 获取所有信号在跳变时间点的值
+   * @param params 查询参数
+   */
+  getSignalValuesAtTransitions(
+    params: GetSignalValuesAtTransitionsParams
+  ): Promise<RawSignalValuesResult>;
 
   // ==================== 渲染（参数化）====================
 
