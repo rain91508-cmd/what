@@ -345,6 +345,17 @@ async function handleGetSignalValuesAtTransitions(payload: any, id: number): Pro
     spaceBeforeBracket,
   } = payload;
 
+  console.log('[WaveformWorker] GET_SIGNAL_VALUES_AT_TRANSITIONS payload:', {
+    signalNames,
+    searchStartTime,
+    searchEndTime,
+    resultMax,
+    signalCount: signals?.length,
+    signalPrefix,
+    serverPrefix,
+    spaceBeforeBracket,
+  });
+
   // Update WASM provider prefix settings if provided
   if (signalPrefix !== undefined) {
     wasmProvider.signal_prefix = signalPrefix;
@@ -355,6 +366,12 @@ async function handleGetSignalValuesAtTransitions(payload: any, id: number): Pro
   if (spaceBeforeBracket !== undefined) {
     wasmProvider.space_before_bracket = spaceBeforeBracket;
   }
+
+  console.log('[WaveformWorker] WASM provider prefix settings:', {
+    signal_prefix: wasmProvider.signal_prefix,
+    server_prefix: wasmProvider.server_prefix,
+    space_before_bracket: wasmProvider.space_before_bracket,
+  });
 
   // Convert signals to WASM format
   const wasmSignals = signals.map((sig: any) => ({
@@ -372,6 +389,14 @@ async function handleGetSignalValuesAtTransitions(payload: any, id: number): Pro
       : undefined,
     display_format: sig.displayFormat,
   }));
+
+  console.log('[WaveformWorker] Calling WASM get_signal_values_at_transitions with:', {
+    signalNames,
+    searchStartTime,
+    searchEndTime,
+    resultMax,
+    wasmSignalsCount: wasmSignals.length,
+  });
 
   // Call WASM function
   // Convert time values to BigInt as required by WASM
