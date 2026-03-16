@@ -1500,16 +1500,12 @@ if tile_missing_signals.is_empty() {
     ) -> Result<JsValue, JsValue> {
         // Debug: Log input parameters
         web_sys::console::log_1(&JsValue::from_str(&format!(
-            "[WASM] get_signal_values_at_transitions called with signal_names: {:?}, search_start_time: {}, search_end_time: {}, result_max: {}, display_unit_per_lod0_unit: {}",
-            signal_names, search_start_time, search_end_time, result_max, self.display_unit_per_lod0_unit
+            "[WASM] get_signal_values_at_transitions called with signal_names: {:?}, search_start_time: {}, search_end_time: {}, result_max: {}, display_unit_per_lod0_unit: {}, enable_opfs: {:?}, enable_memory_cache: {:?}",
+            signal_names, search_start_time, search_end_time, result_max, self.display_unit_per_lod0_unit, enable_opfs, enable_memory_cache
         )));
         web_sys::console::log_1(&JsValue::from_str(&format!(
             "[WASM] Current prefix settings - signal_prefix: {:?}, server_prefix: {:?}, space_before_bracket: {:?}",
             self.signal_prefix, self.server_prefix, self.space_before_bracket
-        )));
-        web_sys::console::log_1(&JsValue::from_str(&format!(
-            "[WASM] Cache settings - enable_opfs: {:?}, enable_memory_cache: {:?}",
-            enable_opfs, enable_memory_cache
         )));
         
         // Apply cache settings if provided (override global settings for this call)
