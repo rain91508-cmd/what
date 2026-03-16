@@ -1495,6 +1495,8 @@ if tile_missing_signals.is_empty() {
         search_end_time: u64,
         result_max: usize,
         signals_with_format: JsValue,
+        enable_opfs: Option<bool>,
+        enable_memory_cache: Option<bool>,
     ) -> Result<JsValue, JsValue> {
         // Debug: Log input parameters
         web_sys::console::log_1(&JsValue::from_str(&format!(
@@ -1505,6 +1507,21 @@ if tile_missing_signals.is_empty() {
             "[WASM] Current prefix settings - signal_prefix: {:?}, server_prefix: {:?}, space_before_bracket: {:?}",
             self.signal_prefix, self.server_prefix, self.space_before_bracket
         )));
+        web_sys::console::log_1(&JsValue::from_str(&format!(
+            "[WASM] Cache settings - enable_opfs: {:?}, enable_memory_cache: {:?}",
+            enable_opfs, enable_memory_cache
+        )));
+        
+        // Apply cache settings if provided (override global settings for this call)
+        let saved_enable_opfs = self.enable_opfs;
+        let saved_enable_memory_cache = self.opfs_cache.is_memory_cache_enabled();
+        
+        if let Some(enabled) = enable_opfs {
+            self.enable_opfs = enabled;
+        }
+        if let Some(enabled) = enable_memory_cache {
+            self.opfs_cache.set_memory_cache_enabled(enabled);
+        }
         
         // Parse signals_with_format from JS
         let signals_format: Vec<SignalWithFormat> = serde_wasm_bindgen::from_value(signals_with_format)
@@ -1661,7 +1678,11 @@ if tile_missing_signals.is_empty() {
         let display_search_start_time = (search_start_time as f64 * self.display_unit_per_lod0_unit) as u64;
         let display_search_end_time = (search_end_time as f64 * self.display_unit_per_lod0_unit) as u64;
         
-        // Step 7: Build and return result with display unit times
+        // Step 7: Restore cache settings
+        self.enable_opfs = saved_enable_opfs;
+        self.opfs_cache.set_memory_cache_enabled(saved_enable_memory_cache);
+        
+        // Step 8: Build and return result with display unit times
         let result = RawSignalValuesResult {
             search_start_time: display_search_start_time,
             search_end_time: display_search_end_time,

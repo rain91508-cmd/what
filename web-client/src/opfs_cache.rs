@@ -646,6 +646,11 @@ impl OpfsCacheManager {
         }
     }
 
+    /// Get memory cache enabled status
+    pub fn is_memory_cache_enabled(&self) -> bool {
+        self.memory_cache_enabled
+    }
+
     /// Set waveform name
     pub fn set_waveform(&mut self, name: String) {
         console_log!("[OpfsCache] Waveform: {}", name);

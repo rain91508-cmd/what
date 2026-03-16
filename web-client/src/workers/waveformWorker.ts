@@ -345,6 +345,9 @@ async function handleGetSignalValuesAtTransitions(payload: any, id: number): Pro
     spaceBeforeBracket,
     // Time unit conversion factor
     displayUnitPerLoD0Unit,
+    // Cache settings
+    enableOpfs,
+    enableMemoryCache,
   } = payload;
 
   console.log('[WaveformWorker] GET_SIGNAL_VALUES_AT_TRANSITIONS payload:', {
@@ -357,6 +360,8 @@ async function handleGetSignalValuesAtTransitions(payload: any, id: number): Pro
     serverPrefix,
     spaceBeforeBracket,
     displayUnitPerLoD0Unit,
+    enableOpfs,
+    enableMemoryCache,
   });
 
   // Update WASM provider prefix settings if provided
@@ -417,7 +422,9 @@ async function handleGetSignalValuesAtTransitions(payload: any, id: number): Pro
     BigInt(searchStartTime),
     BigInt(searchEndTime),
     resultMax,
-    wasmSignals
+    wasmSignals,
+    enableOpfs,
+    enableMemoryCache
   );
 
   sendSuccess(id, result);
