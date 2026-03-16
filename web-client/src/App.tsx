@@ -3538,6 +3538,25 @@ function App() {
         restoredTabs.push(newTab)
       }
 
+      // Update tab counters based on restored tab IDs
+      // Extract the maximum counter value from each tab type
+      const maxCounters = { source: 0, waveform: 0, tableview: 0 }
+      for (const tab of restoredTabs) {
+        const match = tab.id.match(/^(source|waveform|tableview)-(\d+)$/)
+        if (match) {
+          const type = match[1] as 'source' | 'waveform' | 'tableview'
+          const num = parseInt(match[2], 10)
+          if (num > maxCounters[type]) {
+            maxCounters[type] = num
+          }
+        }
+      }
+      // Set counters to max + 1 for next new tab
+      tabCounters.current.source = maxCounters.source + 1
+      tabCounters.current.waveform = maxCounters.waveform + 1
+      tabCounters.current.tableview = maxCounters.tableview + 1
+      console.log('[App] Restored tab counters:', tabCounters.current)
+
       setTabs(restoredTabs)
 
       // Step 7: Restore active tab
