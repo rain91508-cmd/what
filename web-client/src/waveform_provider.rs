@@ -1128,7 +1128,7 @@ impl WaveformDataProvider {
     async fn fetch_signals_data_batch(&mut self, signal_names: Vec<String>) -> Result<(), JsValue> {
         // Calculate appropriate LoD based on current viewport and canvas
         let lod = select_lod(&self.viewport, self.canvas_width);
-        self.fetch_signals_data_batch_internal(signal_names, lod).await
+        self.fetch_signals_data_batch_internal(signal_names, lod, None).await
     }
 
     /// Internal version with explicit LoD parameter
@@ -1136,7 +1136,12 @@ impl WaveformDataProvider {
     /// # Arguments
     /// * `signal_names` - List of signal names to fetch
     /// * `lod` - Level of Detail to use (0 for raw data)
-    async fn fetch_signals_data_batch_internal(&mut self, signal_names: Vec<String>, lod: u32) -> Result<(), JsValue> {
+    async fn fetch_signals_data_batch_internal(
+        &mut self, 
+        signal_names: Vec<String>, 
+        lod: u32,
+        custom_time_range: Option<(u64, u64)>,
+    ) -> Result<(), JsValue> {
         // Clear signal_data cache for new viewport
         // signal_data is temporary cache for current viewport only
         self.signal_data.clear();
@@ -1148,9 +1153,11 @@ impl WaveformDataProvider {
         // Store current LoD for bucket size calculation
         self.current_lod = Some(lod);
 
-        // Get time range from viewport
-        let time_start = self.viewport.time_start as u64;
-        let time_end = self.viewport.time_end as u64;
+        // Get time range from custom range or viewport
+        let (time_start, time_end) = match custom_time_range {
+            Some((start, end)) => (start, end),
+            None => (self.viewport.time_start as u64, self.viewport.time_end as u64),
+        };
 
         // Calculate tile information for debugging
         let tile_span = OpfsCacheManager::get_tile_span(lod);
@@ -1491,8 +1498,8 @@ if tile_missing_signals.is_empty() {
     ) -> Result<JsValue, JsValue> {
         // Debug: Log input parameters
         web_sys::console::log_1(&JsValue::from_str(&format!(
-            "[WASM] get_signal_values_at_transitions called with signal_names: {:?}, search_start_time: {}, search_end_time: {}, result_max: {}",
-            signal_names, search_start_time, search_end_time, result_max
+            "[WASM] get_signal_values_at_transitions called with signal_names: {:?}, search_start_time: {}, search_end_time: {}, result_max: {}, display_unit_per_lod0_unit: {}",
+            signal_names, search_start_time, search_end_time, result_max, self.display_unit_per_lod0_unit
         )));
         web_sys::console::log_1(&JsValue::from_str(&format!(
             "[WASM] Current prefix settings - signal_prefix: {:?}, server_prefix: {:?}, space_before_bracket: {:?}",
@@ -1526,34 +1533,94 @@ if tile_missing_signals.is_empty() {
         };
         self.current_lod = Some(0); // Force LoD 0 for raw data
         
-        // Step 3: Clear existing signal_data and fetch fresh data
-        self.signal_data.clear();
+        // Step 3: Fetch data in batches of 10 tiles at a time
+        // This prevents requesting too much data at once and causing server timeout
+        const TILES_PER_BATCH: u64 = 10;
+        let tile_span = OpfsCacheManager::get_tile_span(0);
+        let start_tile = search_start_time / tile_span;
+        let end_tile = search_end_time / tile_span;
         
-        // Use the internal fetch function with forced LoD 0
-        if let Err(e) = self.fetch_signals_data_batch_internal(signal_names.clone(), 0).await {
-            // Restore state before returning error
-            self.viewport = saved_viewport;
-            self.current_lod = saved_lod;
-            return Err(e);
-        }
-        
-        // Step 4: Collect all transition times
         let mut all_times: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
         all_times.insert(search_start_time); // Always include start time
         
-        for name in &signal_names {
-            if let Some(data) = self.signal_data.get(name) {
-                for t in &data.transitions {
-                    if t.time >= search_start_time && t.time <= search_end_time {
-                        all_times.insert(t.time);
+        let mut current_tile = start_tile;
+        
+        while current_tile <= end_tile && all_times.len() < result_max {
+            // Calculate batch range (10 tiles at a time)
+            let batch_end_tile = (current_tile + TILES_PER_BATCH - 1).min(end_tile);
+            let batch_start_time = current_tile * tile_span;
+            let batch_end_time = (batch_end_tile + 1) * tile_span - 1;
+            
+            web_sys::console::log_1(&JsValue::from_str(&format!(
+                "[WASM] Fetching batch: tiles {}-{}, time {}-{}",
+                current_tile, batch_end_tile, batch_start_time, batch_end_time
+            )));
+            
+            // Clear signal_data for this batch
+            self.signal_data.clear();
+            
+            // Fetch this batch with custom time range
+            if let Err(e) = self.fetch_signals_data_batch_internal(
+                signal_names.clone(), 
+                0, 
+                Some((batch_start_time, batch_end_time))
+            ).await {
+                // Restore state before returning error
+                self.viewport = saved_viewport;
+                self.current_lod = saved_lod;
+                return Err(e);
+            }
+            
+            // Collect transition times from this batch
+            for name in &signal_names {
+                if let Some(data) = self.signal_data.get(name) {
+                    for t in &data.transitions {
+                        if t.time >= search_start_time && t.time <= search_end_time {
+                            all_times.insert(t.time);
+                        }
                     }
                 }
             }
+            
+            web_sys::console::log_1(&JsValue::from_str(&format!(
+                "[WASM] Batch complete: collected {} transitions so far",
+                all_times.len()
+            )));
+            
+            // Move to next batch
+            current_tile = batch_end_tile + 1;
         }
         
-        // Step 5: Build result for each time point (limited by result_max)
+        // Step 4: Build result for each time point (limited by result_max)
         let times: Vec<u64> = all_times.into_iter().take(result_max).collect();
         let mut result_data = Vec::new();
+        
+        // We need to re-fetch data to get all values for the collected times
+        // First, fetch the full range (or we could optimize by fetching only needed tiles)
+        self.signal_data.clear();
+        
+        // Calculate the tiles needed for the collected times
+        if !times.is_empty() {
+            let min_time = *times.first().unwrap();
+            let max_time = *times.last().unwrap();
+            let min_tile = min_time / tile_span;
+            let max_tile = max_time / tile_span;
+            
+            web_sys::console::log_1(&JsValue::from_str(&format!(
+                "[WASM] Final fetch for result: tiles {}-{}, time {}-{}",
+                min_tile, max_tile, min_time, max_time
+            )));
+            
+            if let Err(e) = self.fetch_signals_data_batch_internal(
+                signal_names.clone(), 
+                0, 
+                Some((min_time, max_time))
+            ).await {
+                self.viewport = saved_viewport;
+                self.current_lod = saved_lod;
+                return Err(e);
+            }
+        }
         
         for time in times {
             let mut values = Vec::new();
@@ -1586,15 +1653,15 @@ if tile_missing_signals.is_empty() {
             result_data.push(RawSignalValuesAtTime { time: display_time, values });
         }
         
-        // Step 6: Restore state
+        // Step 5: Restore state
         self.viewport = saved_viewport;
         self.current_lod = saved_lod;
         
-        // Step 7: Convert search range times to display units
+        // Step 6: Convert search range times to display units
         let display_search_start_time = (search_start_time as f64 * self.display_unit_per_lod0_unit) as u64;
         let display_search_end_time = (search_end_time as f64 * self.display_unit_per_lod0_unit) as u64;
         
-        // Step 8: Build and return result with display unit times
+        // Step 7: Build and return result with display unit times
         let result = RawSignalValuesResult {
             search_start_time: display_search_start_time,
             search_end_time: display_search_end_time,
