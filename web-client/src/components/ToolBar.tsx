@@ -506,20 +506,22 @@ export function ToolBar({
   // Display: Start and Span (user-friendly)
   // Internal: Start and End (stored in tab)
   useEffect(() => {
-    if (tableStartTime !== undefined && timeConfig) {
-      const displayValue = lod0ToDisplay(tableStartTime, timeConfig);
+    const effectiveTimeConfig = timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
+    if (tableStartTime !== undefined) {
+      const displayValue = lod0ToDisplay(tableStartTime, effectiveTimeConfig);
       setTableStartInputValue(displayValue.toString());
     }
-  }, [tableStartTime, timeConfig]);
+  }, [tableStartTime, timeConfig, currentWaveDisplayUnitPerLoD0]);
 
   useEffect(() => {
-    if (tableStartTime !== undefined && tableEndTime !== undefined && timeConfig) {
+    const effectiveTimeConfig = timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
+    if (tableStartTime !== undefined && tableEndTime !== undefined) {
       // Calculate span from start and end
       const spanLod0 = tableEndTime - tableStartTime;
-      const displaySpan = lod0ToDisplay(spanLod0, timeConfig);
+      const displaySpan = lod0ToDisplay(spanLod0, effectiveTimeConfig);
       setTableSpanInputValue(displaySpan.toString());
     }
-  }, [tableStartTime, tableEndTime, timeConfig]);
+  }, [tableStartTime, tableEndTime, timeConfig, currentWaveDisplayUnitPerLoD0]);
 
   const handleTableStartInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setTableStartInputValue(e.target.value);
@@ -534,8 +536,9 @@ export function ToolBar({
       commitTableStartValue();
     } else if (e.key === 'Escape') {
       // Restore original value
-      if (tableStartTime !== undefined && timeConfig) {
-        const displayValue = lod0ToDisplay(tableStartTime, timeConfig);
+      if (tableStartTime !== undefined) {
+        const effectiveTimeConfig = timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
+        const displayValue = lod0ToDisplay(tableStartTime, effectiveTimeConfig);
         setTableStartInputValue(displayValue.toString());
       }
     }
@@ -546,29 +549,31 @@ export function ToolBar({
       commitTableSpanValue();
     } else if (e.key === 'Escape') {
       // Restore original span value
-      if (tableStartTime !== undefined && tableEndTime !== undefined && timeConfig) {
+      if (tableStartTime !== undefined && tableEndTime !== undefined) {
+        const effectiveTimeConfig = timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
         const spanLod0 = tableEndTime - tableStartTime;
-        const displaySpan = lod0ToDisplay(spanLod0, timeConfig);
+        const displaySpan = lod0ToDisplay(spanLod0, effectiveTimeConfig);
         setTableSpanInputValue(displaySpan.toString());
       }
     }
   };
 
   const commitTableStartValue = () => {
-    if (!timeConfig || !onTableStartTimeChange) return;
+    const effectiveTimeConfig = timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
+    if (!onTableStartTimeChange) return;
 
     const numValue = parseFloat(tableStartInputValue);
     if (isNaN(numValue) || numValue < 0) {
       // Invalid input, restore original value
       if (tableStartTime !== undefined) {
-        const displayValue = lod0ToDisplay(tableStartTime, timeConfig);
+        const displayValue = lod0ToDisplay(tableStartTime, effectiveTimeConfig);
         setTableStartInputValue(displayValue.toString());
       }
       return;
     }
 
     // Convert display unit value to LoD0 units
-    const newStartLod0 = displayToLod0(numValue, timeConfig);
+    const newStartLod0 = displayToLod0(numValue, effectiveTimeConfig);
     onTableStartTimeChange(newStartLod0);
   };
 
