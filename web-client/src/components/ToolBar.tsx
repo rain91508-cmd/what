@@ -569,13 +569,17 @@ export function ToolBar({
     onTableStartTimeChange(newStartLod0);
   };
 
-  const commitTableSpanValue = () => {
-    if (!timeConfig || !onTableEndTimeChange || tableStartTime === undefined) return;
+  const commitTableSpanValue = (currentStartLod0?: number) => {
+    if (!timeConfig || !onTableEndTimeChange) return;
+
+    // Use provided start time (if just updated) or fall back to prop
+    const baseStartLod0 = currentStartLod0 !== undefined ? currentStartLod0 : tableStartTime;
+    if (baseStartLod0 === undefined) return;
 
     const numValue = parseFloat(tableSpanInputValue);
     if (isNaN(numValue) || numValue <= 0) {
       // Invalid input, restore original span value
-      if (tableEndTime !== undefined) {
+      if (tableEndTime !== undefined && tableStartTime !== undefined) {
         const spanLod0 = tableEndTime - tableStartTime;
         const displaySpan = lod0ToDisplay(spanLod0, timeConfig);
         setTableSpanInputValue(displaySpan.toString());
@@ -586,13 +590,20 @@ export function ToolBar({
     // Convert span from display units to LoD0 units
     const spanLod0 = displayToLod0(numValue, timeConfig);
     // Calculate new end time: start + span
-    const newEndLod0 = tableStartTime + spanLod0;
+    const newEndLod0 = baseStartLod0 + spanLod0;
     onTableEndTimeChange(newEndLod0);
   };
 
   const handleTableTimeApply = () => {
-    commitTableStartValue();
-    commitTableSpanValue();
+    // Commit start value first and get the new start time
+    const numStartValue = parseFloat(tableStartInputValue);
+    let newStartLod0: number | undefined;
+    if (!isNaN(numStartValue) && numStartValue >= 0 && timeConfig && onTableStartTimeChange) {
+      newStartLod0 = displayToLod0(numStartValue, timeConfig);
+      onTableStartTimeChange(newStartLod0);
+    }
+    // Commit span value using the new start time (if updated)
+    commitTableSpanValue(newStartLod0);
     onTableTimeApply?.();
   };
 
