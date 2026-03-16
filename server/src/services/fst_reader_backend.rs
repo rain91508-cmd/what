@@ -1006,23 +1006,25 @@ async fn read_signals_data_fst_reader_tiles_lod_high(
 
                 // 添加每个 bucket 的 first/last
                 // 注意：时间戳使用相对于 tile 的 bucket 索引（从 0 开始）
+                // 使用 bucket_idx 作为时间戳，而不是从 read_range_boundary_values 返回的时间戳
+                // 这样可以确保与 lod_low 的输出一致
                 
                 if let (Some(first_vec), Some(last_vec), Some(multiple_vec)) = 
                     (bucket_first.get(&info.handle), bucket_last.get(&info.handle), bucket_has_multiple.get(&info.handle)) {
                     for bucket_idx in 0..num_buckets {
-                        if let Some((first_time, first_val)) = &first_vec[bucket_idx] {
-                            // first - 使用从 read_range_boundary_values 获取的相对 bucket 索引
+                        if let Some((_, first_val)) = &first_vec[bucket_idx] {
+                            // first - 使用 bucket_idx 作为时间戳（和 lod_low 一致）
                             signal_data.add_transition(Transition {
-                                time: *first_time,
+                                time: bucket_idx as u64,
                                 value: SignalValue::Numeric(first_val.clone()),
                             });
                             last_value_for_next_tile = first_val.clone();
                             
                             // last（只要有多个 transitions 就输出，不管值是否相同）
                             if multiple_vec[bucket_idx] {
-                                if let Some((last_time, last_val)) = &last_vec[bucket_idx] {
+                                if let Some((_, last_val)) = &last_vec[bucket_idx] {
                                     signal_data.add_transition(Transition {
-                                        time: *last_time,
+                                        time: bucket_idx as u64,
                                         value: SignalValue::Numeric(last_val.clone()),
                                     });
                                     last_value_for_next_tile = last_val.clone();

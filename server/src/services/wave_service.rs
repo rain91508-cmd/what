@@ -1908,7 +1908,7 @@ impl WaveService {
                         let mut count = 0;
                         // 时间范围改为右闭（和 lod_low 一致）：[aligned_start, tile_end - 1]
                         for trans in &full_data.transitions {
-                            if trans.time >= aligned_start && trans.time < tile_end {
+                            if trans.time >= aligned_start && trans.time <= tile_end.saturating_sub(1) {
                                 tile_signal.add_transition(trans.clone());
                                 count += 1;
                             }
