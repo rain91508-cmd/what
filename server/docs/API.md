@@ -745,6 +745,327 @@ Tile-based API 返回 MultiTileChunk 格式：
 
 ***
 
+#### 3.8 信号名编码格式
+
+**支持两种编码格式**:
+
+| 格式      | 说明           | 适用场景           |
+| ------- | ------------ | -------------- |
+| `b64:`  | 普通 Base64 编码 | 单个信号           |
+| `trie:` | Trie 树压缩编码   | 多个信号（自动提取公共前缀） |
+
+**Trie 压缩优势**:
+
+- 自动提取公共前缀，减少 URL 长度
+- 多个信号有公共前缀时压缩率更高
+- CDN 缓存友好
+
+**示例**:
+
+```
+原始信号列表:
+tb_top.u_dut.sig1,tb_top.u_dut.sig2,tb_top.u_dut.sig3
+
+Trie 压缩后:
+前缀: tb_top.u_dut.
+后缀: sig1,sig2,sig3
+
+URL: /api/wave/riscv2/lod/0/signals/trie:base64encodedstring/data
+```
+
+**URL 对比**:
+
+| 场景            | 原始长度        | Base64 编码   | Trie 压缩    | 节省    |
+| ------------- | ----------- | ----------- | ---------- | ----- |
+| 1 个信号         | \~20 chars  | \~28 chars  | \~28 chars | -     |
+| 3 个信号（有公共前缀）  | \~60 chars  | \~80 chars  | \~40 chars | \~50% |
+| 10 个信号（有公共前缀） | \~200 chars | \~268 chars | \~80 chars | \~70% |
+
+**查询参数**:
+
+- `time_stamp`: 可选，用于 CDN 缓存刷新（服务器不处理，建议从波形 info 的 `date` 字段获取）
+
+**时间单位说明**:
+
+- 时间参数的单位与波形文件的 `time_unit` 一致
+- 例如：如果波形文件的 `time_unit` 为 "1ps"，则 `start=1000` 表示 1000ps
+
+**请求头**:
+
+- `Range`: 可选，支持断点续传（如 `bytes=0-1023`）
+
+**响应**:
+
+- 成功: 返回二进制波形数据（`Content-Type: application/octet-stream`）
+- 带 Range: 返回 206 Partial Content
+
+**响应头**:
+
+- `Content-Length`: 数据长度
+- `Content-Range`: 数据范围（如果有 Range 请求）
+- `Accept-Ranges`: bytes
+- `Cache-Control`: `public, max-age=3600, immutable`（CDN 缓存优化）
+
+**响应数据格式（二进制，v2版本）**:
+
+服务器返回的二进制数据采用自定义 chunk 格式，结构如下：
+
+```
++------------------+
+|   ChunkHeader    | 32 bytes
+|   (文件头)       |
++------------------+
+| SignalBlockHeader| 21 bytes × 信号数 (v2)
+|   (信号块表)     |
++------------------+
+| Compressed Data  |
+|   (压缩数据区)   |
++------------------+
+```
+
+**数据区布局（每个信号）**:
+
+```
+[Compressed Bucket Index Array] (u16 数组，用于 first/last 配对)
+[Compressed Value Array]
+[Compressed Transition Time Array] (可选，u64 数组，实际 transition 时间)
+```
+
+**ChunkHeader 结构（32字节，v2版本）**:
+
+| 偏移 | 大小 | 字段            | 说明                     |
+| -- | -- | ------------- | ---------------------- |
+| 0  | 4B | magic         | 魔数 0x57415645 ("WAVE") |
+| 4  | 2B | version       | 版本号 (当前为 2)            |
+| 6  | 2B | level         | LoD 层级                 |
+| 8  | 4B | chunk\_id     | Chunk ID               |
+| 12 | 8B | time\_start   | 起始时间                   |
+| 20 | 8B | time\_end     | 结束时间                   |
+| 28 | 4B | signal\_count | 信号数量                   |
+
+**版本说明**:
+
+- **v1**: SignalBlockHeader 17 字节，无 `transition_time_array_offset` 字段，时间数组为 u64
+- **v2**: SignalBlockHeader 21 字节，新增 `transition_time_array_offset` 字段，bucket 索引数组为 u16，可选实际时间数组为 u64
+
+**SignalBlockHeader 结构（21字节，v2版本）**:
+
+| 偏移 | 大小 | 字段                               | 说明                                           |
+| ---- | ---- | ---------------------------------- | ---------------------------------------------- |
+| 0    | 4B   | signal\_handle                     | 信号句柄                                       |
+| 4    | 4B   | time\_array\_offset                | bucket 索引数组偏移（u16 数组，用于 first/last 配对） |
+| 8    | 4B   | value\_array\_offset               | 值数组偏移                                     |
+| 12   | 4B   | transition\_count                  | 转换点数量（不包含 start value）               |
+| 16   | 1B   | compression                        | 压缩类型 (0=无, 1=zstd, 2=lz4)                 |
+| 17   | 4B   | transition\_time\_array\_offset    | 实际时间数组偏移（u64 数组，可选，0 表示不存在） |
+
+**数据区格式（仿 FST 格式，v2版本）**：
+
+**LoD 0 数据布局**:
+
+| 数组 | 偏移字段 | 格式 | 说明 |
+|------|---------|------|------|
+| 时间数组 | `time_array_offset` | u64 数组 | **存储实际 transition 时间** |
+| 值数组 | `value_array_offset` | 变长 | 信号值（包含 Start Value） |
+| 实际时间数组 | `transition_time_array_offset` | - | **= 0，不存在** |
+
+**LoD > 0 数据布局**:
+
+| 数组 | 偏移字段 | 格式 | 说明 |
+|------|---------|------|------|
+| Bucket 索引数组 | `time_array_offset` | u16 数组 | **用于 first/last 配对** |
+| 值数组 | `value_array_offset` | 变长 | 信号值（包含 Start Value） |
+| 实际时间数组 | `transition_time_array_offset` | u64 数组 | **存储实际 transition 时间** |
+
+**特殊标记（Start Value）**:
+
+- **Start Value**: tile 起始时刻的信号值，用于在显示时提供初始状态
+- **LoD 0 时间数组**: Start Value 的时间 = `0xFFFFFFFFFFFFFFFF` (u64::MAX)
+- **LoD > 0 bucket 索引数组**: Start Value 的索引 = `0xFFFF` (u16::MAX)
+- **LoD > 0 实际时间数组**: Start Value 的时间 = `0xFFFFFFFFFFFFFFFF` (u64::MAX)
+- **值数组**: Start Value 作为第一个值存储
+
+**数组对齐**:
+
+所有数组长度相同，一一对应：
+```
+索引:    0        1        2        3        ...
+时间:   [MAX]    [time1]  [time2]  [time3]  ...  (LoD 0: u64, LoD > 0: u16 bucket index)
+值:     [val0]   [val1]   [val2]   [val3]   ...  (变长格式)
+实际时间: -       [time1]  [time2]  [time3]  ...  (LoD > 0 only: u64)
+         ↑
+      Start Value
+```
+
+**时间获取规则（重要）**:
+
+1. **判断 LoD 级别**: 检查 `transition_time_array_offset`
+   - `= 0`: LoD 0，从 `time_array_offset` (u64 数组) 获取实际时间
+   - `> 0`: LoD > 0，从 `transition_time_array_offset` (u64 数组) 获取实际时间
+
+2. **Bucket 索引用途** (仅 LoD > 0): `time_array_offset` 指向的 u16 数组仅用于 first/last 配对，不用于时间显示
+
+3. **First/Last 配对** (仅 LoD > 0): 相同 bucket 索引的 transitions 属于同一个 bucket，第一个是 first，第二个是 last
+
+**版本兼容性**:
+
+- **v1 客户端**: 不支持 v2 格式，需要升级
+- **v2 客户端**: 根据 `transition_time_array_offset` 判断 LoD 级别并读取相应的时间数组
+- **v1 服务器**: 生成 v1 格式数据
+- **v2 服务器**: 生成 v2 格式数据
+
+**值类型说明**:
+
+| 类型               | 值 | 格式            | 说明                                   |
+| ---------------- | - | ------------- | ------------------------------------ |
+| Numeric          | 0 | ASCII 字符串     | "0", "1", "X", "Z", "b1010", "bX1Z0" |
+| String           | 1 | ASCII 字符串     | "Hello" (非 null-terminated)          |
+| Real             | 2 | f64 (8 bytes) | IEEE 754 双精度浮点数                      |
+| BinaryCompressed | 3 | 二进制字节         | 紧凑二进制，MSB在前                          |
+
+**值存储示例**:
+
+```
+Numeric "b1010":
+[type=0, len=6, "b", "1", "0", "1", "0"]
+-> [0x00, 0x06, 0x00, 0x62, 0x31, 0x30, 0x31, 0x30]
+
+String "Hello":
+[type=1, len=5, "H", "e", "l", "l", "o"]
+-> [0x01, 0x05, 0x00, 0x48, 0x65, 0x6C, 0x6C, 0x6F]
+
+Real 3.14:
+[type=2, len=8, f64_bytes...]
+-> [0x02, 0x08, 0x00, ...8 bytes...]
+```
+
+**四态逻辑支持**:
+
+- **0**: 逻辑 0
+- **1**: 逻辑 1
+- **X**: 未知状态
+- **Z**: 高阻状态
+
+LoD 降采样时遵循四态逻辑规则：
+
+- 0 vs 1: min=0, max=1
+- 任何值 vs X: 结果=X
+- 任何值 vs Z: 结果=Z
+
+***
+
+**不同 LoD 的数据组织关系**:
+
+| LoD        | 数据组织           | 说明                                                  |
+| ---------- | -------------- | --------------------------------------------------- |
+| **LoD 0**  | 原始转换点序列        | `[t0,v0], [t1,v1], [t2,v2], ...`                    |
+| **LoD 1+** | First/Last 降采样 | `[t0,first], [t0,last], [t1,first], [t1,last], ...` |
+
+**LoD 1+ 数据特点**:
+
+- **相同时间戳**: 同一个 bucket 的 first 和 last 有相同的时间戳
+- **顺序存储**: 先存 first，再存 last（如果 first ≠ last）
+- **扁平结构**: first 和 last 是独立的转换点，没有层级关系
+
+**示例对比**:
+
+```
+原始数据 (LoD 0):
+时间:  0    100   200   300   400   500   600   700
+值:    0     1     0     1     1     0     1     0
+
+LoD 1 (bucket_size=2):
+时间:  0       0       200     200     400     400     600     600
+值:    0(first) 1(last) 0(first) 1(last) 1(first) 1(last) 0(first) 1(last)
+       └─ bucket 0 ──┘└─ bucket 1 ──┘└─ bucket 2 ──┘└─ bucket 3 ──┘
+
+LoD 2 (bucket_size=4):
+时间:  0       0       400     400
+值:    0(first) 1(last) 0(first) 1(last)
+       └─ bucket 0 ──┘└─ bucket 1 ──┘
+```
+
+**客户端解析规则（重要）**:
+
+LoD 1+ 的 first/last 通过以下规则区分：
+
+1. **按时间戳分组**：相同时间戳的 transition 属于同一个 bucket
+2. **顺序规则**：每个时间戳的第一个值为 first，第二个值为 last（如果存在）
+3. **数量判断**：
+   - 1 个值：first = last（bucket 内值无变化）
+   - 2 个值：第一个是 first，第二个是 last（bucket 内值有变化）
+
+**边界值处理（重要）**:
+
+当请求的时间范围内没有 transition 时，服务器会返回一个**起始边界值**，使用特殊时间戳标记：
+
+- **特殊时间戳**：`0xFFFFFFFFFFFFFFFF` (u64::MAX)
+- **含义**：该值表示请求时间范围起始点的信号值
+- **用途**：客户端可以用这个值绘制水平线
+
+```javascript
+const BOUNDARY_TIME_START = 0xFFFFFFFFFFFFFFFFn;
+
+// LoD 1+ 解析示例（包含边界值处理）
+function parseLodTransitions(transitions) {
+  const result = [];
+  let boundaryValue = null;
+  let i = 0;
+  
+  while (i < transitions.length) {
+    const time = transitions[i].time;
+    
+    // 检查是否是边界值
+    if (time === BOUNDARY_TIME_START) {
+      boundaryValue = transitions[i].value;
+      i++;
+      continue;
+    }
+    
+    const values = [];
+    
+    // 收集相同时间戳的所有值
+    while (i < transitions.length && transitions[i].time === time) {
+      values.push(transitions[i].value);
+      i++;
+    }
+    
+    // 解析 min/max
+    if (values.length === 1) {
+      result.push({ time, min: values[0], max: values[0] });
+    } else {
+      // 依赖顺序：第一个是 min，第二个是 max
+      result.push({ time, min: values[0], max: values[1] });
+    }
+  }
+  
+  return { transitions: result, boundaryValue };
+}
+
+// 绘制波形（考虑边界值）
+function drawWaveform(canvas, parsedData, timeRange) {
+  const { transitions, boundaryValue } = parsedData;
+  const [startTime, endTime] = timeRange;
+  
+  if (transitions.length === 0 && boundaryValue !== null) {
+    // 没有 transition，使用边界值绘制水平线
+    drawHorizontalLine(canvas, startTime, endTime, boundaryValue);
+  } else {
+    // 正常绘制 transitions
+    for (const trans of transitions) {
+      drawTransition(canvas, trans);
+    }
+  }
+}
+```
+
+**客户端处理建议**:
+
+- LoD 0: 直接绘制每个转换点
+- LoD 1+: 按时间戳分组，相同时间戳的取 min 和 max 绘制为垂直线段
+
+***
+
 #### 3.7 Pattern Search API (模式搜索)
 
 ```http
@@ -1030,271 +1351,6 @@ POST /api/wave/{waveform_name}/signals/{signal_names}/pattern-search
 - 对于大波形文件，建议限制 `time_range` 和 `max_results` 以提高性能
 - 多信号搜索时，所有信号必须同时满足 pattern 条件才算匹配
 - 首次搜索可能较慢（需要加载数据），后续搜索会使用缓存
-
-***
-
-#### 3.8 信号名编码格式
-
-**支持两种编码格式**:
-
-| 格式      | 说明           | 适用场景           |
-| ------- | ------------ | -------------- |
-| `b64:`  | 普通 Base64 编码 | 单个信号           |
-| `trie:` | Trie 树压缩编码   | 多个信号（自动提取公共前缀） |
-
-**Trie 压缩优势**:
-
-- 自动提取公共前缀，减少 URL 长度
-- 多个信号有公共前缀时压缩率更高
-- CDN 缓存友好
-
-**示例**:
-
-```
-原始信号列表:
-tb_top.u_dut.sig1,tb_top.u_dut.sig2,tb_top.u_dut.sig3
-
-Trie 压缩后:
-前缀: tb_top.u_dut.
-后缀: sig1,sig2,sig3
-
-URL: /api/wave/riscv2/lod/0/signals/trie:base64encodedstring/data
-```
-
-**URL 对比**:
-
-| 场景            | 原始长度        | Base64 编码   | Trie 压缩    | 节省    |
-| ------------- | ----------- | ----------- | ---------- | ----- |
-| 1 个信号         | \~20 chars  | \~28 chars  | \~28 chars | -     |
-| 3 个信号（有公共前缀）  | \~60 chars  | \~80 chars  | \~40 chars | \~50% |
-| 10 个信号（有公共前缀） | \~200 chars | \~268 chars | \~80 chars | \~70% |
-
-**查询参数**:
-
-- `time_stamp`: 可选，用于 CDN 缓存刷新（服务器不处理，建议从波形 info 的 `date` 字段获取）
-
-**时间单位说明**:
-
-- 时间参数的单位与波形文件的 `time_unit` 一致
-- 例如：如果波形文件的 `time_unit` 为 "1ps"，则 `start=1000` 表示 1000ps
-
-**请求头**:
-
-- `Range`: 可选，支持断点续传（如 `bytes=0-1023`）
-
-**响应**:
-
-- 成功: 返回二进制波形数据（`Content-Type: application/octet-stream`）
-- 带 Range: 返回 206 Partial Content
-
-**响应头**:
-
-- `Content-Length`: 数据长度
-- `Content-Range`: 数据范围（如果有 Range 请求）
-- `Accept-Ranges`: bytes
-- `Cache-Control`: `public, max-age=3600, immutable`（CDN 缓存优化）
-
-**响应数据格式（二进制）**:
-
-服务器返回的二进制数据采用自定义 chunk 格式，结构如下：
-
-```
-+------------------+
-|   ChunkHeader    | 32 bytes
-|   (文件头)       |
-+------------------+
-| SignalBlockHeader| 17 bytes × 信号数
-|   (信号块表)     |
-+------------------+
-| Compressed Data  |
-|   (压缩数据区)   |
-+------------------+
-```
-
-**ChunkHeader 结构（32字节）**:
-
-| 偏移 | 大小 | 字段            | 说明                     |
-| -- | -- | ------------- | ---------------------- |
-| 0  | 4B | magic         | 魔数 0x57415645 ("WAVE") |
-| 4  | 2B | version       | 版本号 (当前为 1)            |
-| 6  | 2B | level         | LoD 层级                 |
-| 8  | 4B | chunk\_id     | Chunk ID               |
-| 12 | 8B | time\_start   | 起始时间                   |
-| 20 | 8B | time\_end     | 结束时间                   |
-| 28 | 4B | signal\_count | 信号数量                   |
-
-**SignalBlockHeader 结构（17字节）**:
-
-| 偏移 | 大小 | 字段                   | 说明                        |
-| -- | -- | -------------------- | ------------------------- |
-| 0  | 4B | signal\_handle       | 信号句柄                      |
-| 4  | 4B | time\_array\_offset  | 时间数组偏移                    |
-| 8  | 4B | value\_array\_offset | 值数组偏移                     |
-| 12 | 4B | transition\_count    | 转换点数量（不包含 start value）    |
-| 16 | 1B | compression          | 压缩类型 (0=无, 1=zstd, 2=lz4) |
-
-**数据区格式（仿 FST 格式）**：
-
-- **时间数组**: `[start_time, t0, t1, t2, ...]` (u64 数组，小端序)
-  - 第一个元素 `start_time` 是特殊的 start value 时间戳（值为 0xFFFFFFFFFFFFFFFF）
-  - 后续元素是实际的转换点时间戳
-  - `transition_count` 只统计实际转换点数量，不包含 start value
-- **值数组**: `[start_type, start_len, start_value..., type0, len0, value0..., ...]` (变长格式)
-  - 第一个值是 start value（tile 起始时刻的信号值）
-  - 后续值是实际转换点的值
-  - `type`: u8，值类型 (0=Numeric, 1=String, 2=Real, 3=BinaryCompressed)
-  - `len`: u16，值字节长度
-  - `value`: 值字节数组
-
-**值类型说明**:
-
-| 类型               | 值 | 格式            | 说明                                   |
-| ---------------- | - | ------------- | ------------------------------------ |
-| Numeric          | 0 | ASCII 字符串     | "0", "1", "X", "Z", "b1010", "bX1Z0" |
-| String           | 1 | ASCII 字符串     | "Hello" (非 null-terminated)          |
-| Real             | 2 | f64 (8 bytes) | IEEE 754 双精度浮点数                      |
-| BinaryCompressed | 3 | 二进制字节         | 紧凑二进制，MSB在前                          |
-
-**值存储示例**:
-
-```
-Numeric "b1010":
-[type=0, len=6, "b", "1", "0", "1", "0"]
--> [0x00, 0x06, 0x00, 0x62, 0x31, 0x30, 0x31, 0x30]
-
-String "Hello":
-[type=1, len=5, "H", "e", "l", "l", "o"]
--> [0x01, 0x05, 0x00, 0x48, 0x65, 0x6C, 0x6C, 0x6F]
-
-Real 3.14:
-[type=2, len=8, f64_bytes...]
--> [0x02, 0x08, 0x00, ...8 bytes...]
-```
-
-**四态逻辑支持**:
-
-- **0**: 逻辑 0
-- **1**: 逻辑 1
-- **X**: 未知状态
-- **Z**: 高阻状态
-
-LoD 降采样时遵循四态逻辑规则：
-
-- 0 vs 1: min=0, max=1
-- 任何值 vs X: 结果=X
-- 任何值 vs Z: 结果=Z
-
-***
-
-**不同 LoD 的数据组织关系**:
-
-| LoD        | 数据组织           | 说明                                                  |
-| ---------- | -------------- | --------------------------------------------------- |
-| **LoD 0**  | 原始转换点序列        | `[t0,v0], [t1,v1], [t2,v2], ...`                    |
-| **LoD 1+** | First/Last 降采样 | `[t0,first], [t0,last], [t1,first], [t1,last], ...` |
-
-**LoD 1+ 数据特点**:
-
-- **相同时间戳**: 同一个 bucket 的 first 和 last 有相同的时间戳
-- **顺序存储**: 先存 first，再存 last（如果 first ≠ last）
-- **扁平结构**: first 和 last 是独立的转换点，没有层级关系
-
-**示例对比**:
-
-```
-原始数据 (LoD 0):
-时间:  0    100   200   300   400   500   600   700
-值:    0     1     0     1     1     0     1     0
-
-LoD 1 (bucket_size=2):
-时间:  0       0       200     200     400     400     600     600
-值:    0(first) 1(last) 0(first) 1(last) 1(first) 1(last) 0(first) 1(last)
-       └─ bucket 0 ──┘└─ bucket 1 ──┘└─ bucket 2 ──┘└─ bucket 3 ──┘
-
-LoD 2 (bucket_size=4):
-时间:  0       0       400     400
-值:    0(first) 1(last) 0(first) 1(last)
-       └─ bucket 0 ──┘└─ bucket 1 ──┘
-```
-
-**客户端解析规则（重要）**:
-
-LoD 1+ 的 first/last 通过以下规则区分：
-
-1. **按时间戳分组**：相同时间戳的 transition 属于同一个 bucket
-2. **顺序规则**：每个时间戳的第一个值为 first，第二个值为 last（如果存在）
-3. **数量判断**：
-   - 1 个值：first = last（bucket 内值无变化）
-   - 2 个值：第一个是 first，第二个是 last（bucket 内值有变化）
-
-**边界值处理（重要）**:
-
-当请求的时间范围内没有 transition 时，服务器会返回一个**起始边界值**，使用特殊时间戳标记：
-
-- **特殊时间戳**：`0xFFFFFFFFFFFFFFFF` (u64::MAX)
-- **含义**：该值表示请求时间范围起始点的信号值
-- **用途**：客户端可以用这个值绘制水平线
-
-```javascript
-const BOUNDARY_TIME_START = 0xFFFFFFFFFFFFFFFFn;
-
-// LoD 1+ 解析示例（包含边界值处理）
-function parseLodTransitions(transitions) {
-  const result = [];
-  let boundaryValue = null;
-  let i = 0;
-  
-  while (i < transitions.length) {
-    const time = transitions[i].time;
-    
-    // 检查是否是边界值
-    if (time === BOUNDARY_TIME_START) {
-      boundaryValue = transitions[i].value;
-      i++;
-      continue;
-    }
-    
-    const values = [];
-    
-    // 收集相同时间戳的所有值
-    while (i < transitions.length && transitions[i].time === time) {
-      values.push(transitions[i].value);
-      i++;
-    }
-    
-    // 解析 min/max
-    if (values.length === 1) {
-      result.push({ time, min: values[0], max: values[0] });
-    } else {
-      // 依赖顺序：第一个是 min，第二个是 max
-      result.push({ time, min: values[0], max: values[1] });
-    }
-  }
-  
-  return { transitions: result, boundaryValue };
-}
-
-// 绘制波形（考虑边界值）
-function drawWaveform(canvas, parsedData, timeRange) {
-  const { transitions, boundaryValue } = parsedData;
-  const [startTime, endTime] = timeRange;
-  
-  if (transitions.length === 0 && boundaryValue !== null) {
-    // 没有 transition，使用边界值绘制水平线
-    drawHorizontalLine(canvas, startTime, endTime, boundaryValue);
-  } else {
-    // 正常绘制 transitions
-    for (const trans of transitions) {
-      drawTransition(canvas, trans);
-    }
-  }
-}
-```
-
-**客户端处理建议**:
-
-- LoD 0: 直接绘制每个转换点
-- LoD 1+: 按时间戳分组，相同时间戳的取 min 和 max 绘制为垂直线段
 
 **示例**:
 
