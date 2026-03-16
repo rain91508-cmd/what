@@ -80,6 +80,9 @@ web-client/wasm-pkg/
 # web-client/public/pace.min.js - copied from pace-js
 # web-client/public/monaco-editor/ - copied from monaco-editor
 
+server/waves/
+server/kdb/
+
 # Python cache
 __pycache__/
 *.pyc
