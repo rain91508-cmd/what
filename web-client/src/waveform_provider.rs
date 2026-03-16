@@ -397,7 +397,7 @@ impl ChunkHeader {
     }
 }
 
-/// Signal block header (17 bytes)
+/// Signal block header (v1: 17 bytes, v2: 21 bytes)
 #[derive(Debug, Clone)]
 pub struct SignalBlockHeader {
     pub signal_handle: u32,
@@ -405,23 +405,41 @@ pub struct SignalBlockHeader {
     pub value_array_offset: u32,
     pub transition_count: u32,
     pub compression: u8,
+    pub transition_time_array_offset: u32, // v2 only, 0 means not present
 }
 
 impl SignalBlockHeader {
-    pub const SIZE: usize = 17;
+    pub const SIZE_V1: usize = 17;
+    pub const SIZE_V2: usize = 21;
 
-    pub fn from_bytes(data: &[u8]) -> Result<Self, String> {
-        if data.len() < Self::SIZE {
-            return Err("Signal block header too small".to_string());
+    pub fn from_bytes(data: &[u8], version: u16) -> Result<Self, String> {
+        if version >= 2 {
+            // v2: 21 bytes with transition_time_array_offset
+            if data.len() < Self::SIZE_V2 {
+                return Err("Signal block header too small for v2".to_string());
+            }
+            Ok(Self {
+                signal_handle: u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
+                time_array_offset: u32::from_le_bytes([data[4], data[5], data[6], data[7]]),
+                value_array_offset: u32::from_le_bytes([data[8], data[9], data[10], data[11]]),
+                transition_count: u32::from_le_bytes([data[12], data[13], data[14], data[15]]),
+                compression: data[16],
+                transition_time_array_offset: u32::from_le_bytes([data[17], data[18], data[19], data[20]]),
+            })
+        } else {
+            // v1: 17 bytes without transition_time_array_offset
+            if data.len() < Self::SIZE_V1 {
+                return Err("Signal block header too small for v1".to_string());
+            }
+            Ok(Self {
+                signal_handle: u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
+                time_array_offset: u32::from_le_bytes([data[4], data[5], data[6], data[7]]),
+                value_array_offset: u32::from_le_bytes([data[8], data[9], data[10], data[11]]),
+                transition_count: u32::from_le_bytes([data[12], data[13], data[14], data[15]]),
+                compression: data[16],
+                transition_time_array_offset: 0, // Not present in v1
+            })
         }
-
-        Ok(Self {
-            signal_handle: u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
-            time_array_offset: u32::from_le_bytes([data[4], data[5], data[6], data[7]]),
-            value_array_offset: u32::from_le_bytes([data[8], data[9], data[10], data[11]]),
-            transition_count: u32::from_le_bytes([data[12], data[13], data[14], data[15]]),
-            compression: data[16],
-        })
     }
 }
 
@@ -604,14 +622,21 @@ impl WaveformDataProvider {
 
         // Parse each signal block
         let mut offset = ChunkHeader::SIZE;
+        let chunk_version = header.version;
         
         for signal_idx in 0..header.signal_count {
-            if offset + SignalBlockHeader::SIZE > data.len() {
+            let block_header_size = if chunk_version >= 2 { 
+                SignalBlockHeader::SIZE_V2 
+            } else { 
+                SignalBlockHeader::SIZE_V1 
+            };
+            
+            if offset + block_header_size > data.len() {
                 break;
             }
 
-            // Parse signal block header
-            let block_header = SignalBlockHeader::from_bytes(&data[offset..])
+            // Parse signal block header (pass version)
+            let block_header = SignalBlockHeader::from_bytes(&data[offset..], chunk_version)
                 .map_err(|e| JsValue::from_str(&e))?;
 
             // Parse transitions for this signal
@@ -653,7 +678,7 @@ impl WaveformDataProvider {
                 .or_insert_with(Vec::new)
                 .push(signal_data);
 
-            offset += SignalBlockHeader::SIZE;
+            offset += block_header_size;
         }
 
         // Write each group to cache (with merge support for V2 format)
@@ -1879,15 +1904,22 @@ if tile_missing_signals.is_empty() {
 
         // Parse each signal block
         let mut offset = ChunkHeader::SIZE;
+        let chunk_version = header.version;
         
         for signal_idx in 0..header.signal_count.min(batch.len() as u32) {
-            if offset + SignalBlockHeader::SIZE > data.len() {
+            let block_header_size = if chunk_version >= 2 { 
+                SignalBlockHeader::SIZE_V2 
+            } else { 
+                SignalBlockHeader::SIZE_V1 
+            };
+            
+            if offset + block_header_size > data.len() {
                 // console_log!("[WASM] Warning: Not enough data for signal block {}", signal_idx);
                 break;
             }
 
-            // Parse signal block header
-            let block_header = SignalBlockHeader::from_bytes(&data[offset..])
+            // Parse signal block header (pass version)
+            let block_header = SignalBlockHeader::from_bytes(&data[offset..], chunk_version)
                 .map_err(|e| JsValue::from_str(&e))?;
 
             // Get signal name from batch (same order as server)
@@ -1967,7 +1999,7 @@ if tile_missing_signals.is_empty() {
                 }
             }
 
-            offset += SignalBlockHeader::SIZE;
+            offset += block_header_size;
         }
 
         Ok(())
@@ -2047,16 +2079,23 @@ if tile_missing_signals.is_empty() {
     /// Parse chunk containing multiple signals
     fn parse_multi_signal_chunk(&mut self, data: &[u8], header: &ChunkHeader) -> Result<(), JsValue> {
         let mut offset = ChunkHeader::SIZE;
+        let chunk_version = header.version;
 
         // Parse each signal block
         for signal_idx in 0..header.signal_count {
-            if offset + SignalBlockHeader::SIZE > data.len() {
+            let block_header_size = if chunk_version >= 2 { 
+                SignalBlockHeader::SIZE_V2 
+            } else { 
+                SignalBlockHeader::SIZE_V1 
+            };
+            
+            if offset + block_header_size > data.len() {
                 // console_log!("[WASM] Warning: Not enough data for signal block {}", signal_idx);
                 break;
             }
 
-            // Parse signal block header
-            let block_header = SignalBlockHeader::from_bytes(&data[offset..])
+            // Parse signal block header (pass version)
+            let block_header = SignalBlockHeader::from_bytes(&data[offset..], chunk_version)
                 .map_err(|e| JsValue::from_str(&e))?;
 
             // console_log!("[WASM] Signal block {}: handle={}, transitions={}",
@@ -2090,7 +2129,7 @@ if tile_missing_signals.is_empty() {
             signal_data.transitions = transitions;
             self.signal_data.insert(signal_name.clone(), signal_data);
 
-            offset += SignalBlockHeader::SIZE;
+            offset += block_header_size;
         }
 
         Ok(())
@@ -2098,13 +2137,20 @@ if tile_missing_signals.is_empty() {
 
     /// Parse single signal chunk
     fn parse_single_signal_chunk(&mut self, signal_name: &str, data: &[u8], header: &ChunkHeader) -> Result<(), JsValue> {
-        if data.len() < ChunkHeader::SIZE + SignalBlockHeader::SIZE {
+        let chunk_version = header.version;
+        let block_header_size = if chunk_version >= 2 { 
+            SignalBlockHeader::SIZE_V2 
+        } else { 
+            SignalBlockHeader::SIZE_V1 
+        };
+        
+        if data.len() < ChunkHeader::SIZE + block_header_size {
             // console_log!("[WASM] Error: Not enough data for single signal chunk, got {} bytes", data.len());
             return Err(JsValue::from_str("Not enough data for single signal chunk"));
         }
 
-        // Parse signal block header
-        let block_header = SignalBlockHeader::from_bytes(&data[ChunkHeader::SIZE..])
+        // Parse signal block header (pass version)
+        let block_header = SignalBlockHeader::from_bytes(&data[ChunkHeader::SIZE..], chunk_version)
             .map_err(|e| JsValue::from_str(&e))?;
 
         // console_log!("[WASM] Single signal block: handle={}, transitions={}",
@@ -2130,28 +2176,38 @@ if tile_missing_signals.is_empty() {
 
     /// Parse transitions from a signal block
     /// Data format from server:
-    /// - Time array: [start_time, t0(u64), t1(u64), ...] (start_time = 0xFFFFFFFFFFFFFFFF)
-    /// - Value array: [start_value, value0, value1, ...]
+    /// v1 API:
+    ///   - Time array: [start_time(u64), t0(u64), t1(u64), ...] (start_time = 0xFFFFFFFFFFFFFFFF)
+    ///   - Value array: [start_value, value0, value1, ...]
+    /// v2 API:
+    ///   - Time array: [start_time(u64), bucket_idx0(u16), bucket_idx1(u16), ...] (LoD > 0)
+    ///   - Transition time array (optional): [actual_time0(u64), actual_time1(u64), ...]
+    ///   - Value array: [start_value, value0, value1, ...]
     /// - transition_count only counts actual transitions, not including start value
     fn parse_transitions_from_block(
         &self,
         data: &[u8],
         block_header: &SignalBlockHeader,
         chunk_header: &ChunkHeader,
-        signal_index: usize,
+        _signal_index: usize,
     ) -> Result<Vec<Transition>, JsValue> {
         const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
         let mut transitions = Vec::new();
+        let lod = chunk_header.level;
+        let is_v2 = chunk_header.version >= 2;
+        let has_transition_time_array = is_v2 && block_header.transition_time_array_offset > 0;
 
         // Calculate offsets based on SignalBlockHeader
         // Note: time_array_offset and value_array_offset are ABSOLUTE from start of chunk
         // NOT relative to data_area_start
         let time_array_start = block_header.time_array_offset as usize;
         let value_array_start = block_header.value_array_offset as usize;
+        let transition_time_array_start = if has_transition_time_array {
+            block_header.transition_time_array_offset as usize
+        } else {
+            0
+        };
 
-        // console_log!("[WASM] Parsing transitions for signal {}: time_start={}, value_start={}, transitions={}",
-        //     signal_index, time_array_start, value_array_start, block_header.transition_count);
-        
         // First, read the start value (time = 0xFFFFFFFFFFFFFFFF)
         // Start value is always present and comes first in the arrays
         if time_array_start + 8 <= data.len() {
@@ -2167,7 +2223,7 @@ if tile_missing_signals.is_empty() {
                 // Parse start value from value array
                 let mut value_idx = value_array_start;
                 if value_idx + 3 <= data.len() {
-                    let value_type = data[value_idx];
+                    let _value_type = data[value_idx];
                     let value_len = u16::from_le_bytes([data[value_idx + 1], data[value_idx + 2]]) as usize;
                     value_idx += 3;
 
@@ -2177,7 +2233,7 @@ if tile_missing_signals.is_empty() {
                         // Add start value transition with special time marker
                         transitions.push(Transition { 
                             time: BOUNDARY_TIME_START,
-                            value_type,
+                            value_type: _value_type,
                             value_len: value_len as u16,
                             value,
                         });
@@ -2186,54 +2242,19 @@ if tile_missing_signals.is_empty() {
             }
         }
 
-        // Debug: print first 64 bytes of time and value arrays (disabled for performance)
-        let time_preview_len = ((block_header.transition_count + 1) as usize * 8).min(64);
-        let value_preview_len = (data.len() - value_array_start).min(64);
-        // console_log!("[WASM] Time array (first {} bytes): {:?}", 
-        //     time_preview_len,
-        //     &data[time_array_start..time_array_start + time_preview_len]
-        //         .iter()
-        //         .map(|b| format!("{:02X}", b))
-        //         .collect::<Vec<_>>()
-        //         .join(" "));
-        // console_log!("[WASM] Value array (first {} bytes): {:?}",
-        //     value_preview_len,
-        //     &data[value_array_start..value_array_start + value_preview_len]
-        //         .iter()
-        //         .map(|b| format!("{:02X}", b))
-        //         .collect::<Vec<_>>()
-        //         .join(" "));
-
         // Then, read the actual transitions (transition_count of them)
         // They start at index 1 in the time array (after start value)
         let mut value_idx = value_array_start;
         // Skip start value in value array
         if value_idx + 3 <= data.len() {
-            let value_type = data[value_idx];
+            let _value_type = data[value_idx];
             let value_len = u16::from_le_bytes([data[value_idx + 1], data[value_idx + 2]]) as usize;
             value_idx += 3 + value_len;
         }
 
         for i in 0..block_header.transition_count {
-            // Time array index: skip start value (index 0), so actual transitions start at index 1
-            let time_idx = time_array_start + ((i + 1) as usize * 8);
-
-            // Check bounds for time
-            if time_idx + 8 > data.len() {
-                // console_log!("[WASM] Warning: Time data out of bounds at index {}", i);
-                break;
-            }
-
-            // Parse time (u64, little-endian)
-            let time = u64::from_le_bytes([
-                data[time_idx], data[time_idx + 1], data[time_idx + 2], data[time_idx + 3],
-                data[time_idx + 4], data[time_idx + 5], data[time_idx + 6], data[time_idx + 7],
-            ]);
-
-            // Parse value according to FST-like format
-            // Format: [type(u8), length(u16), value_bytes...]
+            // Parse value first (same for v1 and v2)
             if value_idx + 3 > data.len() {
-                // console_log!("[WASM] Warning: Value header out of bounds at index {}", i);
                 break;
             }
 
@@ -2242,13 +2263,49 @@ if tile_missing_signals.is_empty() {
             value_idx += 3;
 
             if value_idx + value_len > data.len() {
-                // console_log!("[WASM] Warning: Value data out of bounds at index {} (len={})", i, value_len);
                 break;
             }
 
             let value = data[value_idx..value_idx + value_len].to_vec();
-
             value_idx += value_len;
+
+            // Parse time based on API version and LoD
+            let time: u64;
+            
+            if lod == 0 {
+                // LoD 0: always u64 time (absolute timestamp)
+                let time_idx = time_array_start + ((i + 1) as usize * 8);
+                if time_idx + 8 > data.len() {
+                    break;
+                }
+                time = u64::from_le_bytes([
+                    data[time_idx], data[time_idx + 1], data[time_idx + 2], data[time_idx + 3],
+                    data[time_idx + 4], data[time_idx + 5], data[time_idx + 6], data[time_idx + 7],
+                ]);
+            } else if is_v2 {
+                // v2 API, LoD > 0: bucket index is u16 (0-255)
+                // We don't save transition time, just use bucket index for first/last pairing
+                let time_idx = time_array_start + 8 + ((i as usize) * 2); // +8 to skip start marker
+                if time_idx + 2 > data.len() {
+                    break;
+                }
+                let bucket_idx = u16::from_le_bytes([data[time_idx], data[time_idx + 1]]);
+                // Use bucket index as time (for first/last pairing in parse_buckets_from_transitions)
+                // Note: We don't use transition_time_array, so actual transition time is not saved
+                time = bucket_idx as u64;
+            } else {
+                // v1 API, LoD > 0: bucket index was stored as u64 (but values are 0-255)
+                let time_idx = time_array_start + ((i + 1) as usize * 8);
+                if time_idx + 8 > data.len() {
+                    break;
+                }
+                let bucket_idx = u64::from_le_bytes([
+                    data[time_idx], data[time_idx + 1], data[time_idx + 2], data[time_idx + 3],
+                    data[time_idx + 4], data[time_idx + 5], data[time_idx + 6], data[time_idx + 7],
+                ]);
+                time = bucket_idx;
+            }
+
             transitions.push(Transition {
                 time,
                 value_type,
@@ -2259,7 +2316,6 @@ if tile_missing_signals.is_empty() {
 
         if transitions.is_empty() {
             // Fallback: create at least one transition
-            // console_log!("[WASM] Warning: No transitions parsed, using fallback");
             transitions.push(Transition {
                 time: chunk_header.time_start,
                 value_type: 0,
@@ -2268,12 +2324,6 @@ if tile_missing_signals.is_empty() {
             });
         }
 
-        // Debug: print all parsed transitions (disabled for performance)
-        // for (i, t) in transitions.iter().enumerate() {
-        //     console_log!("[WASM]   Parsed[{}]: time={}, value={}", i, t.time, t.value);
-        // }
-        
-        // console_log!("[WASM] Parsed {} transitions at LoD {}", transitions.len(), chunk_header.level);
         Ok(transitions)
     }
 
