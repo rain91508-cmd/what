@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import type { TimeConfig } from './TabPanel';
-import { displayToLod0, lod0ToDisplay } from './TabPanel';
+import { displayToLod0, lod0ToDisplay, initTimeConfig } from './TabPanel';
 
 // 时间单位类型（用户可选择）
 type TimeUnit = 'fs' | 'ps' | 'ns' | 'us' | 'ms' | 's';
@@ -98,6 +98,8 @@ interface ToolBarProps {
   onTableTimeApply?: () => void;  // Apply time range and fetch data
   // Current tab type to show appropriate controls
   currentTabType?: 'source' | 'waveform' | 'tableview';
+  // Fallback for when tab doesn't have timeConfig
+  currentWaveDisplayUnitPerLoD0?: number;
 }
 
 export function ToolBar({ 
@@ -163,6 +165,7 @@ export function ToolBar({
   onTableEndTimeChange,
   onTableTimeApply,
   currentTabType = 'source',
+  currentWaveDisplayUnitPerLoD0 = 1.0,
 }: ToolBarProps) {
   // Local state for display unit input value (only committed on Enter)
   const [inputValue, setInputValue] = useState<string>('');
@@ -569,8 +572,9 @@ export function ToolBar({
     onTableStartTimeChange(newStartLod0);
   };
 
-  const commitTableSpanValue = (currentStartLod0?: number) => {
-    if (!timeConfig || !onTableEndTimeChange) return;
+  const commitTableSpanValue = (currentStartLod0?: number, effectiveTimeConfig?: TimeConfig) => {
+    const config = effectiveTimeConfig || timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
+    if (!onTableEndTimeChange) return;
 
     // Use provided start time (if just updated) or fall back to prop
     const baseStartLod0 = currentStartLod0 !== undefined ? currentStartLod0 : tableStartTime;
@@ -581,26 +585,29 @@ export function ToolBar({
       // Invalid input, restore original span value
       if (tableEndTime !== undefined && tableStartTime !== undefined) {
         const spanLod0 = tableEndTime - tableStartTime;
-        const displaySpan = lod0ToDisplay(spanLod0, timeConfig);
+        const displaySpan = lod0ToDisplay(spanLod0, config);
         setTableSpanInputValue(displaySpan.toString());
       }
       return;
     }
 
     // Convert span from display units to LoD0 units
-    const spanLod0 = displayToLod0(numValue, timeConfig);
+    const spanLod0 = displayToLod0(numValue, config);
     // Calculate new end time: start + span
     const newEndLod0 = baseStartLod0 + spanLod0;
     onTableEndTimeChange(newEndLod0);
   };
 
   const handleTableTimeApply = () => {
+    // Use fallback timeConfig if tab doesn't have one
+    const effectiveTimeConfig = timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
     console.log('[ToolBar] handleTableTimeApply called', {
       tableStartInputValue,
       tableSpanInputValue,
       currentTableStartTime: tableStartTime,
       currentTableEndTime: tableEndTime,
       timeConfig,
+      effectiveTimeConfig,
       onTableStartTimeChange,
     });
 
@@ -612,17 +619,18 @@ export function ToolBar({
       isNaN_numStartValue: isNaN(numStartValue),
       numStartValue_ge_0: numStartValue >= 0,
       hasTimeConfig: !!timeConfig,
+      hasEffectiveTimeConfig: !!effectiveTimeConfig,
       hasOnTableStartTimeChange: !!onTableStartTimeChange,
     });
-    if (!isNaN(numStartValue) && numStartValue >= 0 && timeConfig && onTableStartTimeChange) {
-      newStartLod0 = displayToLod0(numStartValue, timeConfig);
+    if (!isNaN(numStartValue) && numStartValue >= 0 && effectiveTimeConfig && onTableStartTimeChange) {
+      newStartLod0 = displayToLod0(numStartValue, effectiveTimeConfig);
       console.log('[ToolBar] Committing new start time', { numStartValue, newStartLod0 });
       onTableStartTimeChange(newStartLod0);
     }
 
     // Commit span value using the new start time (if updated)
     console.log('[ToolBar] Committing span value', { tableSpanInputValue, newStartLod0 });
-    commitTableSpanValue(newStartLod0);
+    commitTableSpanValue(newStartLod0, effectiveTimeConfig);
 
     console.log('[ToolBar] Calling onTableTimeApply');
     onTableTimeApply?.();

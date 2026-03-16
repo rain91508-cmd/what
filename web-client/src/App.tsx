@@ -3520,6 +3520,8 @@ function App() {
           id: tableTab.id,
           label: tableTab.label,
           type: 'tableview',
+          // Initialize timeConfig like we do in handleAddTab
+          timeConfig: initTimeConfig(currentWaveDisplayUnitPerLoD0),
           tableStartTime: tableTab.startTime,
           tableEndTime: tableTab.endTime,
           tableSignals: restoredSignals,
@@ -3756,6 +3758,7 @@ function App() {
         onAddBookmark={handleAddBookmark}
         onAddTableViewTab={() => handleAddTab('tableview')}
         currentTabType={activeTabData?.type || 'source'}
+        currentWaveDisplayUnitPerLoD0={currentWaveDisplayUnitPerLoD0}
         // TableView time range
         tableStartTime={activeTabData?.type === 'tableview' ? activeTabData.tableStartTime : undefined}
         tableEndTime={activeTabData?.type === 'tableview' ? activeTabData.tableEndTime : undefined}
