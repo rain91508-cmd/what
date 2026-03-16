@@ -560,7 +560,7 @@ export function ToolBar({
 
   const commitTableStartValue = () => {
     const effectiveTimeConfig = timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
-    if (!onTableStartTimeChange) return;
+    if (!onTableStartTimeChange || !onTableEndTimeChange) return;
 
     const numValue = parseFloat(tableStartInputValue);
     if (isNaN(numValue) || numValue < 0) {
@@ -575,6 +575,14 @@ export function ToolBar({
     // Convert display unit value to LoD0 units
     const newStartLod0 = displayToLod0(numValue, effectiveTimeConfig);
     onTableStartTimeChange(newStartLod0);
+
+    // Calculate new end time based on current span (span remains unchanged)
+    const spanValue = parseFloat(tableSpanInputValue);
+    if (!isNaN(spanValue) && spanValue > 0) {
+      const spanLod0 = displayToLod0(spanValue, effectiveTimeConfig);
+      const newEndLod0 = newStartLod0 + spanLod0;
+      onTableEndTimeChange(newEndLod0);
+    }
   };
 
   const commitTableSpanValue = (currentStartLod0?: number, effectiveTimeConfig?: TimeConfig) => {
