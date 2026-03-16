@@ -1687,8 +1687,16 @@ if tile_missing_signals.is_empty() {
 
     /// Classify value type based on display string
     fn classify_value_type(display_str: &str) -> &'static str {
-        let has_x = display_str.contains('X') || display_str.contains('x');
-        let has_z = display_str.contains('Z') || display_str.contains('z');
+        // For hex values like "0x1234", we should not count the "0x" prefix as containing 'x'
+        // Check if it's a hex prefix and skip it for X/Z detection
+        let check_str = if display_str.starts_with("0x") || display_str.starts_with("0X") {
+            &display_str[2..]
+        } else {
+            display_str
+        };
+        
+        let has_x = check_str.contains('X') || check_str.contains('x');
+        let has_z = check_str.contains('Z') || check_str.contains('z');
         
         match (has_x, has_z) {
             (true, true) => "mixed",

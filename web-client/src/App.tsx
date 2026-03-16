@@ -3479,7 +3479,7 @@ function App() {
           selectedGroup: waveTab.selectedGroup,
           columnWidths: DEFAULT_COLUMN_WIDTHS,
           timeConfig: DEFAULT_TIME_CONFIG,
-          waveformTimeUnit: currentWaveTimeUnit, // Use current waveform time unit
+          waveformTimeUnit: 2, // Default to ns
           viewport: waveTab.viewport,
           cursorPosition: waveTab.cursorPosition,
           waveformRange: waveTab.waveformRange,
@@ -3744,13 +3744,9 @@ function App() {
         onNavigateNext={navigateNext}
         canNavigatePrevious={canNavigatePrevious()}
         canNavigateNext={canNavigateNext()}
-        timeConfig={activeTabData?.type === 'tableview' 
-          ? initTimeConfig(currentWaveDisplayUnitPerLoD0)  // TableView uses shared display unit
-          : activeTabData?.timeConfig}
+        timeConfig={activeTabData?.timeConfig}
         onTimeConfigChange={(config) => handleTimeConfigChange(activeTab, config)}
-        waveformTimeUnit={activeTabData?.type === 'tableview' 
-          ? currentWaveTimeUnit  // TableView uses shared time unit
-          : (activeTabData?.waveformTimeUnit ?? currentWaveTimeUnit)}
+        waveformTimeUnit={activeTabData?.waveformTimeUnit ?? currentWaveTimeUnit} // Use tab's or current waveform's time unit
         maxWaveformTimeLod0={currentWaveEndTime}
         onConnect={() => setShowConnectionDialog(true)}
         onOpenKdb={() => setShowKdbSelectionDialog(true)}
