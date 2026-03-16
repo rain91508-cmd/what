@@ -3479,7 +3479,7 @@ function App() {
           selectedGroup: waveTab.selectedGroup,
           columnWidths: DEFAULT_COLUMN_WIDTHS,
           timeConfig: DEFAULT_TIME_CONFIG,
-          waveformTimeUnit: 2, // Default to ns
+          waveformTimeUnit: currentWaveTimeUnit, // Use current waveform time unit
           viewport: waveTab.viewport,
           cursorPosition: waveTab.cursorPosition,
           waveformRange: waveTab.waveformRange,
