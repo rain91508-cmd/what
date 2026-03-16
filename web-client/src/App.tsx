@@ -2801,6 +2801,7 @@ function App() {
 
   // Handle TableView start time change
   const handleTableStartTimeChange = (newStart: number) => {
+    console.log('[App] handleTableStartTimeChange called', { newStart, activeTab });
     setTabs(prev => prev.map(tab =>
       tab.id === activeTab ? { ...tab, tableStartTime: newStart } : tab
     ))
@@ -2808,6 +2809,7 @@ function App() {
 
   // Handle TableView end time change
   const handleTableEndTimeChange = (newEnd: number) => {
+    console.log('[App] handleTableEndTimeChange called', { newEnd, activeTab });
     setTabs(prev => prev.map(tab =>
       tab.id === activeTab ? { ...tab, tableEndTime: newEnd } : tab
     ))

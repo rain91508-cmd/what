@@ -91,6 +91,9 @@ export function TableViewWindow({
   onColumnMetadataFiltersChange,
   onColumnRadixChange,
 }: TableViewWindowProps) {
+  // Log initial props
+  console.log('[TableViewWindow] Initial props:', { startTime, endTime, refreshTrigger });
+
   // Get shared provider from context (same as WaveformWindow)
   const { provider: sharedProvider, isLoading: providerLoading } = useWaveformProvider();
 
@@ -428,6 +431,7 @@ export function TableViewWindow({
 
   // Handle data fetch using adapter (similar to WaveformWindow)
   const handleFetchData = useCallback(async () => {
+    console.log('[TableViewWindow] handleFetchData called', { startTime, endTime, signals: signals.length });
     if (!adapterRef.current) {
       console.error('[TableViewWindow] Adapter not ready');
       return;

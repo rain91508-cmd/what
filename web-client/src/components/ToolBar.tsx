@@ -595,15 +595,27 @@ export function ToolBar({
   };
 
   const handleTableTimeApply = () => {
+    console.log('[ToolBar] handleTableTimeApply called', {
+      tableStartInputValue,
+      tableSpanInputValue,
+      currentTableStartTime: tableStartTime,
+      currentTableEndTime: tableEndTime,
+    });
+
     // Commit start value first and get the new start time
     const numStartValue = parseFloat(tableStartInputValue);
     let newStartLod0: number | undefined;
     if (!isNaN(numStartValue) && numStartValue >= 0 && timeConfig && onTableStartTimeChange) {
       newStartLod0 = displayToLod0(numStartValue, timeConfig);
+      console.log('[ToolBar] Committing new start time', { numStartValue, newStartLod0 });
       onTableStartTimeChange(newStartLod0);
     }
+
     // Commit span value using the new start time (if updated)
+    console.log('[ToolBar] Committing span value', { tableSpanInputValue, newStartLod0 });
     commitTableSpanValue(newStartLod0);
+
+    console.log('[ToolBar] Calling onTableTimeApply');
     onTableTimeApply?.();
   };
 
