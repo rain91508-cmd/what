@@ -181,10 +181,12 @@ export function ToolBar({
   const cursorInputRef = useRef<HTMLInputElement>(null);
 
   // Local state for TableView time inputs
+  // Display: Start and Span (user-friendly)
+  // Internal: Start and End (stored in tab)
   const [tableStartInputValue, setTableStartInputValue] = useState<string>('0');
-  const [tableEndInputValue, setTableEndInputValue] = useState<string>('0');
+  const [tableSpanInputValue, setTableSpanInputValue] = useState<string>('0');
   const tableStartInputRef = useRef<HTMLInputElement>(null);
-  const tableEndInputRef = useRef<HTMLInputElement>(null);
+  const tableSpanInputRef = useRef<HTMLInputElement>(null);
 
   // Search state
   const [showSearchHistory, setShowSearchHistory] = useState(false);
@@ -498,6 +500,8 @@ export function ToolBar({
   // ==================== TableView Time Handlers ====================
 
   // Update TableView input values when props change
+  // Display: Start and Span (user-friendly)
+  // Internal: Start and End (stored in tab)
   useEffect(() => {
     if (tableStartTime !== undefined && timeConfig) {
       const displayValue = lod0ToDisplay(tableStartTime, timeConfig);
@@ -506,18 +510,20 @@ export function ToolBar({
   }, [tableStartTime, timeConfig]);
 
   useEffect(() => {
-    if (tableEndTime !== undefined && timeConfig) {
-      const displayValue = lod0ToDisplay(tableEndTime, timeConfig);
-      setTableEndInputValue(displayValue.toString());
+    if (tableStartTime !== undefined && tableEndTime !== undefined && timeConfig) {
+      // Calculate span from start and end
+      const spanLod0 = tableEndTime - tableStartTime;
+      const displaySpan = lod0ToDisplay(spanLod0, timeConfig);
+      setTableSpanInputValue(displaySpan.toString());
     }
-  }, [tableEndTime, timeConfig]);
+  }, [tableStartTime, tableEndTime, timeConfig]);
 
   const handleTableStartInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setTableStartInputValue(e.target.value);
   };
 
-  const handleTableEndInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setTableEndInputValue(e.target.value);
+  const handleTableSpanInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setTableSpanInputValue(e.target.value);
   };
 
   const handleTableStartInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -532,14 +538,15 @@ export function ToolBar({
     }
   };
 
-  const handleTableEndInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleTableSpanInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
-      commitTableEndValue();
+      commitTableSpanValue();
     } else if (e.key === 'Escape') {
-      // Restore original value
-      if (tableEndTime !== undefined && timeConfig) {
-        const displayValue = lod0ToDisplay(tableEndTime, timeConfig);
-        setTableEndInputValue(displayValue.toString());
+      // Restore original span value
+      if (tableStartTime !== undefined && tableEndTime !== undefined && timeConfig) {
+        const spanLod0 = tableEndTime - tableStartTime;
+        const displaySpan = lod0ToDisplay(spanLod0, timeConfig);
+        setTableSpanInputValue(displaySpan.toString());
       }
     }
   };
@@ -562,27 +569,30 @@ export function ToolBar({
     onTableStartTimeChange(newStartLod0);
   };
 
-  const commitTableEndValue = () => {
-    if (!timeConfig || !onTableEndTimeChange) return;
+  const commitTableSpanValue = () => {
+    if (!timeConfig || !onTableEndTimeChange || tableStartTime === undefined) return;
 
-    const numValue = parseFloat(tableEndInputValue);
-    if (isNaN(numValue) || numValue < 0) {
-      // Invalid input, restore original value
+    const numValue = parseFloat(tableSpanInputValue);
+    if (isNaN(numValue) || numValue <= 0) {
+      // Invalid input, restore original span value
       if (tableEndTime !== undefined) {
-        const displayValue = lod0ToDisplay(tableEndTime, timeConfig);
-        setTableEndInputValue(displayValue.toString());
+        const spanLod0 = tableEndTime - tableStartTime;
+        const displaySpan = lod0ToDisplay(spanLod0, timeConfig);
+        setTableSpanInputValue(displaySpan.toString());
       }
       return;
     }
 
-    // Convert display unit value to LoD0 units
-    const newEndLod0 = displayToLod0(numValue, timeConfig);
+    // Convert span from display units to LoD0 units
+    const spanLod0 = displayToLod0(numValue, timeConfig);
+    // Calculate new end time: start + span
+    const newEndLod0 = tableStartTime + spanLod0;
     onTableEndTimeChange(newEndLod0);
   };
 
   const handleTableTimeApply = () => {
     commitTableStartValue();
-    commitTableEndValue();
+    commitTableSpanValue();
     onTableTimeApply?.();
   };
 
@@ -778,19 +788,19 @@ export function ToolBar({
               title={`Table start time (${selectedUnit}, press Enter to confirm)`}
             />
           </div>
-          <div style={{ 
-            display: 'flex', 
-            alignItems: 'center', 
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
             gap: '4px',
             padding: '0 4px',
           }}>
-            <span style={{ fontSize: '11px', color: '#666' }}>End:</span>
+            <span style={{ fontSize: '11px', color: '#666' }}>Span:</span>
             <input
-              ref={tableEndInputRef}
+              ref={tableSpanInputRef}
               type="number"
-              value={tableEndInputValue}
-              onChange={handleTableEndInputChange}
-              onKeyDown={handleTableEndInputKeyDown}
+              value={tableSpanInputValue}
+              onChange={handleTableSpanInputChange}
+              onKeyDown={handleTableSpanInputKeyDown}
               style={{
                 width: '70px',
                 padding: '4px 6px',
@@ -801,7 +811,7 @@ export function ToolBar({
               }}
               min="0"
               step={getStepSize()}
-              title={`Table end time (${selectedUnit}, press Enter to confirm)`}
+              title={`Table time span (${selectedUnit}, press Enter to confirm)`}
             />
           </div>
           <button
