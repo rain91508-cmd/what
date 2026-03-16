@@ -600,11 +600,20 @@ export function ToolBar({
       tableSpanInputValue,
       currentTableStartTime: tableStartTime,
       currentTableEndTime: tableEndTime,
+      timeConfig,
+      onTableStartTimeChange,
     });
 
     // Commit start value first and get the new start time
     const numStartValue = parseFloat(tableStartInputValue);
     let newStartLod0: number | undefined;
+    console.log('[ToolBar] Checking conditions', {
+      numStartValue,
+      isNaN_numStartValue: isNaN(numStartValue),
+      numStartValue_ge_0: numStartValue >= 0,
+      hasTimeConfig: !!timeConfig,
+      hasOnTableStartTimeChange: !!onTableStartTimeChange,
+    });
     if (!isNaN(numStartValue) && numStartValue >= 0 && timeConfig && onTableStartTimeChange) {
       newStartLod0 = displayToLod0(numStartValue, timeConfig);
       console.log('[ToolBar] Committing new start time', { numStartValue, newStartLod0 });
