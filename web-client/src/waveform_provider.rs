@@ -2290,9 +2290,13 @@ if tile_missing_signals.is_empty() {
                     break;
                 }
                 let bucket_idx = u16::from_le_bytes([data[time_idx], data[time_idx + 1]]);
-                // Use bucket index as time (for first/last pairing in parse_buckets_from_transitions)
-                // Note: We don't use transition_time_array, so actual transition time is not saved
-                time = bucket_idx as u64;
+                // Handle u16::MAX (0xFFFF) as start value marker (convert to u64::MAX)
+                // Otherwise use bucket index as time for first/last pairing
+                time = if bucket_idx == u16::MAX {
+                    u64::MAX
+                } else {
+                    bucket_idx as u64
+                };
             } else {
                 // v1 API, LoD > 0: bucket index was stored as u64 (but values are 0-255)
                 let time_idx = time_array_start + ((i + 1) as usize * 8);
