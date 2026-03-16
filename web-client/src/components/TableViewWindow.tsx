@@ -153,6 +153,10 @@ export function TableViewWindow({
     }
   }, [sharedProvider, tabId]);
 
+  // Track previous start/end times to detect changes
+  const prevStartTimeRef = useRef(startTime);
+  const prevEndTimeRef = useRef(endTime);
+
   // Auto-fetch data when refreshTrigger changes (e.g., when Toolbar Apply is clicked)
   useEffect(() => {
     if (refreshTrigger > 0 && providerReady && signals.length > 0) {
@@ -160,6 +164,24 @@ export function TableViewWindow({
       handleFetchData();
     }
   }, [refreshTrigger, providerReady, signals.length]);
+
+  // Auto-fetch data when startTime or endTime changes
+  useEffect(() => {
+    const hasStartTimeChanged = startTime !== prevStartTimeRef.current;
+    const hasEndTimeChanged = endTime !== prevEndTimeRef.current;
+
+    if ((hasStartTimeChanged || hasEndTimeChanged) && providerReady && signals.length > 0) {
+      console.log('[TableViewWindow] Time range changed, fetching data...', {
+        oldStart: prevStartTimeRef.current,
+        newStart: startTime,
+        oldEnd: prevEndTimeRef.current,
+        newEnd: endTime,
+      });
+      prevStartTimeRef.current = startTime;
+      prevEndTimeRef.current = endTime;
+      handleFetchData();
+    }
+  }, [startTime, endTime, providerReady, signals.length]);
 
   // Notify parent component when column filters change (for session save)
   useEffect(() => {
