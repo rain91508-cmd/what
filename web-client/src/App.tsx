@@ -3744,9 +3744,13 @@ function App() {
         onNavigateNext={navigateNext}
         canNavigatePrevious={canNavigatePrevious()}
         canNavigateNext={canNavigateNext()}
-        timeConfig={activeTabData?.timeConfig}
+        timeConfig={activeTabData?.type === 'tableview' 
+          ? initTimeConfig(currentWaveDisplayUnitPerLoD0)  // TableView uses shared display unit
+          : activeTabData?.timeConfig}
         onTimeConfigChange={(config) => handleTimeConfigChange(activeTab, config)}
-        waveformTimeUnit={activeTabData?.waveformTimeUnit ?? currentWaveTimeUnit} // Use tab's or current waveform's time unit
+        waveformTimeUnit={activeTabData?.type === 'tableview' 
+          ? currentWaveTimeUnit  // TableView uses shared time unit
+          : (activeTabData?.waveformTimeUnit ?? currentWaveTimeUnit)}
         maxWaveformTimeLod0={currentWaveEndTime}
         onConnect={() => setShowConnectionDialog(true)}
         onOpenKdb={() => setShowKdbSelectionDialog(true)}
