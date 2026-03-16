@@ -332,19 +332,24 @@ pub fn value_matches(
 fn parse_value_string(value: &str) -> Result<u64> {
     let value = value.trim();
     
-    // 如果值包含 x 或 z（FST 中的未知状态），返回 0
-    if value.chars().any(|c| c == 'x' || c == 'X' || c == 'z' || c == 'Z') {
-        return Ok(0);
-    }
-    
-    // 尝试不同的进制
+    // 尝试不同的进制（先处理带前缀的，避免误判前缀中的 x）
     if value.starts_with("0b") || value.starts_with("0B") {
         // 二进制
-        u64::from_str_radix(&value[2..], 2)
+        let rest = &value[2..];
+        // 检查是否包含 x/z（未知状态）
+        if rest.chars().any(|c| c == 'x' || c == 'X' || c == 'z' || c == 'Z') {
+            return Ok(0);
+        }
+        u64::from_str_radix(rest, 2)
             .map_err(|e| ServerError::InvalidRequest(format!("Invalid binary value: {}", e)))
     } else if value.starts_with("0x") || value.starts_with("0X") {
         // 十六进制
-        u64::from_str_radix(&value[2..], 16)
+        let rest = &value[2..];
+        // 检查是否包含 x/z（未知状态）
+        if rest.chars().any(|c| c == 'x' || c == 'X' || c == 'z' || c == 'Z') {
+            return Ok(0);
+        }
+        u64::from_str_radix(rest, 16)
             .map_err(|e| ServerError::InvalidRequest(format!("Invalid hex value: {}", e)))
     } else if value.starts_with("0o") || value.starts_with("0O") {
         // 八进制
