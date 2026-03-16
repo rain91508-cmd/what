@@ -183,10 +183,13 @@ pub async fn read_signals_data_fst_reader_batch_lod_low(
         // 初始化 bucket 状态
         let mut bucket_first: HashMap<FstSignalHandle, Vec<Option<String>>> = HashMap::new();
         let mut bucket_last: HashMap<FstSignalHandle, Vec<Option<String>>> = HashMap::new();
+        // 记录每个 bucket 是否有多个 transitions
+        let mut bucket_has_multiple: HashMap<FstSignalHandle, Vec<bool>> = HashMap::new();
         
         for info in &signal_infos {
             bucket_first.insert(info.handle.clone(), vec![None; num_buckets]);
             bucket_last.insert(info.handle.clone(), vec![None; num_buckets]);
+            bucket_has_multiple.insert(info.handle.clone(), vec![false; num_buckets]);
         }
 
         // 使用 read_signals_in_range 一次性读取整个范围的 transitions
@@ -212,6 +215,11 @@ pub async fn read_signals_data_fst_reader_batch_lod_low(
                 if let Some(first_vec) = bucket_first.get_mut(&handle) {
                     if first_vec[bucket_idx].is_none() {
                         first_vec[bucket_idx] = Some(value_str.clone());
+                    } else {
+                        // first 已经存在，说明有多个 transitions
+                        if let Some(multiple_vec) = bucket_has_multiple.get_mut(&handle) {
+                            multiple_vec[bucket_idx] = true;
+                        }
                     }
                 }
                 
@@ -249,7 +257,8 @@ pub async fn read_signals_data_fst_reader_batch_lod_low(
             });
 
             // 添加每个 bucket 的 first/last（时间戳 = bucket index）
-            if let (Some(first_vec), Some(last_vec)) = (bucket_first.get(&info.handle), bucket_last.get(&info.handle)) {
+            if let (Some(first_vec), Some(last_vec), Some(multiple_vec)) = 
+                (bucket_first.get(&info.handle), bucket_last.get(&info.handle), bucket_has_multiple.get(&info.handle)) {
                 for bucket_idx in 0..num_buckets {
                     if let Some(first_val) = &first_vec[bucket_idx] {
                         // first
@@ -258,9 +267,9 @@ pub async fn read_signals_data_fst_reader_batch_lod_low(
                             value: SignalValue::Numeric(first_val.clone()),
                         });
                         
-                        // last（如果不同于 first）
-                        if let Some(last_val) = &last_vec[bucket_idx] {
-                            if last_val != first_val {
+                        // last（只要有多个 transitions 就输出，不管值是否相同）
+                        if multiple_vec[bucket_idx] {
+                            if let Some(last_val) = &last_vec[bucket_idx] {
                                 signal_data.add_transition(Transition {
                                     time: bucket_idx as u64,
                                     value: SignalValue::Numeric(last_val.clone()),
@@ -470,7 +479,8 @@ pub async fn read_signals_data_fst_reader_tiles(
 ) -> Result<Vec<Vec<SignalWaveData>>> {
     let lod_level = lod.0;
     let bucket_size = 2u64.pow(lod_level);
-    let num_buckets = (tile_span / bucket_size) as usize;
+    // num_buckets 计算改为向上取整，和 wave_data.rs 保持一致
+    let num_buckets = ((tile_span + bucket_size - 1) / bucket_size) as usize;
     
     if lod_level == 0 {
         // LoD 0: 每个 tile 读取所有 transitions
@@ -902,10 +912,13 @@ async fn read_signals_data_fst_reader_tiles_lod_high(
             // 初始化 bucket 状态
             let mut bucket_first: HashMap<FstSignalHandle, Vec<Option<(u64, String)>>> = HashMap::new();
             let mut bucket_last: HashMap<FstSignalHandle, Vec<Option<(u64, String)>>> = HashMap::new();
+            // 记录每个 bucket 是否有多个 transitions（根据 first 和 last 的时间戳判断）
+            let mut bucket_has_multiple: HashMap<FstSignalHandle, Vec<bool>> = HashMap::new();
             
             for info in &signal_infos {
                 bucket_first.insert(info.handle.clone(), vec![None; num_buckets]);
                 bucket_last.insert(info.handle.clone(), vec![None; num_buckets]);
+                bucket_has_multiple.insert(info.handle.clone(), vec![false; num_buckets]);
             }
 
             // 对每个 bucket 调用 read_range_boundary_values
@@ -949,6 +962,20 @@ async fn read_signals_data_fst_reader_tiles_lod_high(
                         }
                     }
                 }
+                
+                // 判断每个信号在该 bucket 中是否有多个 transitions（根据 first 和 last 的时间戳）
+                if let (Some(first), Some(last)) = (&boundary_values.first, &boundary_values.last) {
+                    for first_val in &first.string_values {
+                        if let Some(last_val) = last.string_values.iter().find(|v| v.handle == first_val.handle) {
+                            // 如果 first 和 last 的时间戳不同，说明有多个 transitions
+                            if first_val.time != last_val.time {
+                                if let Some(multiple_vec) = bucket_has_multiple.get_mut(&first_val.handle) {
+                                    multiple_vec[bucket_idx] = true;
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // 构建该 tile 的结果
@@ -980,7 +1007,8 @@ async fn read_signals_data_fst_reader_tiles_lod_high(
                 // 添加每个 bucket 的 first/last
                 // 注意：时间戳使用相对于 tile 的 bucket 索引（从 0 开始）
                 
-                if let (Some(first_vec), Some(last_vec)) = (bucket_first.get(&info.handle), bucket_last.get(&info.handle)) {
+                if let (Some(first_vec), Some(last_vec), Some(multiple_vec)) = 
+                    (bucket_first.get(&info.handle), bucket_last.get(&info.handle), bucket_has_multiple.get(&info.handle)) {
                     for bucket_idx in 0..num_buckets {
                         if let Some((first_time, first_val)) = &first_vec[bucket_idx] {
                             // first - 使用从 read_range_boundary_values 获取的相对 bucket 索引
@@ -990,10 +1018,9 @@ async fn read_signals_data_fst_reader_tiles_lod_high(
                             });
                             last_value_for_next_tile = first_val.clone();
                             
-                            // last（如果时间和值都不同于 first）
-                            if let Some((last_time, last_val)) = &last_vec[bucket_idx] {
-                                // 只有当 last_time != first_time 或者 last_val != first_val 时才添加
-                                if last_time != first_time || last_val != first_val {
+                            // last（只要有多个 transitions 就输出，不管值是否相同）
+                            if multiple_vec[bucket_idx] {
+                                if let Some((last_time, last_val)) = &last_vec[bucket_idx] {
                                     signal_data.add_transition(Transition {
                                         time: *last_time,
                                         value: SignalValue::Numeric(last_val.clone()),

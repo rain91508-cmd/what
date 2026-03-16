@@ -1092,7 +1092,7 @@ pub struct ChunkHeader {
 
 impl ChunkHeader {
     pub const MAGIC: u32 = 0x57415645; // 'WAVE'
-    pub const VERSION: u16 = 2;  // v2: 支持 per-signal transition time array
+    pub const VERSION: u16 = 1;
     pub const SIZE: usize = 32;
 
     pub fn new(level: u16, chunk_id: u32, time_start: u64, time_end: u64, signal_count: u32) -> Self {
@@ -1147,12 +1147,12 @@ impl ChunkHeader {
     }
 }
 
-/// 信号块头（v2版本，21字节）
+/// 信号块头
 #[derive(Debug, Clone)]
 pub struct SignalBlockHeader {
     /// 信号句柄
     pub signal_handle: u32,
-    /// bucket 索引数组偏移（相对于chunk数据起始）
+    /// 时间数组偏移（相对于chunk数据起始）
     pub time_array_offset: u32,
     /// 值数组偏移（相对于chunk数据起始）
     pub value_array_offset: u32,
@@ -1160,12 +1160,10 @@ pub struct SignalBlockHeader {
     pub transition_count: u32,
     /// 压缩类型（0=无压缩, 1=zstd, 2=lz4）
     pub compression: u8,
-    /// 实际时间数组偏移（相对于chunk数据起始，0表示不存在）
-    pub transition_time_array_offset: u32,
 }
 
 impl SignalBlockHeader {
-    pub const SIZE: usize = 21;
+    pub const SIZE: usize = 17;
 
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
         let mut bytes = [0u8; Self::SIZE];
@@ -1174,7 +1172,6 @@ impl SignalBlockHeader {
         bytes[8..12].copy_from_slice(&self.value_array_offset.to_le_bytes());
         bytes[12..16].copy_from_slice(&self.transition_count.to_le_bytes());
         bytes[16] = self.compression;
-        bytes[17..21].copy_from_slice(&self.transition_time_array_offset.to_le_bytes());
         bytes
     }
 
@@ -1189,7 +1186,6 @@ impl SignalBlockHeader {
             value_array_offset: u32::from_le_bytes(bytes[8..12].try_into().unwrap()),
             transition_count: u32::from_le_bytes(bytes[12..16].try_into().unwrap()),
             compression: bytes[16],
-            transition_time_array_offset: u32::from_le_bytes(bytes[17..21].try_into().unwrap()),
         })
     }
 }
@@ -1233,7 +1229,6 @@ impl ChunkSerializer {
         let mut block_headers = Vec::new();
         let mut time_arrays = Vec::new();
         let mut value_arrays = Vec::new();
-        let mut actual_time_arrays = Vec::new();  // v2: 实际时间数组
         let mut current_offset = data_start_offset as u32;
 
         for signal in signals {
@@ -1252,8 +1247,17 @@ impl ChunkSerializer {
                     .collect()
             };
 
-            // 计算 transition_count，包含 Start Value
-            let transition_count = filtered.len() as u32;
+            // 计算 transition_count，排除 Start Value（时间为 BOUNDARY_TIME_START）
+            let transition_count = filtered
+                .iter()
+                .filter(|t| t.time != Self::BOUNDARY_TIME_START)
+                .count() as u32;
+
+            // 时间数组（u64 数组）
+            let time_array: Vec<u8> = filtered
+                .iter()
+                .flat_map(|t| t.time.to_le_bytes())
+                .collect();
 
             // 值数组（仿 FST 格式，支持多种类型）
             // 格式：[类型(u8), 长度(u16), 值字节...] × 转换点数量
@@ -1290,70 +1294,26 @@ impl ChunkSerializer {
                 }
             }
 
-            // 根据 LOD 级别选择时间数组格式
-            let (time_array, transition_time_array) = if level == 0 {
-                // LoD 0: time_array 存储 u64 实际时间，不需要单独的 transition_time_array
-                // Start Value 使用 u64::MAX 作为特殊标记
-                let time_arr: Vec<u8> = filtered
-                    .iter()
-                    .map(|t| if t.time == Self::BOUNDARY_TIME_START { u64::MAX } else { t.time })
-                    .flat_map(|time| time.to_le_bytes())
-                    .collect();
-                (time_arr, Vec::new())
-            } else {
-                // LoD > 0: time_array 存储 u16 bucket 索引，transition_time_array 存储 u64 实际时间
-                // Start Value 使用 u16::MAX 和 u64::MAX 作为特殊标记
-                let bucket_index_array: Vec<u8> = filtered
-                    .iter()
-                    .map(|t| if t.time == Self::BOUNDARY_TIME_START { u16::MAX } else { t.time as u16 })
-                    .flat_map(|idx| idx.to_le_bytes())
-                    .collect();
-                let actual_time_array: Vec<u8> = filtered
-                    .iter()
-                    .map(|t| if t.time == Self::BOUNDARY_TIME_START { u64::MAX } else { t.time })
-                    .flat_map(|time| time.to_le_bytes())
-                    .collect();
-                (bucket_index_array, actual_time_array)
-            };
-
             // 压缩数据
             let compressed_time = compression.compress(&time_array)?;
             let compressed_value = compression.compress(&value_array)?;
-            let compressed_transition_time = if level == 0 {
-                Vec::new()  // LoD 0 不需要
-            } else {
-                compression.compress(&transition_time_array)?
-            };
             
             let time_array_size = compressed_time.len() as u32;
             let value_array_size = compressed_value.len() as u32;
-            let transition_time_size = compressed_transition_time.len() as u32;
             
-            // 计算 transition_time_array_offset
-            let transition_time_array_offset = if level == 0 {
-                0u32  // LoD 0: 没有单独的 transition time 数组
-            } else {
-                current_offset + time_array_size + value_array_size
-            };
-            
-            // v2: SignalBlockHeader 包含 transition_time_array_offset
             let block_header = SignalBlockHeader {
                 signal_handle: signal.handle,
                 time_array_offset: current_offset,
                 value_array_offset: current_offset + time_array_size,
                 transition_count,
                 compression: compression as u8,
-                transition_time_array_offset,
             };
 
             block_headers.push(block_header);
             time_arrays.push(compressed_time);
             value_arrays.push(compressed_value);
-            if level > 0 {
-                actual_time_arrays.push(compressed_transition_time);
-            }
-            
-            current_offset += time_array_size + value_array_size + transition_time_size;
+
+            current_offset += time_array_size + value_array_size;
         }
 
         // 组装最终数据
@@ -1365,17 +1325,16 @@ impl ChunkSerializer {
             result.extend_from_slice(&bh.to_bytes());
         }
 
-        // 写入 bucket 索引数组、值数组和实际时间数组
-        for ((bucket_arr, value_arr), time_arr) in time_arrays.iter().zip(value_arrays.iter()).zip(actual_time_arrays.iter()) {
-            result.extend_from_slice(bucket_arr);
-            result.extend_from_slice(value_arr);
+        // 写入时间数组和值数组
+        for (time_arr, value_arr) in time_arrays.iter().zip(value_arrays.iter()) {
             result.extend_from_slice(time_arr);
+            result.extend_from_slice(value_arr);
         }
 
         Ok(result)
     }
 
-    /// 从 chunk 数据反序列化（支持 v2 格式）
+    /// 从 chunk 数据反序列化
     pub fn deserialize(data: &[u8]) -> Result<(ChunkHeader, Vec<(SignalBlockHeader, Vec<Transition>)>)> {
         // 解析文件头
         let header = ChunkHeader::from_bytes(data)?;
@@ -1389,87 +1348,34 @@ impl ChunkSerializer {
             let block_offset = header_size + SignalBlockHeader::SIZE * i as usize;
             let block_header = SignalBlockHeader::from_bytes(&data[block_offset..])?;
 
-            // 读取压缩的 bucket 索引数组（u16 数组）
-            let bucket_index_start = block_header.time_array_offset as usize;
-            let bucket_index_end = block_header.value_array_offset as usize;
-            let compressed_bucket_index_bytes = &data[bucket_index_start..bucket_index_end];
+            // 读取压缩的时间数组
+            let time_array_start = block_header.time_array_offset as usize;
+            let time_array_end = block_header.value_array_offset as usize;
+            let compressed_time_bytes = &data[time_array_start..time_array_end];
 
             // 读取压缩的值数组
             let value_array_start = block_header.value_array_offset as usize;
-            let value_array_end = if block_header.transition_time_array_offset > 0 {
-                block_header.transition_time_array_offset as usize
-            } else {
-                // 如果没有实际时间数组，值数组到数据结束
-                data.len()
-            };
-            let compressed_value_bytes = &data[value_array_start..value_array_end];
-
-            // 读取压缩的实际时间数组（u64 数组，可选）
-            let compressed_actual_time_bytes = if block_header.transition_time_array_offset > 0 {
-                let actual_time_start = block_header.transition_time_array_offset as usize;
-                &data[actual_time_start..]
-            } else {
-                &[]
-            };
+            let value_array_end = value_array_start + block_header.transition_count as usize * 8;
+            let compressed_value_bytes = &data[value_array_start..];
 
             // 解压数据
             let compression = CompressionAlgorithm::from_u8(block_header.compression);
-            let time_bytes = compression.decompress(compressed_bucket_index_bytes)?;
+            let time_bytes = compression.decompress(compressed_time_bytes)?;
             let value_bytes = compression.decompress(compressed_value_bytes)?;
-            let transition_time_bytes = if compressed_actual_time_bytes.is_empty() {
-                Vec::new()
-            } else {
-                compression.decompress(compressed_actual_time_bytes)?
-            };
 
             // 重建转换点
             let mut transitions = Vec::new();
             let mut value_offset = 0usize;
             
-            // 判断时间数组格式：
-            // - 如果 transition_time_array_offset == 0：LoD 0，time_array 存储 u64 实际时间
-            // - 如果 transition_time_array_offset > 0：LoD > 0，time_array 存储 u16 bucket 索引，transition_time_array 存储 u64 实际时间
-            let is_lod0 = block_header.transition_time_array_offset == 0;
-            
             for j in 0..block_header.transition_count as usize {
-                // 确保不越界
-                if value_offset + 3 > value_bytes.len() {
+                let time_offset = j * 8;
+                
+                // 确保不越界（至少需要类型+长度）
+                if time_offset + 8 > time_bytes.len() || value_offset + 3 > value_bytes.len() {
                     break;
                 }
                 
-                // 读取时间
-                let time = if is_lod0 {
-                    // LoD 0: time_array 存储 u64 实际时间
-                    let time_offset = j * 8;  // u64 = 8 bytes
-                    if time_offset + 8 > time_bytes.len() {
-                        break;
-                    }
-                    let t = u64::from_le_bytes(time_bytes[time_offset..time_offset + 8].try_into().unwrap());
-                    // 转换特殊标记：u64::MAX -> BOUNDARY_TIME_START
-                    if t == u64::MAX { Self::BOUNDARY_TIME_START } else { t }
-                } else {
-                    // LoD > 0: time_array 存储 u16 bucket 索引，transition_time_array 存储 u64 实际时间
-                    let bucket_index_offset = j * 2;  // u16 = 2 bytes
-                    if bucket_index_offset + 2 > time_bytes.len() {
-                        break;
-                    }
-                    let bucket_index = u16::from_le_bytes(time_bytes[bucket_index_offset..bucket_index_offset + 2].try_into().unwrap());
-                    
-                    // 如果有 transition_time_array，使用实际时间
-                    let t = if !transition_time_bytes.is_empty() {
-                        let time_offset = j * 8;  // u64 = 8 bytes
-                        if time_offset + 8 <= transition_time_bytes.len() {
-                            u64::from_le_bytes(transition_time_bytes[time_offset..time_offset + 8].try_into().unwrap())
-                        } else {
-                            bucket_index as u64
-                        }
-                    } else {
-                        bucket_index as u64
-                    };
-                    
-                    // 转换特殊标记：u64::MAX -> BOUNDARY_TIME_START
-                    if t == u64::MAX { Self::BOUNDARY_TIME_START } else { t }
-                };
+                let time = u64::from_le_bytes(time_bytes[time_offset..time_offset + 8].try_into().unwrap());
                 
                 // 值数组格式：[类型(u8), 长度(u16), 值字节...]
                 let value_type = SignalValueType::from_u8(value_bytes[value_offset]);

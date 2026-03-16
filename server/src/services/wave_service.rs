@@ -1875,16 +1875,18 @@ impl WaveService {
                 // 常规模式：读取完整数据后处理
                 info!("使用常规算法：LoD {} <= 15", lod.0);
                 
+                // 计算 num_buckets（和 lod_low 保持一致）
+                let bucket_size = lod.bucket_size() as u64;
+                let num_buckets = (tile_span / bucket_size) as usize;
+                
                 for tile_idx in 0..num_tiles {
                     let tile_start = start_time + tile_span * tile_idx as u64;
-                    let tile_end = tile_start + tile_span;
-                    
-                    info!("处理 Tile {}: time={}-{}", tile_idx, tile_start, tile_end);
-
-                    // 计算对齐后的起始地址（按 LoD bucket size 对齐）
-                    let bucket_size = lod.bucket_size() as u64;
                     let aligned_start = (tile_start / bucket_size) * bucket_size;
-                    info!("Tile {}: 原始起始={}, 对齐后起始={}, bucket_size={}", tile_idx, tile_start, aligned_start, bucket_size);
+                    // tile_end 计算和 lod_low 保持一致
+                    let tile_end = aligned_start + num_buckets as u64 * bucket_size;
+                    
+                    info!("处理 Tile {}: time={}-{} (aligned_start={}, tile_end={})", tile_idx, tile_start, tile_start + tile_span, aligned_start, tile_end);
+                    info!("Tile {}: bucket_size={}, num_buckets={}", tile_idx, bucket_size, num_buckets);
 
                     // 批量搜索 Start Value
                     let start_values = search_boundary_values_optimized(
@@ -1904,8 +1906,9 @@ impl WaveService {
                         let mut tile_signal = SignalWaveData::new((*handle).into(), *width, SignalValueType::Numeric);
                         
                         let mut count = 0;
+                        // 时间范围改为右闭（和 lod_low 一致）：[aligned_start, tile_end - 1]
                         for trans in &full_data.transitions {
-                            if trans.time >= aligned_start && trans.time <= tile_end {
+                            if trans.time >= aligned_start && trans.time < tile_end {
                                 tile_signal.add_transition(trans.clone());
                                 count += 1;
                             }
