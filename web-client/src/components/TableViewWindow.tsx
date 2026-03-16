@@ -131,6 +131,18 @@ export function TableViewWindow({
     [columnId: string]: 'hex' | 'bin' | 'oct' | 'dec';
   }>(initialColumnRadix || {});
 
+  // Use refs to store callback functions to avoid dependency issues in useEffect
+  const onColumnFiltersChangeRef = useRef(onColumnFiltersChange);
+  const onColumnMetadataFiltersChangeRef = useRef(onColumnMetadataFiltersChange);
+  const onColumnRadixChangeRef = useRef(onColumnRadixChange);
+
+  // Update refs when callbacks change
+  useEffect(() => {
+    onColumnFiltersChangeRef.current = onColumnFiltersChange;
+    onColumnMetadataFiltersChangeRef.current = onColumnMetadataFiltersChange;
+    onColumnRadixChangeRef.current = onColumnRadixChange;
+  }, [onColumnFiltersChange, onColumnMetadataFiltersChange, onColumnRadixChange]);
+
   // Create adapter when provider is ready (same pattern as WaveformWindow)
   useEffect(() => {
     if (sharedProvider && !adapterRef.current) {
@@ -151,24 +163,24 @@ export function TableViewWindow({
 
   // Notify parent component when column filters change (for session save)
   useEffect(() => {
-    if (onColumnFiltersChange) {
-      onColumnFiltersChange(columnFilters.map(f => ({ id: f.id, value: f.value as string })));
+    if (onColumnFiltersChangeRef.current) {
+      onColumnFiltersChangeRef.current(columnFilters.map(f => ({ id: f.id, value: f.value as string })));
     }
-  }, [columnFilters, onColumnFiltersChange]);
+  }, [columnFilters]);
 
   // Notify parent component when metadata filters change (for session save)
   useEffect(() => {
-    if (onColumnMetadataFiltersChange) {
-      onColumnMetadataFiltersChange(columnMetadataFilters);
+    if (onColumnMetadataFiltersChangeRef.current) {
+      onColumnMetadataFiltersChangeRef.current(columnMetadataFilters);
     }
-  }, [columnMetadataFilters, onColumnMetadataFiltersChange]);
+  }, [columnMetadataFilters]);
 
   // Notify parent component when radix selection changes (for session save)
   useEffect(() => {
-    if (onColumnRadixChange) {
-      onColumnRadixChange(columnRadix);
+    if (onColumnRadixChangeRef.current) {
+      onColumnRadixChangeRef.current(columnRadix);
     }
-  }, [columnRadix, onColumnRadixChange]);
+  }, [columnRadix]);
 
   // Close metadata filter dropdown when clicking outside
   useEffect(() => {
