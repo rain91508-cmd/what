@@ -37,7 +37,7 @@ use crate::error::{Result, ServerError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
-use tracing::info;
+use tracing::{debug, info};
 
 /// 四态逻辑值（Verilog 四态逻辑）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
