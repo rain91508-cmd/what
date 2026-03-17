@@ -137,7 +137,7 @@ pub struct Transition {
 /// Bucket data for LoD 1+ (First/Last format)
 #[derive(Debug, Clone)]
 pub struct BucketData {
-    pub offset: u32,        // Bucket offset within tile (0-255)
+    pub offset: u16,        // Bucket offset within tile (0-255)
     pub first: Transition,  // First transition in bucket
     pub last: Option<Transition>, // Last transition (None if only one transition)
 }
@@ -214,7 +214,7 @@ pub struct SignalWaveData {
     /// Each tuple: (tile_start, tile_end, start_value_time, start_value)
     pub tile_info: Vec<(u64, u64, u64, Transition)>,
     /// LoD 1+ bucket data: (tile_start, buckets HashMap)
-    pub bucket_data: Vec<(u64, HashMap<u32, BucketData>)>,
+    pub bucket_data: Vec<(u64, HashMap<u16, BucketData>)>,
 }
 
 impl SignalWaveData {
@@ -2376,12 +2376,12 @@ if tile_missing_signals.is_empty() {
     fn parse_buckets_from_transitions(
         &self,
         transitions: &[Transition],
-    ) -> (Option<Transition>, HashMap<u32, BucketData>) {
+    ) -> (Option<Transition>, HashMap<u16, BucketData>) {
         const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
         
         let mut start_value: Option<Transition> = None;
-        let mut buckets: HashMap<u32, BucketData> = HashMap::new();
-        let mut pending_first: Option<(u32, Transition)> = None;
+        let mut buckets: HashMap<u16, BucketData> = HashMap::new();
+        let mut pending_first: Option<(u16, Transition)> = None;
         
         // Debug: Print all transitions
         if !transitions.is_empty() {
@@ -2404,7 +2404,7 @@ if tile_missing_signals.is_empty() {
             }
             
             // For LoD 1+, time is bucket offset (0-255)
-            let offset = transition.time as u32;
+            let offset = transition.time as u16;
             
             match pending_first {
                 None => {
@@ -2549,7 +2549,7 @@ if tile_missing_signals.is_empty() {
                         let bucket_size = 1u64 << lod;
                         let tile_span = OpfsCacheManager::get_tile_span(lod);
                         
-                        let mut tile_buckets: std::collections::HashMap<u64, HashMap<u32, BucketData>> = std::collections::HashMap::new();
+                        let mut tile_buckets: std::collections::HashMap<u64, HashMap<u16, BucketData>> = std::collections::HashMap::new();
                         
                         // console_log!("[WASM] Grouping {} transitions by tile (lod={}, bucket_size={})", 
                             // data.transitions.len(), lod, bucket_size);
@@ -2589,7 +2589,7 @@ if tile_missing_signals.is_empty() {
                         
                         // Convert to vec for generate_lod_segments_from_buckets
                         // Sort by tile_start to ensure correct order
-                        let mut bucket_data: Vec<(u64, HashMap<u32, BucketData>)> = tile_buckets.into_iter().collect();
+                        let mut bucket_data: Vec<(u64, HashMap<u16, BucketData>)> = tile_buckets.into_iter().collect();
                         bucket_data.sort_by_key(|(start, _)| *start);
                         
                         // console_log!("[WASM] Cache data: {} tiles from tile_info, {} bucket entries (sorted)", 
@@ -2754,11 +2754,11 @@ if tile_missing_signals.is_empty() {
     /// Extract bits from bucket data for bit-extraction signals
     fn extract_bits_from_buckets(
         &self,
-        bucket_data: &[(u64, HashMap<u32, BucketData>)],
+        bucket_data: &[(u64, HashMap<u16, BucketData>)],
         _parent_width: u32,
         msb: u32,
         lsb: u32,
-    ) -> Vec<(u64, HashMap<u32, BucketData>)> {
+    ) -> Vec<(u64, HashMap<u16, BucketData>)> {
         // Handle edge case: if range is 64 bits, mask would overflow
         let bit_count = msb - lsb + 1;
         let mask = if bit_count >= 64 {
@@ -2770,7 +2770,7 @@ if tile_missing_signals.is_empty() {
         let mut result = Vec::new();
         
         for (tile_start, buckets) in bucket_data.iter() {
-            let mut extracted_buckets: HashMap<u32, BucketData> = HashMap::new();
+            let mut extracted_buckets: HashMap<u16, BucketData> = HashMap::new();
             
             for (bucket_idx, bucket) in buckets.iter() {
                 // Extract bits from first value
@@ -3214,7 +3214,7 @@ if tile_missing_signals.is_empty() {
     /// - First/Last pair: draw toggling
     fn generate_lod_segments_from_buckets(
         &self,
-        bucket_data: &[(u64, HashMap<u32, BucketData>)],
+        bucket_data: &[(u64, HashMap<u16, BucketData>)],
         width: u32,
         y: f64,
         signal_name: &str,
@@ -3298,17 +3298,17 @@ if tile_missing_signals.is_empty() {
             let viewport_end_u64 = self.viewport.time_end as u64;
             
             // Calculate first bucket index that intersects with viewport
-            let first_bucket_idx = if viewport_start_u64 > *tile_start {
-                ((viewport_start_u64 - tile_start) / bucket_size) as u32
+            let first_bucket_idx: u16 = if viewport_start_u64 > *tile_start {
+                ((viewport_start_u64 - tile_start) / bucket_size) as u16
             } else {
                 0
             };
             
             // Calculate last bucket index that intersects with viewport
-            let last_bucket_idx = if viewport_end_u64 < tile_start + tile_span {
-                ((viewport_end_u64 - tile_start) / bucket_size) as u32
+            let last_bucket_idx: u16 = if viewport_end_u64 < tile_start + tile_span {
+                ((viewport_end_u64 - tile_start) / bucket_size) as u16
             } else {
-                TILE_SPAN_MULTIPLIER - 1
+                (TILE_SPAN_MULTIPLIER - 1) as u16
             };
             
             // console_log!("[WASM]   Bucket range: {} to {} (viewport: {}-{})",
@@ -3581,11 +3581,11 @@ if tile_missing_signals.is_empty() {
         &self,
         signal_name: &str,
         tile_start: u64,
-        buckets: &HashMap<u32, BucketData>,
+        buckets: &HashMap<u16, BucketData>,
         target_time: u64,
         lod: u32,
         tile_idx: usize,
-        all_bucket_data: &[(u64, HashMap<u32, BucketData>)],
+        all_bucket_data: &[(u64, HashMap<u16, BucketData>)],
         start_value: Option<&Transition>,
     ) -> Transition {
         let bucket_size = 1u64 << lod;
@@ -3611,7 +3611,7 @@ if tile_missing_signals.is_empty() {
                 let (prev_tile_start, prev_buckets) = &all_bucket_data[prev_tile_idx];
                 
                 // Search from last bucket to first bucket in previous tile
-                for bucket_idx in (0..TILE_SPAN_MULTIPLIER).rev() {
+                for bucket_idx in (0..TILE_SPAN_MULTIPLIER as u16).rev() {
                     if let Some(bucket) = prev_buckets.get(&bucket_idx) {
                         let trans = if bucket.has_toggle() {
                             bucket.last.as_ref().unwrap().clone()
@@ -3631,7 +3631,7 @@ if tile_missing_signals.is_empty() {
         }
         
         // Calculate which bucket contains target_time
-        let bucket_idx = ((target_time - tile_start) / bucket_size) as u32;
+        let bucket_idx = ((target_time - tile_start) / bucket_size) as u16;
         let bucket_start = tile_start + (bucket_idx as u64) * bucket_size;
         
         // console_log!("[WASM]   bucket_idx={}, bucket_start={}", bucket_idx, bucket_start);
@@ -3662,7 +3662,7 @@ if tile_missing_signals.is_empty() {
             // No previous transitions in this tile, search in previous tiles
             for prev_tile_idx in (0..tile_idx).rev() {
                 let (_, prev_buckets) = &all_bucket_data[prev_tile_idx];
-                for idx in (0..TILE_SPAN_MULTIPLIER).rev() {
+                for idx in (0..TILE_SPAN_MULTIPLIER as u16).rev() {
                     if let Some(bucket) = prev_buckets.get(&idx) {
                         let trans = if bucket.has_toggle() {
                             bucket.last.as_ref().unwrap().clone()
@@ -3717,7 +3717,7 @@ if tile_missing_signals.is_empty() {
             //     prev_tile_idx, prev_tile_start, prev_buckets.len());
             
             // Search from last bucket to first bucket in previous tile
-            for bucket_idx in (0..TILE_SPAN_MULTIPLIER).rev() {
+            for bucket_idx in (0..TILE_SPAN_MULTIPLIER as u16).rev() {
                 if let Some(bucket) = prev_buckets.get(&bucket_idx) {
                     let trans = if bucket.has_toggle() {
                         bucket.last.as_ref().unwrap().clone()
@@ -3912,7 +3912,7 @@ if tile_missing_signals.is_empty() {
         // console_log!("[WASM]   Using bucket_data, lod={}, bucket_size={}", lod, bucket_size);
         
         // Sort bucket_data by tile_start
-        let mut sorted_bucket_data: Vec<(u64, &HashMap<u32, BucketData>)> = data.bucket_data
+        let mut sorted_bucket_data: Vec<(u64, &HashMap<u16, BucketData>)> = data.bucket_data
             .iter()
             .map(|(start, buckets)| (*start, buckets))
             .collect();
@@ -3924,7 +3924,7 @@ if tile_missing_signals.is_empty() {
         for (tile_start, buckets) in &sorted_bucket_data {
             let tile_span = OpfsCacheManager::get_tile_span(lod);
             
-            for bucket_idx in 0..256u32 {
+            for bucket_idx in 0..256u16 {
                 if let Some(bucket) = buckets.get(&bucket_idx) {
                     // Calculate absolute time for this bucket
                     let bucket_time = *tile_start + (bucket_idx as u64) * bucket_size;
@@ -4144,7 +4144,7 @@ if tile_missing_signals.is_empty() {
         let bucket_size = 1u64 << lod;
         
         // Sort bucket_data by tile_start to ensure correct order
-        let mut sorted_bucket_data: Vec<(u64, &HashMap<u32, BucketData>)> = data.bucket_data
+        let mut sorted_bucket_data: Vec<(u64, &HashMap<u16, BucketData>)> = data.bucket_data
             .iter()
             .map(|(start, buckets)| (*start, buckets))
             .collect();
@@ -4157,8 +4157,8 @@ if tile_missing_signals.is_empty() {
             if time_u64 >= *tile_start && time_u64 < tile_end {
                 // Calculate bucket index within this tile
                 let offset_in_tile = (time_u64 - *tile_start) / bucket_size;
-                let bucket_idx = offset_in_tile as u32;
-                
+                let bucket_idx = offset_in_tile as u16;
+
                 // Try to find the bucket at this index
                 let value_transition = if let Some(bucket) = buckets.get(&bucket_idx) {
                     // Found bucket at exact index
@@ -4195,7 +4195,7 @@ if tile_missing_signals.is_empty() {
                                 value_len: 1,
                                 value: vec![b'0'],
                             };
-                            for idx in 0..256u32 {
+                            for idx in 0..256u16 {
                                 if let Some(bucket) = prev_buckets.get(&idx) {
                                     last_transition = if bucket.has_toggle() {
                                         bucket.last.as_ref().unwrap().clone()
