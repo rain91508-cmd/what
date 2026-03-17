@@ -2592,8 +2592,9 @@ if tile_missing_signals.is_empty() {
                             self.generate_min_max_segments(&extracted_transitions, width, y, &signal.name,
                                 time_range, &mut segments, display_format);
                         } else {
+                            // For bit-extracted signals, pass empty tile_info (start value not available)
                             self.generate_normal_segments(&extracted_transitions, width, y, &signal.name,
-                                time_range, &mut segments, display_format);
+                                time_range, &mut segments, display_format, &[]);
                         }
                     }
                 }
@@ -2726,7 +2727,7 @@ if tile_missing_signals.is_empty() {
                         } else {
                             // Process LoD 0 format (original)
                             self.generate_normal_segments(&data.transitions, data.width, y, &signal.name,
-                                time_range, &mut segments, display_format);
+                                time_range, &mut segments, display_format, &data.tile_info);
                         }
                     }
                 }
@@ -2927,7 +2928,8 @@ if tile_missing_signals.is_empty() {
     /// - Then draw each transition's value until next transition
     /// - Last transition -> viewport end
     fn generate_normal_segments(&self, transitions: &[Transition], width: u32, y: f64,
-        signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>, display_format: Option<&str>) {
+        signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>, display_format: Option<&str>,
+        tile_info: &[(u64, u64, u64, Transition)]) {
 
         // Debug: Print all transitions for LoD 0
         console_log!("[WASM DEBUG LoD0] Signal: {}, transitions: {}, viewport: {}-{}",
@@ -2942,9 +2944,23 @@ if tile_missing_signals.is_empty() {
         }
 
         // Separate start value (boundary) from normal transitions
-        let start_value = transitions.iter()
+        // First check in transitions array (for cache data), then in tile_info (for server data)
+        let mut start_value = transitions.iter()
             .find(|t| t.time == BOUNDARY_TIME_START)
             .cloned();
+        
+        // If not found in transitions, check tile_info (for server fetched data)
+        if start_value.is_none() {
+            // Find the first tile's start value from tile_info
+            // tile_info: (tile_start, tile_end, start_time, start_value_transition)
+            start_value = tile_info.iter()
+                .find(|(_, _, start_time, _)| *start_time == BOUNDARY_TIME_START)
+                .map(|(_, _, _, sv)| sv.clone());
+            
+            if start_value.is_some() {
+                console_log!("[WASM DEBUG LoD0]   Found start value in tile_info");
+            }
+        }
 
         let normal_transitions: Vec<_> = transitions.iter()
             .filter(|t| t.time != BOUNDARY_TIME_START)
