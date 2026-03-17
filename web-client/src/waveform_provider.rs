@@ -639,11 +639,13 @@ impl WaveformDataProvider {
             let block_header = SignalBlockHeader::from_bytes(&data[offset..], chunk_version)
                 .map_err(|e| JsValue::from_str(&e))?;
 
-            // Parse transitions for this signal
+            // Parse transitions for this signal (pass version and lod for v2 API support)
             let transitions = self.parse_transitions_for_cache(
                 data,
                 &block_header,
-                signal_idx as usize
+                signal_idx as usize,
+                chunk_version,
+                lod
             )?;
 
             // Use pre-computed draw_sig_id directly (no lookup needed)
@@ -760,20 +762,23 @@ impl WaveformDataProvider {
     /// Parse transitions from a signal block for cache storage
     /// 
     /// Data format according to API:
-    /// - Time array: [start_time, t0, t1, t2, ...] (u64 array)
-    ///   - start_time: 0xFFFFFFFFFFFFFFFF (special marker for start value)
-    ///   - t0, t1, t2, ...: actual transition timestamps
+    /// v1 API:
+    ///   - Time array: [start_time(u64), t0(u64), t1(u64), ...] (u64 array)
+    /// v2 API:
+    ///   - Time array: [start_time(u64), bucket_idx0(u16), bucket_idx1(u16), ...] (LoD > 0)
+    ///   - Transition time array (optional): [actual_time0(u64), actual_time1(u64), ...]
     /// - Value array: [start_value, value0, value1, ...]
-    ///   - start_value: value at tile start
-    ///   - value0, value1, ...: values at transitions
     /// - transition_count: number of actual transitions (NOT including start value)
     fn parse_transitions_for_cache(
         &self,
         data: &[u8],
         block_header: &SignalBlockHeader,
         _signal_index: usize,
+        chunk_version: u16,
+        lod: u32,
     ) -> Result<Vec<Transition>, JsValue> {
         let mut transitions = Vec::new();
+        let is_v2 = chunk_version >= 2;
 
         let time_array_start = block_header.time_array_offset as usize;
         let value_array_start = block_header.value_array_offset as usize;
@@ -817,24 +822,13 @@ impl WaveformDataProvider {
         let mut value_idx = value_array_start;
         // Skip start value in value array
         if value_idx + 3 <= data.len() {
-            let value_type = data[value_idx];
+            let _value_type = data[value_idx];
             let value_len = u16::from_le_bytes([data[value_idx + 1], data[value_idx + 2]]) as usize;
             value_idx += 3 + value_len;
         }
 
         for i in 0..block_header.transition_count {
-            // Time array index: skip start value (index 0), so actual transitions start at index 1
-            let time_idx = time_array_start + ((i + 1) as usize * 8);
-
-            if time_idx + 8 > data.len() {
-                break;
-            }
-
-            let time = u64::from_le_bytes([
-                data[time_idx], data[time_idx + 1], data[time_idx + 2], data[time_idx + 3],
-                data[time_idx + 4], data[time_idx + 5], data[time_idx + 6], data[time_idx + 7],
-            ]);
-
+            // Parse value first (same for v1 and v2)
             if value_idx + 3 > data.len() {
                 break;
             }
@@ -849,6 +843,45 @@ impl WaveformDataProvider {
 
             let value = data[value_idx..value_idx + value_len].to_vec();
             value_idx += value_len;
+
+            // Parse time based on API version and LoD
+            let time: u64;
+            
+            if lod == 0 {
+                // LoD 0: always u64 time (absolute timestamp)
+                let time_idx = time_array_start + ((i + 1) as usize * 8);
+                if time_idx + 8 > data.len() {
+                    break;
+                }
+                time = u64::from_le_bytes([
+                    data[time_idx], data[time_idx + 1], data[time_idx + 2], data[time_idx + 3],
+                    data[time_idx + 4], data[time_idx + 5], data[time_idx + 6], data[time_idx + 7],
+                ]);
+            } else if is_v2 {
+                // v2 API, LoD > 0: bucket index is u16 (0-255)
+                let time_idx = time_array_start + 8 + ((i as usize) * 2); // +8 to skip start marker
+                if time_idx + 2 > data.len() {
+                    break;
+                }
+                let bucket_idx = u16::from_le_bytes([data[time_idx], data[time_idx + 1]]);
+                // Handle u16::MAX (0xFFFF) as start value marker (convert to u64::MAX)
+                time = if bucket_idx == u16::MAX {
+                    u64::MAX
+                } else {
+                    bucket_idx as u64
+                };
+            } else {
+                // v1 API, LoD > 0: bucket index was stored as u64 (but values are 0-255)
+                let time_idx = time_array_start + ((i + 1) as usize * 8);
+                if time_idx + 8 > data.len() {
+                    break;
+                }
+                let bucket_idx = u64::from_le_bytes([
+                    data[time_idx], data[time_idx + 1], data[time_idx + 2], data[time_idx + 3],
+                    data[time_idx + 4], data[time_idx + 5], data[time_idx + 6], data[time_idx + 7],
+                ]);
+                time = bucket_idx;
+            }
 
             transitions.push(Transition { 
                 time,
