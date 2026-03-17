@@ -295,11 +295,12 @@ pub fn serialize_group_data_v2(group_data: &GroupData) -> Vec<u8> {
         directory.set(index_in_group, SignalDirectoryEntry::new(true, offset));
         actual_signal_count += 1;
 
-        // Serialize signal data: [draw_sig_id: u32][transition_count: u32] + [time: u64, value_type: u8, value_len: u16, value: bytes] × count
+        // Serialize signal data: [draw_sig_id: u32][transition_count: u32] + [time: u64, actual_time: u64, value_type: u8, value_len: u16, value: bytes] × count
         signal_data_bytes.extend_from_slice(&signal.draw_sig_id.to_le_bytes());
         signal_data_bytes.extend_from_slice(&(signal.transitions.len() as u32).to_le_bytes());
         for transition in &signal.transitions {
             signal_data_bytes.extend_from_slice(&transition.time.to_le_bytes());
+            signal_data_bytes.extend_from_slice(&transition.actual_time.to_le_bytes());
             signal_data_bytes.push(transition.value_type);
             signal_data_bytes.extend_from_slice(&transition.value_len.to_le_bytes());
             signal_data_bytes.extend_from_slice(&transition.value);
@@ -374,11 +375,17 @@ pub fn deserialize_group_data_v2(data: &[u8]) -> Result<GroupData, String> {
         let mut pos = offset + 8;
 
         for _ in 0..transition_count {
-            if pos + 11 > data.len() {
+            if pos + 19 > data.len() {
                 break;
             }
 
             let time = u64::from_le_bytes([
+                data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
+                data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
+            ]);
+            pos += 8;
+
+            let actual_time = u64::from_le_bytes([
                 data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
                 data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
             ]);
@@ -397,7 +404,7 @@ pub fn deserialize_group_data_v2(data: &[u8]) -> Result<GroupData, String> {
             let value = data[pos..pos + value_len].to_vec();
             pos += value_len;
 
-            transitions.push(Transition { time, actual_time: time, value_type, value_len: value_len as u16, value });
+            transitions.push(Transition { time, actual_time, value_type, value_len: value_len as u16, value });
         }
 
         signals.push(SignalData {
@@ -461,11 +468,17 @@ pub fn read_signal_from_group_v2(data: &[u8], draw_sig_id: u32) -> Result<Option
         let mut pos = offset + 8;
 
         for _ in 0..transition_count {
-            if pos + 11 > data.len() {
+            if pos + 19 > data.len() {
                 break;
             }
 
             let time = u64::from_le_bytes([
+                data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
+                data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
+            ]);
+            pos += 8;
+
+            let actual_time = u64::from_le_bytes([
                 data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
                 data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
             ]);
@@ -484,7 +497,7 @@ pub fn read_signal_from_group_v2(data: &[u8], draw_sig_id: u32) -> Result<Option
             let value = data[pos..pos + value_len].to_vec();
             pos += value_len;
 
-            transitions.push(Transition { time, actual_time: time, value_type, value_len: value_len as u16, value });
+            transitions.push(Transition { time, actual_time, value_type, value_len: value_len as u16, value });
         }
 
     Ok(Some(SignalData {
