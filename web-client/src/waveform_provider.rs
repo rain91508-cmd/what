@@ -128,10 +128,11 @@ pub struct ValueInfo {
 /// Transition data point (stores original server format)
 #[derive(Debug, Clone)]
 pub struct Transition {
-    pub time: u64,       // For LoD 0: absolute time; For LoD 1+: bucket offset (0-255)
-    pub value_type: u8,  // Original value type from server (0=Numeric, 1=String, 2=Real, 3=BinaryCompressed)
-    pub value_len: u16,  // Original value length from server
-    pub value: Vec<u8>,  // Original value bytes from server
+    pub time: u64,        // For LoD 0: absolute time; For LoD 1+: bucket offset (0-255)
+    pub actual_time: u64, // Actual transition timestamp (for LoD 1+ precise drawing), same as time for LoD 0
+    pub value_type: u8,   // Original value type from server (0=Numeric, 1=String, 2=Real, 3=BinaryCompressed)
+    pub value_len: u16,   // Original value length from server
+    pub value: Vec<u8>,   // Original value bytes from server
 }
 
 /// Bucket data for LoD 1+ (First/Last format)
@@ -663,6 +664,7 @@ impl WaveformDataProvider {
                 .map(|t| {
                     crate::opfs_cache::Transition {
                         time: t.time,
+                        actual_time: t.actual_time,
                         value_type: t.value_type,
                         value_len: t.value_len,
                         value: t.value,
@@ -806,8 +808,9 @@ impl WaveformDataProvider {
                         let value = data[value_idx..value_idx + value_len].to_vec();
 
                         // Add start value transition with special time marker
-                        transitions.push(Transition { 
+                        transitions.push(Transition {
                             time: BOUNDARY_TIME_START,
+                            actual_time: BOUNDARY_TIME_START,
                             value_type,
                             value_len: value_len as u16,
                             value,
@@ -826,6 +829,14 @@ impl WaveformDataProvider {
             let value_len = u16::from_le_bytes([data[value_idx + 1], data[value_idx + 2]]) as usize;
             value_idx += 3 + value_len;
         }
+
+        // Check if we have transition_time_array (v2 API)
+        let has_transition_time_array = is_v2 && block_header.transition_time_array_offset > 0;
+        let transition_time_array_start = if has_transition_time_array {
+            block_header.transition_time_array_offset as usize
+        } else {
+            0
+        };
 
         for i in 0..block_header.transition_count {
             // Parse value first (same for v1 and v2)
@@ -846,7 +857,8 @@ impl WaveformDataProvider {
 
             // Parse time based on API version and LoD
             let time: u64;
-            
+            let actual_time: u64;
+
             if lod == 0 {
                 // LoD 0: always u64 time (absolute timestamp)
                 let time_idx = time_array_start + ((i + 1) as usize * 8);
@@ -857,6 +869,8 @@ impl WaveformDataProvider {
                     data[time_idx], data[time_idx + 1], data[time_idx + 2], data[time_idx + 3],
                     data[time_idx + 4], data[time_idx + 5], data[time_idx + 6], data[time_idx + 7],
                 ]);
+                // For LoD 0, actual_time is same as time
+                actual_time = time;
             } else if is_v2 {
                 // v2 API, LoD > 0: bucket index is u16 (0-255)
                 // time_array_offset points to u16 array: [u16::MAX (start), bucket_idx0, bucket_idx1, ...]
@@ -871,6 +885,23 @@ impl WaveformDataProvider {
                 } else {
                     bucket_idx as u64
                 };
+
+                // Read actual transition time from transition_time_array (v2 API)
+                if has_transition_time_array {
+                    let actual_time_idx = transition_time_array_start + ((i + 1) as usize * 8); // +8 to skip start marker
+                    if actual_time_idx + 8 <= data.len() {
+                        actual_time = u64::from_le_bytes([
+                            data[actual_time_idx], data[actual_time_idx + 1],
+                            data[actual_time_idx + 2], data[actual_time_idx + 3],
+                            data[actual_time_idx + 4], data[actual_time_idx + 5],
+                            data[actual_time_idx + 6], data[actual_time_idx + 7],
+                        ]);
+                    } else {
+                        actual_time = time; // Fallback to bucket index
+                    }
+                } else {
+                    actual_time = time; // Fallback to bucket index
+                }
             } else {
                 // v1 API, LoD > 0: bucket index was stored as u64 (but values are 0-255)
                 let time_idx = time_array_start + ((i + 1) as usize * 8);
@@ -882,10 +913,12 @@ impl WaveformDataProvider {
                     data[time_idx + 4], data[time_idx + 5], data[time_idx + 6], data[time_idx + 7],
                 ]);
                 time = bucket_idx;
+                actual_time = time; // For v1, actual_time is same as bucket index
             }
 
-            transitions.push(Transition { 
+            transitions.push(Transition {
                 time,
+                actual_time,
                 value_type,
                 value_len: value_len as u16,
                 value,
@@ -1331,6 +1364,7 @@ impl WaveformDataProvider {
                                         .into_iter()
                                         .map(|t| Transition {
                                             time: t.time,
+                                            actual_time: t.actual_time,
                                             value_type: t.value_type,
                                             value_len: t.value_len,
                                             value: t.value,
@@ -1757,6 +1791,7 @@ if tile_missing_signals.is_empty() {
     ) -> (Transition, bool) {
         let default_transition = Transition {
             time: 0,
+            actual_time: 0,
             value_type: 0,
             value_len: 1,
             value: vec![b'0'],
@@ -2265,8 +2300,9 @@ if tile_missing_signals.is_empty() {
                         let value = data[value_idx..value_idx + value_len].to_vec();
 
                         // Add start value transition with special time marker
-                        transitions.push(Transition { 
+                        transitions.push(Transition {
                             time: BOUNDARY_TIME_START,
+                            actual_time: BOUNDARY_TIME_START,
                             value_type: _value_type,
                             value_len: value_len as u16,
                             value,
@@ -2305,7 +2341,8 @@ if tile_missing_signals.is_empty() {
 
             // Parse time based on API version and LoD
             let time: u64;
-            
+            let actual_time: u64;
+
             if lod == 0 {
                 // LoD 0: always u64 time (absolute timestamp)
                 let time_idx = time_array_start + ((i + 1) as usize * 8);
@@ -2316,10 +2353,11 @@ if tile_missing_signals.is_empty() {
                     data[time_idx], data[time_idx + 1], data[time_idx + 2], data[time_idx + 3],
                     data[time_idx + 4], data[time_idx + 5], data[time_idx + 6], data[time_idx + 7],
                 ]);
+                // For LoD 0, actual_time is same as time
+                actual_time = time;
             } else if is_v2 {
                 // v2 API, LoD > 0: bucket index is u16 (0-255)
                 // time_array_offset points to u16 array: [u16::MAX (start), bucket_idx0, bucket_idx1, ...]
-                // We don't save transition time, just use bucket index for first/last pairing
                 let time_idx = time_array_start + 2 + ((i as usize) * 2); // +2 to skip u16 start marker
                 if time_idx + 2 > data.len() {
                     break;
@@ -2332,6 +2370,25 @@ if tile_missing_signals.is_empty() {
                 } else {
                     bucket_idx as u64
                 };
+
+                // Read actual transition time from transition_time_array (v2 API)
+                if has_transition_time_array {
+                    let actual_time_idx = transition_time_array_start + ((i + 1) as usize * 8); // +8 to skip start marker
+                    if actual_time_idx + 8 <= data.len() {
+                        actual_time = u64::from_le_bytes([
+                            data[actual_time_idx], data[actual_time_idx + 1],
+                            data[actual_time_idx + 2], data[actual_time_idx + 3],
+                            data[actual_time_idx + 4], data[actual_time_idx + 5],
+                            data[actual_time_idx + 6], data[actual_time_idx + 7],
+                        ]);
+                    } else {
+                        // Fallback: calculate from bucket index
+                        actual_time = chunk_header.time_start + (time * (1u64 << lod));
+                    }
+                } else {
+                    // Fallback: calculate from bucket index
+                    actual_time = chunk_header.time_start + (time * (1u64 << lod));
+                }
             } else {
                 // v1 API, LoD > 0: bucket index was stored as u64 (but values are 0-255)
                 let time_idx = time_array_start + ((i + 1) as usize * 8);
@@ -2343,10 +2400,13 @@ if tile_missing_signals.is_empty() {
                     data[time_idx + 4], data[time_idx + 5], data[time_idx + 6], data[time_idx + 7],
                 ]);
                 time = bucket_idx;
+                // For v1, calculate actual_time from bucket index
+                actual_time = chunk_header.time_start + (time * (1u64 << lod));
             }
 
             transitions.push(Transition {
                 time,
+                actual_time,
                 value_type,
                 value_len: value_len as u16,
                 value,
@@ -2357,6 +2417,7 @@ if tile_missing_signals.is_empty() {
             // Fallback: create at least one transition
             transitions.push(Transition {
                 time: chunk_header.time_start,
+                actual_time: chunk_header.time_start,
                 value_type: 0,
                 value_len: 1,
                 value: vec![b'0'],
@@ -2739,6 +2800,7 @@ if tile_missing_signals.is_empty() {
             if last_value != Some(extracted_value) {
                 result.push(Transition {
                     time: t.time,
+                    actual_time: t.actual_time,
                     value_type: 0,
                     value_len: extracted_bytes.len() as u16,
                     value: extracted_bytes,
@@ -2790,17 +2852,19 @@ if tile_missing_signals.is_empty() {
                     let extracted_bytes = extracted_str.into_bytes();
                     Some(Transition {
                         time: last.time,
+                        actual_time: last.actual_time,
                         value_type: 0,
                         value_len: extracted_bytes.len() as u16,
                         value: extracted_bytes,
                     })
                 });
-                
+
                 // Create new bucket with extracted values
                 let extracted_bucket = BucketData {
                     offset: bucket.offset,
                     first: Transition {
                         time: bucket.first.time,
+                        actual_time: bucket.first.actual_time,
                         value_type: 0,
                         value_len: extracted_first_bytes.len() as u16,
                         value: extracted_first_bytes,
@@ -3285,6 +3349,7 @@ if tile_missing_signals.is_empty() {
                 cross_tile_value.clone().unwrap_or_else(|| {
                     Transition {
                         time: 0,
+                        actual_time: 0,
                         value_type: 0,
                         value_len: 1,
                         value: vec![b'0'],
@@ -3317,7 +3382,7 @@ if tile_missing_signals.is_empty() {
             // Process each bucket in the tile that intersects with viewport
             for bucket_idx in first_bucket_idx..=last_bucket_idx {
                 let bucket_start_time = tile_start + (bucket_idx as u64) * bucket_size;
-                let bucket_end_time = bucket_start_time + bucket_size;
+                let bucket_end_time = bucket_start_time + bucket_size - 1;  // Inclusive end, not overlapping with next bucket
                 
                 // Skip if completely outside viewport (shouldn't happen with our range calculation)
                 if bucket_end_time < viewport_start_u64 || bucket_start_time > viewport_end_u64 {
@@ -3426,37 +3491,90 @@ if tile_missing_signals.is_empty() {
                             // Update current value to last
                             current_value = last_trans.clone();
                         } else {
-                            // Single transition: draw stable value
+                            // Single transition: draw with precise timing using actual_time
                             let value_trans = &bucket.first;
-                            let (display_str, value_type_str, has_xz) = transition_to_display(value_trans);
-                            let final_display_str = if width > 1 {
-                                format_multi_bit(value_trans)
-                            } else {
-                                display_str.clone()
-                            };
+                            let actual_transition_time = value_trans.actual_time;
 
-                            // Format min/max values according to display_format
-                            let min_max_val = if width > 1 {
-                                format_multi_bit(value_trans)
-                            } else {
-                                display_str
-                            };
+                            // Check if actual transition time is within bucket range
+                            if bucket_start_time < actual_transition_time && actual_transition_time <= bucket_end_time {
+                                // Draw previous value before transition
+                                let prev_draw_end = ((actual_transition_time - 1) as f64).min(self.viewport.time_end);
+                                if prev_draw_end > draw_start {
+                                    let prev_x1 = ((prev_draw_end - self.viewport.time_start) / time_range) * self.canvas_width;
+                                    let (prev_display_str, prev_value_type_str, prev_has_xz) = transition_to_display(&current_value);
+                                    let prev_final_display_str = if width > 1 {
+                                        format_multi_bit(&current_value)
+                                    } else {
+                                        prev_display_str.clone()
+                                    };
 
-                            segments.push(RenderSegment {
-                                x0,
-                                x1,
-                                y,
-                                value: ValueInfo {
-                                    value_type: value_type_str,
-                                    display_str: final_display_str,
-                                    width,
-                                    has_xz,
-                                    min_value: Some(min_max_val.clone()),
-                                    max_value: Some(min_max_val),
-                                    is_min_max: false,
-                                },
-                                signal_name: signal_name.to_string(),
-                            });
+                                    segments.push(RenderSegment {
+                                        x0,
+                                        x1: prev_x1,
+                                        y,
+                                        value: ValueInfo {
+                                            value_type: prev_value_type_str,
+                                            display_str: prev_final_display_str,
+                                            width,
+                                            has_xz: prev_has_xz,
+                                            min_value: Some(prev_display_str.clone()),
+                                            max_value: Some(prev_display_str),
+                                            is_min_max: false,
+                                        },
+                                        signal_name: signal_name.to_string(),
+                                    });
+                                }
+
+                                // Draw new value from transition point to bucket end
+                                let trans_draw_start = (actual_transition_time as f64).max(self.viewport.time_start);
+                                let trans_x0 = ((trans_draw_start - self.viewport.time_start) / time_range) * self.canvas_width;
+                                let (display_str, value_type_str, has_xz) = transition_to_display(value_trans);
+                                let final_display_str = if width > 1 {
+                                    format_multi_bit(value_trans)
+                                } else {
+                                    display_str.clone()
+                                };
+
+                                segments.push(RenderSegment {
+                                    x0: trans_x0,
+                                    x1,
+                                    y,
+                                    value: ValueInfo {
+                                        value_type: value_type_str,
+                                        display_str: final_display_str,
+                                        width,
+                                        has_xz,
+                                        min_value: Some(display_str.clone()),
+                                        max_value: Some(display_str),
+                                        is_min_max: false,
+                                    },
+                                    signal_name: signal_name.to_string(),
+                                });
+                            } else {
+                                // Transition time not in valid range, draw entire bucket with first value
+                                let (display_str, value_type_str, has_xz) = transition_to_display(value_trans);
+                                let final_display_str = if width > 1 {
+                                    format_multi_bit(value_trans)
+                                } else {
+                                    display_str.clone()
+                                };
+
+                                segments.push(RenderSegment {
+                                    x0,
+                                    x1,
+                                    y,
+                                    value: ValueInfo {
+                                        value_type: value_type_str,
+                                        display_str: final_display_str,
+                                        width,
+                                        has_xz,
+                                        min_value: Some(display_str.clone()),
+                                        max_value: Some(display_str),
+                                        is_min_max: false,
+                                    },
+                                    signal_name: signal_name.to_string(),
+                                });
+                            }
 
                             // Update current value
                             current_value = value_trans.clone();
@@ -3487,6 +3605,7 @@ if tile_missing_signals.is_empty() {
                 let last_trans = cross_tile_value.unwrap_or_else(|| {
                     Transition {
                         time: 0,
+                        actual_time: 0,
                         value_type: 0,
                         value_len: 1,
                         value: vec![b'0'],
@@ -3594,6 +3713,7 @@ if tile_missing_signals.is_empty() {
         // Default transition (used if no start_value provided)
         let default_transition = Transition {
             time: 0,
+            actual_time: 0,
             value_type: 0,
             value_len: 1,
             value: vec![b'0'],
@@ -4191,6 +4311,7 @@ if tile_missing_signals.is_empty() {
                             let (prev_tile_start, prev_buckets) = sorted_bucket_data[tile_idx - 1];
                             let mut last_transition = Transition {
                                 time: 0,
+                                actual_time: 0,
                                 value_type: 0,
                                 value_len: 1,
                                 value: vec![b'0'],
@@ -4212,6 +4333,7 @@ if tile_missing_signals.is_empty() {
                                 .map(|(_, _, _, value)| value.clone())
                                 .unwrap_or_else(|| Transition {
                                     time: 0,
+                                    actual_time: 0,
                                     value_type: 0,
                                     value_len: 1,
                                     value: vec![b'0'],

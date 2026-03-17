@@ -106,10 +106,11 @@ impl DataBlock {
 /// Transition data point (stores original server format)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transition {
-    pub time: u64,
+    pub time: u64,        // For LoD 0: absolute time; For LoD 1+: bucket offset (0-255)
+    pub actual_time: u64, // Actual transition timestamp (for LoD 1+ precise drawing), same as time for LoD 0
     pub value_type: u8,   // Original value type from server (0=Numeric, 1=String, 2=Real, 3=BinaryCompressed)
-    pub value_len: u16,  // Original value length from server
-    pub value: Vec<u8>,  // Original value bytes from server
+    pub value_len: u16,   // Original value length from server
+    pub value: Vec<u8>,   // Original value bytes from server
 }
 
 /// Signal data within a group
@@ -396,7 +397,7 @@ pub fn deserialize_group_data_v2(data: &[u8]) -> Result<GroupData, String> {
             let value = data[pos..pos + value_len].to_vec();
             pos += value_len;
 
-            transitions.push(Transition { time, value_type, value_len: value_len as u16, value });
+            transitions.push(Transition { time, actual_time: time, value_type, value_len: value_len as u16, value });
         }
 
         signals.push(SignalData {
@@ -483,7 +484,7 @@ pub fn read_signal_from_group_v2(data: &[u8], draw_sig_id: u32) -> Result<Option
             let value = data[pos..pos + value_len].to_vec();
             pos += value_len;
 
-            transitions.push(Transition { time, value_type, value_len: value_len as u16, value });
+            transitions.push(Transition { time, actual_time: time, value_type, value_len: value_len as u16, value });
         }
 
     Ok(Some(SignalData {

@@ -20,15 +20,20 @@ This document defines the rules for drawing waveform segments from tile-based da
 Each tile returns for LoD 1+:
 
 ```
-[Start Value] (time=0xFFFFFFFFFFFFFFFF, value=value before tile start)
-[bucket 0] (time=0, value=first)                    <- if bucket has data
-           (time=0, value=last)                     <- if bucket has multiple transitions
-[bucket 1] (time=1, value=first)                    <- if bucket has data
-           (time=1, value=last)                     <- if bucket has multiple transitions
+[Start Value] (time=0xFFFFFFFFFFFFFFFF, actual_time=0xFFFFFFFFFFFFFFFF, value=value before tile start)
+[bucket 0] (time=0, actual_time=timestamp, value=first)                    <- if bucket has data
+           (time=0, actual_time=timestamp, value=last)                     <- if bucket has multiple transitions
+[bucket 1] (time=1, actual_time=timestamp, value=first)                    <- if bucket has data
+           (time=1, actual_time=timestamp, value=last)                     <- if bucket has multiple transitions
 ...
-[bucket 255] (time=255, value=first)                <- if bucket has data
-             (time=255, value=last)                 <- if bucket has multiple transitions
+[bucket 255] (time=255, actual_time=timestamp, value=first)                <- if bucket has data
+             (time=255, actual_time=timestamp, value=last)                 <- if bucket has multiple transitions
 ```
+
+**Fields**:
+- `time`: bucket index (0-255) for first/last pairing
+- `actual_time`: actual transition timestamp (u64, absolute time)
+- `value`: transition value
 
 ### Key Points
 
@@ -38,15 +43,17 @@ Each tile returns for LoD 1+:
 
 2. **LoD 0**: Normal transitions with absolute timestamps
 
-3. **LoD 1+**: First/Last pairs with bucket offset (0-255)
-   - **Time**: bucket offset within tile (0 to 255), NOT absolute time
+3. **LoD 1+**: First/Last pairs with bucket offset (0-255) and actual transition time
+   - **time**: bucket index within tile (0 to 255), for first/last pairing
+   - **actual_time**: actual transition timestamp (u64, absolute time), for precise drawing
    - **First**: value of first transition in bucket
    - **Last**: value of last transition in bucket (only present if multiple transitions)
    - **Empty bucket**: no records output for that bucket index
 
 4. **Time Conversion**:
    ```
-   bucket_absolute_time = tile_start + bucket_offset * (2^lod)
+   bucket_start_time = tile_start + bucket_index * (2^lod)
+   bucket_end_time = bucket_start_time + (2^lod) - 1  // Inclusive end
    ```
 
 5. **Viewport and Tile Relationship**:
@@ -65,7 +72,7 @@ Value = start_value
 
 FOR bucket_index from 0 to 255:
     bucket_start_time = tile_start + bucket_index * (2^lod)
-    bucket_end_time = bucket_start_time + (2^lod)
+    bucket_end_time = bucket_start_time + (2^lod) - 1  // End is inclusive, not overlapping with next bucket
     
     IF bucket_index not in tile.data:
         // Empty bucket: continue with current Value
@@ -76,8 +83,16 @@ FOR bucket_index from 0 to 255:
         draw toggling from bucket_start_time to bucket_end_time
         Value = tile.data[bucket_index].last.value
     ELSE IF tile.data[bucket_index] has only first:
-        // Single transition in bucket: draw stable value
-        draw tile.data[bucket_index].first.value from bucket_start_time to bucket_end_time
+        // Single transition in bucket: draw with precise timing
+        // first.time contains actual transition timestamp
+        if bucket_start_time < tile.data[bucket_index].first.time and tile.data[bucket_index].first.time <= bucket_end_time:
+            // Draw previous value before transition
+            draw Value from bucket_start_time to tile.data[bucket_index].first.time - 1
+            // Draw new value from transition point to bucket end
+            draw tile.data[bucket_index].first.value from tile.data[bucket_index].first.time to bucket_end_time
+        else:
+            // Transition time not in valid range, draw entire bucket with first value
+            draw tile.data[bucket_index].first.value from bucket_start_time to bucket_end_time
         Value = tile.data[bucket_index].first.value
 ```
 
