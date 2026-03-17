@@ -1,0 +1,150 @@
+详细测试报告
+================
+
+波形文件: picorv32
+测试信号: testbench.top.uut.picorv32_core.clk
+LoD: 10 (bucket_size=1024)
+起始时间: 0
+tile_span: 262144 (256 个 bucket)
+tiles 数量: 2
+
+MultiTile Header Info:
+  LoD: 10
+  Num Tiles: 2
+  Start Time: 0
+  Tile Span: 262144
+  Signal Count: 1
+
+=== Tile 0 ===
+
+信号 0 (handle=6):
+  time_array_offset: 53
+  value_array_offset: 161
+  transition_time_array_offset: 377
+  transition_count: 53
+  compression: 0
+  总 transitions: 54
+
+  详细 transactions:
+  Index  Bucket Index         Transition Time      Value                         
+  ------ -------------------- -------------------- ------------------------------
+  0      N/A (Start Value)    MAX (u64::MAX)       Numeric("1")                  
+  1      0                    0                    Numeric("1")                  
+  2      4                    4096                 Numeric("0")                  
+  3      9                    9216                 Numeric("1")                  
+  4      14                   14336                Numeric("0")                  
+  5      19                   19456                Numeric("1")                  
+  6      24                   24576                Numeric("0")                  
+  7      29                   29696                Numeric("1")                  
+  8      34                   34816                Numeric("0")                  
+  9      39                   39936                Numeric("1")                  
+  10     43                   44032                Numeric("0")                  
+  11     48                   49152                Numeric("1")                  
+  12     53                   54272                Numeric("0")                  
+  13     58                   59392                Numeric("1")                  
+  14     63                   64512                Numeric("0")                  
+  15     68                   69632                Numeric("1")                  
+  16     73                   74752                Numeric("0")                  
+  17     78                   79872                Numeric("1")                  
+  18     83                   84992                Numeric("0")                  
+  19     87                   89088                Numeric("1")                  
+  20     92                   94208                Numeric("0")                  
+  21     97                   99328                Numeric("1")                  
+  22     102                  104448               Numeric("0")                  
+  23     107                  109568               Numeric("1")                  
+  24     112                  114688               Numeric("0")                  
+  25     117                  119808               Numeric("1")                  
+  26     122                  124928               Numeric("0")                  
+  27     126                  129024               Numeric("1")                  
+  28     131                  134144               Numeric("0")                  
+  29     136                  139264               Numeric("1")                  
+  30     141                  144384               Numeric("0")                  
+  31     146                  149504               Numeric("1")                  
+  32     151                  154624               Numeric("0")                  
+  33     156                  159744               Numeric("1")                  
+  34     161                  164864               Numeric("0")                  
+  35     166                  169984               Numeric("1")                  
+  36     170                  174080               Numeric("0")                  
+  37     175                  179200               Numeric("1")                  
+  38     180                  184320               Numeric("0")                  
+  39     185                  189440               Numeric("1")                  
+  40     190                  194560               Numeric("0")                  
+  41     195                  199680               Numeric("1")                  
+  42     200                  204800               Numeric("0")                  
+  43     205                  209920               Numeric("1")                  
+  44     209                  214016               Numeric("0")                  
+  45     214                  219136               Numeric("1")                  
+  46     219                  224256               Numeric("0")                  
+  47     224                  229376               Numeric("1")                  
+  48     229                  234496               Numeric("0")                  
+  49     234                  239616               Numeric("1")                  
+  50     239                  244736               Numeric("0")                  
+  51     244                  249856               Numeric("1")                  
+  52     249                  254976               Numeric("0")                  
+  53     253                  259072               Numeric("1")                  
+=== Tile 1 ===
+
+信号 0 (handle=6):
+  time_array_offset: 53
+  value_array_offset: 159
+  transition_time_array_offset: 371
+  transition_count: 52
+  compression: 0
+  总 transitions: 53
+
+  详细 transactions:
+  Index  Bucket Index         Transition Time      Value                         
+  ------ -------------------- -------------------- ------------------------------
+  0      N/A (Start Value)    MAX (u64::MAX)       Numeric("1")                  
+  1      258                  264192               Numeric("0")                  
+  2      263                  269312               Numeric("1")                  
+  3      268                  274432               Numeric("0")                  
+  4      273                  279552               Numeric("1")                  
+  5      278                  284672               Numeric("0")                  
+  6      283                  289792               Numeric("1")                  
+  7      288                  294912               Numeric("0")                  
+  8      292                  299008               Numeric("1")                  
+  9      297                  304128               Numeric("0")                  
+  10     302                  309248               Numeric("1")                  
+  11     307                  314368               Numeric("0")                  
+  12     312                  319488               Numeric("1")                  
+  13     317                  324608               Numeric("0")                  
+  14     322                  329728               Numeric("1")                  
+  15     327                  334848               Numeric("0")                  
+  16     332                  339968               Numeric("1")                  
+  17     336                  344064               Numeric("0")                  
+  18     341                  349184               Numeric("1")                  
+  19     346                  354304               Numeric("0")                  
+  20     351                  359424               Numeric("1")                  
+  21     356                  364544               Numeric("0")                  
+  22     361                  369664               Numeric("1")                  
+  23     366                  374784               Numeric("0")                  
+  24     371                  379904               Numeric("1")                  
+  25     375                  384000               Numeric("0")                  
+  26     380                  389120               Numeric("1")                  
+  27     385                  394240               Numeric("0")                  
+  28     390                  399360               Numeric("1")                  
+  29     395                  404480               Numeric("0")                  
+  30     400                  409600               Numeric("1")                  
+  31     405                  414720               Numeric("0")                  
+  32     410                  419840               Numeric("1")                  
+  33     415                  424960               Numeric("0")                  
+  34     419                  429056               Numeric("1")                  
+  35     424                  434176               Numeric("0")                  
+  36     429                  439296               Numeric("1")                  
+  37     434                  444416               Numeric("0")                  
+  38     439                  449536               Numeric("1")                  
+  39     444                  454656               Numeric("0")                  
+  40     449                  459776               Numeric("1")                  
+  41     454                  464896               Numeric("0")                  
+  42     458                  468992               Numeric("1")                  
+  43     463                  474112               Numeric("0")                  
+  44     468                  479232               Numeric("1")                  
+  45     473                  484352               Numeric("0")                  
+  46     478                  489472               Numeric("1")                  
+  47     483                  494592               Numeric("0")                  
+  48     488                  499712               Numeric("1")                  
+  49     493                  504832               Numeric("0")                  
+  50     498                  509952               Numeric("1")                  
+  51     502                  514048               Numeric("0")                  
+  52     507                  519168               Numeric("1")                  

@@ -178,6 +178,20 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // 如果启用详细信号测试模式
+    if config.detailed_test {
+        println!("\n========================================");
+        println!("  详细信号测试模式");
+        println!("========================================\n");
+        
+        // 运行详细信号测试，完成后立即退出
+        hwda_server::compare_test::run_detailed_signal_test(&config).await;
+        println!("\n========================================");
+        println!("  详细信号测试完成，退出程序");
+        println!("========================================");
+        return Ok(());
+    }
+
     // 启动服务器
     let listener = tokio::net::TcpListener::bind(&config.bind_address()).await?;
     tracing::info!("服务器监听：{}", config.bind_address());

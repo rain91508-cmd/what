@@ -80,6 +80,10 @@ pub struct ServerConfig {
     /// 启用 LoD 20 专项测试模式
     #[arg(long, default_value = "false")]
     pub lod20_test: bool,
+
+    /// 启用详细信号测试模式（测试指定信号的详细对比）
+    #[arg(long, default_value = "false")]
+    pub detailed_test: bool,
 }
 
 impl ServerConfig {
@@ -166,6 +170,7 @@ impl Default for ServerConfig {
             verbose: false,
             compare_test: false,
             lod20_test: false,
+            detailed_test: false,
         }
     }
 }

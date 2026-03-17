@@ -1616,6 +1616,7 @@ impl WaveService {
                 lod_data.transitions.insert(0, Transition {
                     time: ChunkSerializer::BOUNDARY_TIME_START,
                     value: start_value,
+                    actual_time: None,
                 });
                 info!("信号 {} 添加 Start Value 到 LoD 数据", name);
                 
@@ -1825,6 +1826,7 @@ impl WaveService {
                         lod_data.add_transition(Transition {
                             time: ChunkSerializer::BOUNDARY_TIME_START,
                             value: start_value.clone(),
+                            actual_time: None,
                         });
                         
                         // 对每个 bucket 搜索 first 和 last
@@ -1848,8 +1850,9 @@ impl WaveService {
                                     lod_data.add_transition(Transition {
                                         time: bucket_idx as u64,
                                         value: f.clone(),
+                                        actual_time: None,
                                     });
-                                    
+
                                     // 如果有 last 且不同于 first，添加 last（与普通算法一致）
                                     if let Some(l) = last {
                                         if f != l {
@@ -1857,6 +1860,7 @@ impl WaveService {
                                             lod_data.add_transition(Transition {
                                                 time: bucket_idx as u64,
                                                 value: l.clone(),
+                                                actual_time: None,
                                             });
                                         }
                                     }

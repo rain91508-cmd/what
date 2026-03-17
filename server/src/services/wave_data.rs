@@ -1042,6 +1042,7 @@ impl LodPyramidGenerator {
                             width: source.width,
                             data: bucket_min.clone(),
                         },
+                        actual_time: None,
                     });
                 }
                 if bucket_max != bucket_min && bucket_max != last_value {
@@ -1051,6 +1052,7 @@ impl LodPyramidGenerator {
                             width: source.width,
                             data: bucket_max.clone(),
                         },
+                        actual_time: None,
                     });
                 }
 
@@ -1077,6 +1079,7 @@ impl LodPyramidGenerator {
                         width: source.width,
                         data: bucket_min.clone(),
                     },
+                    actual_time: None,
                 });
             }
             if bucket_max != bucket_min {
@@ -1086,6 +1089,7 @@ impl LodPyramidGenerator {
                         width: source.width,
                         data: bucket_max.clone(),
                     },
+                    actual_time: None,
                 });
             }
         }
@@ -1526,7 +1530,7 @@ impl ChunkSerializer {
                 
                 let value_data = &value_bytes[value_offset + 3..value_offset + 3 + value_len];
                 let value = SignalValue::from_fst(value_data, value_type);
-                transitions.push(Transition { time, value });
+                transitions.push(Transition { time, value, actual_time: None });
                 
                 // 移动到下一个值
                 value_offset += 3 + value_len;

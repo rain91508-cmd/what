@@ -430,3 +430,280 @@ fn compare_signal_wave_data(lod_low_data: &[crate::services::SignalWaveData], lo
         false
     }
 }
+
+/// 测试指定信号的详细对比，打印 fstapi 获取的所有 transactions
+/// 
+/// 信号: testbench.top.uut.picorv32_core.clk
+/// 起点: 0
+/// LoD: 10
+/// tile_span: 256 个 bucket
+/// tiles: 2 个
+pub async fn run_detailed_signal_test(config: &ServerConfig) {
+    println!("\n========================================");
+    println!("[DETAILED-TEST] 指定信号详细对比测试");
+    println!("========================================\n");
+    
+    // 测试参数
+    let wave_name = "picorv32";
+    let signal_name = "testbench.top.uut.picorv32_core.clk";
+    let test_signals = vec![signal_name.to_string()];
+    let lod: u32 = 10;
+    let start_time: u64 = 0;
+    let num_buckets = 256usize;
+    let num_tiles = 2usize;
+    
+    let bucket_size = 2u64.pow(lod);
+    let tile_span = bucket_size * num_buckets as u64;
+    
+    println!("[DETAILED-TEST] 波形文件: {}", wave_name);
+    println!("[DETAILED-TEST] 测试信号: {}", signal_name);
+    println!("[DETAILED-TEST] LoD: {} (bucket_size={})", lod, bucket_size);
+    println!("[DETAILED-TEST] 起始时间: {}", start_time);
+    println!("[DETAILED-TEST] tile_span: {} ({} 个 bucket)", tile_span, num_buckets);
+    println!("[DETAILED-TEST] tiles 数量: {}", num_tiles);
+    println!();
+    
+    // 创建服务
+    let state = ServerState::new(config.clone());
+    let api_service = WaveService::with_backend(state.clone(), FstBackend::FstApi);
+    let reader_service = WaveService::with_backend(state.clone(), FstBackend::FstReader);
+    
+    // ===== 1. 使用 fstapi 读取 =====
+    println!("[DETAILED-TEST] ===== 1. FSTAPI 读取 =====");
+    let api_tiles = match api_service.get_wave_data_tiles(
+        &wave_name,
+        &test_signals,
+        lod,
+        start_time,
+        tile_span,
+        num_tiles,
+        CompressionAlgorithm::None,
+    ).await {
+        Ok(d) => d.0,
+        Err(e) => {
+            println!("[DETAILED-TEST] FSTAPI 读取失败: {:?}", e);
+            return;
+        }
+    };
+    
+    // 解析并打印 fstapi 的所有 transactions
+    let api_multi = MultiTileChunkSerializer::deserialize(&api_tiles);
+    
+    // 创建输出文件
+    let output_file = format!("detailed_test_{}_{}_lod{}.txt", wave_name, signal_name.replace(".", "_"), lod);
+    let mut file_content = String::new();
+    
+    file_content.push_str(&format!("详细测试报告\n"));
+    file_content.push_str(&format!("================\n\n"));
+    file_content.push_str(&format!("波形文件: {}\n", wave_name));
+    file_content.push_str(&format!("测试信号: {}\n", signal_name));
+    file_content.push_str(&format!("LoD: {} (bucket_size={})\n", lod, bucket_size));
+    file_content.push_str(&format!("起始时间: {}\n", start_time));
+    file_content.push_str(&format!("tile_span: {} ({} 个 bucket)\n", tile_span, num_buckets));
+    file_content.push_str(&format!("tiles 数量: {}\n\n", num_tiles));
+    
+    match &api_multi {
+        Ok((header, tiles)) => {
+            file_content.push_str(&format!("MultiTile Header Info:\n"));
+            file_content.push_str(&format!("  LoD: {}\n", header.lod));
+            file_content.push_str(&format!("  Num Tiles: {}\n", header.num_tiles));
+            file_content.push_str(&format!("  Start Time: {}\n", header.start_time));
+            file_content.push_str(&format!("  Tile Span: {}\n", header.tile_span));
+            file_content.push_str(&format!("  Signal Count: {}\n\n", header.signal_count));
+            
+            for (tile_idx, (_, signals)) in tiles.iter().enumerate() {
+                println!("\n[DETAILED-TEST] --- Tile {} ---", tile_idx);
+                file_content.push_str(&format!("=== Tile {} ===\n", tile_idx));
+                
+                for (sig_idx, (sig_header, transitions)) in signals.iter().enumerate() {
+                    println!("[DETAILED-TEST] 信号 {} (handle={}): {} transitions",
+                        sig_idx, sig_header.signal_handle, transitions.len());
+                    
+                    file_content.push_str(&format!("\n信号 {} (handle={}):\n", sig_idx, sig_header.signal_handle));
+                    file_content.push_str(&format!("  time_array_offset: {}\n", sig_header.time_array_offset));
+                    file_content.push_str(&format!("  value_array_offset: {}\n", sig_header.value_array_offset));
+                    file_content.push_str(&format!("  transition_time_array_offset: {}\n", sig_header.transition_time_array_offset));
+                    file_content.push_str(&format!("  transition_count: {}\n", sig_header.transition_count));
+                    file_content.push_str(&format!("  compression: {}\n", sig_header.compression));
+                    file_content.push_str(&format!("  总 transitions: {}\n\n", transitions.len()));
+                    
+                    file_content.push_str(&format!("  详细 transactions:\n"));
+                    file_content.push_str(&format!("  {:<6} {:<20} {:<20} {:<30}\n", "Index", "Bucket Index", "Transition Time", "Value"));
+                    file_content.push_str(&format!("  {:-<6} {:-<20} {:-<20} {:-<30}\n", "", "", "", ""));
+                    
+                    println!("[DETAILED-TEST] 详细 transactions:");
+                    for (trans_idx, trans) in transitions.iter().enumerate() {
+                        let (bucket_idx, time_str) = if trans.time == u64::MAX {
+                            ("N/A (Start Value)".to_string(), "MAX (u64::MAX)".to_string())
+                        } else {
+                            // 计算 bucket index
+                            let bucket = trans.time / bucket_size;
+                            (bucket.to_string(), trans.time.to_string())
+                        };
+                        
+                        let value_str = format!("{:?}", trans.value);
+                        
+                        println!("[DETAILED-TEST]   [{}] bucket_idx={}, time={}, value={}",
+                            trans_idx, bucket_idx, time_str, value_str);
+                        
+                        file_content.push_str(&format!("  {:<6} {:<20} {:<20} {:<30}\n", 
+                            trans_idx, bucket_idx, time_str, value_str));
+                    }
+                }
+            }
+            
+            // 写入文件
+            match std::fs::write(&output_file, file_content) {
+                Ok(_) => println!("\n[DETAILED-TEST] 结果已写入文件: {}", output_file),
+                Err(e) => println!("\n[DETAILED-TEST] 写入文件失败: {:?}", e),
+            }
+        }
+        Err(e) => {
+            println!("[DETAILED-TEST] 解析 FSTAPI 数据失败: {:?}", e);
+        }
+    }
+    
+    // ===== 2. 使用 lod_low 读取 =====
+    println!("\n[DETAILED-TEST] ===== 2. LOD_LOW 读取 =====");
+    let wave_path = PathBuf::from(&config.wave_dir).join(format!("{}.fst", wave_name));
+    let cache = crate::services::fst_reader_cache::get_fst_reader_cache();
+    
+    let lod_low_result = match read_signals_data_fst_reader_batch_lod_low(
+        &cache,
+        &wave_path,
+        &test_signals,
+        crate::services::LodLevel(lod),
+        start_time,
+        start_time + tile_span * num_tiles as u64,
+        num_buckets,
+    ).await {
+        Ok(d) => d,
+        Err(e) => {
+            println!("[DETAILED-TEST] LOD_LOW 读取失败: {:?}", e);
+            Vec::new()
+        }
+    };
+    
+    println!("[DETAILED-TEST] LOD_LOW 读取了 {} 个信号", lod_low_result.len());
+    for (sig_idx, signal) in lod_low_result.iter().enumerate() {
+        println!("[DETAILED-TEST]   信号 {}: {} transitions",
+            sig_idx, signal.transitions.len());
+    }
+    
+    // ===== 3. 使用 lod_high 读取 =====
+    println!("\n[DETAILED-TEST] ===== 3. LOD_HIGH 读取 =====");
+    let lod_high_result = match read_signals_data_fst_reader_batch_lod_high(
+        &cache,
+        &wave_path,
+        &test_signals,
+        crate::services::LodLevel(lod),
+        start_time,
+        start_time + tile_span * num_tiles as u64,
+        num_buckets,
+    ).await {
+        Ok(d) => d,
+        Err(e) => {
+            println!("[DETAILED-TEST] LOD_HIGH 读取失败: {:?}", e);
+            Vec::new()
+        }
+    };
+    
+    println!("[DETAILED-TEST] LOD_HIGH 读取了 {} 个信号", lod_high_result.len());
+    for (sig_idx, signal) in lod_high_result.iter().enumerate() {
+        println!("[DETAILED-TEST]   信号 {}: {} transitions",
+            sig_idx, signal.transitions.len());
+    }
+    
+    // ===== 4. 对比三个实现 =====
+    println!("\n[DETAILED-TEST] ===== 4. 对比结果 =====");
+    
+    // 对比 fstapi vs lod_low
+    let reader_tiles = match reader_service.get_wave_data_tiles(
+        &wave_name,
+        &test_signals,
+        lod,
+        start_time,
+        tile_span,
+        num_tiles,
+        CompressionAlgorithm::None,
+    ).await {
+        Ok(d) => d.0,
+        Err(e) => {
+            println!("[DETAILED-TEST] Reader 读取失败: {:?}", e);
+            return;
+        }
+    };
+    
+    let passed = compare_tile_data(&reader_tiles, &api_tiles, lod);
+    if passed {
+        println!("[DETAILED-TEST] ✓ FSTAPI vs READER: 匹配");
+    } else {
+        println!("[DETAILED-TEST] ✗ FSTAPI vs READER: 不匹配");
+    }
+    
+    // 对比 lod_low vs lod_high
+    let low_high_match = compare_lod_low_high_detailed(&lod_low_result, &lod_high_result);
+    if low_high_match {
+        println!("[DETAILED-TEST] ✓ LOD_LOW vs LOD_HIGH: 匹配");
+    } else {
+        println!("[DETAILED-TEST] ✗ LOD_LOW vs LOD_HIGH: 不匹配");
+    }
+    
+    println!("\n[DETAILED-TEST] ===== 测试结束 =====");
+}
+
+/// 详细对比 lod_low 和 lod_high 的结果
+fn compare_lod_low_high_detailed(
+    low_result: &[crate::services::wave_data::SignalWaveData],
+    high_result: &[crate::services::wave_data::SignalWaveData],
+) -> bool {
+    if low_result.len() != high_result.len() {
+        println!("[DETAILED-TEST] 信号数量不匹配: low={}, high={}", low_result.len(), high_result.len());
+        return false;
+    }
+    
+    let mut total_diff = 0usize;
+    
+    for (sig_idx, (low_sig, high_sig)) in low_result.iter().zip(high_result.iter()).enumerate() {
+        let low_trans = &low_sig.transitions;
+        let high_trans = &high_sig.transitions;
+        
+        if low_trans.len() != high_trans.len() {
+            let diff = if low_trans.len() > high_trans.len() {
+                low_trans.len() - high_trans.len()
+            } else {
+                high_trans.len() - low_trans.len()
+            };
+            total_diff += diff;
+            
+            println!("[DETAILED-TEST] 信号 {}: transition 数量不匹配 (low={}, high={}, diff={})",
+                sig_idx, low_trans.len(), high_trans.len(), diff);
+            
+            // 显示前几个 transition
+            let min_len = low_trans.len().min(high_trans.len()).min(5);
+            for j in 0..min_len {
+                println!("      [{}]: low(time={}, value={:?}) vs high(time={}, value={:?})",
+                    j, low_trans[j].time, low_trans[j].value,
+                    high_trans[j].time, high_trans[j].value);
+            }
+        } else {
+            // 数量相同，比较每个 transition
+            for (j, (low_t, high_t)) in low_trans.iter().zip(high_trans.iter()).enumerate() {
+                if low_t.time != high_t.time || low_t.value != high_t.value {
+                    println!("[DETAILED-TEST] 信号 {} transition[{}] 不匹配",
+                        sig_idx, j);
+                    println!("      low:  time={}, value={:?}", low_t.time, low_t.value);
+                    println!("      high: time={}, value={:?}", high_t.time, high_t.value);
+                    total_diff += 1;
+                }
+            }
+        }
+    }
+    
+    if total_diff == 0 {
+        true
+    } else {
+        println!("[DETAILED-TEST] 共发现 {} 处差异", total_diff);
+        false
+    }
+}
