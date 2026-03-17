@@ -2962,14 +2962,15 @@ if tile_missing_signals.is_empty() {
         }
 
         // Find the first transition at or after viewport start
+        // For LoD 0, use actual_time (time field is not used)
         let viewport_start_u64 = self.viewport.time_start as u64;
         let first_visible_idx = normal_transitions.iter()
-            .position(|t| t.time >= viewport_start_u64)
+            .position(|t| t.actual_time >= viewport_start_u64)
             .unwrap_or(0);
 
         // If first visible transition is after viewport start, draw start value segment
         if first_visible_idx < normal_transitions.len() {
-            let first_trans_time = normal_transitions[first_visible_idx].time as f64;
+            let first_trans_time = normal_transitions[first_visible_idx].actual_time as f64;
             
             // Check if we need an initial segment (first transition is after viewport start)
             if first_trans_time > self.viewport.time_start {
@@ -3020,10 +3021,11 @@ if tile_missing_signals.is_empty() {
         }
 
         // Draw transitions
+        // For LoD 0, use actual_time (time field is not used)
         for i in 0..normal_transitions.len() {
-            let t0 = normal_transitions[i].time as f64;
+            let t0 = normal_transitions[i].actual_time as f64;
             let t1 = if i + 1 < normal_transitions.len() {
-                normal_transitions[i + 1].time as f64
+                normal_transitions[i + 1].actual_time as f64
             } else {
                 self.viewport.time_end
             };
