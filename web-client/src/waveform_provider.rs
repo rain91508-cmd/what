@@ -3226,10 +3226,20 @@ if tile_missing_signals.is_empty() {
             // Get initial value for this tile
             // For first tile: need to find value at viewport_start according to spec Rule 2
             // For subsequent tiles: use last value from previous tile (cross-tile continuity)
-            let initial_value = if tile_idx == 0 {
-                // First tile: find value at viewport_start
-                // Pass all tiles data to allow searching backward into previous tiles if needed
-                let viewport_start_u64 = self.viewport.time_start as u64;
+            let viewport_start_u64 = self.viewport.time_start as u64;
+            let initial_value = if tile_idx == 0 && viewport_start_u64 == *tile_start {
+                // Viewport starts exactly at tile start, use bucket 0's value if available
+                // This handles the case where bucket 0 has a first transition at tile start
+                if let Some(bucket) = buckets.get(&0) {
+                    // Bucket 0 exists, use its first value as initial value
+                    bucket.first.clone()
+                } else {
+                    // Bucket 0 is empty, need to find value from start_value or previous tiles
+                    self.find_value_at_time(signal_name, *tile_start, buckets, viewport_start_u64, lod, tile_idx, bucket_data)
+                }
+            } else if tile_idx == 0 {
+                // First tile but viewport starts within the tile
+                // Use find_value_at_time to handle Rule 2 correctly
                 self.find_value_at_time(signal_name, *tile_start, buckets, viewport_start_u64, lod, tile_idx, bucket_data)
             } else {
                 // Subsequent tiles: use value from previous tile's last bucket
