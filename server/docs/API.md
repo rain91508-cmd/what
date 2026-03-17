@@ -875,7 +875,7 @@ URL: /api/wave/riscv2/lod/0/signals/trie:base64encodedstring/data
 |------|---------|------|------|
 | Bucket 索引数组 | `time_array_offset` | u16 数组 | **用于 first/last 配对** |
 | 值数组 | `value_array_offset` | 变长 | 信号值（包含 Start Value） |
-| 实际时间数组 | `transition_time_array_offset` | u64 数组 | **存储实际 transition 时间** |
+| 实际时间数组 | `transition_time_array_offset` | u64 数组 | **存储实际 transition 时间（包含 Start Value，时间为 u64::MAX）** |
 
 **特殊标记（Start Value）**:
 
