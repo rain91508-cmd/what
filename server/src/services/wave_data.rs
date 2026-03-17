@@ -1265,6 +1265,7 @@ impl ChunkSerializer {
             // LoD 0: time_array = u64数组（实际时间），transition_time_array = 不存在（offset=0）
             // LoD > 0: time_array = u16数组（bucket索引），transition_time_array = u64数组（实际时间，包含Start Value）
             let is_lod0 = level == 0;
+            let bucket_size = 2u64.pow(level as u32); // 计算 bucket_size
             
             // 构建 time_array 和 transition_time_array（LoD > 0）
             let mut time_array = Vec::new();
@@ -1278,22 +1279,19 @@ impl ChunkSerializer {
                     // LoD > 0: 
                     // - time_array 存储 bucket 索引（u16）
                     // - transition_time_array 存储实际时间（u64，包含Start Value）
-                    let bucket_idx = if t.time == Self::BOUNDARY_TIME_START {
-                        0xFFFFu16 // Start Value 的特殊标记
+                    // 
+                    // 注意：对于 LoD > 0，t.time 是相对于 tile 的 bucket 索引
+                    // 需要转换为绝对时间：absolute_time = time_start + bucket_idx * bucket_size
+                    let (bucket_idx, actual_time) = if t.time == Self::BOUNDARY_TIME_START {
+                        (0xFFFFu16, Self::BOUNDARY_TIME_START) // Start Value
                     } else {
-                        // 假设 t.time 已经是 bucket 索引（由调用者保证）
-                        // 如果 t.time 是实际时间，需要转换为 bucket 索引
-                        // 这里简化处理，直接使用 t.time 作为 bucket 索引
-                        t.time as u16
+                        // t.time 是 bucket 索引
+                        let bucket_idx = t.time as u16;
+                        // 计算绝对时间
+                        let absolute_time = time_start + t.time * bucket_size;
+                        (bucket_idx, absolute_time)
                     };
                     time_array.extend_from_slice(&bucket_idx.to_le_bytes());
-                    
-                    // transition_time_array 存储实际时间
-                    let actual_time = if t.time == Self::BOUNDARY_TIME_START {
-                        Self::BOUNDARY_TIME_START // u64::MAX
-                    } else {
-                        t.time
-                    };
                     transition_time_array.extend_from_slice(&actual_time.to_le_bytes());
                 }
             }
