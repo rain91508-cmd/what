@@ -3264,12 +3264,22 @@ if tile_missing_signals.is_empty() {
                     bucket.first.clone()
                 } else {
                     // Bucket 0 is empty, need to find value from start_value or previous tiles
-                    self.find_value_at_time(signal_name, *tile_start, buckets, viewport_start_u64, lod, tile_idx, bucket_data)
+                    // Get start_value from signal_data's tile_info
+                    let start_value = self.signal_data.get(signal_name)
+                        .and_then(|data| data.tile_info.iter()
+                            .find(|(start, _, _, _)| *start == *tile_start)
+                            .map(|(_, _, _, value)| value));
+                    self.find_value_at_time(signal_name, *tile_start, buckets, viewport_start_u64, lod, tile_idx, bucket_data, start_value)
                 }
             } else if tile_idx == 0 {
                 // First tile but viewport starts within the tile
                 // Use find_value_at_time to handle Rule 2 correctly
-                self.find_value_at_time(signal_name, *tile_start, buckets, viewport_start_u64, lod, tile_idx, bucket_data)
+                // Get start_value from signal_data's tile_info
+                let start_value = self.signal_data.get(signal_name)
+                    .and_then(|data| data.tile_info.iter()
+                        .find(|(start, _, _, _)| *start == *tile_start)
+                        .map(|(_, _, _, value)| value));
+                self.find_value_at_time(signal_name, *tile_start, buckets, viewport_start_u64, lod, tile_idx, bucket_data, start_value)
             } else {
                 // Subsequent tiles: use value from previous tile's last bucket
                 cross_tile_value.clone().unwrap_or_else(|| {
@@ -3557,6 +3567,16 @@ if tile_missing_signals.is_empty() {
     /// Find the value at a specific time according to Rule 2
     /// This handles the case where viewport_start falls within a bucket
     /// Can search backward into previous tiles if needed
+    /// 
+    /// # Arguments
+    /// * `signal_name` - Signal name for logging
+    /// * `tile_start` - Start time of current tile
+    /// * `buckets` - Buckets in current tile
+    /// * `target_time` - Time to find value at
+    /// * `lod` - Level of detail
+    /// * `tile_idx` - Index of current tile in all_bucket_data
+    /// * `all_bucket_data` - All tiles' bucket data
+    /// * `start_value` - Start value of current tile (from tile_info), used as fallback
     fn find_value_at_time(
         &self,
         signal_name: &str,
@@ -3566,11 +3586,12 @@ if tile_missing_signals.is_empty() {
         lod: u32,
         tile_idx: usize,
         all_bucket_data: &[(u64, HashMap<u32, BucketData>)],
+        start_value: Option<&Transition>,
     ) -> Transition {
         let bucket_size = 1u64 << lod;
         const TILE_SPAN_MULTIPLIER: u32 = 256;
         
-        // Default transition
+        // Default transition (used if no start_value provided)
         let default_transition = Transition {
             time: 0,
             value_type: 0,
@@ -3655,7 +3676,11 @@ if tile_missing_signals.is_empty() {
                 }
             }
             
-            // No previous transitions found, return default
+            // No previous transitions found, use start_value if available
+            if let Some(start) = start_value {
+                // console_log!("[WASM]   No previous transitions found, using start_value: {:?}", start.value);
+                return start.clone();
+            }
             // console_log!("[WASM]   No previous transitions found, returning default");
             return default_transition;
         } else {
@@ -3706,15 +3731,21 @@ if tile_missing_signals.is_empty() {
             }
         }
         
-        // No transitions found in any previous tiles, use tile's start_value
-        let start_value = self.signal_data.get(signal_name)
+        // No transitions found in any previous tiles, use start_value if available
+        if let Some(start) = start_value {
+            // console_log!("[WASM]   Using provided start_value: {:?}", start.value);
+            return start.clone();
+        }
+        
+        // Fallback: try to get from signal_data (should not happen if called correctly)
+        let fallback = self.signal_data.get(signal_name)
             .and_then(|data| data.tile_info.iter()
                 .find(|(start, _, _, _)| *start == tile_start)
                 .map(|(_, _, _, value)| value.clone()))
             .unwrap_or_else(|| default_transition);
         
-        // console_log!("[WASM]   Using tile start_value: {:?}", start_value.value);
-        start_value
+        // console_log!("[WASM]   Using fallback start_value: {:?}", fallback.value);
+        fallback
     }
 
     /// Classify value for rendering
