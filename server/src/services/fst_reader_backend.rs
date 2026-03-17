@@ -2,7 +2,7 @@
 
 use crate::error::{Result, ServerError};
 use crate::services::wave_data::{SignalWaveData, Transition, SignalValueType, SignalValue};
-use crate::services::wave_service::search_bucket_first_last_with_time_from_fst;
+
 use crate::services::LodLevel;
 use crate::services::fst_reader_cache::FstReaderCache;
 use fst_reader::{FstReader, FstHierarchyEntry, FstSignalHandle, FstFilter, FstSignalValue};
