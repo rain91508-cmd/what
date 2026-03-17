@@ -2717,8 +2717,14 @@ if tile_missing_signals.is_empty() {
                             display_format,
                         );
                     } else {
-                        // Check if this is LoD 1+ data (min/max format)
-                        let is_lod_min_max = self.detect_min_max_format(&data.transitions);
+                        // For LoD 0, always use normal segment generation
+                        // For LoD 1+, check if it's min/max format
+                        let lod = self.current_lod.unwrap_or(25);
+                        let is_lod_min_max = if lod == 0 {
+                            false // LoD 0 never uses min/max format
+                        } else {
+                            self.detect_min_max_format(&data.transitions)
+                        };
 
                         if is_lod_min_max {
                             // Process LoD 1+ min/max format
