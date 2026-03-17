@@ -1299,7 +1299,7 @@ impl ChunkSerializer {
                         // actual_time 就是 t.time（已经是绝对时间）
                         
                         // 调试信息
-                        eprintln!("[DEBUG] ChunkSerializer::serialize - chunk_id={}, time_start={}, t.time={}, relative_time={}, bucket_idx={}, bucket_size={}",
+                        debug!("ChunkSerializer::serialize - chunk_id={}, time_start={}, t.time={}, relative_time={}, bucket_idx={}, bucket_size={}",
                             chunk_id, time_start, t.time, relative_time, bucket_idx, bucket_size);
                         
                         (bucket_idx, t.time)
@@ -1835,7 +1835,7 @@ impl MultiTileChunkSerializer {
             let tile_start_time = start_time + tile_span * tile_idx as u64;
             let tile_end_time = tile_start_time + tile_span;
 
-            eprintln!("[DEBUG] MultiTileChunkSerializer::serialize - tile_idx={}, start_time={}, tile_span={}, tile_start_time={}, tile_end_time={}",
+            debug!("MultiTileChunkSerializer::serialize - tile_idx={}, start_time={}, tile_span={}, tile_start_time={}, tile_end_time={}",
                 tile_idx, start_time, tile_span, tile_start_time, tile_end_time);
 
             // 使用现有的 ChunkSerializer 序列化单个 tile

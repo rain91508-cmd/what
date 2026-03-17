@@ -267,7 +267,7 @@ pub async fn read_signals_data_fst_reader_batch_lod_low(
                     if let (Some(first_val), Some(first_time), Some(last_val), Some(last_time)) = 
                         (&first_val_vec[bucket_idx], &first_time_vec[bucket_idx], 
                          &last_val_vec[bucket_idx], &last_time_vec[bucket_idx]) {
-                        eprintln!("[DEBUG LOD_LOW] bucket_idx={}, first_time={}, first_val={}, last_time={}, last_val={}",
+                        debug!("LOD_LOW bucket_idx={}, first_time={}, first_val={}, last_time={}, last_val={}",
                             bucket_idx, first_time, first_val, last_time, last_val);
                         
                         // first（使用实际的 first transition 时间）
