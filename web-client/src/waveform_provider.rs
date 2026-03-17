@@ -859,7 +859,8 @@ impl WaveformDataProvider {
                 ]);
             } else if is_v2 {
                 // v2 API, LoD > 0: bucket index is u16 (0-255)
-                let time_idx = time_array_start + 8 + ((i as usize) * 2); // +8 to skip start marker
+                // time_array_offset points to u16 array: [u16::MAX (start), bucket_idx0, bucket_idx1, ...]
+                let time_idx = time_array_start + 2 + ((i as usize) * 2); // +2 to skip u16 start marker
                 if time_idx + 2 > data.len() {
                     break;
                 }
@@ -2317,8 +2318,9 @@ if tile_missing_signals.is_empty() {
                 ]);
             } else if is_v2 {
                 // v2 API, LoD > 0: bucket index is u16 (0-255)
+                // time_array_offset points to u16 array: [u16::MAX (start), bucket_idx0, bucket_idx1, ...]
                 // We don't save transition time, just use bucket index for first/last pairing
-                let time_idx = time_array_start + 8 + ((i as usize) * 2); // +8 to skip start marker
+                let time_idx = time_array_start + 2 + ((i as usize) * 2); // +2 to skip u16 start marker
                 if time_idx + 2 > data.len() {
                     break;
                 }
@@ -2381,6 +2383,19 @@ if tile_missing_signals.is_empty() {
         let mut buckets: HashMap<u32, BucketData> = HashMap::new();
         let mut pending_first: Option<(u32, Transition)> = None;
         
+        // Debug: Print all transitions
+        if !transitions.is_empty() {
+            console_log!("[WASM] parse_buckets_from_transitions: {} transitions", transitions.len());
+            for (i, t) in transitions.iter().enumerate() {
+                let val = String::from_utf8_lossy(&t.value);
+                if t.time == BOUNDARY_TIME_START {
+                    console_log!("[WASM]   Transition[{}]: time=MAX (start_value), value={}", i, val);
+                } else {
+                    console_log!("[WASM]   Transition[{}]: time={}, value={}", i, t.time, val);
+                }
+            }
+        }
+        
         for transition in transitions {
             // Check for start value (boundary time)
             if transition.time == BOUNDARY_TIME_START {
@@ -2429,6 +2444,20 @@ if tile_missing_signals.is_empty() {
                 last: None,
             };
             buckets.insert(pending_offset, bucket);
+        }
+        
+        // Debug: Print generated buckets
+        if !buckets.is_empty() {
+            console_log!("[WASM] parse_buckets_from_transitions: {} buckets generated", buckets.len());
+            for (offset, bucket) in &buckets {
+                let first_val = String::from_utf8_lossy(&bucket.first.value);
+                let last_info = if let Some(ref last) = bucket.last {
+                    format!(", last={}", String::from_utf8_lossy(&last.value))
+                } else {
+                    ", last=None".to_string()
+                };
+                console_log!("[WASM]   Bucket[{}]: first={}{}", offset, first_val, last_info);
+            }
         }
         
         (start_value, buckets)
@@ -3295,6 +3324,21 @@ if tile_missing_signals.is_empty() {
                 
                 if x1 <= x0 {
                     continue;
+                }
+                
+                // Debug: Print bucket 0 details
+                if bucket_idx == 0 {
+                    if let Some(bucket) = buckets.get(&0) {
+                        let first_val = String::from_utf8_lossy(&bucket.first.value);
+                        let last_info = if let Some(ref last) = bucket.last {
+                            format!(", last={}", String::from_utf8_lossy(&last.value))
+                        } else {
+                            ", last=None".to_string()
+                        };
+                        console_log!("[WASM] Tile {} bucket 0: first={}{}", tile_idx, first_val, last_info);
+                    } else {
+                        console_log!("[WASM] Tile {} bucket 0: NOT FOUND", tile_idx);
+                    }
                 }
                 
                 match buckets.get(&bucket_idx) {
