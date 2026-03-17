@@ -2444,18 +2444,18 @@ if tile_missing_signals.is_empty() {
         let mut buckets: HashMap<u16, BucketData> = HashMap::new();
         let mut pending_first: Option<(u16, Transition)> = None;
         
-        // Debug: Print all transitions
-        if !transitions.is_empty() {
-            console_log!("[WASM] parse_buckets_from_transitions: {} transitions", transitions.len());
-            for (i, t) in transitions.iter().enumerate() {
-                let val = String::from_utf8_lossy(&t.value);
-                if t.time == BOUNDARY_TIME_START {
-                    console_log!("[WASM]   Transition[{}]: time=MAX (start_value), value={}", i, val);
-                } else {
-                    console_log!("[WASM]   Transition[{}]: time={}, value={}", i, t.time, val);
-                }
-            }
-        }
+        // Debug: Print all transitions (disabled)
+        // if !transitions.is_empty() {
+        //     console_log!("[WASM] parse_buckets_from_transitions: {} transitions", transitions.len());
+        //     for (i, t) in transitions.iter().enumerate() {
+        //         let val = String::from_utf8_lossy(&t.value);
+        //         if t.time == BOUNDARY_TIME_START {
+        //             console_log!("[WASM]   Transition[{}]: time=MAX (start_value), value={}", i, val);
+        //         } else {
+        //             console_log!("[WASM]   Transition[{}]: time={}, value={}", i, t.time, val);
+        //         }
+        //     }
+        // }
         
         for transition in transitions {
             // Check for start value (boundary time)
@@ -2507,19 +2507,19 @@ if tile_missing_signals.is_empty() {
             buckets.insert(pending_offset, bucket);
         }
         
-        // Debug: Print generated buckets
-        if !buckets.is_empty() {
-            console_log!("[WASM] parse_buckets_from_transitions: {} buckets generated", buckets.len());
-            for (offset, bucket) in &buckets {
-                let first_val = String::from_utf8_lossy(&bucket.first.value);
-                let last_info = if let Some(ref last) = bucket.last {
-                    format!(", last={}", String::from_utf8_lossy(&last.value))
-                } else {
-                    ", last=None".to_string()
-                };
-                console_log!("[WASM]   Bucket[{}]: first={}{}", offset, first_val, last_info);
-            }
-        }
+        // Debug: Print generated buckets (disabled)
+        // if !buckets.is_empty() {
+        //     console_log!("[WASM] parse_buckets_from_transitions: {} buckets generated", buckets.len());
+        //     for (offset, bucket) in &buckets {
+        //         let first_val = String::from_utf8_lossy(&bucket.first.value);
+        //         let last_info = if let Some(ref last) = bucket.last {
+        //             format!(", last={}", String::from_utf8_lossy(&last.value))
+        //         } else {
+        //             ", last=None".to_string()
+        //         };
+        //         console_log!("[WASM]   Bucket[{}]: first={}{}", offset, first_val, last_info);
+        //     }
+        // }
         
         (start_value, buckets)
     }
@@ -3303,7 +3303,37 @@ if tile_missing_signals.is_empty() {
         
         // console_log!("[WASM] generate_lod_segments_from_buckets: {} tiles, viewport={}-{}",
         //     bucket_data.len(), self.viewport.time_start, self.viewport.time_end);
-        
+
+        // Debug: When view start is 0, print all signal_data info
+        if self.viewport.time_start == 0.0 {
+            console_log!("[WASM DEBUG] View start is 0, printing signal_data for '{}'", signal_name);
+            if let Some(signal_data) = self.signal_data.get(signal_name) {
+                console_log!("[WASM DEBUG] Signal: {}, width: {}, transitions: {}, tile_info: {}, bucket_data: {}",
+                    signal_data.name, signal_data.width, signal_data.transitions.len(),
+                    signal_data.tile_info.len(), signal_data.bucket_data.len());
+
+                // Print all bucket data
+                for (tile_idx, (tile_start, buckets)) in signal_data.bucket_data.iter().enumerate() {
+                    console_log!("[WASM DEBUG] Tile {}: start={}, {} buckets", tile_idx, tile_start, buckets.len());
+                    for (bucket_idx, bucket) in buckets.iter() {
+                        let first_time = bucket.first.actual_time;
+                        let first_val = String::from_utf8_lossy(&bucket.first.value);
+                        if let Some(ref last) = bucket.last {
+                            let last_time = last.actual_time;
+                            let last_val = String::from_utf8_lossy(&last.value);
+                            console_log!("[WASM DEBUG]   Bucket[{}]: first(time={}, value={}), last(time={}, value={})",
+                                bucket_idx, first_time, first_val, last_time, last_val);
+                        } else {
+                            console_log!("[WASM DEBUG]   Bucket[{}]: single(time={}, value={})",
+                                bucket_idx, first_time, first_val);
+                        }
+                    }
+                }
+            } else {
+                console_log!("[WASM DEBUG] Signal '{}' not found in signal_data!", signal_name);
+            }
+        }
+
         // Track current value across tiles for continuity
         let mut cross_tile_value: Option<Transition> = None;
         
@@ -3401,20 +3431,20 @@ if tile_missing_signals.is_empty() {
                     continue;
                 }
                 
-                // Debug: Print bucket 0 details
-                if bucket_idx == 0 {
-                    if let Some(bucket) = buckets.get(&0) {
-                        let first_val = String::from_utf8_lossy(&bucket.first.value);
-                        let last_info = if let Some(ref last) = bucket.last {
-                            format!(", last={}", String::from_utf8_lossy(&last.value))
-                        } else {
-                            ", last=None".to_string()
-                        };
-                        console_log!("[WASM] Tile {} bucket 0: first={}{}", tile_idx, first_val, last_info);
-                    } else {
-                        console_log!("[WASM] Tile {} bucket 0: NOT FOUND", tile_idx);
-                    }
-                }
+                // Debug: Print bucket 0 details (disabled)
+                // if bucket_idx == 0 {
+                //     if let Some(bucket) = buckets.get(&0) {
+                //         let first_val = String::from_utf8_lossy(&bucket.first.value);
+                //         let last_info = if let Some(ref last) = bucket.last {
+                //             format!(", last={}", String::from_utf8_lossy(&last.value))
+                //         } else {
+                //             ", last=None".to_string()
+                //         };
+                //         console_log!("[WASM] Tile {} bucket 0: first={}{}", tile_idx, first_val, last_info);
+                //     } else {
+                //         console_log!("[WASM] Tile {} bucket 0: NOT FOUND", tile_idx);
+                //     }
+                // }
                 
                 match buckets.get(&bucket_idx) {
                     None => {
