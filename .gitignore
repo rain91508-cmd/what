@@ -82,6 +82,7 @@ web-client/wasm-pkg/
 
 server/waves/
 server/kdb/
+server/*.txt
 
 # Python cache
 __pycache__/
