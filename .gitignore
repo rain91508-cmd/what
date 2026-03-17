@@ -41,6 +41,7 @@ Thumbs.db
 *.fst
 *.evcd
 test_*/
+debug.txt
 
 # Third-party build artifacts
 third_party/Surelog/build/
