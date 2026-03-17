@@ -2616,7 +2616,13 @@ if tile_missing_signals.is_empty() {
                 } else if !data.transitions.is_empty() {
                     // Check if transitions are in LoD 1+ format (bucket offsets 0-255)
                     // This handles cache data from old format
-                    let is_lod_format = self.detect_lod_bucket_format(&data.transitions);
+                    // For LoD 0, always use normal segment generation
+                    let lod = self.current_lod.unwrap_or(25);
+                    let is_lod_format = if lod == 0 {
+                        false // LoD 0 always uses normal segments
+                    } else {
+                        self.detect_lod_bucket_format(&data.transitions)
+                    };
                     
                     if is_lod_format {
                         // Parse transitions into bucket data and generate segments
@@ -2723,7 +2729,9 @@ if tile_missing_signals.is_empty() {
     }
 
     /// Detect if transitions are in LoD bucket format (First/Last format)
-    /// Returns true if time values are small (0-255), indicating bucket offsets
+    /// Returns true if actual_time values are small (0-255), indicating bucket offsets
+    /// Note: For LoD 1+ data stored in OPFS, actual_time contains the real timestamp,
+    /// but for the format detection we check if it's in the bucket offset range
     fn detect_lod_bucket_format(&self, transitions: &[Transition]) -> bool {
         const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
         
@@ -2732,12 +2740,16 @@ if tile_missing_signals.is_empty() {
         }
         
         // Check first few non-boundary transitions
+        // For LoD 1+ bucket format, time field contains bucket index (0-255)
+        // For LoD 0, time field contains actual timestamp (which could be any value)
+        // We use time field (not actual_time) for format detection
         let mut checked = 0;
         for t in transitions.iter() {
             if t.time == BOUNDARY_TIME_START {
                 continue;
             }
-            // If time is small (0-255), it's likely a bucket offset
+            // If time is small (0-255), it's likely a bucket offset (LoD 1+)
+            // If time is large, it's likely LoD 0 with actual timestamp
             if t.time <= 255 {
                 checked += 1;
                 if checked >= 3 {
