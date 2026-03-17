@@ -2602,13 +2602,8 @@ if tile_missing_signals.is_empty() {
             }
 
             if let Some(data) = self.signal_data.get(&signal.name) {
-                // Debug: Print data availability
-                console_log!("[WASM DEBUG get_segments] Signal: {}, bucket_data: {}, transitions: {}, lod: {:?}",
-                    signal.name, data.bucket_data.len(), data.transitions.len(), self.current_lod);
-                
                 // Check if we have bucket data (new First/Last format)
                 if !data.bucket_data.is_empty() {
-                    console_log!("[WASM DEBUG get_segments]   Using bucket_data path");
                     // Use new bucket-based segment generation
                     self.generate_lod_segments_from_buckets(
                         &data.bucket_data,
@@ -2620,18 +2615,14 @@ if tile_missing_signals.is_empty() {
                         display_format,
                     );
                 } else if !data.transitions.is_empty() {
-                    console_log!("[WASM DEBUG get_segments]   Using transitions path");
                     // Check if transitions are in LoD 1+ format (bucket offsets 0-255)
                     // This handles cache data from old format
                     // For LoD 0, always use normal segment generation
                     let lod = self.current_lod.unwrap_or(25);
                     let is_lod_format = if lod == 0 {
-                        console_log!("[WASM DEBUG get_segments]   LoD 0 detected, using normal segments");
                         false // LoD 0 always uses normal segments
                     } else {
-                        let detected = self.detect_lod_bucket_format(&data.transitions);
-                        console_log!("[WASM DEBUG get_segments]   LoD {} detected, is_lod_format: {}", lod, detected);
-                        detected
+                        self.detect_lod_bucket_format(&data.transitions)
                     };
                     
                     if is_lod_format {
@@ -2937,18 +2928,6 @@ if tile_missing_signals.is_empty() {
         signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>, display_format: Option<&str>,
         tile_info: &[(u64, u64, u64, Transition)]) {
 
-        // Debug: Print all transitions for LoD 0
-        console_log!("[WASM DEBUG LoD0] Signal: {}, transitions: {}, viewport: {}-{}",
-            signal_name, transitions.len(), self.viewport.time_start, self.viewport.time_end);
-        for (i, t) in transitions.iter().enumerate() {
-            let val = String::from_utf8_lossy(&t.value);
-            if t.time == BOUNDARY_TIME_START {
-                console_log!("[WASM DEBUG LoD0]   Transition[{}]: BOUNDARY (start_value), actual_time={}, value={}", i, t.actual_time, val);
-            } else {
-                console_log!("[WASM DEBUG LoD0]   Transition[{}]: time={}, actual_time={}, value={}", i, t.time, t.actual_time, val);
-            }
-        }
-
         // Separate start value (boundary) from normal transitions
         // First check in transitions array (for cache data), then in tile_info (for server data)
         let mut start_value = transitions.iter()
@@ -2962,10 +2941,6 @@ if tile_missing_signals.is_empty() {
             start_value = tile_info.iter()
                 .find(|(_, _, start_time, _)| *start_time == BOUNDARY_TIME_START)
                 .map(|(_, _, _, sv)| sv.clone());
-            
-            if start_value.is_some() {
-                console_log!("[WASM DEBUG LoD0]   Found start value in tile_info");
-            }
         }
 
         let normal_transitions: Vec<_> = transitions.iter()
@@ -3071,9 +3046,6 @@ if tile_missing_signals.is_empty() {
                         },
                         signal_name: signal_name.to_string(),
                     });
-
-                    // Debug: Print initial segment
-                    console_log!("[WASM DEBUG LoD0]   Initial Segment: x0={:.2}, x1={:.2}, value={}", x0, x1, final_display_str);
                 }
             }
         }
@@ -3126,13 +3098,7 @@ if tile_missing_signals.is_empty() {
                 },
                 signal_name: signal_name.to_string(),
             });
-
-            // Debug: Print generated segment
-            console_log!("[WASM DEBUG LoD0]   Segment: x0={:.2}, x1={:.2}, value={}", x0, x1, final_display_str);
         }
-
-        // Debug: Print total segments generated
-        console_log!("[WASM DEBUG LoD0] Total segments generated: {}", segments.len());
     }
 
     /// Generate segments for LoD 1+ (min/max format) according to the drawing spec
