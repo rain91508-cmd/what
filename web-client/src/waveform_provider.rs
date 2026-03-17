@@ -1169,11 +1169,6 @@ impl WaveformDataProvider {
             }
         }
 
-        web_sys::console::log_1(&JsValue::from_str(&format!(
-            "[WASM] build_server_signal_name: local_name='{}' -> server_name='{}' (signal_prefix='{}', server_prefix='{}', space_before_bracket={})",
-            local_name, server_name, self.signal_prefix, self.server_prefix, self.space_before_bracket
-        )));
-
         server_name
     }
 
@@ -3353,34 +3348,34 @@ if tile_missing_signals.is_empty() {
         //     bucket_data.len(), self.viewport.time_start, self.viewport.time_end);
 
         // Debug: When view start is 0, print all signal_data info
-        if self.viewport.time_start == 0.0 {
-            console_log!("[WASM DEBUG] View start is 0, printing signal_data for '{}'", signal_name);
-            if let Some(signal_data) = self.signal_data.get(signal_name) {
-                console_log!("[WASM DEBUG] Signal: {}, width: {}, transitions: {}, tile_info: {}, bucket_data: {}",
-                    signal_data.name, signal_data.width, signal_data.transitions.len(),
-                    signal_data.tile_info.len(), signal_data.bucket_data.len());
-
-                // Print all bucket data
-                for (tile_idx, (tile_start, buckets)) in signal_data.bucket_data.iter().enumerate() {
-                    console_log!("[WASM DEBUG] Tile {}: start={}, {} buckets", tile_idx, tile_start, buckets.len());
-                    for (bucket_idx, bucket) in buckets.iter() {
-                        let first_time = bucket.first.actual_time;
-                        let first_val = String::from_utf8_lossy(&bucket.first.value);
-                        if let Some(ref last) = bucket.last {
-                            let last_time = last.actual_time;
-                            let last_val = String::from_utf8_lossy(&last.value);
-                            console_log!("[WASM DEBUG]   Bucket[{}]: first(time={}, value={}), last(time={}, value={})",
-                                bucket_idx, first_time, first_val, last_time, last_val);
-                        } else {
-                            console_log!("[WASM DEBUG]   Bucket[{}]: single(time={}, value={})",
-                                bucket_idx, first_time, first_val);
-                        }
-                    }
-                }
-            } else {
-                console_log!("[WASM DEBUG] Signal '{}' not found in signal_data!", signal_name);
-            }
-        }
+        // if self.viewport.time_start == 0.0 {
+        //     console_log!("[WASM DEBUG] View start is 0, printing signal_data for '{}'", signal_name);
+        //     if let Some(signal_data) = self.signal_data.get(signal_name) {
+        //         console_log!("[WASM DEBUG] Signal: {}, width: {}, transitions: {}, tile_info: {}, bucket_data: {}",
+        //             signal_data.name, signal_data.width, signal_data.transitions.len(),
+        //             signal_data.tile_info.len(), signal_data.bucket_data.len());
+        //
+        //         // Print all bucket data
+        //         for (tile_idx, (tile_start, buckets)) in signal_data.bucket_data.iter().enumerate() {
+        //             console_log!("[WASM DEBUG] Tile {}: start={}, {} buckets", tile_idx, tile_start, buckets.len());
+        //             for (bucket_idx, bucket) in buckets.iter() {
+        //                 let first_time = bucket.first.actual_time;
+        //                 let first_val = String::from_utf8_lossy(&bucket.first.value);
+        //                 if let Some(ref last) = bucket.last {
+        //                     let last_time = last.actual_time;
+        //                     let last_val = String::from_utf8_lossy(&last.value);
+        //                     console_log!("[WASM DEBUG]   Bucket[{}]: first(time={}, value={}), last(time={}, value={})",
+        //                         bucket_idx, first_time, first_val, last_time, last_val);
+        //                 } else {
+        //                     console_log!("[WASM DEBUG]   Bucket[{}]: single(time={}, value={})",
+        //                         bucket_idx, first_time, first_val);
+        //                 }
+        //             }
+        //         }
+        //     } else {
+        //         console_log!("[WASM DEBUG] Signal '{}' not found in signal_data!", signal_name);
+        //     }
+        // }
 
         // Track current value across tiles for continuity
         let mut cross_tile_value: Option<Transition> = None;
@@ -4612,3 +4607,4 @@ if tile_missing_signals.is_empty() {
         format!("Local: '{}' -> Server: '{}' -> Base64: '{}'", local_name, server_name, encoded)
     }
 }
+
