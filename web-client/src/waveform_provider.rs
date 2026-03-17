@@ -2920,6 +2920,18 @@ if tile_missing_signals.is_empty() {
     fn generate_normal_segments(&self, transitions: &[Transition], width: u32, y: f64,
         signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>, display_format: Option<&str>) {
 
+        // Debug: Print all transitions for LoD 0
+        console_log!("[WASM DEBUG LoD0] Signal: {}, transitions: {}, viewport: {}-{}",
+            signal_name, transitions.len(), self.viewport.time_start, self.viewport.time_end);
+        for (i, t) in transitions.iter().enumerate() {
+            let val = String::from_utf8_lossy(&t.value);
+            if t.time == BOUNDARY_TIME_START {
+                console_log!("[WASM DEBUG LoD0]   Transition[{}]: BOUNDARY (start_value), actual_time={}, value={}", i, t.actual_time, val);
+            } else {
+                console_log!("[WASM DEBUG LoD0]   Transition[{}]: time={}, actual_time={}, value={}", i, t.time, t.actual_time, val);
+            }
+        }
+
         // Separate start value (boundary) from normal transitions
         let start_value = transitions.iter()
             .find(|t| t.time == BOUNDARY_TIME_START)
@@ -3018,8 +3030,8 @@ if tile_missing_signals.is_empty() {
                         x1,
                         y,
                         value: ValueInfo {
-                            value_type: value_type_str,
-                            display_str: final_display_str,
+                            value_type: value_type_str.clone(),
+                            display_str: final_display_str.clone(),
                             width,
                             has_xz,
                             min_value: None,
@@ -3028,6 +3040,9 @@ if tile_missing_signals.is_empty() {
                         },
                         signal_name: signal_name.to_string(),
                     });
+
+                    // Debug: Print initial segment
+                    console_log!("[WASM DEBUG LoD0]   Initial Segment: x0={:.2}, x1={:.2}, value={}", x0, x1, final_display_str);
                 }
             }
         }
@@ -3070,8 +3085,8 @@ if tile_missing_signals.is_empty() {
                 x1,
                 y,
                 value: ValueInfo {
-                    value_type: value_type_str,
-                    display_str: final_display_str,
+                    value_type: value_type_str.clone(),
+                    display_str: final_display_str.clone(),
                     width,
                     has_xz,
                     min_value: None,
@@ -3080,7 +3095,13 @@ if tile_missing_signals.is_empty() {
                 },
                 signal_name: signal_name.to_string(),
             });
+
+            // Debug: Print generated segment
+            console_log!("[WASM DEBUG LoD0]   Segment: x0={:.2}, x1={:.2}, value={}", x0, x1, final_display_str);
         }
+
+        // Debug: Print total segments generated
+        console_log!("[WASM DEBUG LoD0] Total segments generated: {}", segments.len());
     }
 
     /// Generate segments for LoD 1+ (min/max format) according to the drawing spec
