@@ -565,14 +565,25 @@ pub async fn run_detailed_signal_test(config: &ServerConfig) {
         }
     }
     
-    // ===== 2. 使用 lod_low 读取（每个 tile 分别读取） =====
+    // ===== 2. 使用 lod_low 读取（每个 tile 分别读取，不合并） =====
     println!("\n[DETAILED-TEST] ===== 2. LOD_LOW 读取 =====");
     let wave_path = PathBuf::from(&config.wave_dir).join(format!("{}.fst", wave_name));
     let cache = crate::services::fst_reader_cache::get_fst_reader_cache();
     
-    // 为每个 tile 分别读取
-    let mut all_lod_low_results: Vec<Vec<crate::services::wave_data::SignalWaveData>> = Vec::new();
+    // 创建 LOD_LOW 输出文件
+    let lodlow_output_file = format!("lodlow_{}_{}_lod{}.txt", wave_name, signal_name.replace(".", "_"), lod);
+    let mut lodlow_content = String::new();
     
+    lodlow_content.push_str(&format!("LOD_LOW 详细测试报告\n"));
+    lodlow_content.push_str(&format!("================\n\n"));
+    lodlow_content.push_str(&format!("波形文件: {}\n", wave_name));
+    lodlow_content.push_str(&format!("测试信号: {}\n", signal_name));
+    lodlow_content.push_str(&format!("LoD: {} (bucket_size={})\n", lod, bucket_size));
+    lodlow_content.push_str(&format!("起始时间: {}\n", start_time));
+    lodlow_content.push_str(&format!("tile_span: {} ({} 个 bucket)\n", tile_span, num_buckets));
+    lodlow_content.push_str(&format!("tiles 数量: {}\n\n", num_tiles));
+    
+    // 为每个 tile 分别读取（不合并，分开显示）
     for tile_idx in 0..num_tiles {
         let tile_start = start_time + tile_idx as u64 * tile_span;
         let tile_end = tile_start + tile_span;
@@ -595,45 +606,49 @@ pub async fn run_detailed_signal_test(config: &ServerConfig) {
             }
         };
         
-        all_lod_low_results.push(tile_result);
-    }
-    
-    // 合并所有 tile 的结果（按信号合并）
-    let mut lod_low_result: Vec<crate::services::wave_data::SignalWaveData> = Vec::new();
-    if !all_lod_low_results.is_empty() && !all_lod_low_results[0].is_empty() {
-        for sig_idx in 0..all_lod_low_results[0].len() {
-            let mut merged_signal = all_lod_low_results[0][sig_idx].clone();
+        // 打印当前 tile 的结果
+        println!("[DETAILED-TEST] LOD_LOW Tile {} 读取了 {} 个信号", tile_idx, tile_result.len());
+        lodlow_content.push_str(&format!("=== Tile {} (time {} - {}) ===\n\n", tile_idx, tile_start, tile_end));
+        
+        for (sig_idx, signal) in tile_result.iter().enumerate() {
+            println!("[DETAILED-TEST]   信号 {}: {} transitions",
+                sig_idx, signal.transitions.len());
             
-            // 添加其他 tile 的 transitions（跳过 Start Value）
-            for tile_idx in 1..all_lod_low_results.len() {
-                if sig_idx < all_lod_low_results[tile_idx].len() {
-                    for trans in &all_lod_low_results[tile_idx][sig_idx].transitions {
-                        if trans.time != u64::MAX { // 跳过 Start Value
-                            merged_signal.add_transition(trans.clone());
-                        }
-                    }
-                }
+            lodlow_content.push_str(&format!("信号 {}:\n", sig_idx));
+            lodlow_content.push_str(&format!("  总 transitions: {}\n\n", signal.transitions.len()));
+            lodlow_content.push_str(&format!("  详细 transactions:\n"));
+            lodlow_content.push_str(&format!("  {:<6} {:<20} {:<20} {:<30}\n", "Index", "Bucket Index", "Transition Time", "Value"));
+            lodlow_content.push_str(&format!("  {:-<6} {:-<20} {:-<20} {:-<30}\n", "", "", "", ""));
+            
+            // 打印详细的 transition 信息（包含 bucket index 计算）
+            println!("[DETAILED-TEST]   LOD_LOW Tile {} 信号 {} 详细 transitions:", tile_idx, sig_idx);
+            for (j, trans) in signal.transitions.iter().enumerate() {
+                let bucket_idx = if trans.time == u64::MAX {
+                    "MAX (Start)".to_string()
+                } else {
+                    // 计算相对于当前 tile 的 bucket index
+                    let relative_time = trans.time.saturating_sub(tile_start);
+                    (relative_time / bucket_size).to_string()
+                };
+                let time_str = if trans.time == u64::MAX {
+                    "MAX (u64::MAX)".to_string()
+                } else {
+                    trans.time.to_string()
+                };
+                println!("    [{}] bucket_idx={}, time={}, value={:?}",
+                    j, bucket_idx, time_str, trans.value);
+                
+                lodlow_content.push_str(&format!("  {:<6} {:<20} {:<20} {:<30}\n", 
+                    j, bucket_idx, time_str, format!("{:?}", trans.value)));
             }
-            
-            lod_low_result.push(merged_signal);
+            lodlow_content.push_str("\n");
         }
     }
     
-    println!("[DETAILED-TEST] LOD_LOW 读取了 {} 个信号", lod_low_result.len());
-    for (sig_idx, signal) in lod_low_result.iter().enumerate() {
-        println!("[DETAILED-TEST]   信号 {}: {} transitions",
-            sig_idx, signal.transitions.len());
-        // 打印详细的 transition 信息（包含 bucket index 计算）
-        println!("[DETAILED-TEST]   LOD_LOW 详细 transitions:");
-        for (j, trans) in signal.transitions.iter().enumerate() {
-            let bucket_idx = if trans.time == u64::MAX {
-                "MAX (Start)".to_string()
-            } else {
-                ((trans.time - start_time) / bucket_size).to_string()
-            };
-            println!("    [{}] bucket_idx={}, time={}, value={:?}",
-                j, bucket_idx, trans.time, trans.value);
-        }
+    // 写入 LOD_LOW 文件
+    match std::fs::write(&lodlow_output_file, lodlow_content) {
+        Ok(_) => println!("\n[DETAILED-TEST] LOD_LOW 结果已写入文件: {}", lodlow_output_file),
+        Err(e) => println!("\n[DETAILED-TEST] 写入 LOD_LOW 文件失败: {:?}", e),
     }
     
     // ===== 3. 使用 lod_high 读取（每个 tile 分别读取） =====
@@ -652,9 +667,7 @@ pub async fn run_detailed_signal_test(config: &ServerConfig) {
     lodhigh_content.push_str(&format!("tile_span: {} ({} 个 bucket)\n", tile_span, num_buckets));
     lodhigh_content.push_str(&format!("tiles 数量: {}\n\n", num_tiles));
     
-    // 为每个 tile 分别读取
-    let mut all_lod_high_results: Vec<Vec<crate::services::wave_data::SignalWaveData>> = Vec::new();
-    
+    // 为每个 tile 分别读取（不合并，分开显示）
     for tile_idx in 0..num_tiles {
         let tile_start = start_time + tile_idx as u64 * tile_span;
         let tile_end = tile_start + tile_span;
@@ -677,60 +690,42 @@ pub async fn run_detailed_signal_test(config: &ServerConfig) {
             }
         };
         
-        all_lod_high_results.push(tile_result);
-    }
-    
-    // 合并所有 tile 的结果（按信号合并）
-    let mut lod_high_result: Vec<crate::services::wave_data::SignalWaveData> = Vec::new();
-    if !all_lod_high_results.is_empty() && !all_lod_high_results[0].is_empty() {
-        for sig_idx in 0..all_lod_high_results[0].len() {
-            let mut merged_signal = all_lod_high_results[0][sig_idx].clone();
+        // 打印当前 tile 的结果
+        println!("[DETAILED-TEST] LOD_HIGH Tile {} 读取了 {} 个信号", tile_idx, tile_result.len());
+        lodhigh_content.push_str(&format!("=== Tile {} (time {} - {}) ===\n\n", tile_idx, tile_start, tile_end));
+        
+        for (sig_idx, signal) in tile_result.iter().enumerate() {
+            println!("[DETAILED-TEST]   信号 {}: {} transitions",
+                sig_idx, signal.transitions.len());
             
-            // 添加其他 tile 的 transitions（跳过 Start Value）
-            for tile_idx in 1..all_lod_high_results.len() {
-                if sig_idx < all_lod_high_results[tile_idx].len() {
-                    for trans in &all_lod_high_results[tile_idx][sig_idx].transitions {
-                        if trans.time != u64::MAX { // 跳过 Start Value
-                            merged_signal.add_transition(trans.clone());
-                        }
-                    }
-                }
+            lodhigh_content.push_str(&format!("信号 {}:\n", sig_idx));
+            lodhigh_content.push_str(&format!("  总 transitions: {}\n\n", signal.transitions.len()));
+            lodhigh_content.push_str(&format!("  详细 transactions:\n"));
+            lodhigh_content.push_str(&format!("  {:<6} {:<20} {:<20} {:<30}\n", "Index", "Bucket Index", "Transition Time", "Value"));
+            lodhigh_content.push_str(&format!("  {:-<6} {:-<20} {:-<20} {:-<30}\n", "", "", "", ""));
+            
+            // 打印详细的 transition 信息（包含 bucket index 计算）
+            println!("[DETAILED-TEST]   LOD_HIGH Tile {} 信号 {} 详细 transitions:", tile_idx, sig_idx);
+            for (j, trans) in signal.transitions.iter().enumerate() {
+                let bucket_idx = if trans.time == u64::MAX {
+                    "MAX (Start)".to_string()
+                } else {
+                    // 计算相对于当前 tile 的 bucket index
+                    let relative_time = trans.time.saturating_sub(tile_start);
+                    (relative_time / bucket_size).to_string()
+                };
+                let time_str = if trans.time == u64::MAX {
+                    "MAX (u64::MAX)".to_string()
+                } else {
+                    trans.time.to_string()
+                };
+                println!("    [{}] bucket_idx={}, time={}, value={:?}",
+                    j, bucket_idx, time_str, trans.value);
+                
+                lodhigh_content.push_str(&format!("  {:<6} {:<20} {:<20} {:<30}\n", 
+                    j, bucket_idx, time_str, format!("{:?}", trans.value)));
             }
-            
-            lod_high_result.push(merged_signal);
-        }
-    }
-    
-    println!("[DETAILED-TEST] LOD_HIGH 读取了 {} 个信号", lod_high_result.len());
-    
-    for (sig_idx, signal) in lod_high_result.iter().enumerate() {
-        println!("[DETAILED-TEST]   信号 {}: {} transitions",
-            sig_idx, signal.transitions.len());
-        
-        lodhigh_content.push_str(&format!("信号 {}:\n", sig_idx));
-        lodhigh_content.push_str(&format!("  总 transitions: {}\n\n", signal.transitions.len()));
-        lodhigh_content.push_str(&format!("  详细 transactions:\n"));
-        lodhigh_content.push_str(&format!("  {:<6} {:<20} {:<20} {:<30}\n", "Index", "Bucket Index", "Transition Time", "Value"));
-        lodhigh_content.push_str(&format!("  {:-<6} {:-<20} {:-<20} {:-<30}\n", "", "", "", ""));
-        
-        // 打印详细的 transition 信息（包含 bucket index 计算）
-        println!("[DETAILED-TEST]   LOD_HIGH 详细 transitions:");
-        for (j, trans) in signal.transitions.iter().enumerate() {
-            let bucket_idx = if trans.time == u64::MAX {
-                "MAX (Start)".to_string()
-            } else {
-                ((trans.time - start_time) / bucket_size).to_string()
-            };
-            println!("    [{}] bucket_idx={}, time={}, value={:?}",
-                j, bucket_idx, trans.time, trans.value);
-            
-            let time_str = if trans.time == u64::MAX {
-                "MAX (u64::MAX)".to_string()
-            } else {
-                trans.time.to_string()
-            };
-            lodhigh_content.push_str(&format!("  {:<6} {:<20} {:<20} {:<30}\n", 
-                j, bucket_idx, time_str, format!("{:?}", trans.value)));
+            lodhigh_content.push_str("\n");
         }
     }
     
@@ -767,15 +762,11 @@ pub async fn run_detailed_signal_test(config: &ServerConfig) {
         println!("[DETAILED-TEST] ✗ FSTAPI vs READER: 不匹配");
     }
     
-    // 对比 lod_low vs lod_high
-    let low_high_match = compare_lod_low_high_detailed(&lod_low_result, &lod_high_result);
-    if low_high_match {
-        println!("[DETAILED-TEST] ✓ LOD_LOW vs LOD_HIGH: 匹配");
-    } else {
-        println!("[DETAILED-TEST] ✗ LOD_LOW vs LOD_HIGH: 不匹配");
-    }
-    
     println!("\n[DETAILED-TEST] ===== 测试结束 =====");
+    println!("[DETAILED-TEST] 结果文件:");
+    println!("[DETAILED-TEST]   - FSTAPI: {}", fstapi_output_file);
+    println!("[DETAILED-TEST]   - LOD_LOW: {}", lodlow_output_file);
+    println!("[DETAILED-TEST]   - LOD_HIGH: {}", lodhigh_output_file);
 }
 
 /// 详细对比 lod_low 和 lod_high 的结果

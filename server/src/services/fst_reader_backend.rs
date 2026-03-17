@@ -134,7 +134,7 @@ async fn read_signals_data_fst_reader_batch_lod0(
     .map_err(|e| ServerError::Internal(format!("任务执行失败: {}", e)))?
 }
 
-/// LoD 1-10: 使用 search_bucket_first_last_with_time_from_fst 读取每个 bucket 的 first/last 及其时间戳
+/// LoD 1-10: 使用 read_signals_in_range 读取所有 transitions，记录 first/last 及其时间戳
 pub async fn read_signals_data_fst_reader_batch_lod_low(
     cache: &FstReaderCache,
     wave_path: &PathBuf,
@@ -149,7 +149,7 @@ pub async fn read_signals_data_fst_reader_batch_lod_low(
     let lod_level = lod.0;
     let path_str = path.to_string_lossy().to_string();
     
-    // 从缓存获取 reader（用于读取 pre-start values）
+    // 从缓存获取 reader
     let reader_arc = cache.get_or_create(&path_str).await?;
     
     tokio::task::spawn_blocking(move || {
@@ -181,39 +181,57 @@ pub async fn read_signals_data_fst_reader_batch_lod_low(
         let pre_start_values = reader.read_pre_start_values(&pre_start_filter)
             .map_err(|e| ServerError::Internal(format!("读取 pre-start 值失败: {:?}", e)))?;
 
-        // 为每个 bucket 搜索 first 和 last（带时间戳）
-        let mut bucket_results: HashMap<FstSignalHandle, Vec<Option<((String, u64), (String, u64))>>> = HashMap::new();
+        // 初始化 bucket 状态（记录 first/last 的值和时间戳）
+        let mut bucket_first_value: HashMap<FstSignalHandle, Vec<Option<String>>> = HashMap::new();
+        let mut bucket_first_time: HashMap<FstSignalHandle, Vec<Option<u64>>> = HashMap::new();
+        let mut bucket_last_value: HashMap<FstSignalHandle, Vec<Option<String>>> = HashMap::new();
+        let mut bucket_last_time: HashMap<FstSignalHandle, Vec<Option<u64>>> = HashMap::new();
         
         for info in &signal_infos {
-            bucket_results.insert(info.handle.clone(), vec![None; num_buckets]);
+            bucket_first_value.insert(info.handle.clone(), vec![None; num_buckets]);
+            bucket_first_time.insert(info.handle.clone(), vec![None; num_buckets]);
+            bucket_last_value.insert(info.handle.clone(), vec![None; num_buckets]);
+            bucket_last_time.insert(info.handle.clone(), vec![None; num_buckets]);
         }
 
-        // 为每个 bucket 调用 search_bucket_first_last_with_time_from_fst
-        for bucket_idx in 0..num_buckets {
-            let bucket_start = aligned_start + bucket_idx as u64 * bucket_size;
-            let bucket_end = bucket_start + bucket_size;
-            
-            let results = search_bucket_first_last_with_time_from_fst(
-                &path,
-                &handles,
-                bucket_start,
-                bucket_end,
-            );
-            
-            for (handle, (first, last)) in results {
-                if let Some(vec) = bucket_results.get_mut(&handle) {
-                    let first_tuple = first.map(|(v, t)| (v.to_string(), t));
-                    let last_tuple = last.map(|(v, t)| (v.to_string(), t));
-                    
-                    if first_tuple.is_some() || last_tuple.is_some() {
-                        vec[bucket_idx] = Some((
-                            first_tuple.unwrap_or_else(|| ("X".to_string(), bucket_start)),
-                            last_tuple.unwrap_or_else(|| ("X".to_string(), bucket_start)),
-                        ));
+        // 使用 read_signals_in_range 一次性读取整个范围的 transitions
+        let range_filter = FstFilter {
+            start: aligned_start,
+            end: Some(time_end.saturating_sub(1)),
+            include: Some(handles.clone()),
+        };
+
+        reader.read_signals_in_range(&range_filter, |time, handle, value| {
+            // 计算 bucket index
+            let bucket_idx = ((time - aligned_start) / bucket_size) as usize;
+            // bucket index 必须在有效范围内 [0, num_buckets-1]
+            if bucket_idx < num_buckets {
+                let value_str = match value {
+                    FstSignalValue::String(b) => String::from_utf8_lossy(b).to_string(),
+                    FstSignalValue::Real(v) => format!("{}", v),
+                };
+                
+                // 更新 first（如果还没有值）
+                if let Some(first_vec) = bucket_first_value.get_mut(&handle) {
+                    if first_vec[bucket_idx].is_none() {
+                        first_vec[bucket_idx] = Some(value_str.clone());
+                        // 记录 first 的时间戳
+                        if let Some(time_vec) = bucket_first_time.get_mut(&handle) {
+                            time_vec[bucket_idx] = Some(time);
+                        }
+                    }
+                }
+                
+                // 更新 last（总是更新）
+                if let Some(last_vec) = bucket_last_value.get_mut(&handle) {
+                    last_vec[bucket_idx] = Some(value_str);
+                    // 记录 last 的时间戳
+                    if let Some(time_vec) = bucket_last_time.get_mut(&handle) {
+                        time_vec[bucket_idx] = Some(time);
                     }
                 }
             }
-        }
+        }).map_err(|e| ServerError::Internal(format!("读取信号数据失败: {:?}", e)))?;
 
         // 构建结果
         let mut result_map: HashMap<String, SignalWaveData> = HashMap::new();
@@ -242,9 +260,16 @@ pub async fn read_signals_data_fst_reader_batch_lod_low(
             });
 
             // 添加每个 bucket 的 first/last（使用实际的 transition 时间戳）
-            if let Some(results_vec) = bucket_results.get(&info.handle) {
+            if let (Some(first_val_vec), Some(first_time_vec), Some(last_val_vec), Some(last_time_vec)) = 
+                (bucket_first_value.get(&info.handle), bucket_first_time.get(&info.handle), 
+                 bucket_last_value.get(&info.handle), bucket_last_time.get(&info.handle)) {
                 for bucket_idx in 0..num_buckets {
-                    if let Some(((first_val, first_time), (last_val, last_time))) = &results_vec[bucket_idx] {
+                    if let (Some(first_val), Some(first_time), Some(last_val), Some(last_time)) = 
+                        (&first_val_vec[bucket_idx], &first_time_vec[bucket_idx], 
+                         &last_val_vec[bucket_idx], &last_time_vec[bucket_idx]) {
+                        eprintln!("[DEBUG LOD_LOW] bucket_idx={}, first_time={}, first_val={}, last_time={}, last_val={}",
+                            bucket_idx, first_time, first_val, last_time, last_val);
+                        
                         // first（使用实际的 first transition 时间）
                         signal_data.add_transition(Transition {
                             time: *first_time,
