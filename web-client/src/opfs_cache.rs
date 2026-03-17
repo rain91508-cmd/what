@@ -395,7 +395,7 @@ pub fn deserialize_group_data_v2(data: &[u8], lod: u32) -> Result<GroupData, Str
             let (time, actual_time);
             
             if lod == 0 {
-                // LoD 0: Read only actual_time (u64), time is set to 0
+                // LoD 0: Read only actual_time (u64)
                 if pos + 11 > data.len() {
                     break;
                 }
@@ -404,7 +404,14 @@ pub fn deserialize_group_data_v2(data: &[u8], lod: u32) -> Result<GroupData, Str
                     data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
                 ]);
                 pos += 8;
-                time = 0; // Not used for LoD 0
+                // For LoD 0, if actual_time is BOUNDARY, set time to BOUNDARY as well
+                // This allows proper identification of start value transitions
+                const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
+                time = if actual_time == BOUNDARY_TIME_START {
+                    BOUNDARY_TIME_START
+                } else {
+                    0 // Normal transition, time not used for LoD 0
+                };
             } else {
                 // LoD 1+: Read time as u16 + actual_time as u64
                 if pos + 13 > data.len() {
@@ -503,7 +510,7 @@ pub fn read_signal_from_group_v2(data: &[u8], draw_sig_id: u32, lod: u32) -> Res
             let (time, actual_time);
             
             if lod == 0 {
-                // LoD 0: Read only actual_time (u64), time is set to 0
+                // LoD 0: Read only actual_time (u64)
                 if pos + 11 > data.len() {
                     break;
                 }
@@ -512,7 +519,14 @@ pub fn read_signal_from_group_v2(data: &[u8], draw_sig_id: u32, lod: u32) -> Res
                     data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
                 ]);
                 pos += 8;
-                time = 0; // Not used for LoD 0
+                // For LoD 0, if actual_time is BOUNDARY, set time to BOUNDARY as well
+                // This allows proper identification of start value transitions
+                const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
+                time = if actual_time == BOUNDARY_TIME_START {
+                    BOUNDARY_TIME_START
+                } else {
+                    0 // Normal transition, time not used for LoD 0
+                };
             } else {
                 // LoD 1+: Read time as u16 + actual_time as u64
                 if pos + 13 > data.len() {
