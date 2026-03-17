@@ -4034,11 +4034,13 @@ if tile_missing_signals.is_empty() {
                     continue;
                 }
 
-                let t = transition.time as f64;
-                if t < time {
-                    prev = Some(transition.time);
-                } else if t > time && next.is_none() {
-                    next = Some(transition.time);
+                // Use actual_time for cursor snapping (precise transition time)
+                // For LoD 0, actual_time == time; for LoD 1+, actual_time is the real timestamp
+                let actual_t = transition.actual_time as f64;
+                if actual_t < time {
+                    prev = Some(transition.actual_time);
+                } else if actual_t > time && next.is_none() {
+                    next = Some(transition.actual_time);
                     break; // Found next, no need to continue
                 }
             }

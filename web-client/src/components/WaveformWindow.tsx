@@ -153,6 +153,14 @@ const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
 // DisplayUnitPerLoD0Unit = 1 表示 1 DisplayUnit = 1 LoD0Unit
 const DEFAULT_TIME_CONFIG: TimeConfig = initTimeConfig(1);
 
+/**
+ * 格式化数字，每3位添加千位分隔符（逗号）
+ * 例如：1234567 -> 1,234,567
+ */
+function formatNumberWithCommas(num: number): string {
+  return num.toLocaleString('en-US');
+}
+
 export function WaveformWindow({
   signals,
   groups,
@@ -2729,7 +2737,7 @@ export function WaveformWindow({
 
           {/* Cursor info - 两行显示：第一行Cursor，第二行时间 */}
           {cursor.visible && (() => {
-            const cursorTimeStr = Math.round(lod0ToDisplay(cursor.position, timeConfig)).toString();
+            const cursorTimeStr = formatNumberWithCommas(Math.round(lod0ToDisplay(cursor.position, timeConfig)));
             const line1 = 'Cursor';
             const line2 = cursorTimeStr;
             // 估计每个字符8px宽度，取两行中较长的一行
@@ -2778,7 +2786,7 @@ export function WaveformWindow({
               return null;
             }
             
-            const wavemarkTimeStr = Math.round(lod0ToDisplay(wavemark.time, timeConfig)).toString();
+            const wavemarkTimeStr = formatNumberWithCommas(Math.round(lod0ToDisplay(wavemark.time, timeConfig)));
             const line1 = wavemark.name;
             const line2 = wavemarkTimeStr;
             const charWidth = 8;
@@ -2841,10 +2849,10 @@ export function WaveformWindow({
             const mouseTimeDisplay = Math.round(lod0ToDisplay(mouseTime, timeConfig));
             const cursorTimeDisplay = Math.round(lod0ToDisplay(cursor.position, timeConfig));
             const delta = mouseTimeDisplay - cursorTimeDisplay;
-            const deltaStr = `(${delta >= 0 ? '+' : ''}${delta})`;
-            
+            const deltaStr = `(${delta >= 0 ? '+' : ''}${formatNumberWithCommas(delta)})`;
+
             const line1 = deltaStr;
-            const line2 = mouseTimeDisplay.toString();
+            const line2 = formatNumberWithCommas(mouseTimeDisplay);
             // 估计每个字符8px宽度，取两行中较长的一行
             const charWidth = 8;
             const mouseTextWidth = Math.max(line1.length, line2.length) * charWidth + 8; // +8px padding
