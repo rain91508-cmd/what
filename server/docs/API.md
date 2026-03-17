@@ -892,7 +892,7 @@ URL: /api/wave/riscv2/lod/0/signals/trie:base64encodedstring/data
 索引:    0        1        2        3        ...
 时间:   [MAX]    [time1]  [time2]  [time3]  ...  (LoD 0: u64, LoD > 0: u16 bucket index)
 值:     [val0]   [val1]   [val2]   [val3]   ...  (变长格式)
-实际时间: -       [time1]  [time2]  [time3]  ...  (LoD > 0 only: u64)
+实际时间: [MAX]   [time1]  [time2]  [time3]  ...  (LoD > 0 only: u64)
          ↑
       Start Value
 ```
