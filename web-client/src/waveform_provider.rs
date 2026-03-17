@@ -3566,22 +3566,12 @@ if tile_missing_signals.is_empty() {
         
         // Check if target_time falls within a bucket (not at boundary)
         if target_time > bucket_start {
-            // Target is within a bucket
-            // Check if this bucket has data
-            if let Some(bucket) = buckets.get(&bucket_idx) {
-                // Bucket has transitions, determine which value to use
-                // For now, we use the first value (since we don't have per-transition timestamps in LoD 1+)
-                // In a more detailed implementation, we would check if target_time is before or after the transition
-                let trans = if bucket.has_toggle() {
-                    bucket.last.as_ref().unwrap().clone()
-                } else {
-                    bucket.first.clone()
-                };
-                // console_log!("[WASM]   Found value in bucket {}: {:?}", bucket_idx, trans.value);
-                return trans;
-            }
+            // Target is within a bucket (not at boundary)
+            // According to Spec Rule 2, if viewport_start is within a bucket with transitions,
+            // we should use the value BEFORE the first transition in that bucket
+            // (which is the last value from previous buckets or start_value)
             
-            // Bucket is empty, search backward for last transition in current tile
+            // Search backward for the last transition BEFORE this bucket
             for idx in (0..bucket_idx).rev() {
                 if let Some(bucket) = buckets.get(&idx) {
                     let trans = if bucket.has_toggle() {
@@ -3593,6 +3583,27 @@ if tile_missing_signals.is_empty() {
                     return trans;
                 }
             }
+            
+            // No previous transitions in this tile, search in previous tiles
+            for prev_tile_idx in (0..tile_idx).rev() {
+                let (_, prev_buckets) = &all_bucket_data[prev_tile_idx];
+                for idx in (0..TILE_SPAN_MULTIPLIER).rev() {
+                    if let Some(bucket) = prev_buckets.get(&idx) {
+                        let trans = if bucket.has_toggle() {
+                            bucket.last.as_ref().unwrap().clone()
+                        } else {
+                            bucket.first.clone()
+                        };
+                        // console_log!("[WASM]   Found value in previous tile {} bucket {}: {:?}",
+                        //     prev_tile_idx, idx, trans.value);
+                        return trans;
+                    }
+                }
+            }
+            
+            // No previous transitions found, return default
+            // console_log!("[WASM]   No previous transitions found, returning default");
+            return default_transition;
         } else {
             // Target is exactly at bucket boundary
             if let Some(bucket) = buckets.get(&bucket_idx) {

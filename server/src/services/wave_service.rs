@@ -252,13 +252,17 @@ pub fn search_boundary_values_optimized(
 /// 
 /// # Returns
 /// * 每个信号的 (first, last) 值，如果 bucket 内没有 transition 则为 None
-pub fn search_bucket_first_last_from_fst(
+/// 搜索 bucket 内的 first 和 last 值及其时间戳
+/// 
+/// # Returns
+/// * 每个信号的 (first_value, first_time, last_value, last_time)
+pub fn search_bucket_first_last_with_time_from_fst(
     wave_path: &std::path::Path,
     handles: &[Handle],
     bucket_start: u64,
     bucket_end: u64,
-) -> std::collections::HashMap<Handle, (Option<SignalValue>, Option<SignalValue>)> {
-    let mut results: std::collections::HashMap<Handle, (Option<SignalValue>, Option<SignalValue>)> = 
+) -> std::collections::HashMap<Handle, (Option<(SignalValue, u64)>, Option<(SignalValue, u64)>)> {
+    let mut results: std::collections::HashMap<Handle, (Option<(SignalValue, u64)>, Option<(SignalValue, u64)>)> = 
         handles.iter().map(|h| (*h, (None, None))).collect();
     
     // 重新打开 reader（避免状态污染）
@@ -275,12 +279,11 @@ pub fn search_bucket_first_last_from_fst(
     };
     
     // 启用所有 mask（必须调用，否则 for_each_block 不会读取数据）
-    // 注意：set_mask_all 会启用所有信号的 mask，不需要单独调用 set_mask
     info!("Setting mask all");
     reader.set_mask_all();
     
-    let mut first_values: std::collections::HashMap<Handle, SignalValue> = std::collections::HashMap::new();
-    let mut last_values: std::collections::HashMap<Handle, SignalValue> = std::collections::HashMap::new();
+    let mut first_values: std::collections::HashMap<Handle, (SignalValue, u64)> = std::collections::HashMap::new();
+    let mut last_values: std::collections::HashMap<Handle, (SignalValue, u64)> = std::collections::HashMap::new();
     
     // 设置时间范围限制
     info!("Setting time range: [{}, {}]", bucket_start, bucket_end);
@@ -292,22 +295,22 @@ pub fn search_bucket_first_last_from_fst(
     let mut block_count = 0;
     
     // 只遍历一次数据，同时记录 first 和 last
-    reader.for_each_block(|_time, handle, value, _var_len| {
+    reader.for_each_block(|time, handle, value, _var_len| {
         block_count += 1;
         if handles.contains(&handle) {
             let signal_value = SignalValue::Numeric(String::from_utf8_lossy(value).to_string());
             
             // 记录 first（第一个遇到的值）
             if !first_values.contains_key(&handle) {
-                first_values.insert(handle, signal_value.clone());
+                first_values.insert(handle, (signal_value.clone(), time));
             }
             
             // 更新 last（最后一个遇到的值）
-            last_values.insert(handle, signal_value);
+            last_values.insert(handle, (signal_value, time));
         }
     }).ok();
     
-    info!("search_bucket_first_last_from_fst: bucket=[{}, {}], blocks={}, first_values={}, last_values={}", 
+    info!("search_bucket_first_last_with_time_from_fst: bucket=[{}, {}], blocks={}, first_values={}, last_values={}", 
           bucket_start, bucket_end, block_count, first_values.len(), last_values.len());
     
     // 组装结果
@@ -318,6 +321,28 @@ pub fn search_bucket_first_last_from_fst(
     }
     
     results
+}
+
+/// 为多个信号搜索 bucket 内的 first 和 last 值（兼容旧版本，不返回时间戳）
+pub fn search_bucket_first_last_from_fst(
+    wave_path: &std::path::Path,
+    handles: &[Handle],
+    bucket_start: u64,
+    bucket_end: u64,
+) -> std::collections::HashMap<Handle, (Option<SignalValue>, Option<SignalValue>)> {
+    let results_with_time = search_bucket_first_last_with_time_from_fst(
+        wave_path, handles, bucket_start, bucket_end
+    );
+    
+    // 转换为旧格式（只返回值，不返回时间戳）
+    results_with_time
+        .into_iter()
+        .map(|(handle, (first, last))| {
+            let first_val = first.map(|(v, _)| v);
+            let last_val = last.map(|(v, _)| v);
+            (handle, (first_val, last_val))
+        })
+        .collect()
 }
 
 /// 为多个信号搜索 bucket 内的 first 和 last 值（优化版本）
