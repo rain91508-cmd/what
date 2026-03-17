@@ -1371,31 +1371,47 @@ impl WaveformDataProvider {
                                         })
                                         .collect();
                                     
-                                    // Parse into bucket_data directly (like server fetch)
-                                    let (start_value, buckets) = self.parse_buckets_from_transitions(&transitions);
-                                    let tile_end = tile_start + tile_span;
-                                    
-                                    // Merge with existing signal_data
-                                    if let Some(existing) = self.signal_data.get_mut(signal_name) {
-                                        // Check if this tile already exists (avoid duplicates for repeated signals)
-                                        let tile_exists = existing.bucket_data.iter().any(|(ts, _)| *ts == tile_start);
-                                        if !tile_exists {
-                                            // Add bucket_data for this tile
-                                            existing.bucket_data.push((tile_start, buckets));
-                                            // Store tile info
-                                            if let Some(sv) = start_value {
-                                                existing.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv));
-                                            }
+                                    // For LoD 0: store transitions directly
+                                    // For LoD 1+: parse into bucket_data
+                                    if lod == 0 {
+                                        // Merge with existing signal_data
+                                        if let Some(existing) = self.signal_data.get_mut(signal_name) {
+                                            // Append transitions
+                                            existing.transitions.extend(transitions);
+                                        } else {
+                                            // Insert new signal_data with transitions
+                                            let width = self.get_signal_width(signal_name);
+                                            let mut signal_data = SignalWaveData::new(signal_name.clone(), width);
+                                            signal_data.transitions = transitions;
+                                            self.signal_data.insert(signal_name.clone(), signal_data);
                                         }
                                     } else {
-                                        // Insert new signal_data with bucket_data
-                                        let width = self.get_signal_width(signal_name);
-                                        let mut signal_data = SignalWaveData::new(signal_name.clone(), width);
-                                        signal_data.bucket_data.push((tile_start, buckets));
-                                        if let Some(sv) = start_value {
-                                            signal_data.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv));
+                                        // Parse into bucket_data directly (like server fetch)
+                                        let (start_value, buckets) = self.parse_buckets_from_transitions(&transitions);
+                                        let tile_end = tile_start + tile_span;
+                                        
+                                        // Merge with existing signal_data
+                                        if let Some(existing) = self.signal_data.get_mut(signal_name) {
+                                            // Check if this tile already exists (avoid duplicates for repeated signals)
+                                            let tile_exists = existing.bucket_data.iter().any(|(ts, _)| *ts == tile_start);
+                                            if !tile_exists {
+                                                // Add bucket_data for this tile
+                                                existing.bucket_data.push((tile_start, buckets));
+                                                // Store tile info
+                                                if let Some(sv) = start_value {
+                                                    existing.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv));
+                                                }
+                                            }
+                                        } else {
+                                            // Insert new signal_data with bucket_data
+                                            let width = self.get_signal_width(signal_name);
+                                            let mut signal_data = SignalWaveData::new(signal_name.clone(), width);
+                                            signal_data.bucket_data.push((tile_start, buckets));
+                                            if let Some(sv) = start_value {
+                                                signal_data.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv));
+                                            }
+                                            self.signal_data.insert(signal_name.clone(), signal_data);
                                         }
-                                        self.signal_data.insert(signal_name.clone(), signal_data);
                                     }
                                 }
                                 Ok(None) => {
