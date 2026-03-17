@@ -708,7 +708,7 @@ impl WaveformDataProvider {
                 Ok(Some(existing_data)) => {
                     // console_log!("[WASM]     Existing group data found: {} bytes", existing_data.len());
                     // Deserialize existing data using V2 format
-                    match crate::opfs_cache::deserialize_group_data_v2(&existing_data) {
+                    match crate::opfs_cache::deserialize_group_data_v2(&existing_data, lod) {
                         Ok(existing_group) => {
                             // console_log!("[WASM]     Existing signals: {}", existing_group.signals.len());
                             
@@ -747,7 +747,7 @@ impl WaveformDataProvider {
 
             // Serialize merged data using V2 format
             let group_data = crate::opfs_cache::GroupData { signals: merged_signals };
-            let bin_data = crate::opfs_cache::serialize_group_data_v2(&group_data);
+            let bin_data = crate::opfs_cache::serialize_group_data_v2(&group_data, lod);
 
             // console_log!("[WASM]     Serialized size: {} bytes", bin_data.len());
 
@@ -1309,7 +1309,7 @@ impl WaveformDataProvider {
                     match self.opfs_cache.read(&block).await {
                         Ok(Some(data)) => {
                             // Group file exists, check if specific signal exists using V2 format
-                            match crate::opfs_cache::read_signal_from_group_v2(&data, draw_sig_id) {
+                            match crate::opfs_cache::read_signal_from_group_v2(&data, draw_sig_id, lod) {
                                 Ok(Some(signal_data)) => {
                                     // Signal found in cache, load into signal_data
                                     tile_hits += 1;

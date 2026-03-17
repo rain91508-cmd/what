@@ -278,7 +278,11 @@ impl SignalDirectory {
 /// Serialize group data to bin format V2 (fixed 256 slots)
 /// Format: [HeaderV2][SignalDirectory(256×4bytes)][DataArea]
 /// Each signal is placed at directory index = draw_sig_id % 256
-pub fn serialize_group_data_v2(group_data: &GroupData) -> Vec<u8> {
+/// 
+/// Storage optimization based on LoD:
+/// - LoD 0: Store only actual_time (u64), time is not used
+/// - LoD 1+: Store time as u16 (bucket index) + actual_time as u64
+pub fn serialize_group_data_v2(group_data: &GroupData, lod: u32) -> Vec<u8> {
     // Calculate data area offset (header + signal directory)
     let data_area_offset = (GroupBinHeaderV2::SIZE + SignalDirectory::SIZE) as u32;
     
@@ -295,12 +299,21 @@ pub fn serialize_group_data_v2(group_data: &GroupData) -> Vec<u8> {
         directory.set(index_in_group, SignalDirectoryEntry::new(true, offset));
         actual_signal_count += 1;
 
-        // Serialize signal data: [draw_sig_id: u32][transition_count: u32] + [time: u64, actual_time: u64, value_type: u8, value_len: u16, value: bytes] × count
+        // Serialize signal data based on LoD
         signal_data_bytes.extend_from_slice(&signal.draw_sig_id.to_le_bytes());
         signal_data_bytes.extend_from_slice(&(signal.transitions.len() as u32).to_le_bytes());
+        
         for transition in &signal.transitions {
-            signal_data_bytes.extend_from_slice(&transition.time.to_le_bytes());
-            signal_data_bytes.extend_from_slice(&transition.actual_time.to_le_bytes());
+            if lod == 0 {
+                // LoD 0: Store only actual_time (u64)
+                // Format: [actual_time: u64][value_type: u8][value_len: u16][value: bytes]
+                signal_data_bytes.extend_from_slice(&transition.actual_time.to_le_bytes());
+            } else {
+                // LoD 1+: Store time as u16 (bucket index) + actual_time as u64
+                // Format: [time: u16][actual_time: u64][value_type: u8][value_len: u16][value: bytes]
+                signal_data_bytes.extend_from_slice(&(transition.time as u16).to_le_bytes());
+                signal_data_bytes.extend_from_slice(&transition.actual_time.to_le_bytes());
+            }
             signal_data_bytes.push(transition.value_type);
             signal_data_bytes.extend_from_slice(&transition.value_len.to_le_bytes());
             signal_data_bytes.extend_from_slice(&transition.value);
@@ -321,7 +334,11 @@ pub fn serialize_group_data_v2(group_data: &GroupData) -> Vec<u8> {
 
 /// Deserialize group data from bin format V2 (fixed 256 slots)
 /// Format: [HeaderV2][SignalDirectory(256×4bytes)][DataArea]
-pub fn deserialize_group_data_v2(data: &[u8]) -> Result<GroupData, String> {
+/// 
+/// Storage format based on LoD:
+/// - LoD 0: [actual_time: u64][value_type: u8][value_len: u16][value: bytes]
+/// - LoD 1+: [time: u16][actual_time: u64][value_type: u8][value_len: u16][value: bytes]
+pub fn deserialize_group_data_v2(data: &[u8], lod: u32) -> Result<GroupData, String> {
     if data.len() < GroupBinHeaderV2::SIZE {
         return Err("Data too small for header".to_string());
     }
@@ -375,21 +392,32 @@ pub fn deserialize_group_data_v2(data: &[u8]) -> Result<GroupData, String> {
         let mut pos = offset + 8;
 
         for _ in 0..transition_count {
-            if pos + 19 > data.len() {
-                break;
+            let (time, actual_time);
+            
+            if lod == 0 {
+                // LoD 0: Read only actual_time (u64), time is set to 0
+                if pos + 11 > data.len() {
+                    break;
+                }
+                actual_time = u64::from_le_bytes([
+                    data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
+                    data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
+                ]);
+                pos += 8;
+                time = 0; // Not used for LoD 0
+            } else {
+                // LoD 1+: Read time as u16 + actual_time as u64
+                if pos + 13 > data.len() {
+                    break;
+                }
+                time = u16::from_le_bytes([data[pos], data[pos + 1]]) as u64;
+                pos += 2;
+                actual_time = u64::from_le_bytes([
+                    data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
+                    data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
+                ]);
+                pos += 8;
             }
-
-            let time = u64::from_le_bytes([
-                data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
-                data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
-            ]);
-            pos += 8;
-
-            let actual_time = u64::from_le_bytes([
-                data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
-                data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
-            ]);
-            pos += 8;
 
             let value_type = data[pos];
             pos += 1;
@@ -418,7 +446,11 @@ pub fn deserialize_group_data_v2(data: &[u8]) -> Result<GroupData, String> {
 
 /// Read a single signal from group data V2 by draw_sig_id
 /// Returns None if signal not found
-pub fn read_signal_from_group_v2(data: &[u8], draw_sig_id: u32) -> Result<Option<SignalData>, String> {
+/// 
+/// Storage format based on LoD:
+/// - LoD 0: [actual_time: u64][value_type: u8][value_len: u16][value: bytes]
+/// - LoD 1+: [time: u16][actual_time: u64][value_type: u8][value_len: u16][value: bytes]
+pub fn read_signal_from_group_v2(data: &[u8], draw_sig_id: u32, lod: u32) -> Result<Option<SignalData>, String> {
     if data.len() < GroupBinHeaderV2::SIZE {
         return Err("Data too small for header".to_string());
     }
@@ -468,21 +500,32 @@ pub fn read_signal_from_group_v2(data: &[u8], draw_sig_id: u32) -> Result<Option
         let mut pos = offset + 8;
 
         for _ in 0..transition_count {
-            if pos + 19 > data.len() {
-                break;
+            let (time, actual_time);
+            
+            if lod == 0 {
+                // LoD 0: Read only actual_time (u64), time is set to 0
+                if pos + 11 > data.len() {
+                    break;
+                }
+                actual_time = u64::from_le_bytes([
+                    data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
+                    data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
+                ]);
+                pos += 8;
+                time = 0; // Not used for LoD 0
+            } else {
+                // LoD 1+: Read time as u16 + actual_time as u64
+                if pos + 13 > data.len() {
+                    break;
+                }
+                time = u16::from_le_bytes([data[pos], data[pos + 1]]) as u64;
+                pos += 2;
+                actual_time = u64::from_le_bytes([
+                    data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
+                    data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
+                ]);
+                pos += 8;
             }
-
-            let time = u64::from_le_bytes([
-                data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
-                data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
-            ]);
-            pos += 8;
-
-            let actual_time = u64::from_le_bytes([
-                data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
-                data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
-            ]);
-            pos += 8;
 
             let value_type = data[pos];
             pos += 1;
