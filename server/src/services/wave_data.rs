@@ -491,24 +491,9 @@ impl CompressionAlgorithm {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Transition {
     /// 时间戳
-    /// LoD 0: 实际时间
-    /// LoD > 0: bucket 索引（用于 time_array）
     pub time: u64,
     /// 值（仿 FST 格式）
     pub value: SignalValue,
-    /// 实际的 transition 时间（仅用于 LoD > 0，存储在 transition_time_array）
-    /// 如果为 None，表示使用 time 字段（LoD 0 或 Start Value）
-    pub actual_time: Option<u64>,
-}
-
-impl Default for Transition {
-    fn default() -> Self {
-        Self {
-            time: 0,
-            value: SignalValue::Numeric("0".to_string()),
-            actual_time: None,
-        }
-    }
 }
 
 impl Transition {
@@ -520,7 +505,7 @@ impl Transition {
     /// * `value_type` - 值类型
     pub fn from_fst(time: u64, fst_value: &[u8], value_type: SignalValueType) -> Self {
         let value = SignalValue::from_fst(fst_value, value_type);
-        Self { time, value, actual_time: None }
+        Self { time, value }
     }
 
     /// 从数值字符串创建（支持四态 X/Z）
@@ -534,16 +519,6 @@ impl Transition {
         Self {
             time,
             value: SignalValue::Numeric(value_str.to_string()),
-            actual_time: None,
-        }
-    }
-
-    /// 从数值字符串创建，同时指定 actual_time（用于 LoD > 0）
-    pub fn from_numeric_with_actual_time(time: u64, value_str: &str, actual_time: u64) -> Self {
-        Self {
-            time,
-            value: SignalValue::Numeric(value_str.to_string()),
-            actual_time: Some(actual_time),
         }
     }
 
@@ -552,7 +527,6 @@ impl Transition {
         Self {
             time,
             value: SignalValue::String(s.to_string()),
-            actual_time: None,
         }
     }
 
@@ -561,7 +535,6 @@ impl Transition {
         Self {
             time,
             value: SignalValue::Real(f),
-            actual_time: None,
         }
     }
 
@@ -578,7 +551,6 @@ impl Transition {
         Self {
             time,
             value: SignalValue::Binary { width, data },
-            actual_time: None,
         }
     }
 
@@ -805,11 +777,9 @@ impl LodPyramidGenerator {
             .unwrap_or_else(|| FourStateValue::new(source.width));
         let mut bucket_first = first_fs.clone();
         let mut bucket_last = first_fs.clone();
+        let mut bucket_first_time = first_trans.time;  // 记录 first transition 的实际时间
+        let mut bucket_last_time = first_trans.time;   // 记录 last transition 的实际时间
         let mut bucket_has_multiple = false;  // 跟踪 bucket 内是否有多个 transitions
-        
-        // 记录 first 和 last 的实际时间
-        let mut bucket_first_time = first_trans.time;
-        let mut bucket_last_time = first_trans.time;
         
         // 计算第一个 transition 的 bucket 索引
         // 统一规则：只处理 [aligned_start, range_end - 1] 范围内的 transition
@@ -839,33 +809,29 @@ impl LodPyramidGenerator {
                 .unwrap_or_else(|| FourStateValue::new(source.width));
 
             if trans_bucket_idx > current_bucket_idx {
-                // 先输出当前 bucket 的 first/last（使用 bucket offset 作为时间戳）
+                // 先输出当前 bucket 的 first/last（使用实际 transition 时间戳）
                 let first_str = bucket_first.to_string();
                 let last_str = bucket_last.to_string();
                 
-                // 使用 from_numeric_with_actual_time 同时存储 bucket 索引和实际时间
-                result.add_transition(Transition::from_numeric_with_actual_time(
-                    current_bucket_idx as u64, &first_str, bucket_first_time
-                ));
+                // 使用实际的 first transition 时间
+                result.add_transition(Transition::from_numeric(bucket_first_time, &first_str));
                 
-                // 如果 bucket 内有多个 transitions，输出 last（即使值相等）
+                // 如果 bucket 内有多个 transitions，输出 last（使用实际的 last transition 时间）
                 if bucket_has_multiple {
-                    result.add_transition(Transition::from_numeric_with_actual_time(
-                        current_bucket_idx as u64, &last_str, bucket_last_time
-                    ));
+                    result.add_transition(Transition::from_numeric(bucket_last_time, &last_str));
                 }
 
                 // 开始新 bucket（跳过中间空 bucket，不输出）
                 current_bucket_idx = trans_bucket_idx.min(total_buckets - 1);
                 bucket_first = trans_fs.clone();
                 bucket_last = trans_fs.clone();
-                bucket_first_time = trans.time;
-                bucket_last_time = trans.time;
+                bucket_first_time = trans.time;  // 记录新 bucket 的 first transition 时间
+                bucket_last_time = trans.time;   // 记录新 bucket 的 last transition 时间
                 bucket_has_multiple = false;  // 新 bucket 开始，重置标志
             } else {
                 // 更新当前 bucket 的 last
                 bucket_last = trans_fs.clone();
-                bucket_last_time = trans.time;
+                bucket_last_time = trans.time;  // 更新 last transition 时间
                 bucket_has_multiple = true;  // 标记 bucket 内有多个 transitions
             }
         }
@@ -874,15 +840,12 @@ impl LodPyramidGenerator {
         let first_str = bucket_first.to_string();
         let last_str = bucket_last.to_string();
         
-        result.add_transition(Transition::from_numeric_with_actual_time(
-            current_bucket_idx as u64, &first_str, bucket_first_time
-        ));
+        // 使用实际的 first transition 时间
+        result.add_transition(Transition::from_numeric(bucket_first_time, &first_str));
         
-        // 如果 bucket 内有多个 transitions，输出 last（即使值相等）
+        // 如果 bucket 内有多个 transitions，输出 last（使用实际的 last transition 时间）
         if bucket_has_multiple {
-            result.add_transition(Transition::from_numeric_with_actual_time(
-                current_bucket_idx as u64, &last_str, bucket_last_time
-            ));
+            result.add_transition(Transition::from_numeric(bucket_last_time, &last_str));
         }
 
         result
@@ -1042,7 +1005,6 @@ impl LodPyramidGenerator {
                             width: source.width,
                             data: bucket_min.clone(),
                         },
-                        actual_time: None,
                     });
                 }
                 if bucket_max != bucket_min && bucket_max != last_value {
@@ -1052,7 +1014,6 @@ impl LodPyramidGenerator {
                             width: source.width,
                             data: bucket_max.clone(),
                         },
-                        actual_time: None,
                     });
                 }
 
@@ -1079,7 +1040,6 @@ impl LodPyramidGenerator {
                         width: source.width,
                         data: bucket_min.clone(),
                     },
-                    actual_time: None,
                 });
             }
             if bucket_max != bucket_min {
@@ -1089,7 +1049,6 @@ impl LodPyramidGenerator {
                         width: source.width,
                         data: bucket_max.clone(),
                     },
-                    actual_time: None,
                 });
             }
         }
@@ -1325,19 +1284,25 @@ impl ChunkSerializer {
                     time_array.extend_from_slice(&t.time.to_le_bytes());
                 } else {
                     // LoD > 0: 
-                    // - time_array 存储 bucket 索引（u16）
+                    // - time_array 存储 bucket 索引（u16），相对于当前 tile
                     // - transition_time_array 存储实际时间（u64，包含Start Value）
                     // 
-                    // 注意：对于 LoD > 0，t.time 是 bucket 索引
-                    // t.actual_time 是实际的 transition 时间（由 generate_numeric_level_with_range 设置）
+                    // 注意：对于 LoD > 0，t.time 是实际的 transition 时间戳
+                    // bucket_idx 应该相对于 tile 的起始时间，不是绝对时间
                     let (bucket_idx, actual_time) = if t.time == Self::BOUNDARY_TIME_START {
                         (0xFFFFu16, Self::BOUNDARY_TIME_START) // Start Value
                     } else {
-                        // t.time 是 bucket 索引
-                        let bucket_idx = t.time as u16;
-                        // 使用 actual_time（如果存在），否则使用 bucket 开始时间
-                        let actual_time = t.actual_time.unwrap_or(time_start + t.time * bucket_size);
-                        (bucket_idx, actual_time)
+                        // t.time 是实际时间戳，计算相对于 tile 的 bucket 索引
+                        // 使用 time_start 作为 tile 的起始时间
+                        let relative_time = t.time.saturating_sub(time_start);
+                        let bucket_idx = (relative_time / bucket_size) as u16;
+                        // actual_time 就是 t.time（已经是绝对时间）
+                        
+                        // 调试信息
+                        eprintln!("[DEBUG] ChunkSerializer::serialize - chunk_id={}, time_start={}, t.time={}, relative_time={}, bucket_idx={}, bucket_size={}",
+                            chunk_id, time_start, t.time, relative_time, bucket_idx, bucket_size);
+                        
+                        (bucket_idx, t.time)
                     };
                     time_array.extend_from_slice(&bucket_idx.to_le_bytes());
                     transition_time_array.extend_from_slice(&actual_time.to_le_bytes());
@@ -1530,7 +1495,7 @@ impl ChunkSerializer {
                 
                 let value_data = &value_bytes[value_offset + 3..value_offset + 3 + value_len];
                 let value = SignalValue::from_fst(value_data, value_type);
-                transitions.push(Transition { time, value, actual_time: None });
+                transitions.push(Transition { time, value });
                 
                 // 移动到下一个值
                 value_offset += 3 + value_len;
@@ -1869,6 +1834,9 @@ impl MultiTileChunkSerializer {
         for (tile_idx, tile_signals) in tiles_data.iter().enumerate() {
             let tile_start_time = start_time + tile_span * tile_idx as u64;
             let tile_end_time = tile_start_time + tile_span;
+
+            eprintln!("[DEBUG] MultiTileChunkSerializer::serialize - tile_idx={}, start_time={}, tile_span={}, tile_start_time={}, tile_end_time={}",
+                tile_idx, start_time, tile_span, tile_start_time, tile_end_time);
 
             // 使用现有的 ChunkSerializer 序列化单个 tile
             // Tile 数据的时间已经是 bucket 索引，不需要过滤

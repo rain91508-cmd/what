@@ -256,14 +256,18 @@ pub async fn read_signals_data_fst_reader_batch_lod_low(
                 value: SignalValue::Numeric(start_value),
             });
 
-            // 添加每个 bucket 的 first/last（时间戳 = bucket index）
+            // 添加每个 bucket 的 first/last（时间戳 = 实际时间）
+            // 注意：使用实际时间戳 aligned_start + bucket_idx * bucket_size，与 lod_high 保持一致
             if let (Some(first_vec), Some(last_vec), Some(multiple_vec)) = 
                 (bucket_first.get(&info.handle), bucket_last.get(&info.handle), bucket_has_multiple.get(&info.handle)) {
                 for bucket_idx in 0..num_buckets {
                     if let Some(first_val) = &first_vec[bucket_idx] {
+                        // 计算实际时间戳
+                        let actual_time = aligned_start + bucket_idx as u64 * bucket_size;
+                        
                         // first
                         signal_data.add_transition(Transition {
-                            time: bucket_idx as u64,
+                            time: actual_time,
                             value: SignalValue::Numeric(first_val.clone()),
                         });
                         
@@ -271,7 +275,7 @@ pub async fn read_signals_data_fst_reader_batch_lod_low(
                         if multiple_vec[bucket_idx] {
                             if let Some(last_val) = &last_vec[bucket_idx] {
                                 signal_data.add_transition(Transition {
-                                    time: bucket_idx as u64,
+                                    time: actual_time,
                                     value: SignalValue::Numeric(last_val.clone()),
                                 });
                             }
@@ -418,13 +422,17 @@ pub async fn read_signals_data_fst_reader_batch_lod_high(
                 value: SignalValue::Numeric(start_value),
             });
 
-            // 添加每个 bucket 的 first/last（时间戳 = bucket index）
+            // 添加每个 bucket 的 first/last（时间戳 = 实际时间）
+            // 注意：返回实际时间戳，不是 bucket 索引，以便与 lod_low 保持一致
             if let (Some(first_vec), Some(last_vec)) = (bucket_first.get(&info.handle), bucket_last.get(&info.handle)) {
                 for bucket_idx in 0..num_buckets {
                     if let Some(first_val) = &first_vec[bucket_idx] {
+                        // 计算实际时间戳
+                        let actual_time = aligned_start + bucket_idx as u64 * bucket_size;
+                        
                         // first
                         signal_data.add_transition(Transition {
-                            time: bucket_idx as u64,
+                            time: actual_time,
                             value: SignalValue::Numeric(first_val.clone()),
                         });
                         
@@ -432,7 +440,7 @@ pub async fn read_signals_data_fst_reader_batch_lod_high(
                         if let Some(last_val) = &last_vec[bucket_idx] {
                             if last_val != first_val {
                                 signal_data.add_transition(Transition {
-                                    time: bucket_idx as u64,
+                                    time: actual_time,
                                     value: SignalValue::Numeric(last_val.clone()),
                                 });
                             }
