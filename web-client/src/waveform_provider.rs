@@ -3677,38 +3677,45 @@ if tile_missing_signals.is_empty() {
     }
     
     /// Merge adjacent segments with the same value to avoid vertical lines at tile boundaries
+    /// For multi-bit signals, also merges segments with same value even if not strictly adjacent
     fn merge_adjacent_segments(&self, segments: &mut Vec<RenderSegment>) {
         if segments.len() < 2 {
             return;
         }
-        
+
         let mut merged: Vec<RenderSegment> = Vec::new();
         let mut current = segments[0].clone();
-        
+
         for i in 1..segments.len() {
             let next = &segments[i];
-            
-            // Check if can merge: same y, same signal, same value, not toggle, adjacent x
-            let can_merge = current.y == next.y 
+
+            // Check if can merge: same y, same signal, same value, not toggle
+            let same_value = current.y == next.y
                 && current.signal_name == next.signal_name
                 && !current.value.is_min_max  // Not a toggle segment
                 && !next.value.is_min_max     // Not a toggle segment
-                && current.value.display_str == next.value.display_str  // Same value
-                && (current.x1 - next.x0).abs() < 0.001;  // Adjacent (within 1 pixel)
-            
+                && current.value.display_str == next.value.display_str;  // Same value
+
+            // For merging, check if adjacent OR overlapping (within 2 pixels tolerance)
+            // This handles floating point precision issues and small gaps
+            let can_merge = same_value
+                && (next.x0 <= current.x1 + 2.0);  // Next starts before or shortly after current ends
+
             if can_merge {
-                // Merge: extend current segment to next's end
-                current.x1 = next.x1;
+                // Merge: extend current segment to next's end (if next extends further)
+                if next.x1 > current.x1 {
+                    current.x1 = next.x1;
+                }
             } else {
                 // Cannot merge: push current and start new
                 merged.push(current);
                 current = next.clone();
             }
         }
-        
+
         // Push final segment
         merged.push(current);
-        
+
         // Replace original segments with merged
         *segments = merged;
     }
