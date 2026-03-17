@@ -450,7 +450,7 @@ pub async fn run_detailed_signal_test(config: &ServerConfig) {
     let lod: u32 = 10;
     let start_time: u64 = 0;
     let num_buckets = 256usize;
-    let num_tiles = 2usize;
+    let num_tiles = 4usize;
     
     let bucket_size = 2u64.pow(lod);
     let tile_span = bucket_size * num_buckets as u64;
