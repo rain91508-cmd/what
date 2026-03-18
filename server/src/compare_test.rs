@@ -445,7 +445,7 @@ pub async fn run_detailed_signal_test(config: &ServerConfig) {
     
     // 测试参数
     let wave_name = "picorv32";
-    let signal_name = "testbench.top.uut.picorv32_core.clk";
+    let signal_name = "testbench.top.uut.picorv32_core.mem_addr [31:0]";
     let test_signals = vec![signal_name.to_string()];
     let lod: u32 = 10;
     let start_time: u64 = 784342160;  // 指定的 view start
@@ -490,7 +490,7 @@ pub async fn run_detailed_signal_test(config: &ServerConfig) {
     let api_multi = MultiTileChunkSerializer::deserialize(&api_tiles);
     
     // 创建 FSTAPI 输出文件
-    let fstapi_output_file = format!("fstapi_{}_{}_lod{}.txt", wave_name, signal_name.replace(".", "_"), lod);
+    let fstapi_output_file = format!("fstapi_{}_{}_lod{}.txt", wave_name, signal_name.replace(['.', ' ', '[', ']', ':'], "_"), lod);
     let mut fstapi_content = String::new();
     
     fstapi_content.push_str(&format!("FSTAPI 详细测试报告\n"));
@@ -571,7 +571,7 @@ pub async fn run_detailed_signal_test(config: &ServerConfig) {
     let cache = crate::services::fst_reader_cache::get_fst_reader_cache();
     
     // 创建 LOD_LOW 输出文件
-    let lodlow_output_file = format!("lodlow_{}_{}_lod{}.txt", wave_name, signal_name.replace(".", "_"), lod);
+    let lodlow_output_file = format!("lodlow_{}_{}_lod{}.txt", wave_name, signal_name.replace(['.', ' ', '[', ']', ':'], "_"), lod);
     let mut lodlow_content = String::new();
     
     lodlow_content.push_str(&format!("LOD_LOW 详细测试报告\n"));
@@ -655,7 +655,7 @@ pub async fn run_detailed_signal_test(config: &ServerConfig) {
     println!("\n[DETAILED-TEST] ===== 3. LOD_HIGH 读取 =====");
     
     // 创建 LOD_HIGH 输出文件
-    let lodhigh_output_file = format!("lodhigh_{}_{}_lod{}.txt", wave_name, signal_name.replace(".", "_"), lod);
+    let lodhigh_output_file = format!("lodhigh_{}_{}_lod{}.txt", wave_name, signal_name.replace(['.', ' ', '[', ']', ':'], "_"), lod);
     let mut lodhigh_content = String::new();
     
     lodhigh_content.push_str(&format!("LOD_HIGH 详细测试报告\n"));
