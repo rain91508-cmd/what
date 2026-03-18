@@ -146,6 +146,14 @@ export function TableViewWindow({
   const [resultMax, setResultMax] = useState(100);
   // Show warning message when transition count < 3
   const [showLowTransitionWarning, setShowLowTransitionWarning] = useState(false);
+  // Current search end time for continue fetch
+  const [currentSearchEndTime, setCurrentSearchEndTime] = useState<number>(endTime);
+  // Whether we can continue fetching (returned max results)
+  const [canContinueFetch, setCanContinueFetch] = useState(false);
+  // Page size for table pagination
+  const [pageSize, setPageSize] = useState(100);
+  // Accumulated data for continue fetch
+  const [accumulatedData, setAccumulatedData] = useState<RawSignalValuesResult | null>(null);
 
   // Use refs to store callback functions to avoid dependency issues in useEffect
   const onColumnFiltersChangeRef = useRef(onColumnFiltersChange);
@@ -428,7 +436,7 @@ export function TableViewWindow({
       columnVisibility,
       pagination: {
         pageIndex: currentPage,
-        pageSize: 100,
+        pageSize: pageSize,
       },
     },
     onColumnFiltersChange: setColumnFilters,
@@ -470,13 +478,14 @@ export function TableViewWindow({
   }, []);
 
   // Handle data fetch using adapter (similar to WaveformWindow)
-  const handleFetchData = useCallback(async () => {
+  const handleFetchData = useCallback(async (continueFetch: boolean = false) => {
     console.log('[TableViewWindow] handleFetchData called', { 
       startTime, 
       endTime, 
       signals: signals.length,
       displayUnitPerLoD0Unit: _displayUnitPerLoD0Unit,
-      timeSpan: endTime - startTime
+      timeSpan: endTime - startTime,
+      continueFetch
     });
     if (!adapterRef.current) {
       console.error('[TableViewWindow] Adapter not ready');
@@ -516,13 +525,23 @@ export function TableViewWindow({
       const selectedLoD = calculateClosestLoD(_displayUnitPerLoD0Unit);
       console.log('[TableViewWindow] Selected LoD:', selectedLoD, 'based on displayUnitPerLoD0Unit:', _displayUnitPerLoD0Unit);
 
+      // Determine search range
+      let searchStartTime = startTime;
+      let searchEndTime = endTime;
+      
+      if (continueFetch && accumulatedData) {
+        // Continue from last search end + 1
+        searchStartTime = currentSearchEndTime + 1;
+        console.log('[TableViewWindow] Continue fetch from:', searchStartTime, 'to:', endTime);
+      }
+
       // Calculate how many LoD buckets are in this range
       const lodBucketSize = Math.pow(2, selectedLoD);
-      const numBuckets = Math.ceil((endTime - startTime) / lodBucketSize);
+      const numBuckets = Math.ceil((searchEndTime - searchStartTime) / lodBucketSize);
       console.log('[TableViewWindow] Time range analysis:', {
-        startTime,
-        endTime,
-        timeRange: endTime - startTime,
+        searchStartTime,
+        searchEndTime,
+        timeRange: searchEndTime - searchStartTime,
         selectedLoD,
         lodBucketSize,
         numBuckets,
@@ -532,8 +551,8 @@ export function TableViewWindow({
       // WASM expects time parameters in LoD0 units!
       // display unit only affects the display of time in returned data
       console.log('[TableViewWindow] Time params for WASM:', {
-        startTime_LoD0: startTime,
-        endTime_LoD0: endTime,
+        startTime_LoD0: searchStartTime,
+        endTime_LoD0: searchEndTime,
         displayUnitPerLoD0Unit: _displayUnitPerLoD0Unit,
       });
       
@@ -541,8 +560,8 @@ export function TableViewWindow({
       // Pass prefix settings to let WASM handle signal name conversion
       const getSignalValuesParams = {
         signalNames: signals.map(s => s.name), // Use local names, WASM will convert
-        searchStartTime: startTime,
-        searchEndTime: endTime,
+        searchStartTime: searchStartTime,
+        searchEndTime: searchEndTime,
         resultMax: resultMax, // Use user-specified max result count
         signals: updatedSignals,
         // Pass LoD parameter
@@ -579,15 +598,41 @@ export function TableViewWindow({
         allRowTimes: result.data.map(r => r.time)
       });
 
+      // Check if we got max results (can continue fetching)
+      const gotMaxResults = result.data.length >= resultMax;
+      setCanContinueFetch(gotMaxResults && result.searchEndTime < endTime);
+      setCurrentSearchEndTime(result.searchEndTime);
+
       // Check if transition count is less than 3
       if (result.data.length < 3) {
         setShowLowTransitionWarning(true);
       }
 
-      // Update parent with fetched data
-      onFetchData(result);
-
-      console.log(`[TableViewWindow] Fetched ${result.data.length} rows`);
+      // Merge or replace data
+      if (continueFetch && accumulatedData) {
+        // Filter out duplicate times (WASM may return boundary transition again)
+        const existingTimes = new Set(accumulatedData.data.map(r => r.time));
+        const newData = result.data.filter(r => !existingTimes.has(r.time));
+        
+        // Append new data to accumulated data
+        const mergedResult: RawSignalValuesResult = {
+          searchStartTime: accumulatedData.searchStartTime,
+          searchEndTime: result.searchEndTime,
+          data: [...accumulatedData.data, ...newData],
+        };
+        setAccumulatedData(mergedResult);
+        onFetchData(mergedResult);
+        console.log(`[TableViewWindow] Fetched ${result.data.length} rows, filtered ${result.data.length - newData.length} duplicates, total: ${mergedResult.data.length} rows`);
+        
+        // Navigate to the last page to show new data
+        const totalPages = Math.ceil(mergedResult.data.length / pageSize);
+        handlePageChange(totalPages - 1);
+      } else {
+        // Replace data
+        setAccumulatedData(result);
+        onFetchData(result);
+        console.log(`[TableViewWindow] Fetched ${result.data.length} rows`);
+      }
     } catch (error) {
       console.error('[TableViewWindow] Failed to fetch data:', error);
     } finally {
@@ -607,7 +652,9 @@ export function TableViewWindow({
     _displayUnitPerLoD0Unit,
     calculateClosestLoD,
     resultMax,
-    earlyExitOnInsufficientTransitions
+    earlyExitOnInsufficientTransitions,
+    accumulatedData,
+    currentSearchEndTime
   ]);
 
   // Get total pages
@@ -630,7 +677,7 @@ export function TableViewWindow({
         }}
       >
         <button
-          onClick={handleFetchData}
+          onClick={() => handleFetchData(false)}
           disabled={!providerReady || isFetching}
           style={{
             padding: '6px 12px',
@@ -678,6 +725,52 @@ export function TableViewWindow({
               borderRadius: '3px',
             }}
           />
+        </label>
+
+        {/* Continue Fetch Button */}
+        {canContinueFetch && (
+          <button
+            onClick={() => handleFetchData(true)}
+            disabled={!providerReady || isFetching}
+            style={{
+              padding: '6px 12px',
+              fontSize: '12px',
+              backgroundColor: providerReady ? '#ff9800' : '#ccc',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: providerReady ? 'pointer' : 'not-allowed',
+            }}
+          >
+            {isFetching ? 'Fetching...' : 'Continue Fetch'}
+          </button>
+        )}
+
+        {/* Page Size Control */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}>
+          Page Size:
+          <select
+            value={pageSize}
+            onChange={(e) => {
+              const newPageSize = parseInt(e.target.value);
+              setPageSize(newPageSize);
+              // Reset to first page when page size changes
+              handlePageChange(0);
+            }}
+            style={{
+              padding: '2px 4px',
+              fontSize: '11px',
+              border: '1px solid #ccc',
+              borderRadius: '3px',
+            }}
+          >
+            <option value={10}>10</option>
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+            <option value={200}>200</option>
+            <option value={500}>500</option>
+          </select>
         </label>
 
         {/* Column Visibility Toggle */}
