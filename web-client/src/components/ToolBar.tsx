@@ -757,7 +757,7 @@ export function ToolBar({
             onKeyDown={handleStartInputKeyDown}
             onBlur={handleStartInputBlur}
             style={{
-              width: '70px',
+              width: '105px',
               padding: '4px 6px',
               fontSize: '12px',
               border: '1px solid #c0c0c0',
@@ -765,7 +765,7 @@ export function ToolBar({
               height: '24px',
             }}
             min="0"
-            step={getStepSize()}
+            step="1"
             title={`Viewport start time (${selectedUnit}, press Enter to confirm)`}
           />
         </div>
@@ -788,7 +788,7 @@ export function ToolBar({
             onKeyDown={handleCursorInputKeyDown}
             onBlur={handleCursorInputBlur}
             style={{
-              width: '70px',
+              width: '105px',
               padding: '4px 6px',
               fontSize: '12px',
               border: '1px solid #c0c0c0',
@@ -796,7 +796,7 @@ export function ToolBar({
               height: '24px',
             }}
             min="0"
-            step={getStepSize()}
+            step="1"
             title={`Cursor position (${selectedUnit}, press Enter to confirm)`}
           />
         </div>
@@ -819,7 +819,7 @@ export function ToolBar({
               onChange={handleTableStartInputChange}
               onKeyDown={handleTableStartInputKeyDown}
               style={{
-                width: '70px',
+                width: '105px',
                 padding: '4px 6px',
                 fontSize: '12px',
                 border: '1px solid #c0c0c0',
@@ -827,7 +827,7 @@ export function ToolBar({
                 height: '24px',
               }}
               min="0"
-              step={getStepSize()}
+              step="1"
               title={`Table start time (${selectedUnit}, press Enter to confirm)`}
             />
           </div>
@@ -845,7 +845,7 @@ export function ToolBar({
               onChange={handleTableSpanInputChange}
               onKeyDown={handleTableSpanInputKeyDown}
               style={{
-                width: '70px',
+                width: '105px',
                 padding: '4px 6px',
                 fontSize: '12px',
                 border: '1px solid #c0c0c0',
@@ -853,7 +853,7 @@ export function ToolBar({
                 height: '24px',
               }}
               min="0"
-              step={getStepSize()}
+              step="1"
               title={`Table time span (${selectedUnit}, press Enter to confirm)`}
             />
           </div>
