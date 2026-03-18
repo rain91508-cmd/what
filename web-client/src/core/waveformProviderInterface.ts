@@ -79,6 +79,7 @@ export interface RawValue {
   displayStr: string;
   valueType: 'has_x' | 'has_z' | 'mixed' | 'numeric';
   hasTransition: boolean;
+  hasToggle: boolean;
 }
 
 /**
@@ -107,6 +108,16 @@ export interface GetSignalValuesAtTransitionsParams {
   searchEndTime: number;
   resultMax: number;
   signals: SignalWithFormat[];
+  /**
+   * Optional: Level of Detail (0=raw data, 1+=aggregated data)
+   * If not provided, defaults to 0 (raw data)
+   */
+  lod?: number;
+  /**
+   * Optional: If true, exit early if first 10 tiles contain fewer than 2 real transitions
+   * Defaults to false
+   */
+  earlyExitOnInsufficientTransitions?: boolean;
   // Prefix settings for signal name conversion (optional)
   signalPrefix?: string;
   serverPrefix?: string;

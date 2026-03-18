@@ -263,6 +263,8 @@ pub struct RawValue {
     pub value_type: String, // "has_x" | "has_z" | "mixed" | "numeric"
     #[serde(rename = "hasTransition")]
     pub has_transition: bool,
+    #[serde(rename = "hasToggle")]
+    pub has_toggle: bool,
 }
 
 /// All signal values at a specific time point
@@ -1599,13 +1601,15 @@ if tile_missing_signals.is_empty() {
         search_end_time: u64,
         result_max: usize,
         signals_with_format: JsValue,
+        lod: Option<u32>,
         enable_opfs: Option<bool>,
         enable_memory_cache: Option<bool>,
+        early_exit_on_insufficient_transitions: Option<bool>,
     ) -> Result<JsValue, JsValue> {
         // Debug: Log input parameters
         web_sys::console::log_1(&JsValue::from_str(&format!(
-            "[WASM] get_signal_values_at_transitions called with signal_names: {:?}, search_start_time: {}, search_end_time: {}, result_max: {}, display_unit_per_lod0_unit: {}, enable_opfs: {:?}, enable_memory_cache: {:?}",
-            signal_names, search_start_time, search_end_time, result_max, self.display_unit_per_lod0_unit, enable_opfs, enable_memory_cache
+            "[WASM] get_signal_values_at_transitions called with signal_names: {:?}, search_start_time: {}, search_end_time: {}, result_max: {}, lod: {:?}, enable_opfs: {:?}, enable_memory_cache: {:?}, early_exit_on_insufficient_transitions: {:?}",
+            signal_names, search_start_time, search_end_time, result_max, lod, enable_opfs, enable_memory_cache, early_exit_on_insufficient_transitions
         )));
         web_sys::console::log_1(&JsValue::from_str(&format!(
             "[WASM] Current prefix settings - signal_prefix: {:?}, server_prefix: {:?}, space_before_bracket: {:?}",
@@ -1643,17 +1647,23 @@ if tile_missing_signals.is_empty() {
         let saved_viewport = self.viewport;
         let saved_lod = self.current_lod;
         
+        // Determine LoD to use
+        let requested_lod = lod.unwrap_or(0);
+        let early_exit = early_exit_on_insufficient_transitions.unwrap_or(false);
+        
         // Step 2: Set independent viewport for this query
         self.viewport = Viewport {
             time_start: search_start_time as f64,
             time_end: search_end_time as f64,
         };
-        self.current_lod = Some(0); // Force LoD 0 for raw data
+        self.current_lod = Some(requested_lod);
+        
+        // Calculate tile span based on requested LoD
+        let tile_span = OpfsCacheManager::get_tile_span(requested_lod);
         
         // Step 3: Fetch data in batches of 10 tiles at a time
         // This prevents requesting too much data at once and causing server timeout
         const TILES_PER_BATCH: u64 = 10;
-        let tile_span = OpfsCacheManager::get_tile_span(0);
         let start_tile = search_start_time / tile_span;
         let end_tile = search_end_time / tile_span;
         
@@ -1661,6 +1671,8 @@ if tile_missing_signals.is_empty() {
         all_times.insert(search_start_time); // Always include start time
         
         let mut current_tile = start_tile;
+        let mut real_transition_count = 0;
+        let mut is_first_batch = true;
         
         while current_tile <= end_tile && all_times.len() < result_max {
             // Calculate batch range (10 tiles at a time)
@@ -1679,7 +1691,7 @@ if tile_missing_signals.is_empty() {
             // Fetch this batch with custom time range
             if let Err(e) = self.fetch_signals_data_batch_internal(
                 signal_names.clone(), 
-                0, 
+                requested_lod, 
                 Some((batch_start_time, batch_end_time))
             ).await {
                 // Restore state before returning error
@@ -1692,17 +1704,42 @@ if tile_missing_signals.is_empty() {
             for name in &signal_names {
                 if let Some(data) = self.signal_data.get(name) {
                     for t in &data.transitions {
-                        if t.time >= search_start_time && t.time <= search_end_time {
-                            all_times.insert(t.time);
+                        // Use actual_time for LoD > 0, time for LoD 0
+                        let transition_time = if requested_lod > 0 {
+                            t.actual_time
+                        } else {
+                            t.time
+                        };
+                        
+                        if transition_time >= search_start_time && transition_time <= search_end_time {
+                            all_times.insert(transition_time);
+                            
+                            // Count real transitions (excluding start value marker)
+                            const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
+                            if t.time != BOUNDARY_TIME_START && t.actual_time != BOUNDARY_TIME_START {
+                                real_transition_count += 1;
+                            }
                         }
                     }
                 }
             }
             
             web_sys::console::log_1(&JsValue::from_str(&format!(
-                "[WASM] Batch complete: collected {} transitions so far",
-                all_times.len()
+                "[WASM] Batch complete: collected {} transitions so far (real: {})",
+                all_times.len(), real_transition_count
             )));
+            
+            // Early exit check after first batch if enabled
+            if early_exit && is_first_batch {
+                is_first_batch = false;
+                if real_transition_count < 2 {
+                    web_sys::console::log_1(&JsValue::from_str(&format!(
+                        "[WASM] Early exit: only {} real transitions found in first 10 tiles",
+                        real_transition_count
+                    )));
+                    break;
+                }
+            }
             
             // Move to next batch
             current_tile = batch_end_tile + 1;
@@ -1730,7 +1767,7 @@ if tile_missing_signals.is_empty() {
             
             if let Err(e) = self.fetch_signals_data_batch_internal(
                 signal_names.clone(), 
-                0, 
+                requested_lod, 
                 Some((min_time, max_time))
             ).await {
                 self.viewport = saved_viewport;
@@ -1743,7 +1780,7 @@ if tile_missing_signals.is_empty() {
             let mut values = Vec::new();
             
             for name in &signal_names {
-                let (transition, has_transition) = self.find_value_at_time_in_signal(name, time);
+                let (transition, has_transition, has_toggle) = self.find_value_at_time_in_signal(name, time, requested_lod);
                 
                 // Get signal width
                 let width = *width_map.get(name).unwrap_or(&1);
@@ -1761,6 +1798,7 @@ if tile_missing_signals.is_empty() {
                     display_str,
                     value_type: value_type.to_string(),
                     has_transition,
+                    has_toggle,
                 });
             }
             
@@ -1794,12 +1832,13 @@ if tile_missing_signals.is_empty() {
     }
 
     /// Find the value of a signal at a specific time
-    /// Returns (transition, has_transition_at_exact_time)
+    /// Returns (transition, has_transition_at_exact_time, has_toggle)
     fn find_value_at_time_in_signal(
         &self,
         signal_name: &str,
         target_time: u64,
-    ) -> (Transition, bool) {
+        requested_lod: u32,
+    ) -> (Transition, bool, bool) {
         let default_transition = Transition {
             time: 0,
             actual_time: 0,
@@ -1810,28 +1849,82 @@ if tile_missing_signals.is_empty() {
         
         let signal_data = match self.signal_data.get(signal_name) {
             Some(data) => data,
-            None => return (default_transition, false),
+            None => return (default_transition, false, false),
         };
         
-        // Check for exact match
-        if let Ok(idx) = signal_data.transitions.binary_search_by_key(&target_time, |t| t.time) {
-            return (signal_data.transitions[idx].clone(), true);
+        let mut has_toggle = false;
+        
+        // For LoD > 0, check if this transition's bucket has toggle
+        if requested_lod > 0 && !signal_data.bucket_data.is_empty() {
+            // Find which bucket contains this transition
+            // For simplicity, check if any bucket has last.is_some()
+            // This is a placeholder - in real implementation, we'd map transition to bucket
+            for (_tile_start, buckets) in &signal_data.bucket_data {
+                for bucket in buckets.values() {
+                    if bucket.last.is_some() {
+                        has_toggle = true;
+                        break;
+                    }
+                }
+                if has_toggle {
+                    break;
+                }
+            }
+        }
+        
+        // Determine which time field to use for lookup
+        let search_key = if requested_lod > 0 {
+            target_time
+        } else {
+            target_time
+        };
+        
+        // Check for exact match (using actual_time for LoD > 0, time for LoD 0)
+        let mut exact_match = false;
+        let mut found_transition = None;
+        
+        for (idx, t) in signal_data.transitions.iter().enumerate() {
+            let transition_time = if requested_lod > 0 {
+                t.actual_time
+            } else {
+                t.time
+            };
+            if transition_time == search_key {
+                found_transition = Some((idx, true));
+                break;
+            }
+        }
+        
+        if let Some((idx, is_exact)) = found_transition {
+            return (signal_data.transitions[idx].clone(), is_exact, has_toggle);
         }
         
         // Find most recent transition before target_time
-        if let Some(trans) = signal_data.transitions.iter().filter(|t| t.time < target_time).last() {
-            return (trans.clone(), false);
+        let mut most_recent: Option<&Transition> = None;
+        for t in signal_data.transitions.iter() {
+            let transition_time = if requested_lod > 0 {
+                t.actual_time
+            } else {
+                t.time
+            };
+            if transition_time < target_time {
+                most_recent = Some(t);
+            }
+        }
+        
+        if let Some(trans) = most_recent {
+            return (trans.clone(), false, has_toggle);
         }
         
         // Use tile start value
         for (tile_start, tile_end, _start_time, start_value) in &signal_data.tile_info {
             if target_time >= *tile_start && target_time <= *tile_end {
-                return (start_value.clone(), false);
+                return (start_value.clone(), false, has_toggle);
             }
         }
         
         // Default to '0'
-        (default_transition, false)
+        (default_transition, false, has_toggle)
     }
 
     /// Format a transition value with the specified display format

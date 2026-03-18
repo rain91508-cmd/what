@@ -339,6 +339,10 @@ async function handleGetSignalValuesAtTransitions(payload: any, id: number): Pro
     searchEndTime,
     resultMax,
     signals,
+    // LoD parameter
+    lod,
+    // Early exit parameter
+    earlyExitOnInsufficientTransitions,
     // Prefix settings for signal name conversion
     signalPrefix,
     serverPrefix,
@@ -356,6 +360,8 @@ async function handleGetSignalValuesAtTransitions(payload: any, id: number): Pro
     searchEndTime,
     resultMax,
     signalCount: signals?.length,
+    lod,
+    earlyExitOnInsufficientTransitions,
     signalPrefix,
     serverPrefix,
     spaceBeforeBracket,
@@ -423,8 +429,10 @@ async function handleGetSignalValuesAtTransitions(payload: any, id: number): Pro
     BigInt(searchEndTime),
     resultMax,
     wasmSignals,
+    lod,
     enableOpfs,
-    enableMemoryCache
+    enableMemoryCache,
+    earlyExitOnInsufficientTransitions
   );
 
   sendSuccess(id, result);
