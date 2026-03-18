@@ -698,7 +698,7 @@ export function ToolBar({
         gap: '4px',
         padding: '0 4px',
       }}>
-        <span style={{ fontSize: '11px', color: '#666' }}>Grid:</span>
+        <span style={{ fontSize: '11px', color: '#666' }}>Display:</span>
         <input
           ref={inputRef}
           type="number"
