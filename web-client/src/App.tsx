@@ -2667,9 +2667,11 @@ function App() {
   // Update time configuration for a specific tab
   const handleTimeConfigChange = (tabId: string, timeConfig: TimeConfig) => {
     console.log('[App] handleTimeConfigChange called', { tabId, timeConfig });
-    // Update tab's timeConfig
+    // Update timeConfig for all waveform and tableview tabs to keep them in sync
     setTabs(prev => prev.map(tab =>
-      tab.id === tabId ? { ...tab, timeConfig } : tab
+      (tab.type === 'waveform' || tab.type === 'tableview')
+        ? { ...tab, timeConfig }
+        : tab
     ));
     // Also update the global currentWaveDisplayUnitPerLoD0
     setCurrentWaveDisplayUnitPerLoD0(timeConfig.DisplayUnitPerLoD0Unit);
@@ -3220,6 +3222,8 @@ function App() {
           spaceBeforeBracket: tab.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket,
           // Wavemarks
           wavemarks: tab.wavemarks || [],
+          // TimeConfig for display unit synchronization
+          timeConfig: tab.timeConfig,
         }))
 
       // Build tableview tabs data
@@ -3246,6 +3250,8 @@ function App() {
           signalPrefix: tab.signalPrefix ?? currentWaveSignalPrefix,
           serverPrefix: tab.serverPrefix ?? currentWaveSignalServerPrefix,
           spaceBeforeBracket: tab.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket,
+          // TimeConfig for display unit synchronization
+          timeConfig: tab.timeConfig,
         }))
 
       // Get bookmarks
@@ -3426,7 +3432,8 @@ function App() {
           groups: restoredGroups,
           selectedGroup: waveTab.selectedGroup,
           columnWidths: DEFAULT_COLUMN_WIDTHS,
-          timeConfig: DEFAULT_TIME_CONFIG,
+          // Restore saved timeConfig, or use global currentWaveDisplayUnitPerLoD0 as fallback
+          timeConfig: waveTab.timeConfig ? initTimeConfig(waveTab.timeConfig.DisplayUnitPerLoD0Unit) : initTimeConfig(currentWaveDisplayUnitPerLoD0),
           waveformTimeUnit: 2, // Default to ns
           viewport: waveTab.viewport,
           cursorPosition: waveTab.cursorPosition,
@@ -3468,8 +3475,8 @@ function App() {
           id: tableTab.id,
           label: tableTab.label,
           type: 'tableview',
-          // Initialize timeConfig like we do in handleAddTab
-          timeConfig: initTimeConfig(currentWaveDisplayUnitPerLoD0),
+          // Restore saved timeConfig, or use global currentWaveDisplayUnitPerLoD0 as fallback
+          timeConfig: tableTab.timeConfig ? initTimeConfig(tableTab.timeConfig.DisplayUnitPerLoD0Unit) : initTimeConfig(currentWaveDisplayUnitPerLoD0),
           tableStartTime: tableTab.startTime,
           tableEndTime: tableTab.endTime,
           tableSignals: restoredSignals,

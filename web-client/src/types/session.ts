@@ -81,6 +81,10 @@ export interface Session {
       createdAt: number;
       expandedGroups: string[];
     }>;
+    // TimeConfig for display unit synchronization
+    timeConfig?: {
+      DisplayUnitPerLoD0Unit: number;
+    };
   }>;
   activeWaveformTabId?: string;
 
@@ -118,6 +122,10 @@ export interface Session {
     signalPrefix?: string;
     serverPrefix?: string;
     spaceBeforeBracket?: boolean;
+    // TimeConfig for display unit synchronization
+    timeConfig?: {
+      DisplayUnitPerLoD0Unit: number;
+    };
   }>;
   activeTableviewTabId?: string;
 
