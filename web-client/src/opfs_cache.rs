@@ -311,7 +311,8 @@ pub fn serialize_group_data_v2(group_data: &GroupData, lod: u32) -> Vec<u8> {
             } else {
                 // LoD 1+: Store time as u16 (bucket index) + actual_time as u64
                 // Format: [time: u16][actual_time: u64][value_type: u8][value_len: u16][value: bytes]
-                signal_data_bytes.extend_from_slice(&(transition.time as u16).to_le_bytes());
+                let time_u16 = transition.time as u16;
+                signal_data_bytes.extend_from_slice(&time_u16.to_le_bytes());
                 signal_data_bytes.extend_from_slice(&transition.actual_time.to_le_bytes());
             }
             signal_data_bytes.push(transition.value_type);
@@ -417,7 +418,14 @@ pub fn deserialize_group_data_v2(data: &[u8], lod: u32) -> Result<GroupData, Str
                 if pos + 13 > data.len() {
                     break;
                 }
-                time = u16::from_le_bytes([data[pos], data[pos + 1]]) as u64;
+                const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
+                let time_u16 = u16::from_le_bytes([data[pos], data[pos + 1]]);
+                // Convert u16::MAX to u64::MAX for start value marker
+                time = if time_u16 == u16::MAX {
+                    BOUNDARY_TIME_START
+                } else {
+                    time_u16 as u64
+                };
                 pos += 2;
                 actual_time = u64::from_le_bytes([
                     data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
@@ -532,7 +540,14 @@ pub fn read_signal_from_group_v2(data: &[u8], draw_sig_id: u32, lod: u32) -> Res
                 if pos + 13 > data.len() {
                     break;
                 }
-                time = u16::from_le_bytes([data[pos], data[pos + 1]]) as u64;
+                const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
+                let time_u16 = u16::from_le_bytes([data[pos], data[pos + 1]]);
+                // Convert u16::MAX to u64::MAX for start value marker
+                time = if time_u16 == u16::MAX {
+                    BOUNDARY_TIME_START
+                } else {
+                    time_u16 as u64
+                };
                 pos += 2;
                 actual_time = u64::from_le_bytes([
                     data[pos], data[pos + 1], data[pos + 2], data[pos + 3],

@@ -781,43 +781,71 @@ impl WaveformDataProvider {
         chunk_version: u16,
         lod: u32,
     ) -> Result<Vec<Transition>, JsValue> {
+        const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
         let mut transitions = Vec::new();
         let is_v2 = chunk_version >= 2;
 
         let time_array_start = block_header.time_array_offset as usize;
         let value_array_start = block_header.value_array_offset as usize;
 
-        // First, read the start value (time = 0xFFFFFFFFFFFFFFFF)
+        // First, read the start value (bucket index = u16::MAX for v2/LoD>0, or u64::MAX for v1/LoD0)
         // Start value is always present and comes first in the arrays
-        if time_array_start + 8 <= data.len() {
-            let start_time = u64::from_le_bytes([
-                data[time_array_start], data[time_array_start + 1], 
-                data[time_array_start + 2], data[time_array_start + 3],
-                data[time_array_start + 4], data[time_array_start + 5], 
-                data[time_array_start + 6], data[time_array_start + 7],
-            ]);
+        let is_start_value = if lod == 0 {
+            // LoD 0: time is u64
+            if time_array_start + 8 <= data.len() {
+                let start_time = u64::from_le_bytes([
+                    data[time_array_start], data[time_array_start + 1],
+                    data[time_array_start + 2], data[time_array_start + 3],
+                    data[time_array_start + 4], data[time_array_start + 5],
+                    data[time_array_start + 6], data[time_array_start + 7],
+                ]);
+                start_time == BOUNDARY_TIME_START
+            } else {
+                false
+            }
+        } else if is_v2 {
+            // v2 API, LoD > 0: bucket index is u16, start value is u16::MAX
+            if time_array_start + 2 <= data.len() {
+                let start_bucket_idx = u16::from_le_bytes([data[time_array_start], data[time_array_start + 1]]);
+                start_bucket_idx == u16::MAX
+            } else {
+                false
+            }
+        } else {
+            // v1 API, LoD > 0: bucket index is stored as u64
+            if time_array_start + 8 <= data.len() {
+                let start_time = u64::from_le_bytes([
+                    data[time_array_start], data[time_array_start + 1],
+                    data[time_array_start + 2], data[time_array_start + 3],
+                    data[time_array_start + 4], data[time_array_start + 5],
+                    data[time_array_start + 6], data[time_array_start + 7],
+                ]);
+                start_time == BOUNDARY_TIME_START
+            } else {
+                false
+            }
+        };
 
-            // Verify this is the start value marker
-            if start_time == BOUNDARY_TIME_START {
-                // Parse start value from value array
-                let mut value_idx = value_array_start;
-                if value_idx + 3 <= data.len() {
-                    let value_type = data[value_idx];
-                    let value_len = u16::from_le_bytes([data[value_idx + 1], data[value_idx + 2]]) as usize;
-                    value_idx += 3;
+        // Parse start value if marker found
+        if is_start_value {
+            // Parse start value from value array
+            let mut value_idx = value_array_start;
+            if value_idx + 3 <= data.len() {
+                let value_type = data[value_idx];
+                let value_len = u16::from_le_bytes([data[value_idx + 1], data[value_idx + 2]]) as usize;
+                value_idx += 3;
 
-                    if value_idx + value_len <= data.len() {
-                        let value = data[value_idx..value_idx + value_len].to_vec();
+                if value_idx + value_len <= data.len() {
+                    let value = data[value_idx..value_idx + value_len].to_vec();
 
-                        // Add start value transition with special time marker
-                        transitions.push(Transition {
-                            time: BOUNDARY_TIME_START,
-                            actual_time: BOUNDARY_TIME_START,
-                            value_type,
-                            value_len: value_len as u16,
-                            value,
-                        });
-                    }
+                    // Add start value transition with special time marker (always use u64::MAX internally)
+                    transitions.push(Transition {
+                        time: BOUNDARY_TIME_START,
+                        actual_time: BOUNDARY_TIME_START,
+                        value_type,
+                        value_len: value_len as u16,
+                        value,
+                    });
                 }
             }
         }
@@ -2490,37 +2518,64 @@ if tile_missing_signals.is_empty() {
             0
         };
 
-        // First, read the start value (time = 0xFFFFFFFFFFFFFFFF)
+        // First, read the start value (bucket index = u16::MAX for v2/LoD>0, or u64::MAX for v1/LoD0)
         // Start value is always present and comes first in the arrays
-        if time_array_start + 8 <= data.len() {
-            let start_time = u64::from_le_bytes([
-                data[time_array_start], data[time_array_start + 1], 
-                data[time_array_start + 2], data[time_array_start + 3],
-                data[time_array_start + 4], data[time_array_start + 5], 
-                data[time_array_start + 6], data[time_array_start + 7],
-            ]);
+        let is_start_value = if lod == 0 {
+            // LoD 0: time is u64
+            if time_array_start + 8 <= data.len() {
+                let start_time = u64::from_le_bytes([
+                    data[time_array_start], data[time_array_start + 1],
+                    data[time_array_start + 2], data[time_array_start + 3],
+                    data[time_array_start + 4], data[time_array_start + 5],
+                    data[time_array_start + 6], data[time_array_start + 7],
+                ]);
+                start_time == BOUNDARY_TIME_START
+            } else {
+                false
+            }
+        } else if is_v2 {
+            // v2 API, LoD > 0: bucket index is u16, start value is u16::MAX
+            if time_array_start + 2 <= data.len() {
+                let start_bucket_idx = u16::from_le_bytes([data[time_array_start], data[time_array_start + 1]]);
+                start_bucket_idx == u16::MAX
+            } else {
+                false
+            }
+        } else {
+            // v1 API, LoD > 0: bucket index is stored as u64
+            if time_array_start + 8 <= data.len() {
+                let start_time = u64::from_le_bytes([
+                    data[time_array_start], data[time_array_start + 1],
+                    data[time_array_start + 2], data[time_array_start + 3],
+                    data[time_array_start + 4], data[time_array_start + 5],
+                    data[time_array_start + 6], data[time_array_start + 7],
+                ]);
+                start_time == BOUNDARY_TIME_START
+            } else {
+                false
+            }
+        };
 
-            // Verify this is the start value marker
-            if start_time == BOUNDARY_TIME_START {
-                // Parse start value from value array
-                let mut value_idx = value_array_start;
-                if value_idx + 3 <= data.len() {
-                    let _value_type = data[value_idx];
-                    let value_len = u16::from_le_bytes([data[value_idx + 1], data[value_idx + 2]]) as usize;
-                    value_idx += 3;
+        // Parse start value if marker found
+        if is_start_value {
+            // Parse start value from value array
+            let mut value_idx = value_array_start;
+            if value_idx + 3 <= data.len() {
+                let _value_type = data[value_idx];
+                let value_len = u16::from_le_bytes([data[value_idx + 1], data[value_idx + 2]]) as usize;
+                value_idx += 3;
 
-                    if value_idx + value_len <= data.len() {
-                        let value = data[value_idx..value_idx + value_len].to_vec();
+                if value_idx + value_len <= data.len() {
+                    let value = data[value_idx..value_idx + value_len].to_vec();
 
-                        // Add start value transition with special time marker
-                        transitions.push(Transition {
-                            time: BOUNDARY_TIME_START,
-                            actual_time: BOUNDARY_TIME_START,
-                            value_type: _value_type,
-                            value_len: value_len as u16,
-                            value,
-                        });
-                    }
+                    // Add start value transition with special time marker (always use u64::MAX internally)
+                    transitions.push(Transition {
+                        time: BOUNDARY_TIME_START,
+                        actual_time: BOUNDARY_TIME_START,
+                        value_type: _value_type,
+                        value_len: value_len as u16,
+                        value,
+                    });
                 }
             }
         }
@@ -3517,10 +3572,10 @@ if tile_missing_signals.is_empty() {
 
     /// Generate segments from bucket data for LoD 1+ (First/Last format)
     /// 
-    /// Drawing Rules per spec:
-    /// - Empty bucket: continue with current value
-    /// - Single transition: draw stable value
-    /// - First/Last pair: draw toggling
+    /// Generate segments for LoD 1+ using the three-step algorithm:
+    /// Step 1: Sort tiles by tile_start (already sorted by caller)
+    /// Step 2: Generate full segments for all tiles (no viewport clipping)
+    /// Step 3: Clip segments to viewport
     fn generate_lod_segments_from_buckets(
         &self,
         bucket_data: &[(u64, HashMap<u16, BucketData>)],
@@ -3532,6 +3587,10 @@ if tile_missing_signals.is_empty() {
         display_format: Option<&str>,
     ) {
         const TILE_SPAN_MULTIPLIER: u32 = 256;
+        
+        if bucket_data.is_empty() {
+            return;
+        }
         
         // Helper to convert Transition to display string and classify value
         let transition_to_display = |t: &Transition| -> (String, String, bool) {
@@ -3546,181 +3605,67 @@ if tile_missing_signals.is_empty() {
             self.format_multi_bit_value(&display_str, width, display_format)
         };
         
-        // console_log!("[WASM] generate_lod_segments_from_buckets: {} tiles, viewport={}-{}",
-        //     bucket_data.len(), self.viewport.time_start, self.viewport.time_end);
-
-        // Debug: When view start is 0, print all signal_data info
-        // if self.viewport.time_start == 0.0 {
-        //     console_log!("[WASM DEBUG] View start is 0, printing signal_data for '{}'", signal_name);
-        //     if let Some(signal_data) = self.signal_data.get(signal_name) {
-        //         console_log!("[WASM DEBUG] Signal: {}, width: {}, transitions: {}, tile_info: {}, bucket_data: {}",
-        //             signal_data.name, signal_data.width, signal_data.transitions.len(),
-        //             signal_data.tile_info.len(), signal_data.bucket_data.len());
-        //
-        //         // Print all bucket data
-        //         for (tile_idx, (tile_start, buckets)) in signal_data.bucket_data.iter().enumerate() {
-        //             console_log!("[WASM DEBUG] Tile {}: start={}, {} buckets", tile_idx, tile_start, buckets.len());
-        //             for (bucket_idx, bucket) in buckets.iter() {
-        //                 let first_time = bucket.first.actual_time;
-        //                 let first_val = String::from_utf8_lossy(&bucket.first.value);
-        //                 if let Some(ref last) = bucket.last {
-        //                     let last_time = last.actual_time;
-        //                     let last_val = String::from_utf8_lossy(&last.value);
-        //                     console_log!("[WASM DEBUG]   Bucket[{}]: first(time={}, value={}), last(time={}, value={})",
-        //                         bucket_idx, first_time, first_val, last_time, last_val);
-        //                 } else {
-        //                     console_log!("[WASM DEBUG]   Bucket[{}]: single(time={}, value={})",
-        //                         bucket_idx, first_time, first_val);
-        //                 }
-        //             }
-        //         }
-        //     } else {
-        //         console_log!("[WASM DEBUG] Signal '{}' not found in signal_data!", signal_name);
-        //     }
-        // }
-
-        // Track current value across tiles for continuity
-        let mut cross_tile_value: Option<Transition> = None;
+        // Get LoD and calculate bucket size
+        let lod = self.current_lod.unwrap_or(25);
+        let bucket_size = 1u64 << lod;
+        let tile_span = bucket_size * TILE_SPAN_MULTIPLIER as u64;
         
+        // Step 1: Ensure tiles are sorted by tile_start (they should already be)
+        // bucket_data is already sorted by the caller
+        
+        // Step 2: Generate full segments for all tiles (no viewport clipping yet)
+        // This generates segments for the entire time range covered by all tiles
+        let mut full_segments: Vec<RenderSegment> = Vec::new();
+        let mut current_value: Option<Transition> = None;
+
         for (tile_idx, (tile_start, buckets)) in bucket_data.iter().enumerate() {
-            // Calculate bucket size from tile span
-            let lod = self.current_lod.unwrap_or(25);
-            let bucket_size = 1u64 << lod;
-            let tile_span = bucket_size * TILE_SPAN_MULTIPLIER as u64;
-            
-            // console_log!("[WASM]   Processing tile {}: start={}, {} buckets, bucket_size={}, tile_span={}",
-            //     tile_idx, tile_start, buckets.len(), bucket_size, tile_span);
-            
-            // Get initial value for this tile
-            // For first tile: need to find value at viewport_start according to spec Rule 2
-            // For subsequent tiles: use last value from previous tile (cross-tile continuity)
-            let viewport_start_u64 = self.viewport.time_start as u64;
-            let initial_value = if tile_idx == 0 && viewport_start_u64 == *tile_start {
-                // Viewport starts exactly at tile start
-                // Check if bucket 0 exists and its first transition is not a start_value
-                if let Some(bucket) = buckets.get(&0) {
-                    // Check if bucket 0's first is a start_value (BOUNDARY_TIME_START)
-                    if bucket.first.actual_time == BOUNDARY_TIME_START {
-                        // Bucket 0's first is start_value, skip it and find the real initial value
-                        let start_value = self.signal_data.get(signal_name)
-                            .and_then(|data| data.tile_info.iter()
-                                .find(|(start, _, _, _)| *start == *tile_start)
-                                .map(|(_, _, _, value)| value));
-                        self.find_value_at_time(signal_name, *tile_start, buckets, viewport_start_u64, lod, tile_idx, bucket_data, start_value)
-                    } else {
-                        // Bucket 0 exists with real transition, use its first value as initial value
-                        bucket.first.clone()
-                    }
-                } else {
-                    // Bucket 0 is empty, need to find value from start_value or previous tiles
-                    // Get start_value from signal_data's tile_info
-                    let start_value = self.signal_data.get(signal_name)
-                        .and_then(|data| data.tile_info.iter()
-                            .find(|(start, _, _, _)| *start == *tile_start)
-                            .map(|(_, _, _, value)| value));
-                    self.find_value_at_time(signal_name, *tile_start, buckets, viewport_start_u64, lod, tile_idx, bucket_data, start_value)
-                }
-            } else if tile_idx == 0 {
-                // First tile but viewport starts within the tile
-                // Use find_value_at_time to handle Rule 2 correctly
-                // Get start_value from signal_data's tile_info
-                let start_value = self.signal_data.get(signal_name)
-                    .and_then(|data| data.tile_info.iter()
-                        .find(|(start, _, _, _)| *start == *tile_start)
-                        .map(|(_, _, _, value)| value));
-                self.find_value_at_time(signal_name, *tile_start, buckets, viewport_start_u64, lod, tile_idx, bucket_data, start_value)
+            // Get start_value for this tile
+            let start_value = self.signal_data.get(signal_name)
+                .and_then(|data| data.tile_info.iter()
+                    .find(|(start, _, _, _)| *start == *tile_start)
+                    .map(|(_, _, _, value)| value.clone()));
+
+            // Initialize current_value for the first tile
+            if tile_idx == 0 {
+                // For first tile, use start_value as initial value
+                let start_val = start_value.clone().unwrap_or_else(|| Transition {
+                    time: 0,
+                    actual_time: 0,
+                    value_type: 0,
+                    value_len: 1,
+                    value: vec![b'0'],
+                });
+                current_value = Some(start_val);
             } else {
-                // Subsequent tiles: use value from previous tile's last bucket
-                cross_tile_value.clone().unwrap_or_else(|| {
-                    Transition {
-                        time: 0,
-                        actual_time: 0,
-                        value_type: 0,
-                        value_len: 1,
-                        value: vec![b'0'],
-                    }
-                })
-            };
+                // For subsequent tiles, current_value is already set from previous tile's last bucket
+                // Verify continuity: tile's start_value should match current_value
+                // (this is guaranteed by server, but we use current_value for continuity)
+            }
             
-            let mut current_value = initial_value.clone();
-            let mut segments_in_tile = 0;
-            let viewport_start_u64 = self.viewport.time_start as u64;
-            let viewport_end_u64 = self.viewport.time_end as u64;
-            
-            // Calculate first bucket index that intersects with viewport
-            let first_bucket_idx: u16 = if viewport_start_u64 > *tile_start {
-                ((viewport_start_u64 - tile_start) / bucket_size) as u16
-            } else {
-                0
-            };
-            
-            // Calculate last bucket index that intersects with viewport
-            let last_bucket_idx: u16 = if viewport_end_u64 < tile_start + tile_span {
-                ((viewport_end_u64 - tile_start) / bucket_size) as u16
-            } else {
-                (TILE_SPAN_MULTIPLIER - 1) as u16
-            };
-            
-            // console_log!("[WASM]   Bucket range: {} to {} (viewport: {}-{})",
-            //     first_bucket_idx, last_bucket_idx, viewport_start_u64, viewport_end_u64);
-            
-            // Process each bucket in the tile that intersects with viewport
-            for bucket_idx in first_bucket_idx..=last_bucket_idx {
+            // Process all 256 buckets in this tile
+            for bucket_idx in 0..TILE_SPAN_MULTIPLIER as u16 {
                 let bucket_start_time = tile_start + (bucket_idx as u64) * bucket_size;
-                let bucket_end_time = bucket_start_time + bucket_size - 1;  // Inclusive end, not overlapping with next bucket
-                
-                // Skip if completely outside viewport (shouldn't happen with our range calculation)
-                if bucket_end_time < viewport_start_u64 || bucket_start_time > viewport_end_u64 {
-                    continue;
-                }
-                
-                // Clamp to viewport
-                let draw_start = (bucket_start_time as f64).max(self.viewport.time_start);
-                let draw_end = (bucket_end_time as f64).min(self.viewport.time_end);
-                
-                // Convert to pixel coordinates
-                let x0 = ((draw_start - self.viewport.time_start) / time_range) * self.canvas_width;
-                let x1 = ((draw_end - self.viewport.time_start) / time_range) * self.canvas_width;
-                
-                if x1 <= x0 {
-                    continue;
-                }
-                
-                // Debug: Print bucket 0 details (disabled)
-                // if bucket_idx == 0 {
-                //     if let Some(bucket) = buckets.get(&0) {
-                //         let first_val = String::from_utf8_lossy(&bucket.first.value);
-                //         let last_info = if let Some(ref last) = bucket.last {
-                //             format!(", last={}", String::from_utf8_lossy(&last.value))
-                //         } else {
-                //             ", last=None".to_string()
-                //         };
-                //         console_log!("[WASM] Tile {} bucket 0: first={}{}", tile_idx, first_val, last_info);
-                //     } else {
-                //         console_log!("[WASM] Tile {} bucket 0: NOT FOUND", tile_idx);
-                //     }
-                // }
+                let bucket_end_time = bucket_start_time + bucket_size;  // Exclusive end
                 
                 match buckets.get(&bucket_idx) {
                     None => {
-                        // Empty bucket: draw current value
-                        let (display_str, value_type_str, has_xz) = transition_to_display(&current_value);
+                        // Empty bucket: draw current value for entire bucket
+                        let value = current_value.as_ref().unwrap();
+                        let (display_str, value_type_str, has_xz) = transition_to_display(value);
                         let final_display_str = if width > 1 {
-                            format_multi_bit(&current_value)
+                            format_multi_bit(value)
+                        } else {
+                            display_str.clone()
+                        };
+                        let min_max_val = if width > 1 {
+                            format_multi_bit(value)
                         } else {
                             display_str.clone()
                         };
 
-                        // Format min/max values according to display_format
-                        let min_max_val = if width > 1 {
-                            format_multi_bit(&current_value)
-                        } else {
-                            display_str
-                        };
-
-                        segments.push(RenderSegment {
-                            x0,
-                            x1,
+                        full_segments.push(RenderSegment {
+                            x0: bucket_start_time as f64,
+                            x1: bucket_end_time as f64,
                             y,
                             value: ValueInfo {
                                 value_type: value_type_str,
@@ -3735,27 +3680,23 @@ if tile_missing_signals.is_empty() {
                         });
                     }
                     Some(bucket) => {
-                        // Check if this bucket's first transition is a start_value (BOUNDARY_TIME_START)
-                        // If so, skip drawing this bucket and just update current_value
+                        // Skip start_value transitions (BOUNDARY_TIME_START)
                         if bucket.first.actual_time == BOUNDARY_TIME_START {
-                            // This is a start_value transition, don't draw it
-                            // Just update current_value to this transition's value
-                            current_value = bucket.first.clone();
-                            // If there's a last transition, update to that instead
+                            // Update current_value to this transition's value
+                            current_value = Some(bucket.first.clone());
                             if let Some(ref last) = bucket.last {
-                                current_value = last.clone();
+                                current_value = Some(last.clone());
                             }
                             continue;
                         }
                         
                         if bucket.has_toggle() {
-                            // First/Last pair: draw toggling
+                            // Toggle bucket: draw toggling for entire bucket
                             let first_trans = &bucket.first;
                             let last_trans = bucket.last.as_ref().unwrap();
                             let first_val_raw = server_value_to_string(first_trans.value_type, first_trans.value_len, &first_trans.value);
                             let last_val_raw = server_value_to_string(last_trans.value_type, last_trans.value_len, &last_trans.value);
 
-                            // Format min/max values according to display_format
                             let first_val_str = if width > 1 {
                                 self.format_multi_bit_value(&first_val_raw, width, display_format)
                             } else {
@@ -3767,65 +3708,58 @@ if tile_missing_signals.is_empty() {
                                 last_val_raw.clone()
                             };
 
-                            // For toggle buckets, always display "toggling" for both single and multi-bit signals
-                            let display_str = "toggling".to_string();
-
-                            segments.push(RenderSegment {
-                                x0,
-                                x1,
+                            full_segments.push(RenderSegment {
+                                x0: bucket_start_time as f64,
+                                x1: bucket_end_time as f64,
                                 y,
                                 value: ValueInfo {
                                     value_type: "min_max".to_string(),
-                                    display_str,
+                                    display_str: "toggling".to_string(),
                                     width,
                                     has_xz: false,
                                     min_value: Some(first_val_str),
                                     max_value: Some(last_val_str),
-                                    is_min_max: true,  // This is a toggle bucket
+                                    is_min_max: true,
                                 },
                                 signal_name: signal_name.to_string(),
                             });
 
                             // Update current value to last
-                            current_value = last_trans.clone();
+                            current_value = Some(last_trans.clone());
                         } else {
-                            // Single transition: draw with precise timing using actual_time
+                            // Single transition: draw with precise timing
                             let value_trans = &bucket.first;
                             let actual_transition_time = value_trans.actual_time;
-
-                            // Check if actual transition time is within bucket range
+                            
+                            // Per spec Rule 1: check if actual_time is within bucket range
+                            // bucket_start_time < actual_time <= bucket_end_time
                             if bucket_start_time < actual_transition_time && actual_transition_time <= bucket_end_time {
                                 // Draw previous value before transition
-                                let prev_draw_end = ((actual_transition_time - 1) as f64).min(self.viewport.time_end);
-                                if prev_draw_end > draw_start {
-                                    let prev_x1 = ((prev_draw_end - self.viewport.time_start) / time_range) * self.canvas_width;
-                                    let (prev_display_str, prev_value_type_str, prev_has_xz) = transition_to_display(&current_value);
-                                    let prev_final_display_str = if width > 1 {
-                                        format_multi_bit(&current_value)
-                                    } else {
-                                        prev_display_str.clone()
-                                    };
+                                let (prev_display_str, prev_value_type_str, prev_has_xz) = 
+                                    transition_to_display(current_value.as_ref().unwrap());
+                                let prev_final_display_str = if width > 1 {
+                                    format_multi_bit(current_value.as_ref().unwrap())
+                                } else {
+                                    prev_display_str.clone()
+                                };
 
-                                    segments.push(RenderSegment {
-                                        x0,
-                                        x1: prev_x1,
-                                        y,
-                                        value: ValueInfo {
-                                            value_type: prev_value_type_str,
-                                            display_str: prev_final_display_str,
-                                            width,
-                                            has_xz: prev_has_xz,
-                                            min_value: Some(prev_display_str.clone()),
-                                            max_value: Some(prev_display_str),
-                                            is_min_max: false,
-                                        },
-                                        signal_name: signal_name.to_string(),
-                                    });
-                                }
+                                full_segments.push(RenderSegment {
+                                    x0: bucket_start_time as f64,
+                                    x1: actual_transition_time as f64,
+                                    y,
+                                    value: ValueInfo {
+                                        value_type: prev_value_type_str,
+                                        display_str: prev_final_display_str,
+                                        width,
+                                        has_xz: prev_has_xz,
+                                        min_value: Some(prev_display_str.clone()),
+                                        max_value: Some(prev_display_str),
+                                        is_min_max: false,
+                                    },
+                                    signal_name: signal_name.to_string(),
+                                });
 
                                 // Draw new value from transition point to bucket end
-                                let trans_draw_start = (actual_transition_time as f64).max(self.viewport.time_start);
-                                let trans_x0 = ((trans_draw_start - self.viewport.time_start) / time_range) * self.canvas_width;
                                 let (display_str, value_type_str, has_xz) = transition_to_display(value_trans);
                                 let final_display_str = if width > 1 {
                                     format_multi_bit(value_trans)
@@ -3833,9 +3767,9 @@ if tile_missing_signals.is_empty() {
                                     display_str.clone()
                                 };
 
-                                segments.push(RenderSegment {
-                                    x0: trans_x0,
-                                    x1,
+                                full_segments.push(RenderSegment {
+                                    x0: actual_transition_time as f64,
+                                    x1: bucket_end_time as f64,
                                     y,
                                     value: ValueInfo {
                                         value_type: value_type_str,
@@ -3857,9 +3791,9 @@ if tile_missing_signals.is_empty() {
                                     display_str.clone()
                                 };
 
-                                segments.push(RenderSegment {
-                                    x0,
-                                    x1,
+                                full_segments.push(RenderSegment {
+                                    x0: bucket_start_time as f64,
+                                    x1: bucket_end_time as f64,
                                     y,
                                     value: ValueInfo {
                                         value_type: value_type_str,
@@ -3875,73 +3809,50 @@ if tile_missing_signals.is_empty() {
                             }
 
                             // Update current value
-                            current_value = value_trans.clone();
+                            current_value = Some(value_trans.clone());
                         }
                     }
                 }
-                
-                segments_in_tile += 1;
-            }
-            
-            // Store last value for cross-tile continuity
-            cross_tile_value = Some(current_value.clone());
-            
-            // console_log!("[WASM]   Tile {} complete: {} segments generated, last_value={:?}", 
-            //     tile_idx, segments_in_tile, current_value.value);
-        }
-        
-        // Rule 3: If viewport extends beyond last bucket, draw to viewport_end
-        if let Some(last_tile) = bucket_data.last() {
-            let tile_start = last_tile.0;
-            let lod = self.current_lod.unwrap_or(25);
-            let bucket_size = 1u64 << lod;
-            let tile_span = bucket_size * TILE_SPAN_MULTIPLIER as u64;
-            let tile_end = tile_start + tile_span;
-            
-            if (tile_end as f64) < self.viewport.time_end {
-                // Viewport extends beyond last tile, need to draw to viewport_end
-                let last_trans = cross_tile_value.unwrap_or_else(|| {
-                    Transition {
-                        time: 0,
-                        actual_time: 0,
-                        value_type: 0,
-                        value_len: 1,
-                        value: vec![b'0'],
-                    }
-                });
-                let (display_str, value_type_str, has_xz) = transition_to_display(&last_trans);
-                let final_display_str = if width > 1 {
-                    format_multi_bit(&last_trans)
-                } else {
-                    display_str.clone()
-                };
-                let x0 = ((tile_end as f64 - self.viewport.time_start) / time_range) * self.canvas_width;
-                let x1 = ((self.viewport.time_end - self.viewport.time_start) / time_range) * self.canvas_width;
-                
-                if x1 > x0 {
-                    segments.push(RenderSegment {
-                        x0,
-                        x1,
-                        y,
-                        value: ValueInfo {
-                            value_type: value_type_str,
-                            display_str: final_display_str,
-                            width,
-                            has_xz,
-                            min_value: Some(display_str),
-                            max_value: Some(server_value_to_string(last_trans.value_type, last_trans.value_len, &last_trans.value)),
-                            is_min_max: false,
-                        },
-                        signal_name: signal_name.to_string(),
-                    });
-                }
             }
         }
         
-        // Merge adjacent segments with same value (Rule 1: value unchanged, no vertical line)
-        self.merge_adjacent_segments(segments);
+        // Merge adjacent segments with same value before clipping
+        self.merge_adjacent_segments(&mut full_segments);
         
-        // console_log!("[WASM] generate_lod_segments_from_buckets complete: total {} segments", segments.len());
+        // Step 3: Clip segments to viewport and convert to pixel coordinates
+        let viewport_start = self.viewport.time_start;
+        let viewport_end = self.viewport.time_end;
+
+        for segment in full_segments {
+            // Check if segment is completely outside viewport
+            if segment.x1 <= viewport_start || segment.x0 >= viewport_end {
+                continue;
+            }
+
+            // Clip segment to viewport
+            let clipped_x0 = segment.x0.max(viewport_start);
+            let clipped_x1 = segment.x1.min(viewport_end);
+
+            if clipped_x1 <= clipped_x0 {
+                continue;
+            }
+
+            // Convert to pixel coordinates
+            let pixel_x0 = ((clipped_x0 - viewport_start) / time_range) * self.canvas_width;
+            let pixel_x1 = ((clipped_x1 - viewport_start) / time_range) * self.canvas_width;
+
+            if pixel_x1 <= pixel_x0 {
+                continue;
+            }
+
+            segments.push(RenderSegment {
+                x0: pixel_x0,
+                x1: pixel_x1,
+                y: segment.y,
+                value: segment.value,
+                signal_name: segment.signal_name,
+            });
+        }
     }
     
     /// Merge adjacent segments with the same value to avoid vertical lines at tile boundaries
