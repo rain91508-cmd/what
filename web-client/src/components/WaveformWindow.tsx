@@ -2714,9 +2714,9 @@ export function WaveformWindow({
               left: `${((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * 100}%`,
               top: 0,
               bottom: 0,
-              width: '1px',
+              width: '2px',
               background: '#ff00ff',
-              zIndex: 1,
+              zIndex: 100,
               pointerEvents: 'none',
             }} />
           )}
@@ -2923,9 +2923,9 @@ export function WaveformWindow({
               left: `${((cursor.position - viewport.timeStart) / (viewport.timeEnd - viewport.timeStart)) * 100}%`,
               top: 0,
               bottom: 0,
-              width: '1px',
+              width: '2px',
               background: '#ff00ff',
-              zIndex: 10,
+              zIndex: 100,
               pointerEvents: 'none',
             }} />
           )}
