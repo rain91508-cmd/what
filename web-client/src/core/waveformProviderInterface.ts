@@ -125,6 +125,9 @@ export interface GetSignalValuesAtTransitionsParams {
   // Time unit conversion factor (optional, defaults to 1.0)
   // Multiply LoD0 time by this factor to get display unit time
   displayUnitPerLoD0Unit?: number;
+  // Cache settings (optional)
+  enableOpfs?: boolean;
+  enableMemoryCache?: boolean;
 }
 
 /**

@@ -410,6 +410,10 @@ async function handleGetSignalValuesAtTransitions(payload: any, id: number): Pro
     searchEndTime,
     resultMax,
     wasmSignalsCount: wasmSignals.length,
+    lod,
+    enableOpfs,
+    enableMemoryCache,
+    earlyExitOnInsufficientTransitions,
   });
 
   // Set display unit conversion factor if provided
@@ -419,6 +423,13 @@ async function handleGetSignalValuesAtTransitions(payload: any, id: number): Pro
 
   console.log('[WaveformWorker] WASM provider time settings:', {
     display_unit_per_lod0_unit: wasmProvider.display_unit_per_lod0_unit,
+  });
+
+  console.log('[WaveformWorker] Final WASM call parameters:', {
+    lod,
+    enableOpfs,
+    enableMemoryCache,
+    earlyExitOnInsufficientTransitions,
   });
 
   // Call WASM function

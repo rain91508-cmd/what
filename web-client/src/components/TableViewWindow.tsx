@@ -49,6 +49,9 @@ interface TableViewWindowProps {
   refreshTrigger?: number;
   // Time unit conversion factor (display unit / LoD0 unit)
   displayUnitPerLoD0Unit?: number;
+  // Cache settings
+  enableOpfs?: boolean;
+  enableMemoryCache?: boolean;
   // Initial column filters for session restore
   initialColumnFilters?: Array<{ id: string; value: string }>;
   // Initial metadata filters for session restore
@@ -84,6 +87,8 @@ export function TableViewWindow({
   waveformName: _waveformName = '',
   refreshTrigger = 0,
   displayUnitPerLoD0Unit: _displayUnitPerLoD0Unit = 1.0,
+  enableOpfs: _enableOpfs = false,
+  enableMemoryCache: _enableMemoryCache = true,
   initialColumnFilters,
   initialColumnMetadataFilters,
   initialColumnRadix,
@@ -309,8 +314,8 @@ export function TableViewWindow({
       header: 'Time',
       cell: ({ getValue }) => {
         const time = getValue<number>();
-        const displayTime = lod0ToDisplay(time, timeConfig);
-        return displayTime.toFixed(3);
+        // WASM already returns time in display units, no need to convert again
+        return time.toFixed(3);
       },
       filterFn: 'includesString',
     };
@@ -442,20 +447,25 @@ export function TableViewWindow({
 
   // Calculate the closest LoD value based on displayUnitPerLoD0Unit
   const calculateClosestLoD = useCallback((displayUnitPerLoD0Unit: number): number => {
+    console.log('[TableViewWindow] calculateClosestLoD called with displayUnitPerLoD0Unit:', displayUnitPerLoD0Unit);
     // For displayUnitPerLoD0Unit, find the closest 2^n
     // Try LoD 0 to 20 (practical upper limit)
     let closestLoD = 0;
     let closestDiff = Math.abs(1 - displayUnitPerLoD0Unit); // LoD 0 is 2^0 = 1
+    console.log('[TableViewWindow] Initial - LoD 0, value 1, diff:', closestDiff);
     
     for (let lod = 1; lod <= 20; lod++) {
       const lodValue = Math.pow(2, lod);
       const diff = Math.abs(lodValue - displayUnitPerLoD0Unit);
+      console.log(`[TableViewWindow] LoD ${lod}, value ${lodValue}, diff: ${diff}`);
       if (diff < closestDiff) {
         closestDiff = diff;
         closestLoD = lod;
+        console.log(`[TableViewWindow] New closest - LoD ${closestLoD}, diff ${closestDiff}`);
       }
     }
     
+    console.log('[TableViewWindow] Final selected LoD:', closestLoD);
     return closestLoD;
   }, []);
 
@@ -465,7 +475,8 @@ export function TableViewWindow({
       startTime, 
       endTime, 
       signals: signals.length,
-      displayUnitPerLoD0Unit: _displayUnitPerLoD0Unit 
+      displayUnitPerLoD0Unit: _displayUnitPerLoD0Unit,
+      timeSpan: endTime - startTime
     });
     if (!adapterRef.current) {
       console.error('[TableViewWindow] Adapter not ready');
@@ -505,9 +516,30 @@ export function TableViewWindow({
       const selectedLoD = calculateClosestLoD(_displayUnitPerLoD0Unit);
       console.log('[TableViewWindow] Selected LoD:', selectedLoD, 'based on displayUnitPerLoD0Unit:', _displayUnitPerLoD0Unit);
 
+      // Calculate how many LoD buckets are in this range
+      const lodBucketSize = Math.pow(2, selectedLoD);
+      const numBuckets = Math.ceil((endTime - startTime) / lodBucketSize);
+      console.log('[TableViewWindow] Time range analysis:', {
+        startTime,
+        endTime,
+        timeRange: endTime - startTime,
+        selectedLoD,
+        lodBucketSize,
+        numBuckets,
+        expectedBuckets: `Should have about ${numBuckets} buckets for LoD ${selectedLoD}`
+      });
+
+      // WASM expects time parameters in LoD0 units!
+      // display unit only affects the display of time in returned data
+      console.log('[TableViewWindow] Time params for WASM:', {
+        startTime_LoD0: startTime,
+        endTime_LoD0: endTime,
+        displayUnitPerLoD0Unit: _displayUnitPerLoD0Unit,
+      });
+      
       // Fetch data using adapter
       // Pass prefix settings to let WASM handle signal name conversion
-      const result = await adapterRef.current.get_signal_values_at_transitions({
+      const getSignalValuesParams = {
         signalNames: signals.map(s => s.name), // Use local names, WASM will convert
         searchStartTime: startTime,
         searchEndTime: endTime,
@@ -523,7 +555,12 @@ export function TableViewWindow({
         spaceBeforeBracket: _spaceBeforeBracket,
         // Pass time unit conversion factor
         displayUnitPerLoD0Unit: _displayUnitPerLoD0Unit,
-      });
+        // Pass cache settings
+        enableOpfs: _enableOpfs,
+        enableMemoryCache: _enableMemoryCache,
+      };
+      console.log('[TableViewWindow] Calling get_signal_values_at_transitions with params:', getSignalValuesParams);
+      const result = await adapterRef.current.get_signal_values_at_transitions(getSignalValuesParams);
 
       // Debug: Log WASM returned data
       console.log('[TableViewWindow] WASM returned data:', {

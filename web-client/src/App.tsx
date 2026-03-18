@@ -2666,9 +2666,13 @@ function App() {
 
   // Update time configuration for a specific tab
   const handleTimeConfigChange = (tabId: string, timeConfig: TimeConfig) => {
+    console.log('[App] handleTimeConfigChange called', { tabId, timeConfig });
+    // Update tab's timeConfig
     setTabs(prev => prev.map(tab =>
       tab.id === tabId ? { ...tab, timeConfig } : tab
-    ))
+    ));
+    // Also update the global currentWaveDisplayUnitPerLoD0
+    setCurrentWaveDisplayUnitPerLoD0(timeConfig.DisplayUnitPerLoD0Unit);
   }
 
   // Handle viewport start time change from toolbar
@@ -3855,6 +3859,8 @@ function App() {
                 waveformName={currentWaveName || ''}
                 refreshTrigger={tableViewRefreshTrigger}
                 displayUnitPerLoD0Unit={currentWaveDisplayUnitPerLoD0}
+                enableOpfs={opfsCacheEnabled}
+                enableMemoryCache={memoryCacheEnabled}
                 // Session restore props
                 initialColumnFilters={activeTabData.tableColumnFilters}
                 initialColumnMetadataFilters={activeTabData.tableColumnMetadataFilters}

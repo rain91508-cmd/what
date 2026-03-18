@@ -587,15 +587,34 @@ export function ToolBar({
 
   const commitTableSpanValue = (currentStartLod0?: number, effectiveTimeConfig?: TimeConfig) => {
     const config = effectiveTimeConfig || timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
-    if (!onTableEndTimeChange) return;
+    console.log('[ToolBar] commitTableSpanValue called', {
+      currentStartLod0,
+      effectiveTimeConfig,
+      config,
+      tableSpanInputValue,
+      tableStartTime,
+      tableEndTime,
+      displayUnitPerLoD0Unit: config.DisplayUnitPerLoD0Unit,
+    });
+    
+    if (!onTableEndTimeChange) {
+      console.log('[ToolBar] commitTableSpanValue: onTableEndTimeChange not provided');
+      return;
+    }
 
     // Use provided start time (if just updated) or fall back to prop
     const baseStartLod0 = currentStartLod0 !== undefined ? currentStartLod0 : tableStartTime;
-    if (baseStartLod0 === undefined) return;
+    console.log('[ToolBar] commitTableSpanValue: baseStartLod0', baseStartLod0);
+    if (baseStartLod0 === undefined) {
+      console.log('[ToolBar] commitTableSpanValue: baseStartLod0 is undefined');
+      return;
+    }
 
     const numValue = parseFloat(tableSpanInputValue);
+    console.log('[ToolBar] commitTableSpanValue: numValue', numValue);
     if (isNaN(numValue) || numValue <= 0) {
       // Invalid input, restore original span value
+      console.log('[ToolBar] commitTableSpanValue: invalid numValue');
       if (tableEndTime !== undefined && tableStartTime !== undefined) {
         const spanLod0 = tableEndTime - tableStartTime;
         const displaySpan = lod0ToDisplay(spanLod0, config);
@@ -606,8 +625,19 @@ export function ToolBar({
 
     // Convert span from display units to LoD0 units
     const spanLod0 = displayToLod0(numValue, config);
+    console.log('[ToolBar] commitTableSpanValue: span conversion', {
+      numValue,
+      displayUnitPerLoD0Unit: config.DisplayUnitPerLoD0Unit,
+      spanLod0,
+      calculation: `${numValue} * ${config.DisplayUnitPerLoD0Unit} = ${numValue * config.DisplayUnitPerLoD0Unit}`
+    });
     // Calculate new end time: start + span
     const newEndLod0 = baseStartLod0 + spanLod0;
+    console.log('[ToolBar] commitTableSpanValue: newEndLod0', {
+      baseStartLod0,
+      spanLod0,
+      newEndLod0
+    });
     onTableEndTimeChange(newEndLod0);
   };
 
@@ -637,12 +667,23 @@ export function ToolBar({
     });
     if (!isNaN(numStartValue) && numStartValue >= 0 && effectiveTimeConfig && onTableStartTimeChange) {
       newStartLod0 = displayToLod0(numStartValue, effectiveTimeConfig);
-      console.log('[ToolBar] Committing new start time', { numStartValue, newStartLod0 });
+      console.log('[ToolBar] Committing new start time', { 
+        numStartValue, 
+        newStartLod0,
+        displayUnitPerLoD0Unit: effectiveTimeConfig.DisplayUnitPerLoD0Unit,
+        calculation: `${numStartValue} * ${effectiveTimeConfig.DisplayUnitPerLoD0Unit} = ${numStartValue * effectiveTimeConfig.DisplayUnitPerLoD0Unit}`
+      });
       onTableStartTimeChange(newStartLod0);
     }
 
     // Commit span value using the new start time (if updated)
-    console.log('[ToolBar] Committing span value', { tableSpanInputValue, newStartLod0 });
+    const numSpanValue = parseFloat(tableSpanInputValue);
+    console.log('[ToolBar] Committing span value', { 
+      tableSpanInputValue, 
+      numSpanValue,
+      newStartLod0,
+      displayUnitPerLoD0Unit: effectiveTimeConfig.DisplayUnitPerLoD0Unit,
+    });
     commitTableSpanValue(newStartLod0, effectiveTimeConfig);
 
     console.log('[ToolBar] Calling onTableTimeApply');

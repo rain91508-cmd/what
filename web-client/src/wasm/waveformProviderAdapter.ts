@@ -232,6 +232,9 @@ export class WaveformProviderAdapter {
       spaceBeforeBracket: params.spaceBeforeBracket,
       // Pass time unit conversion factor
       displayUnitPerLoD0Unit: params.displayUnitPerLoD0Unit,
+      // Pass cache settings
+      enableOpfs: params.enableOpfs,
+      enableMemoryCache: params.enableMemoryCache,
     });
   }
 
