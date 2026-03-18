@@ -1833,9 +1833,15 @@ if tile_missing_signals.is_empty() {
         
         for time in times {
             let mut values = Vec::new();
+            let mut has_any_transition = false;
             
             for name in &signal_names {
                 let (transition, has_transition, has_toggle) = self.find_value_at_time_in_signal(name, time, requested_lod);
+                
+                // Track if any signal has a transition at this time
+                if has_transition {
+                    has_any_transition = true;
+                }
                 
                 // Get signal width
                 let width = *width_map.get(name).unwrap_or(&1);
@@ -1855,6 +1861,15 @@ if tile_missing_signals.is_empty() {
                     has_transition,
                     has_toggle,
                 });
+            }
+            
+            // Skip rows that only contain start values (no transitions at all)
+            if !has_any_transition {
+                web_sys::console::log_1(&JsValue::from_str(&format!(
+                    "[WASM] Skipping row at time {} - no transitions (only start values)",
+                    time
+                )));
+                continue;
             }
             
             // Convert time from LoD0 units to display units for display
