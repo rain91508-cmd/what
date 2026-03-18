@@ -3988,32 +3988,34 @@ if tile_missing_signals.is_empty() {
         *segments = merged;
     }
     
-    /// Find the value at a specific time according to Rule 2
-    /// This handles the case where viewport_start falls within a bucket
-    /// Can search backward into previous tiles if needed
+    /// Find the value at a specific time within a single tile
     /// 
+    /// Algorithm:
+    /// 1. Only search within the tile that contains target_time
+    ///    (tile_start <= target_time < tile_start + tile_span)
+    /// 2. Search all buckets in this tile for transitions with actual_time <= target_time
+    ///    - Check both first and last transitions in each bucket
+    ///    - Find the transition with the largest actual_time that is <= target_time
+    /// 3. If no such transition found, use the tile's start_value
+    ///
     /// # Arguments
-    /// * `signal_name` - Signal name for logging
-    /// * `tile_start` - Start time of current tile
     /// * `buckets` - Buckets in current tile
     /// * `target_time` - Time to find value at
-    /// * `lod` - Level of detail
-    /// * `tile_idx` - Index of current tile in all_bucket_data
-    /// * `all_bucket_data` - All tiles' bucket data
     /// * `start_value` - Start value of current tile (from tile_info), used as fallback
     fn find_value_at_time(
         &self,
-        signal_name: &str,
+        _signal_name: &str,
         tile_start: u64,
         buckets: &HashMap<u16, BucketData>,
         target_time: u64,
         lod: u32,
-        tile_idx: usize,
-        all_bucket_data: &[(u64, HashMap<u16, BucketData>)],
+        _tile_idx: usize,
+        _all_bucket_data: &[(u64, HashMap<u16, BucketData>)],
         start_value: Option<&Transition>,
     ) -> Transition {
-        let bucket_size = 1u64 << lod;
         const TILE_SPAN_MULTIPLIER: u32 = 256;
+        let bucket_size = 1u64 << lod;
+        let tile_span = bucket_size * TILE_SPAN_MULTIPLIER as u64;
         
         // Default transition (used if no start_value provided)
         let default_transition = Transition {
@@ -4024,159 +4026,52 @@ if tile_missing_signals.is_empty() {
             value: vec![b'0'],
         };
         
-        // Debug log (disabled for performance)
-        // console_log!("[WASM] find_value_at_time: signal={}, tile_start={}, target_time={}, lod={}", 
-        //     signal_name, tile_start, target_time, lod);
+        // Verify target_time is within this tile
+        // tile_start <= target_time < tile_start + tile_span
+        if target_time < tile_start || target_time >= tile_start + tile_span {
+            // Target time is outside this tile, use start_value or default
+            return start_value.map(|s| s.clone()).unwrap_or(default_transition);
+        }
         
-        // Check for potential underflow
-        if target_time < tile_start {
-            // console_log!("[WASM] WARNING: target_time < tile_start, searching backward in previous tiles");
-            // Search backward into previous tiles
-            for prev_tile_idx in (0..tile_idx).rev() {
-                let (prev_tile_start, prev_buckets) = &all_bucket_data[prev_tile_idx];
-                
-                // Search from last bucket to first bucket in previous tile
-                for bucket_idx in (0..TILE_SPAN_MULTIPLIER as u16).rev() {
-                    if let Some(bucket) = prev_buckets.get(&bucket_idx) {
-                        let trans = if bucket.has_toggle() {
-                            bucket.last.as_ref().unwrap().clone()
-                        } else {
-                            bucket.first.clone()
-                        };
-                        // console_log!("[WASM]   Found value in previous tile {} bucket {}: {:?}",
-                        //     prev_tile_idx, bucket_idx, trans.value);
-                        return trans;
+        // Search all buckets in this tile for the transition with largest actual_time <= target_time
+        // Check both first and last transitions
+        let mut best_transition: Option<(u64, Transition)> = None; // (actual_time, transition)
+        
+        for (bucket_idx, bucket) in buckets.iter() {
+            // Check first transition
+            let first_time = bucket.first.actual_time;
+            // Skip start_value transitions (BOUNDARY_TIME_START)
+            if first_time != BOUNDARY_TIME_START && first_time <= target_time {
+                if best_transition.is_none() || first_time > best_transition.as_ref().unwrap().0 {
+                    best_transition = Some((first_time, bucket.first.clone()));
+                }
+            }
+            
+            // Check last transition if exists
+            if let Some(ref last) = bucket.last {
+                let last_time = last.actual_time;
+                // Skip start_value transitions
+                if last_time != BOUNDARY_TIME_START && last_time <= target_time {
+                    if best_transition.is_none() || last_time > best_transition.as_ref().unwrap().0 {
+                        best_transition = Some((last_time, last.clone()));
                     }
                 }
             }
-            
-            // No transitions found in previous tiles, use start_value if available
-            if let Some(start) = start_value {
-                // console_log!("[WASM]   No transitions found, using start_value: {:?}", start.value);
-                return start.clone();
-            }
-            
-            // No start_value provided, use default
-            // console_log!("[WASM]   No value found, returning default '0'");
-            return default_transition;
         }
         
-        // Calculate which bucket contains target_time
-        let bucket_idx = ((target_time - tile_start) / bucket_size) as u16;
-        let bucket_start = tile_start + (bucket_idx as u64) * bucket_size;
-        
-        // console_log!("[WASM]   bucket_idx={}, bucket_start={}", bucket_idx, bucket_start);
-        
-        // console_log!("[WASM] find_value_at_time: target={}, bucket_idx={}, bucket_start={}",
-        //     target_time, bucket_idx, bucket_start);
-        
-        // Check if target_time falls within a bucket (not at boundary)
-        if target_time > bucket_start {
-            // Target is within a bucket (not at boundary)
-            // According to Spec Rule 2, if viewport_start is within a bucket with transitions,
-            // we should use the value BEFORE the first transition in that bucket
-            // (which is the last value from previous buckets or start_value)
-            
-            // Search backward for the last transition BEFORE this bucket
-            for idx in (0..bucket_idx).rev() {
-                if let Some(bucket) = buckets.get(&idx) {
-                    let trans = if bucket.has_toggle() {
-                        bucket.last.as_ref().unwrap().clone()
-                    } else {
-                        bucket.first.clone()
-                    };
-                    // console_log!("[WASM]   Found value in earlier bucket {}: {:?}", idx, trans.value);
-                    return trans;
-                }
-            }
-            
-            // No previous transitions in this tile, search in previous tiles
-            for prev_tile_idx in (0..tile_idx).rev() {
-                let (_, prev_buckets) = &all_bucket_data[prev_tile_idx];
-                for idx in (0..TILE_SPAN_MULTIPLIER as u16).rev() {
-                    if let Some(bucket) = prev_buckets.get(&idx) {
-                        let trans = if bucket.has_toggle() {
-                            bucket.last.as_ref().unwrap().clone()
-                        } else {
-                            bucket.first.clone()
-                        };
-                        // console_log!("[WASM]   Found value in previous tile {} bucket {}: {:?}",
-                        //     prev_tile_idx, idx, trans.value);
-                        return trans;
-                    }
-                }
-            }
-            
-            // No previous transitions found, use start_value if available
-            if let Some(start) = start_value {
-                // console_log!("[WASM]   No previous transitions found, using start_value: {:?}", start.value);
-                return start.clone();
-            }
-            // console_log!("[WASM]   No previous transitions found, returning default");
-            return default_transition;
-        } else {
-            // Target is exactly at bucket boundary
-            if let Some(bucket) = buckets.get(&bucket_idx) {
-                let trans = bucket.first.clone();
-                // console_log!("[WASM]   Found value at bucket boundary {}: {:?}", bucket_idx, trans.value);
-                return trans;
-            }
-            
-            // Empty bucket at boundary, search backward in current tile
-            for idx in (0..bucket_idx).rev() {
-                if let Some(bucket) = buckets.get(&idx) {
-                    let trans = if bucket.has_toggle() {
-                        bucket.last.as_ref().unwrap().clone()
-                    } else {
-                        bucket.first.clone()
-                    };
-                    // console_log!("[WASM]   Found value in earlier bucket {}: {:?}", idx, trans.value);
-                    return trans;
-                }
-            }
+        // If found a valid transition, return it
+        if let Some((_, trans)) = best_transition {
+            return trans;
         }
         
-        // No transitions found in current tile before target_time
-        // Search backward into previous tiles
-        // console_log!("[WASM]   No transition found in current tile, searching previous tiles...");
-        
-        for prev_tile_idx in (0..tile_idx).rev() {
-            let (prev_tile_start, prev_buckets) = &all_bucket_data[prev_tile_idx];
-            let prev_tile_span = bucket_size * TILE_SPAN_MULTIPLIER as u64;
-            
-            // console_log!("[WASM]   Checking previous tile {}: start={}, buckets={}",
-            //     prev_tile_idx, prev_tile_start, prev_buckets.len());
-            
-            // Search from last bucket to first bucket in previous tile
-            for bucket_idx in (0..TILE_SPAN_MULTIPLIER as u16).rev() {
-                if let Some(bucket) = prev_buckets.get(&bucket_idx) {
-                    let trans = if bucket.has_toggle() {
-                        bucket.last.as_ref().unwrap().clone()
-                    } else {
-                        bucket.first.clone()
-                    };
-                    // console_log!("[WASM]   Found value in previous tile {} bucket {}: {:?}",
-                    //     prev_tile_idx, bucket_idx, trans.value);
-                    return trans;
-                }
-            }
-        }
-        
-        // No transitions found in any previous tiles, use start_value if available
+        // No transition found with actual_time <= target_time
+        // Use start_value as fallback
         if let Some(start) = start_value {
-            // console_log!("[WASM]   Using provided start_value: {:?}", start.value);
             return start.clone();
         }
         
-        // Fallback: try to get from signal_data (should not happen if called correctly)
-        let fallback = self.signal_data.get(signal_name)
-            .and_then(|data| data.tile_info.iter()
-                .find(|(start, _, _, _)| *start == tile_start)
-                .map(|(_, _, _, value)| value.clone()))
-            .unwrap_or_else(|| default_transition);
-        
-        // console_log!("[WASM]   Using fallback start_value: {:?}", fallback.value);
-        fallback
+        // Last resort: return default
+        default_transition
     }
 
     /// Classify value for rendering
