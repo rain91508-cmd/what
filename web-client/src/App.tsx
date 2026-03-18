@@ -2615,9 +2615,8 @@ function App() {
     // For waveform tabs, use current waveform's time settings
     const isWaveform = type === 'waveform'
     const isTableView = type === 'tableview'
-    const timeConfig = isWaveform || isTableView
-      ? initTimeConfig(currentWaveDisplayUnitPerLoD0)
-      : undefined
+    // Note: timeConfig is now global only, no longer stored per-tab
+    // All waveform and tableview tabs use currentWaveDisplayUnitPerLoD0
 
     // Determine waveform total range:
     // - If user provides customRange, use that
@@ -2645,7 +2644,7 @@ function App() {
       signals: isWaveform ? [] : undefined,
       groups: isWaveform ? createDefaultGroups() : undefined,
       selectedGroup: isWaveform ? 'group_1' : undefined,
-      timeConfig,
+      // Note: timeConfig is now global only, removed from tab-level storage
       viewport,
       cursorPosition: isWaveform && waveformRange
         ? Math.floor((waveformRange.start + waveformRange.end) / 2)
@@ -2664,16 +2663,11 @@ function App() {
     addMessage(`Added new ${type} tab` + (customRange ? ` (custom range: ${customRange.start}-${customRange.end})` : ''))
   }
 
-  // Update time configuration for a specific tab
+  // Update time configuration - global only, all tabs share the same timeConfig
   const handleTimeConfigChange = (tabId: string, timeConfig: TimeConfig) => {
     console.log('[App] handleTimeConfigChange called', { tabId, timeConfig });
-    // Update timeConfig for all waveform and tableview tabs to keep them in sync
-    setTabs(prev => prev.map(tab =>
-      (tab.type === 'waveform' || tab.type === 'tableview')
-        ? { ...tab, timeConfig }
-        : tab
-    ));
-    // Also update the global currentWaveDisplayUnitPerLoD0
+    // Only update the global currentWaveDisplayUnitPerLoD0
+    // All waveform and tableview tabs will use this global value
     setCurrentWaveDisplayUnitPerLoD0(timeConfig.DisplayUnitPerLoD0Unit);
   }
 
@@ -3222,8 +3216,7 @@ function App() {
           spaceBeforeBracket: tab.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket,
           // Wavemarks
           wavemarks: tab.wavemarks || [],
-          // TimeConfig for display unit synchronization
-          timeConfig: tab.timeConfig,
+          // Note: timeConfig is now global only, no longer saved per-tab
         }))
 
       // Build tableview tabs data
@@ -3250,8 +3243,7 @@ function App() {
           signalPrefix: tab.signalPrefix ?? currentWaveSignalPrefix,
           serverPrefix: tab.serverPrefix ?? currentWaveSignalServerPrefix,
           spaceBeforeBracket: tab.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket,
-          // TimeConfig for display unit synchronization
-          timeConfig: tab.timeConfig,
+          // Note: timeConfig is now global only, no longer saved per-tab
         }))
 
       // Get bookmarks
@@ -3432,8 +3424,7 @@ function App() {
           groups: restoredGroups,
           selectedGroup: waveTab.selectedGroup,
           columnWidths: DEFAULT_COLUMN_WIDTHS,
-          // Restore saved timeConfig, or use global currentWaveDisplayUnitPerLoD0 as fallback
-          timeConfig: waveTab.timeConfig ? initTimeConfig(waveTab.timeConfig.DisplayUnitPerLoD0Unit) : initTimeConfig(currentWaveDisplayUnitPerLoD0),
+          // Note: timeConfig is now global only, use global currentWaveDisplayUnitPerLoD0
           waveformTimeUnit: 2, // Default to ns
           viewport: waveTab.viewport,
           cursorPosition: waveTab.cursorPosition,
@@ -3475,8 +3466,7 @@ function App() {
           id: tableTab.id,
           label: tableTab.label,
           type: 'tableview',
-          // Restore saved timeConfig, or use global currentWaveDisplayUnitPerLoD0 as fallback
-          timeConfig: tableTab.timeConfig ? initTimeConfig(tableTab.timeConfig.DisplayUnitPerLoD0Unit) : initTimeConfig(currentWaveDisplayUnitPerLoD0),
+          // Note: timeConfig is now global only, use global currentWaveDisplayUnitPerLoD0
           tableStartTime: tableTab.startTime,
           tableEndTime: tableTab.endTime,
           tableSignals: restoredSignals,
@@ -3718,7 +3708,7 @@ function App() {
         onNavigateNext={navigateNext}
         canNavigatePrevious={canNavigatePrevious()}
         canNavigateNext={canNavigateNext()}
-        timeConfig={activeTabData?.timeConfig}
+        timeConfig={initTimeConfig(currentWaveDisplayUnitPerLoD0)}
         onTimeConfigChange={(config) => handleTimeConfigChange(activeTab, config)}
         waveformTimeUnit={activeTabData?.waveformTimeUnit ?? currentWaveTimeUnit} // Use tab's or current waveform's time unit
         maxWaveformTimeLod0={currentWaveEndTime}
@@ -3849,7 +3839,7 @@ function App() {
                 startTime={activeTabData.tableStartTime || 0}
                 endTime={activeTabData.tableEndTime || 0}
                 data={activeTabData.tableData || null}
-                timeConfig={activeTabData.timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0)}
+                timeConfig={initTimeConfig(currentWaveDisplayUnitPerLoD0)}
                 onSignalsChange={(signals) => {
                   setTabs(prev => prev.map(tab =>
                     tab.id === activeTabData.id ? { ...tab, tableSignals: signals } : tab
@@ -3895,7 +3885,7 @@ function App() {
                 groups={activeTabData.groups || createDefaultGroups()}
                 selectedGroup={activeTabData.selectedGroup || 'group_1'}
                 columnWidths={activeTabData.columnWidths}
-                timeConfig={activeTabData.timeConfig}
+                timeConfig={initTimeConfig(currentWaveDisplayUnitPerLoD0)}
                 viewport={activeTabData.viewport}
                 onViewportChange={(viewport) => {
                   // Validate viewport time range before updating

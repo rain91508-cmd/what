@@ -279,7 +279,7 @@ export interface Tab {
   groups?: Record<string, SignalGroup>;  // For waveform tabs - group structure
   selectedGroup?: string;       // For waveform tabs - currently selected group
   columnWidths?: ColumnWidths;  // For waveform tabs - 列宽配置
-  timeConfig?: TimeConfig;      // For waveform tabs - 时间配置
+  // Note: timeConfig is now global only, removed from tab-level storage
   waveformTimeUnit?: number;    // For waveform tabs - WaveformInfo.timeUnit (0=fs, 1=ps, 2=ns, 3=us, 4=ms, 5=s), default 2 (ns)
   // Viewport state for waveform tabs (time in LoD0Unit)
   viewport?: {

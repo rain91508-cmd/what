@@ -81,10 +81,7 @@ export interface Session {
       createdAt: number;
       expandedGroups: string[];
     }>;
-    // TimeConfig for display unit synchronization
-    timeConfig?: {
-      DisplayUnitPerLoD0Unit: number;
-    };
+    // Note: timeConfig is now global only, removed from tab-level storage
   }>;
   activeWaveformTabId?: string;
 
@@ -122,10 +119,7 @@ export interface Session {
     signalPrefix?: string;
     serverPrefix?: string;
     spaceBeforeBracket?: boolean;
-    // TimeConfig for display unit synchronization
-    timeConfig?: {
-      DisplayUnitPerLoD0Unit: number;
-    };
+    // Note: timeConfig is now global only, removed from tab-level storage
   }>;
   activeTableviewTabId?: string;
 
