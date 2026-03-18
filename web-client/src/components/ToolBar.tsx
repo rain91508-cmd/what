@@ -577,53 +577,35 @@ export function ToolBar({
     // Convert display unit value to LoD0 units
     const newStartLod0 = displayToLod0(numValue, effectiveTimeConfig);
 
-    // Calculate new end time based on current span (span remains unchanged)
+    // Calculate new end time based on current span (span remains unchanged, even if 0 or negative)
     const spanValue = parseFloat(tableSpanInputValue);
-    if (!isNaN(spanValue) && spanValue > 0) {
+    let newEndLod0 = newStartLod0;
+    if (!isNaN(spanValue)) {
       const spanLod0 = displayToLod0(spanValue, effectiveTimeConfig);
-      const newEndLod0 = newStartLod0 + spanLod0;
-      // Use the combined handler to update both start and end atomically
-      if (onTableStartTimeChangeWithSpan) {
-        onTableStartTimeChangeWithSpan(newStartLod0, newEndLod0);
-      } else {
-        onTableStartTimeChange(newStartLod0);
-        onTableEndTimeChange(newEndLod0);
-      }
+      newEndLod0 = newStartLod0 + spanLod0;
+    }
+    
+    // Use the combined handler to update both start and end atomically
+    if (onTableStartTimeChangeWithSpan) {
+      onTableStartTimeChangeWithSpan(newStartLod0, newEndLod0);
     } else {
       onTableStartTimeChange(newStartLod0);
+      onTableEndTimeChange(newEndLod0);
     }
   };
 
   const commitTableSpanValue = (currentStartLod0?: number, effectiveTimeConfig?: TimeConfig) => {
     const config = effectiveTimeConfig || timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
-    console.log('[ToolBar] commitTableSpanValue called', {
-      currentStartLod0,
-      effectiveTimeConfig,
-      config,
-      tableSpanInputValue,
-      tableStartTime,
-      tableEndTime,
-      displayUnitPerLoD0Unit: config.DisplayUnitPerLoD0Unit,
-    });
     
-    if (!onTableEndTimeChange) {
-      console.log('[ToolBar] commitTableSpanValue: onTableEndTimeChange not provided');
-      return;
-    }
+    if (!onTableEndTimeChange) return;
 
     // Use provided start time (if just updated) or fall back to prop
     const baseStartLod0 = currentStartLod0 !== undefined ? currentStartLod0 : tableStartTime;
-    console.log('[ToolBar] commitTableSpanValue: baseStartLod0', baseStartLod0);
-    if (baseStartLod0 === undefined) {
-      console.log('[ToolBar] commitTableSpanValue: baseStartLod0 is undefined');
-      return;
-    }
+    if (baseStartLod0 === undefined) return;
 
     const numValue = parseFloat(tableSpanInputValue);
-    console.log('[ToolBar] commitTableSpanValue: numValue', numValue);
-    if (isNaN(numValue) || numValue <= 0) {
+    if (isNaN(numValue) || numValue < 0) {
       // Invalid input, restore original span value
-      console.log('[ToolBar] commitTableSpanValue: invalid numValue');
       if (tableEndTime !== undefined && tableStartTime !== undefined) {
         const spanLod0 = tableEndTime - tableStartTime;
         const displaySpan = lod0ToDisplay(spanLod0, config);
@@ -634,68 +616,26 @@ export function ToolBar({
 
     // Convert span from display units to LoD0 units
     const spanLod0 = displayToLod0(numValue, config);
-    console.log('[ToolBar] commitTableSpanValue: span conversion', {
-      numValue,
-      displayUnitPerLoD0Unit: config.DisplayUnitPerLoD0Unit,
-      spanLod0,
-      calculation: `${numValue} * ${config.DisplayUnitPerLoD0Unit} = ${numValue * config.DisplayUnitPerLoD0Unit}`
-    });
     // Calculate new end time: start + span
     const newEndLod0 = baseStartLod0 + spanLod0;
-    console.log('[ToolBar] commitTableSpanValue: newEndLod0', {
-      baseStartLod0,
-      spanLod0,
-      newEndLod0
-    });
     onTableEndTimeChange(newEndLod0);
   };
 
   const handleTableTimeApply = () => {
     // Use fallback timeConfig if tab doesn't have one
     const effectiveTimeConfig = timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
-    console.log('[ToolBar] handleTableTimeApply called', {
-      tableStartInputValue,
-      tableSpanInputValue,
-      currentTableStartTime: tableStartTime,
-      currentTableEndTime: tableEndTime,
-      timeConfig,
-      effectiveTimeConfig,
-      onTableStartTimeChange,
-    });
 
     // Commit start value first and get the new start time
     const numStartValue = parseFloat(tableStartInputValue);
     let newStartLod0: number | undefined;
-    console.log('[ToolBar] Checking conditions', {
-      numStartValue,
-      isNaN_numStartValue: isNaN(numStartValue),
-      numStartValue_ge_0: numStartValue >= 0,
-      hasTimeConfig: !!timeConfig,
-      hasEffectiveTimeConfig: !!effectiveTimeConfig,
-      hasOnTableStartTimeChange: !!onTableStartTimeChange,
-    });
     if (!isNaN(numStartValue) && numStartValue >= 0 && effectiveTimeConfig && onTableStartTimeChange) {
       newStartLod0 = displayToLod0(numStartValue, effectiveTimeConfig);
-      console.log('[ToolBar] Committing new start time', { 
-        numStartValue, 
-        newStartLod0,
-        displayUnitPerLoD0Unit: effectiveTimeConfig.DisplayUnitPerLoD0Unit,
-        calculation: `${numStartValue} * ${effectiveTimeConfig.DisplayUnitPerLoD0Unit} = ${numStartValue * effectiveTimeConfig.DisplayUnitPerLoD0Unit}`
-      });
       onTableStartTimeChange(newStartLod0);
     }
 
     // Commit span value using the new start time (if updated)
-    const numSpanValue = parseFloat(tableSpanInputValue);
-    console.log('[ToolBar] Committing span value', { 
-      tableSpanInputValue, 
-      numSpanValue,
-      newStartLod0,
-      displayUnitPerLoD0Unit: effectiveTimeConfig.DisplayUnitPerLoD0Unit,
-    });
     commitTableSpanValue(newStartLod0, effectiveTimeConfig);
 
-    console.log('[ToolBar] Calling onTableTimeApply');
     onTableTimeApply?.();
   };
 
