@@ -1634,15 +1634,6 @@ if tile_missing_signals.is_empty() {
         enable_memory_cache: Option<bool>,
         early_exit_on_insufficient_transitions: Option<bool>,
     ) -> Result<JsValue, JsValue> {
-        // Debug: Log input parameters
-        web_sys::console::log_1(&JsValue::from_str(&format!(
-            "[WASM] get_signal_values_at_transitions called with signal_names: {:?}, search_start_time: {}, search_end_time: {}, result_max: {}, lod: {:?}, enable_opfs: {:?}, enable_memory_cache: {:?}, early_exit_on_insufficient_transitions: {:?}",
-            signal_names, search_start_time, search_end_time, result_max, lod, enable_opfs, enable_memory_cache, early_exit_on_insufficient_transitions
-        )));
-        web_sys::console::log_1(&JsValue::from_str(&format!(
-            "[WASM] Current prefix settings - signal_prefix: {:?}, server_prefix: {:?}, space_before_bracket: {:?}",
-            self.signal_prefix, self.server_prefix, self.space_before_bracket
-        )));
         
         // Apply cache settings if provided (override global settings for this call)
         let saved_enable_opfs = self.enable_opfs;
@@ -1708,10 +1699,7 @@ if tile_missing_signals.is_empty() {
             let batch_start_time = current_tile * tile_span;
             let batch_end_time = (batch_end_tile + 1) * tile_span - 1;
             
-            web_sys::console::log_1(&JsValue::from_str(&format!(
-                "[WASM] Fetching batch: tiles {}-{}, time {}-{}",
-                current_tile, batch_end_tile, batch_start_time, batch_end_time
-            )));
+
             
             // Clear signal_data for this batch
             self.signal_data.clear();
@@ -1733,36 +1721,16 @@ if tile_missing_signals.is_empty() {
                 if let Some(data) = self.signal_data.get(name) {
                     if requested_lod > 0 {
                         // For LoD > 0: collect both first and last transition times from bucket_data
-                        web_sys::console::log_1(&JsValue::from_str(&format!(
-                            "[WASM] LoD {}: bucket_data len = {}, transitions len = {}",
-                            requested_lod, data.bucket_data.len(), data.transitions.len()
-                        )));
-                        
                         let bucket_size = 1u64 << requested_lod;
-                        let mut bucket_count = 0;
                         for (tile_start, buckets) in &data.bucket_data {
-                            web_sys::console::log_1(&JsValue::from_str(&format!(
-                                "[WASM] Processing tile at {}, buckets count = {}",
-                                tile_start, buckets.len()
-                            )));
-                            
                             for (bucket_offset, bucket) in buckets {
-                                bucket_count += 1;
                                 let bucket_start_time = tile_start + (*bucket_offset as u64) * bucket_size;
-                                
-                                web_sys::console::log_1(&JsValue::from_str(&format!(
-                                    "[WASM] Bucket {}: offset={}, start_time={}, first_actual_time={}, has_last={}",
-                                    bucket_count, bucket_offset, bucket_start_time, bucket.first.actual_time, bucket.last.is_some()
-                                )));
                                 
                                 // Use actual_time from the first transition, not bucket start time
                                 let first_actual_time = bucket.first.actual_time;
                                 if first_actual_time >= search_start_time && first_actual_time <= search_end_time {
                                     all_times.insert(first_actual_time);
                                     real_transition_count += 1;
-                                    web_sys::console::log_1(&JsValue::from_str(&format!(
-                                        "[WASM] Added first transition at actual time {}", first_actual_time
-                                    )));
                                 }
                                 
                                 // If has last transition (toggle), use its actual_time too
@@ -1771,9 +1739,6 @@ if tile_missing_signals.is_empty() {
                                     if last_actual_time >= search_start_time && last_actual_time <= search_end_time {
                                         all_times.insert(last_actual_time);
                                         real_transition_count += 1;
-                                        web_sys::console::log_1(&JsValue::from_str(&format!(
-                                            "[WASM] Added last transition at actual time {}", last_actual_time
-                                        )));
                                     }
                                 }
                             }
@@ -1797,19 +1762,10 @@ if tile_missing_signals.is_empty() {
                 }
             }
             
-            web_sys::console::log_1(&JsValue::from_str(&format!(
-                "[WASM] Batch complete: collected {} transitions so far (real: {})",
-                all_times.len(), real_transition_count
-            )));
-            
             // Early exit check after first batch if enabled
             if early_exit && is_first_batch {
                 is_first_batch = false;
                 if real_transition_count < 2 {
-                    web_sys::console::log_1(&JsValue::from_str(&format!(
-                        "[WASM] Early exit: only {} real transitions found in first 10 tiles",
-                        real_transition_count
-                    )));
                     break;
                 }
             }
@@ -1825,11 +1781,6 @@ if tile_missing_signals.is_empty() {
         let actual_search_start_time = times.first().copied().unwrap_or(search_start_time);
         let actual_search_end_time = times.last().copied().unwrap_or(search_end_time);
         
-        web_sys::console::log_1(&JsValue::from_str(&format!(
-            "[WASM] Actual search range: {} to {} (LoD0 units), requested: {} to {}",
-            actual_search_start_time, actual_search_end_time, search_start_time, search_end_time
-        )));
-        
         let mut result_data = Vec::new();
         
         // We need to re-fetch data to get all values for the collected times
@@ -1842,11 +1793,6 @@ if tile_missing_signals.is_empty() {
             let max_time = *times.last().unwrap();
             let min_tile = min_time / tile_span;
             let max_tile = max_time / tile_span;
-            
-            web_sys::console::log_1(&JsValue::from_str(&format!(
-                "[WASM] Final fetch for result: tiles {}-{}, time {}-{}",
-                min_tile, max_tile, min_time, max_time
-            )));
             
             if let Err(e) = self.fetch_signals_data_batch_internal(
                 signal_names.clone(), 
@@ -1893,10 +1839,6 @@ if tile_missing_signals.is_empty() {
             
             // Skip rows that only contain start values (no transitions at all)
             if !has_any_transition {
-                web_sys::console::log_1(&JsValue::from_str(&format!(
-                    "[WASM] Skipping row at time {} - no transitions (only start values)",
-                    time
-                )));
                 continue;
             }
             
@@ -1946,8 +1888,18 @@ if tile_missing_signals.is_empty() {
         
         let signal_data = match self.signal_data.get(signal_name) {
             Some(data) => data,
-            None => return (default_transition, false, false),
+            None => {
+                web_sys::console::log_1(&JsValue::from_str(&format!(
+                    "[WASM] Signal not found: {}", signal_name
+                )));
+                return (default_transition, false, false);
+            }
         };
+        
+        web_sys::console::log_1(&JsValue::from_str(&format!(
+            "[WASM] Finding value for signal '{}' at time {}, LoD {}, bucket_data len: {}",
+            signal_name, target_time, requested_lod, signal_data.bucket_data.len()
+        )));
         
         // For LoD > 0: find value from bucket_data using actual_time
         if requested_lod > 0 && !signal_data.bucket_data.is_empty() {
@@ -2065,13 +2017,14 @@ if tile_missing_signals.is_empty() {
     }
 
     /// Format a transition value with the specified display format
+    /// Uses the same approach as render functions: convert to string first, then format
     fn format_value_with_format(
         &self,
         transition: &Transition,
         width: u32,
         display_format: &str,
     ) -> String {
-        // Convert raw bytes to string
+        // Convert raw bytes to string first (same as render functions)
         let raw_str = server_value_to_string(
             transition.value_type,
             transition.value_len,
@@ -2083,25 +2036,8 @@ if tile_missing_signals.is_empty() {
             return raw_str;
         }
         
-        // For multi-bit signals, apply display format
-        // Parse the raw string as a numeric value
-        let numeric_value = if raw_str.starts_with("0x") || raw_str.starts_with("0X") {
-            u64::from_str_radix(&raw_str[2..], 16).unwrap_or(0)
-        } else if raw_str.starts_with("0b") || raw_str.starts_with("0B") {
-            u64::from_str_radix(&raw_str[2..], 2).unwrap_or(0)
-        } else if raw_str.starts_with("0o") || raw_str.starts_with("0O") {
-            u64::from_str_radix(&raw_str[2..], 8).unwrap_or(0)
-        } else {
-            raw_str.parse::<u64>().unwrap_or(0)
-        };
-        
-        match display_format {
-            "hex" | "h" => format!("0x{:0width$X}", numeric_value, width = ((width + 3) / 4) as usize),
-            "bin" | "b" => format!("0b{:0width$b}", numeric_value, width = width as usize),
-            "oct" | "o" => format!("0o{:0width$o}", numeric_value, width = ((width + 2) / 3) as usize),
-            "dec" | "d" => numeric_value.to_string(),
-            _ => format!("0x{:0width$X}", numeric_value, width = ((width + 3) / 4) as usize), // Default to hex
-        }
+        // For multi-bit signals, use the same formatting as render functions
+        self.format_multi_bit_value(&raw_str, width, Some(display_format))
     }
 
     /// Classify value type based on display string

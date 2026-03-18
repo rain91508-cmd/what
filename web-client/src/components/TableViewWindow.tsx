@@ -96,9 +96,6 @@ export function TableViewWindow({
   onColumnMetadataFiltersChange,
   onColumnRadixChange,
 }: TableViewWindowProps) {
-  // Log initial props
-  console.log('[TableViewWindow] Initial props:', { startTime, endTime, refreshTrigger });
-
   // Get shared provider from context (same as WaveformWindow)
   const { provider: sharedProvider, isLoading: providerLoading } = useWaveformProvider();
 
@@ -173,7 +170,6 @@ export function TableViewWindow({
       const adapter = new WaveformProviderAdapter(sharedProvider, tabId);
       adapterRef.current = adapter;
       setAdapterCreated(true);
-      console.log(`[TableViewWindow] Created adapter for tab: ${tabId}`);
     }
   }, [sharedProvider, tabId]);
 
@@ -184,7 +180,6 @@ export function TableViewWindow({
   // Auto-fetch data when refreshTrigger changes (e.g., when Toolbar Apply is clicked)
   useEffect(() => {
     if (refreshTrigger > 0 && providerReady && signals.length > 0) {
-      console.log('[TableViewWindow] Refresh triggered, fetching data...');
       handleFetchData();
     }
   }, [refreshTrigger, providerReady, signals.length]);
@@ -195,12 +190,6 @@ export function TableViewWindow({
     const hasEndTimeChanged = endTime !== prevEndTimeRef.current;
 
     if ((hasStartTimeChanged || hasEndTimeChanged) && providerReady && signals.length > 0) {
-      console.log('[TableViewWindow] Time range changed, fetching data...', {
-        oldStart: prevStartTimeRef.current,
-        newStart: startTime,
-        oldEnd: prevEndTimeRef.current,
-        newEnd: endTime,
-      });
       prevStartTimeRef.current = startTime;
       prevEndTimeRef.current = endTime;
       handleFetchData();
@@ -412,7 +401,13 @@ export function TableViewWindow({
           </span>
         );
       },
-      filterFn: 'includesString',
+      filterFn: (row, columnId, filterValue) => {
+        const value = row.getValue(columnId) as RawValue | undefined;
+        if (!value) return false;
+        const displayStr = value.displayStr.toLowerCase();
+        const filter = (filterValue as string).toLowerCase();
+        return displayStr.includes(filter);
+      },
     }));
 
     return [timeColumn, ...signalColumns];
@@ -460,40 +455,27 @@ export function TableViewWindow({
     // Try LoD 0 to 20 (practical upper limit)
     let closestLoD = 0;
     let closestDiff = Math.abs(1 - displayUnitPerLoD0Unit); // LoD 0 is 2^0 = 1
-    console.log('[TableViewWindow] Initial - LoD 0, value 1, diff:', closestDiff);
     
     for (let lod = 1; lod <= 20; lod++) {
       const lodValue = Math.pow(2, lod);
       const diff = Math.abs(lodValue - displayUnitPerLoD0Unit);
-      console.log(`[TableViewWindow] LoD ${lod}, value ${lodValue}, diff: ${diff}`);
       if (diff < closestDiff) {
         closestDiff = diff;
         closestLoD = lod;
-        console.log(`[TableViewWindow] New closest - LoD ${closestLoD}, diff ${closestDiff}`);
       }
     }
     
-    console.log('[TableViewWindow] Final selected LoD:', closestLoD);
     return closestLoD;
   }, []);
 
   // Handle data fetch using adapter (similar to WaveformWindow)
   const handleFetchData = useCallback(async (continueFetch: boolean = false) => {
-    console.log('[TableViewWindow] handleFetchData called', { 
-      startTime, 
-      endTime, 
-      signals: signals.length,
-      displayUnitPerLoD0Unit: _displayUnitPerLoD0Unit,
-      timeSpan: endTime - startTime,
-      continueFetch
-    });
     if (!adapterRef.current) {
       console.error('[TableViewWindow] Adapter not ready');
       return;
     }
 
     if (signals.length === 0) {
-      console.log('[TableViewWindow] No signals to fetch');
       return;
     }
 
@@ -523,7 +505,6 @@ export function TableViewWindow({
 
       // Calculate the closest LoD
       const selectedLoD = calculateClosestLoD(_displayUnitPerLoD0Unit);
-      console.log('[TableViewWindow] Selected LoD:', selectedLoD, 'based on displayUnitPerLoD0Unit:', _displayUnitPerLoD0Unit);
 
       // Determine search range
       let searchStartTime = startTime;
@@ -532,30 +513,8 @@ export function TableViewWindow({
       if (continueFetch && accumulatedData) {
         // Continue from last search end + 1
         searchStartTime = currentSearchEndTime + 1;
-        console.log('[TableViewWindow] Continue fetch from:', searchStartTime, 'to:', endTime);
       }
 
-      // Calculate how many LoD buckets are in this range
-      const lodBucketSize = Math.pow(2, selectedLoD);
-      const numBuckets = Math.ceil((searchEndTime - searchStartTime) / lodBucketSize);
-      console.log('[TableViewWindow] Time range analysis:', {
-        searchStartTime,
-        searchEndTime,
-        timeRange: searchEndTime - searchStartTime,
-        selectedLoD,
-        lodBucketSize,
-        numBuckets,
-        expectedBuckets: `Should have about ${numBuckets} buckets for LoD ${selectedLoD}`
-      });
-
-      // WASM expects time parameters in LoD0 units!
-      // display unit only affects the display of time in returned data
-      console.log('[TableViewWindow] Time params for WASM:', {
-        startTime_LoD0: searchStartTime,
-        endTime_LoD0: searchEndTime,
-        displayUnitPerLoD0Unit: _displayUnitPerLoD0Unit,
-      });
-      
       // Fetch data using adapter
       // Pass prefix settings to let WASM handle signal name conversion
       const getSignalValuesParams = {
@@ -578,25 +537,7 @@ export function TableViewWindow({
         enableOpfs: _enableOpfs,
         enableMemoryCache: _enableMemoryCache,
       };
-      console.log('[TableViewWindow] Calling get_signal_values_at_transitions with params:', getSignalValuesParams);
       const result = await adapterRef.current.get_signal_values_at_transitions(getSignalValuesParams);
-
-      // Debug: Log WASM returned data
-      console.log('[TableViewWindow] WASM returned data:', {
-        searchStartTime: result.searchStartTime,
-        searchEndTime: result.searchEndTime,
-        rowCount: result.data.length,
-        firstRow: result.data[0] ? {
-          time: result.data[0].time,
-          values: result.data[0].values.map(v => ({ 
-            displayStr: v.displayStr, 
-            valueType: v.valueType, 
-            hasTransition: v.hasTransition,
-            hasToggle: (v as any).hasToggle 
-          }))
-        } : null,
-        allRowTimes: result.data.map(r => r.time)
-      });
 
       // Check if we got max results (can continue fetching)
       const gotMaxResults = result.data.length >= resultMax;
@@ -622,8 +563,6 @@ export function TableViewWindow({
         };
         setAccumulatedData(mergedResult);
         onFetchData(mergedResult);
-        console.log(`[TableViewWindow] Fetched ${result.data.length} rows, filtered ${result.data.length - newData.length} duplicates, total: ${mergedResult.data.length} rows`);
-        
         // Navigate to the last page to show new data
         const totalPages = Math.ceil(mergedResult.data.length / pageSize);
         handlePageChange(totalPages - 1);
@@ -631,7 +570,6 @@ export function TableViewWindow({
         // Replace data
         setAccumulatedData(result);
         onFetchData(result);
-        console.log(`[TableViewWindow] Fetched ${result.data.length} rows`);
       }
     } catch (error) {
       console.error('[TableViewWindow] Failed to fetch data:', error);
@@ -654,7 +592,8 @@ export function TableViewWindow({
     resultMax,
     earlyExitOnInsufficientTransitions,
     accumulatedData,
-    currentSearchEndTime
+    currentSearchEndTime,
+    columnRadix
   ]);
 
   // Get total pages
@@ -912,37 +851,70 @@ export function TableViewWindow({
                           }}
                         />
                       )}
-                      {/* Metadata Filter Button (small triangle) - only for signal columns */}
+                      {/* Delete Button and Metadata Filter Button - only for signal columns */}
                       {header.column.id !== 'time' && (
-                        <div style={{ position: 'relative' }}>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          {/* Delete Button */}
                           <button
-                            onClick={() => setOpenMetadataFilterColumn(
-                              openMetadataFilterColumn === header.column.id ? null : header.column.id
-                            )}
+                            onClick={() => {
+                              const signalName = header.column.id;
+                              const newSignals = signals.filter(s => s.name !== signalName);
+                              onSignalsChange(newSignals);
+                              // Remove radix and filter settings for this signal
+                              setColumnRadix(prev => {
+                                const { [signalName]: _, ...rest } = prev;
+                                return rest;
+                              });
+                              setColumnMetadataFilters(prev => {
+                                const { [signalName]: _, ...rest } = prev;
+                                return rest;
+                              });
+                            }}
                             style={{
                               padding: '2px 4px',
                               fontSize: '10px',
-                              backgroundColor: (columnMetadataFilters[header.column.id]?.hasX ||
-                                                columnMetadataFilters[header.column.id]?.hasZ ||
-                                                columnMetadataFilters[header.column.id]?.mixed ||
-                                                columnMetadataFilters[header.column.id]?.hasTransition ||
-                                                columnMetadataFilters[header.column.id]?.hasToggle)
-                                                ? '#ff9800' : '#f0f0f0',
-                              color: (columnMetadataFilters[header.column.id]?.hasX ||
-                                      columnMetadataFilters[header.column.id]?.hasZ ||
-                                      columnMetadataFilters[header.column.id]?.mixed ||
-                                      columnMetadataFilters[header.column.id]?.hasTransition ||
-                                      columnMetadataFilters[header.column.id]?.hasToggle)
-                                      ? 'white' : '#666',
+                              backgroundColor: '#ff4444',
+                              color: 'white',
                               border: '1px solid #ccc',
                               borderRadius: '3px',
                               cursor: 'pointer',
                               lineHeight: 1,
                             }}
-                            title="Filter by metadata"
+                            title="Remove signal"
                           >
-                            ▼
+                            ✕
                           </button>
+                          
+                          {/* Metadata Filter Button (small triangle) */}
+                          <div style={{ position: 'relative' }}>
+                            <button
+                              onClick={() => setOpenMetadataFilterColumn(
+                                openMetadataFilterColumn === header.column.id ? null : header.column.id
+                              )}
+                              style={{
+                                padding: '2px 4px',
+                                fontSize: '10px',
+                                backgroundColor: (columnMetadataFilters[header.column.id]?.hasX ||
+                                                  columnMetadataFilters[header.column.id]?.hasZ ||
+                                                  columnMetadataFilters[header.column.id]?.mixed ||
+                                                  columnMetadataFilters[header.column.id]?.hasTransition ||
+                                                  columnMetadataFilters[header.column.id]?.hasToggle)
+                                                  ? '#ff9800' : '#f0f0f0',
+                                color: (columnMetadataFilters[header.column.id]?.hasX ||
+                                        columnMetadataFilters[header.column.id]?.hasZ ||
+                                        columnMetadataFilters[header.column.id]?.mixed ||
+                                        columnMetadataFilters[header.column.id]?.hasTransition ||
+                                        columnMetadataFilters[header.column.id]?.hasToggle)
+                                        ? 'white' : '#666',
+                                border: '1px solid #ccc',
+                                borderRadius: '3px',
+                                cursor: 'pointer',
+                                lineHeight: 1,
+                              }}
+                              title="Filter by metadata"
+                            >
+                              ▼
+                            </button>
 
                           {/* Metadata Filter Dropdown */}
                           {openMetadataFilterColumn === header.column.id && (
@@ -976,6 +948,8 @@ export function TableViewWindow({
                                         key={radix}
                                         onClick={() => {
                                           setColumnRadix(prev => ({ ...prev, [columnId]: radix }));
+                                          // Trigger refetch to apply new radix
+                                          setTimeout(() => handleFetchData(false), 0);
                                         }}
                                         style={{
                                           padding: '2px 6px',
@@ -1075,6 +1049,7 @@ export function TableViewWindow({
                             </div>
                           )}
                         </div>
+                      </div>
                       )}
                     </div>
                   </th>
