@@ -52,12 +52,12 @@ interface TableViewWindowProps {
   // Initial column filters for session restore
   initialColumnFilters?: Array<{ id: string; value: string }>;
   // Initial metadata filters for session restore
-  initialColumnMetadataFilters?: Record<string, { hasX: boolean; hasZ: boolean; mixed: boolean; hasTransition: boolean }>;
+  initialColumnMetadataFilters?: Record<string, { hasX: boolean; hasZ: boolean; mixed: boolean; hasTransition: boolean; hasToggle: boolean }>;
   // Initial radix selection for session restore
   initialColumnRadix?: Record<string, 'hex' | 'bin' | 'oct' | 'dec'>;
   // Callbacks to save state for session
   onColumnFiltersChange?: (filters: Array<{ id: string; value: string }>) => void;
-  onColumnMetadataFiltersChange?: (filters: Record<string, { hasX: boolean; hasZ: boolean; mixed: boolean; hasTransition: boolean }>) => void;
+  onColumnMetadataFiltersChange?: (filters: Record<string, { hasX: boolean; hasZ: boolean; mixed: boolean; hasTransition: boolean; hasToggle: boolean }>) => void;
   onColumnRadixChange?: (radix: Record<string, 'hex' | 'bin' | 'oct' | 'dec'>) => void;
 }
 
@@ -114,7 +114,7 @@ export function TableViewWindow({
   const [showColumnVisibility, setShowColumnVisibility] = useState(false);
   // Loading state for data fetch
   const [isFetching, setIsFetching] = useState(false);
-  // Per-column metadata filter state: { [columnId]: { hasX, hasZ, mixed, hasTransition } }
+  // Per-column metadata filter state: { [columnId]: { hasX, hasZ, mixed, hasTransition, hasToggle } }
   // Initialize from session if provided
   const [columnMetadataFilters, setColumnMetadataFilters] = useState<{
     [columnId: string]: {
@@ -122,6 +122,7 @@ export function TableViewWindow({
       hasZ: boolean;
       mixed: boolean;
       hasTransition: boolean;
+      hasToggle: boolean;
     };
   }>(initialColumnMetadataFilters || {});
   // Track which column's metadata filter dropdown is open
@@ -133,6 +134,13 @@ export function TableViewWindow({
   const [columnRadix, setColumnRadix] = useState<{
     [columnId: string]: 'hex' | 'bin' | 'oct' | 'dec';
   }>(initialColumnRadix || {});
+  
+  // Early exit on insufficient transitions
+  const [earlyExitOnInsufficientTransitions, setEarlyExitOnInsufficientTransitions] = useState(false);
+  // Max result count
+  const [resultMax, setResultMax] = useState(100);
+  // Show warning message when transition count < 3
+  const [showLowTransitionWarning, setShowLowTransitionWarning] = useState(false);
 
   // Use refs to store callback functions to avoid dependency issues in useEffect
   const onColumnFiltersChangeRef = useRef(onColumnFiltersChange);
@@ -252,7 +260,7 @@ export function TableViewWindow({
   const filteredTableData = useMemo(() => {
     // Check if any column has active metadata filter
     const hasActiveMetadataFilter = Object.values(columnMetadataFilters).some(
-      (filter) => filter.hasX || filter.hasZ || filter.mixed || filter.hasTransition
+      (filter) => filter.hasX || filter.hasZ || filter.mixed || filter.hasTransition || filter.hasToggle
     );
 
     if (!hasActiveMetadataFilter) {
@@ -263,7 +271,7 @@ export function TableViewWindow({
       // Check each column that has metadata filters
       for (const [columnId, filter] of Object.entries(columnMetadataFilters)) {
         // Skip if this column has no active filters
-        if (!filter.hasX && !filter.hasZ && !filter.mixed && !filter.hasTransition) {
+        if (!filter.hasX && !filter.hasZ && !filter.mixed && !filter.hasTransition && !filter.hasToggle) {
           continue;
         }
 
@@ -279,9 +287,10 @@ export function TableViewWindow({
         const matchesHasZ = filter.hasZ && value.valueType === 'has_z';
         const matchesMixed = filter.mixed && value.valueType === 'mixed';
         const matchesTransition = filter.hasTransition && value.hasTransition;
+        const matchesToggle = filter.hasToggle && (value as any).hasToggle; // Note: RawValue now has hasToggle
 
         // If no metadata filter matches for this column, exclude the row (AND relationship across columns)
-        if (!matchesHasX && !matchesHasZ && !matchesMixed && !matchesTransition) {
+        if (!matchesHasX && !matchesHasZ && !matchesMixed && !matchesTransition && !matchesToggle) {
           return false;
         }
       }
@@ -374,14 +383,16 @@ export function TableViewWindow({
       cell: ({ getValue }) => {
         const value = getValue<RawValue | undefined>();
         if (!value) return '-';
+        const rawValue = value as any; // Type assertion to access hasToggle
         return (
           <span
             style={{
-              color: value.valueType === 'has_x' ? '#ff6b6b' :
+              color: rawValue.hasToggle ? '#2196f3' : // Blue for hasToggle
+                     value.valueType === 'has_x' ? '#ff6b6b' :
                      value.valueType === 'has_z' ? '#4ecdc4' :
                      value.valueType === 'mixed' ? '#ffe66d' :
                      value.hasTransition ? '#000' : '#666', // 有跳变黑色，无跳变深灰色
-              fontWeight: value.hasTransition ? 'bold' : 'normal', // 有跳变加粗
+              fontWeight: rawValue.hasToggle || value.hasTransition ? 'bold' : 'normal', // 有toggle或有跳变加粗
             }}
           >
             {value.displayStr}
@@ -429,9 +440,33 @@ export function TableViewWindow({
     table.setPageIndex(newPage);
   }, [onPageChange, table]);
 
+  // Calculate the closest LoD value based on displayUnitPerLoD0Unit
+  const calculateClosestLoD = useCallback((displayUnitPerLoD0Unit: number): number => {
+    // For displayUnitPerLoD0Unit, find the closest 2^n
+    // Try LoD 0 to 20 (practical upper limit)
+    let closestLoD = 0;
+    let closestDiff = Math.abs(1 - displayUnitPerLoD0Unit); // LoD 0 is 2^0 = 1
+    
+    for (let lod = 1; lod <= 20; lod++) {
+      const lodValue = Math.pow(2, lod);
+      const diff = Math.abs(lodValue - displayUnitPerLoD0Unit);
+      if (diff < closestDiff) {
+        closestDiff = diff;
+        closestLoD = lod;
+      }
+    }
+    
+    return closestLoD;
+  }, []);
+
   // Handle data fetch using adapter (similar to WaveformWindow)
   const handleFetchData = useCallback(async () => {
-    console.log('[TableViewWindow] handleFetchData called', { startTime, endTime, signals: signals.length });
+    console.log('[TableViewWindow] handleFetchData called', { 
+      startTime, 
+      endTime, 
+      signals: signals.length,
+      displayUnitPerLoD0Unit: _displayUnitPerLoD0Unit 
+    });
     if (!adapterRef.current) {
       console.error('[TableViewWindow] Adapter not ready');
       return;
@@ -443,6 +478,7 @@ export function TableViewWindow({
     }
 
     setIsFetching(true);
+    setShowLowTransitionWarning(false);
 
     try {
       // Build WASM signals with proper draw_sig_id (same as WaveformWindow)
@@ -465,14 +501,22 @@ export function TableViewWindow({
       }));
       onSignalsChange(updatedSignals);
 
+      // Calculate the closest LoD
+      const selectedLoD = calculateClosestLoD(_displayUnitPerLoD0Unit);
+      console.log('[TableViewWindow] Selected LoD:', selectedLoD, 'based on displayUnitPerLoD0Unit:', _displayUnitPerLoD0Unit);
+
       // Fetch data using adapter
       // Pass prefix settings to let WASM handle signal name conversion
       const result = await adapterRef.current.get_signal_values_at_transitions({
         signalNames: signals.map(s => s.name), // Use local names, WASM will convert
         searchStartTime: startTime,
         searchEndTime: endTime,
-        resultMax: 100, // 100 rows per page
+        resultMax: resultMax, // Use user-specified max result count
         signals: updatedSignals,
+        // Pass LoD parameter
+        lod: selectedLoD,
+        // Pass early exit parameter
+        earlyExitOnInsufficientTransitions: earlyExitOnInsufficientTransitions,
         // Pass prefix settings for signal name conversion
         signalPrefix: _signalPrefix,
         serverPrefix: _serverPrefix,
@@ -488,10 +532,20 @@ export function TableViewWindow({
         rowCount: result.data.length,
         firstRow: result.data[0] ? {
           time: result.data[0].time,
-          values: result.data[0].values.map(v => ({ displayStr: v.displayStr, valueType: v.valueType, hasTransition: v.hasTransition }))
+          values: result.data[0].values.map(v => ({ 
+            displayStr: v.displayStr, 
+            valueType: v.valueType, 
+            hasTransition: v.hasTransition,
+            hasToggle: (v as any).hasToggle 
+          }))
         } : null,
         allRowTimes: result.data.map(r => r.time)
       });
+
+      // Check if transition count is less than 3
+      if (result.data.length < 3) {
+        setShowLowTransitionWarning(true);
+      }
 
       // Update parent with fetched data
       onFetchData(result);
@@ -502,7 +556,22 @@ export function TableViewWindow({
     } finally {
       setIsFetching(false);
     }
-  }, [adapterRef, signals, startTime, endTime, onSignalsChange, onFetchData, _waveformName, _signalPrefix, _serverPrefix, _spaceBeforeBracket]);
+  }, [
+    adapterRef, 
+    signals, 
+    startTime, 
+    endTime, 
+    onSignalsChange, 
+    onFetchData, 
+    _waveformName, 
+    _signalPrefix, 
+    _serverPrefix, 
+    _spaceBeforeBracket,
+    _displayUnitPerLoD0Unit,
+    calculateClosestLoD,
+    resultMax,
+    earlyExitOnInsufficientTransitions
+  ]);
 
   // Get total pages
   const totalPages = table.getPageCount();
@@ -520,6 +589,7 @@ export function TableViewWindow({
           padding: '8px 12px',
           borderBottom: '1px solid #e0e0e0',
           backgroundColor: '#f5f5f5',
+          flexWrap: 'wrap',
         }}
       >
         <button
@@ -544,8 +614,37 @@ export function TableViewWindow({
           </span>
         )}
 
+        {/* Early Exit Toggle */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={earlyExitOnInsufficientTransitions}
+            onChange={(e) => setEarlyExitOnInsufficientTransitions(e.target.checked)}
+          />
+          Early Exit
+        </label>
+
+        {/* Max Result Input */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}>
+          Max Rows:
+          <input
+            type="number"
+            value={resultMax}
+            onChange={(e) => setResultMax(Math.max(1, parseInt(e.target.value) || 100))}
+            min="1"
+            max="10000"
+            style={{
+              width: '60px',
+              padding: '2px 4px',
+              fontSize: '11px',
+              border: '1px solid #ccc',
+              borderRadius: '3px',
+            }}
+          />
+        </label>
+
         {/* Column Visibility Toggle */}
-        <div style={{ position: 'relative' }}>
+        <div style={{ position: 'relative', marginLeft: 'auto' }}>
           <button
             onClick={() => setShowColumnVisibility(!showColumnVisibility)}
             style={{
@@ -566,7 +665,7 @@ export function TableViewWindow({
               style={{
                 position: 'absolute',
                 top: '100%',
-                left: 0,
+                right: 0,
                 zIndex: 100,
                 backgroundColor: 'white',
                 border: '1px solid #ccc',
@@ -608,10 +707,42 @@ export function TableViewWindow({
           )}
         </div>
 
-        <div style={{ marginLeft: 'auto', fontSize: '12px', color: '#666' }}>
+        <div style={{ fontSize: '12px', color: '#666' }}>
           Total: {filteredTableData.length} / {tableData.length} rows
         </div>
       </div>
+
+      {/* Low Transition Warning */}
+      {showLowTransitionWarning && (
+        <div
+          style={{
+            backgroundColor: '#fff3cd',
+            borderBottom: '1px solid #ffc107',
+            padding: '8px 12px',
+            fontSize: '12px',
+            color: '#856404',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}
+        >
+          <span>
+            ⚠️ Only {tableData.length} transition(s) found. Consider increasing display unit per LoD0 unit for more data.
+          </span>
+          <button
+            onClick={() => setShowLowTransitionWarning(false)}
+            style={{
+              background: 'none',
+              border: 'none',
+              fontSize: '16px',
+              cursor: 'pointer',
+              color: '#856404',
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Table */}
       <div style={{ flex: 1, overflow: 'auto' }}>
@@ -664,12 +795,14 @@ export function TableViewWindow({
                               backgroundColor: (columnMetadataFilters[header.column.id]?.hasX ||
                                                 columnMetadataFilters[header.column.id]?.hasZ ||
                                                 columnMetadataFilters[header.column.id]?.mixed ||
-                                                columnMetadataFilters[header.column.id]?.hasTransition)
+                                                columnMetadataFilters[header.column.id]?.hasTransition ||
+                                                columnMetadataFilters[header.column.id]?.hasToggle)
                                                 ? '#ff9800' : '#f0f0f0',
                               color: (columnMetadataFilters[header.column.id]?.hasX ||
                                       columnMetadataFilters[header.column.id]?.hasZ ||
                                       columnMetadataFilters[header.column.id]?.mixed ||
-                                      columnMetadataFilters[header.column.id]?.hasTransition)
+                                      columnMetadataFilters[header.column.id]?.hasTransition ||
+                                      columnMetadataFilters[header.column.id]?.hasToggle)
                                       ? 'white' : '#666',
                               border: '1px solid #ccc',
                               borderRadius: '3px',
@@ -738,7 +871,7 @@ export function TableViewWindow({
                               </div>
                               {(() => {
                                 const columnId = header.column.id;
-                                const filters = columnMetadataFilters[columnId] || { hasX: false, hasZ: false, mixed: false, hasTransition: false };
+                                const filters = columnMetadataFilters[columnId] || { hasX: false, hasZ: false, mixed: false, hasTransition: false, hasToggle: false };
                                 return (
                                   <>
                                     <label style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '4px', fontSize: '11px', cursor: 'pointer' }}>
@@ -780,7 +913,7 @@ export function TableViewWindow({
                                       />
                                       <span style={{ color: '#ffa500' }}>Mixed</span>
                                     </label>
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', cursor: 'pointer' }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '4px', fontSize: '11px', cursor: 'pointer' }}>
                                       <input
                                         type="checkbox"
                                         checked={filters.hasTransition}
@@ -792,6 +925,19 @@ export function TableViewWindow({
                                         }}
                                       />
                                       <span style={{ fontWeight: 'bold' }}>Transition</span>
+                                    </label>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', cursor: 'pointer' }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={filters.hasToggle}
+                                        onChange={(e) => {
+                                          setColumnMetadataFilters(prev => ({
+                                            ...prev,
+                                            [columnId]: { ...filters, hasToggle: e.target.checked }
+                                          }));
+                                        }}
+                                      />
+                                      <span style={{ color: '#2196f3' }}>Toggle</span>
                                     </label>
                                   </>
                                 );

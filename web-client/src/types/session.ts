@@ -110,6 +110,7 @@ export interface Session {
       hasZ: boolean;
       mixed: boolean;
       hasTransition: boolean;
+      hasToggle: boolean;
     }>;
     // Radix selection per column
     columnRadix?: Record<string, 'hex' | 'bin' | 'oct' | 'dec'>;

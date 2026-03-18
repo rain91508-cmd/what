@@ -322,6 +322,7 @@ export interface Tab {
     hasZ: boolean;
     mixed: boolean;
     hasTransition: boolean;
+    hasToggle: boolean;
   }>;
   // TableView radix selection per column for session save/restore
   tableColumnRadix?: Record<string, 'hex' | 'bin' | 'oct' | 'dec'>;
