@@ -3581,11 +3581,21 @@ if tile_missing_signals.is_empty() {
             // For subsequent tiles: use last value from previous tile (cross-tile continuity)
             let viewport_start_u64 = self.viewport.time_start as u64;
             let initial_value = if tile_idx == 0 && viewport_start_u64 == *tile_start {
-                // Viewport starts exactly at tile start, use bucket 0's value if available
-                // This handles the case where bucket 0 has a first transition at tile start
+                // Viewport starts exactly at tile start
+                // Check if bucket 0 exists and its first transition is not a start_value
                 if let Some(bucket) = buckets.get(&0) {
-                    // Bucket 0 exists, use its first value as initial value
-                    bucket.first.clone()
+                    // Check if bucket 0's first is a start_value (BOUNDARY_TIME_START)
+                    if bucket.first.actual_time == BOUNDARY_TIME_START {
+                        // Bucket 0's first is start_value, skip it and find the real initial value
+                        let start_value = self.signal_data.get(signal_name)
+                            .and_then(|data| data.tile_info.iter()
+                                .find(|(start, _, _, _)| *start == *tile_start)
+                                .map(|(_, _, _, value)| value));
+                        self.find_value_at_time(signal_name, *tile_start, buckets, viewport_start_u64, lod, tile_idx, bucket_data, start_value)
+                    } else {
+                        // Bucket 0 exists with real transition, use its first value as initial value
+                        bucket.first.clone()
+                    }
                 } else {
                     // Bucket 0 is empty, need to find value from start_value or previous tiles
                     // Get start_value from signal_data's tile_info
@@ -3710,6 +3720,19 @@ if tile_missing_signals.is_empty() {
                         });
                     }
                     Some(bucket) => {
+                        // Check if this bucket's first transition is a start_value (BOUNDARY_TIME_START)
+                        // If so, skip drawing this bucket and just update current_value
+                        if bucket.first.actual_time == BOUNDARY_TIME_START {
+                            // This is a start_value transition, don't draw it
+                            // Just update current_value to this transition's value
+                            current_value = bucket.first.clone();
+                            // If there's a last transition, update to that instead
+                            if let Some(ref last) = bucket.last {
+                                current_value = last.clone();
+                            }
+                            continue;
+                        }
+                        
                         if bucket.has_toggle() {
                             // First/Last pair: draw toggling
                             let first_trans = &bucket.first;
