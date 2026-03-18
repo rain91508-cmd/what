@@ -434,7 +434,7 @@ fn compare_signal_wave_data(lod_low_data: &[crate::services::SignalWaveData], lo
 /// 测试指定信号的详细对比，打印 fstapi 获取的所有 transactions
 /// 
 /// 信号: testbench.top.uut.picorv32_core.clk
-/// 起点: 0
+/// 起点: 784342160
 /// LoD: 10
 /// tile_span: 256 个 bucket
 /// tiles: 2 个
@@ -448,9 +448,9 @@ pub async fn run_detailed_signal_test(config: &ServerConfig) {
     let signal_name = "testbench.top.uut.picorv32_core.clk";
     let test_signals = vec![signal_name.to_string()];
     let lod: u32 = 10;
-    let start_time: u64 = 0;
+    let start_time: u64 = 784342160;  // 指定的 view start
     let num_buckets = 256usize;
-    let num_tiles = 4usize;
+    let num_tiles = 2usize;  // 2个 tiles
     
     let bucket_size = 2u64.pow(lod);
     let tile_span = bucket_size * num_buckets as u64;
