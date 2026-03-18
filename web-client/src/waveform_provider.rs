@@ -4050,7 +4050,13 @@ if tile_missing_signals.is_empty() {
                 }
             }
             
-            // No transitions found, use default
+            // No transitions found in previous tiles, use start_value if available
+            if let Some(start) = start_value {
+                // console_log!("[WASM]   No transitions found, using start_value: {:?}", start.value);
+                return start.clone();
+            }
+            
+            // No start_value provided, use default
             // console_log!("[WASM]   No value found, returning default '0'");
             return default_transition;
         }
