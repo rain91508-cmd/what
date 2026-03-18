@@ -2745,7 +2745,6 @@ function App() {
 
   // Handle TableView start time change
   const handleTableStartTimeChange = (newStart: number) => {
-    console.log('[App] handleTableStartTimeChange called', { newStart, activeTab });
     setTabs(prev => prev.map(tab =>
       tab.id === activeTab ? { ...tab, tableStartTime: newStart } : tab
     ))
@@ -2753,9 +2752,15 @@ function App() {
 
   // Handle TableView end time change
   const handleTableEndTimeChange = (newEnd: number) => {
-    console.log('[App] handleTableEndTimeChange called', { newEnd, activeTab });
     setTabs(prev => prev.map(tab =>
       tab.id === activeTab ? { ...tab, tableEndTime: newEnd } : tab
+    ))
+  }
+
+  // Handle TableView start time change with span preservation
+  const handleTableStartTimeChangeWithSpan = (newStart: number, newEnd: number) => {
+    setTabs(prev => prev.map(tab =>
+      tab.id === activeTab ? { ...tab, tableStartTime: newStart, tableEndTime: newEnd } : tab
     ))
   }
 
@@ -3728,6 +3733,7 @@ function App() {
         tableEndTime={activeTabData?.type === 'tableview' ? activeTabData.tableEndTime : undefined}
         onTableStartTimeChange={handleTableStartTimeChange}
         onTableEndTimeChange={handleTableEndTimeChange}
+        onTableStartTimeChangeWithSpan={handleTableStartTimeChangeWithSpan}
         onTableTimeApply={handleTableTimeApply}
         viewportStart={activeTabData?.viewport?.timeStart}
         viewportEnd={activeTabData?.viewport?.timeEnd}

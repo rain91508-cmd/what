@@ -95,6 +95,7 @@ interface ToolBarProps {
   tableEndTime?: number;    // LoD0 units
   onTableStartTimeChange?: (time: number) => void;
   onTableEndTimeChange?: (time: number) => void;
+  onTableStartTimeChangeWithSpan?: (start: number, end: number) => void;  // Update start and end together
   onTableTimeApply?: () => void;  // Apply time range and fetch data
   // Current tab type to show appropriate controls
   currentTabType?: 'source' | 'waveform' | 'tableview';
@@ -163,6 +164,7 @@ export function ToolBar({
   tableEndTime,
   onTableStartTimeChange,
   onTableEndTimeChange,
+  onTableStartTimeChangeWithSpan,
   onTableTimeApply,
   currentTabType = 'source',
   currentWaveDisplayUnitPerLoD0 = 1.0,
@@ -574,14 +576,21 @@ export function ToolBar({
 
     // Convert display unit value to LoD0 units
     const newStartLod0 = displayToLod0(numValue, effectiveTimeConfig);
-    onTableStartTimeChange(newStartLod0);
 
     // Calculate new end time based on current span (span remains unchanged)
     const spanValue = parseFloat(tableSpanInputValue);
     if (!isNaN(spanValue) && spanValue > 0) {
       const spanLod0 = displayToLod0(spanValue, effectiveTimeConfig);
       const newEndLod0 = newStartLod0 + spanLod0;
-      onTableEndTimeChange(newEndLod0);
+      // Use the combined handler to update both start and end atomically
+      if (onTableStartTimeChangeWithSpan) {
+        onTableStartTimeChangeWithSpan(newStartLod0, newEndLod0);
+      } else {
+        onTableStartTimeChange(newStartLod0);
+        onTableEndTimeChange(newEndLod0);
+      }
+    } else {
+      onTableStartTimeChange(newStartLod0);
     }
   };
 

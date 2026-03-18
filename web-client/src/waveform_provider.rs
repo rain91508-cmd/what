@@ -1896,11 +1896,6 @@ if tile_missing_signals.is_empty() {
             }
         };
         
-        web_sys::console::log_1(&JsValue::from_str(&format!(
-            "[WASM] Finding value for signal '{}' at time {}, LoD {}, bucket_data len: {}",
-            signal_name, target_time, requested_lod, signal_data.bucket_data.len()
-        )));
-        
         // For LoD > 0: find value from bucket_data using actual_time
         if requested_lod > 0 && !signal_data.bucket_data.is_empty() {
             // First, check if target_time matches exactly a first or last transition's actual_time
