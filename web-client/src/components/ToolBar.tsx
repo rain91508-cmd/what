@@ -42,6 +42,9 @@ interface ToolBarProps {
   onTimeConfigChange?: (config: TimeConfig) => void;
   // Waveform info for time unit conversion
   waveformTimeUnit?: number; // WaveformInfo.timeUnit (0=fs, 1=ps, 2=ns, 3=us, 4=ms, 5=s)
+  // Global display unit selection (shared across all tabs)
+  selectedDisplayUnit?: TimeUnit;
+  onDisplayUnitChange?: (unit: TimeUnit) => void;
   // Maximum waveform time in LoD0Unit (for validation)
   maxWaveformTimeLod0?: number;
   // Connection and file actions
@@ -168,10 +171,15 @@ export function ToolBar({
   onTableTimeApply,
   currentTabType = 'source',
   currentWaveDisplayUnitPerLoD0 = 1.0,
+  // Global display unit selection
+  selectedDisplayUnit,
+  onDisplayUnitChange,
 }: ToolBarProps) {
   // Local state for display unit input value (only committed on Enter)
   const [inputValue, setInputValue] = useState<string>('');
-  const [selectedUnit, setSelectedUnit] = useState<TimeUnit>('ns');
+  // Use global selectedDisplayUnit if provided, otherwise fall back to local state
+  const [localSelectedUnit, setLocalSelectedUnit] = useState<TimeUnit>('ns');
+  const selectedUnit = selectedDisplayUnit ?? localSelectedUnit;
   const [isEditing, setIsEditing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -216,14 +224,18 @@ export function ToolBar({
     return TIME_UNIT_MULTIPLIERS[TIME_UNIT_ENUM_TO_STR[waveformTimeUnit] ?? 'ns'];
   };
 
-  // 根据 waveformTimeUnit 更新选中单位
+  // 根据 waveformTimeUnit 更新选中单位（仅当没有全局设置时）
   useEffect(() => {
+    // 如果有全局设置的 selectedDisplayUnit，则使用它，不根据 waveformTimeUnit 自动更新
+    if (selectedDisplayUnit !== undefined) {
+      return;
+    }
     const unit = TIME_UNIT_ENUM_TO_STR[waveformTimeUnit ?? 2] ?? 'ns';
     // 只更新为有效的单位选项
     if (unit in TIME_UNIT_MULTIPLIERS) {
-      setSelectedUnit(unit);
+      setLocalSelectedUnit(unit);
     }
-  }, [waveformTimeUnit]);
+  }, [waveformTimeUnit, selectedDisplayUnit]);
 
   // Update display unit input value when timeConfig changes
   useEffect(() => {
@@ -290,7 +302,12 @@ export function ToolBar({
   };
 
   const handleUnitChange = (newUnit: TimeUnit) => {
-    setSelectedUnit(newUnit);
+    // Update local state as fallback
+    setLocalSelectedUnit(newUnit);
+    // Notify parent component if callback provided (global state management)
+    if (onDisplayUnitChange) {
+      onDisplayUnitChange(newUnit);
+    }
     // 单位改变时，重新计算输入值
     if (timeConfig && !isEditing) {
       const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;

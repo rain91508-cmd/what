@@ -121,6 +121,7 @@ function App() {
   const [currentWaveEndTime, setCurrentWaveEndTime] = useState<number>(1000000)  // Waveform end time in LoD0 units (time_unit)
   const [currentWaveDisplayUnitPerLoD0, setCurrentWaveDisplayUnitPerLoD0] = useState<number>(1)  // DisplayUnit per LoD0Unit
   const [currentWaveCustomRange, setCurrentWaveCustomRange] = useState<{ start: number; end: number } | undefined>(undefined)  // User custom time range
+  const [selectedDisplayUnit, setSelectedDisplayUnit] = useState<'fs' | 'ps' | 'ns' | 'us' | 'ms' | 's'>('ns')  // Global display unit selection (shared across all tabs)
   const [tableViewRefreshTrigger, setTableViewRefreshTrigger] = useState<number>(0)  // Trigger TableView data refresh
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(false)
   const autoCheckIntervalRef = useRef<NodeJS.Timeout | null>(null)
@@ -2634,6 +2635,67 @@ function App() {
       viewport = { timeStart: sanitized.timeStart, timeEnd: sanitized.timeEnd }
     }
 
+    // Check if current active tab is waveform and we're creating a tableview
+    // If so, inherit viewport time range and signals from expanded groups
+    let tableStartTime: number | undefined = undefined
+    let tableEndTime: number | undefined = undefined
+    let tableSignals: SignalWithFormat[] | undefined = undefined
+    let tableSignalPrefix: string | undefined = undefined
+    let tableServerPrefix: string | undefined = undefined
+    let tableSpaceBeforeBracket: boolean | undefined = undefined
+    let tableColumnRadix: Record<string, 'hex' | 'bin' | 'oct' | 'dec'> | undefined = undefined
+
+    if (isTableView) {
+      const activeWaveformTab = tabs.find(t => t.type === 'waveform' && t.id === activeTab)
+      if (activeWaveformTab) {
+        // Inherit viewport time range from waveform
+        if (activeWaveformTab.viewport) {
+          tableStartTime = activeWaveformTab.viewport.timeStart
+          tableEndTime = activeWaveformTab.viewport.timeEnd
+        }
+
+        // Inherit prefix settings from waveform tab
+        tableSignalPrefix = activeWaveformTab.signalPrefix
+        tableServerPrefix = activeWaveformTab.serverPrefix
+        tableSpaceBeforeBracket = activeWaveformTab.spaceBeforeBracket
+
+        // Extract signals from expanded groups
+        const groups = activeWaveformTab.groups || {}
+        const signalDisplayFormats = activeWaveformTab.signalDisplayFormats || {}
+        const extractedSignals: SignalWithFormat[] = []
+        const columnRadixMap: Record<string, 'hex' | 'bin' | 'oct' | 'dec'> = {}
+        let rowCounter = 0
+
+        Object.values(groups).forEach(group => {
+          if (group.expanded && group.signals) {
+            group.signals.forEach(signal => {
+              // Get the display format for this signal from waveform tab
+              const displayFormat = signalDisplayFormats[signal.unique_id] || 'hex'
+
+              extractedSignals.push({
+                globalId: signal.globalId,
+                name: signal.fullName, // Use full name, WASM will handle prefix conversion
+                row: rowCounter++,
+                width: Math.abs(signal.msb - signal.lsb) + 1,
+                drawSigId: signal.globalId,
+                displayFormat: displayFormat as 'hex' | 'bin' | 'oct' | 'dec',
+              })
+
+              // Also populate columnRadix for the dropdown menu
+              columnRadixMap[signal.fullName] = displayFormat as 'hex' | 'bin' | 'oct' | 'dec'
+            })
+          }
+        })
+
+        if (extractedSignals.length > 0) {
+          tableSignals = extractedSignals
+          tableColumnRadix = columnRadixMap
+        }
+
+        addMessage(`Created TableView from waveform: ${extractedSignals.length} signals, time range ${tableStartTime}-${tableEndTime}`)
+      }
+    }
+
     const newTab: Tab = {
       id: newId,
       label: type === 'source' ? `Source ${counter}` :
@@ -2652,11 +2714,17 @@ function App() {
       waveformTimeUnit: isWaveform ? currentWaveTimeUnit : undefined,
       waveformRange, // Save the total range for sanity checks
       // TableView specific
-      tableStartTime: isTableView ? 0 : undefined,
-      tableEndTime: isTableView ? 0 : undefined,
-      tableSignals: isTableView ? [] : undefined,
+      tableStartTime: isTableView ? (tableStartTime ?? 0) : undefined,
+      tableEndTime: isTableView ? (tableEndTime ?? 0) : undefined,
+      tableSignals: isTableView ? (tableSignals ?? []) : undefined,
       tableData: undefined,
       tableCurrentPage: isTableView ? 0 : undefined,
+      // Inherit column radix from waveform signals
+      tableColumnRadix: isTableView ? tableColumnRadix : undefined,
+      // Inherit prefix settings from waveform if available
+      signalPrefix: isTableView ? tableSignalPrefix : undefined,
+      serverPrefix: isTableView ? tableServerPrefix : undefined,
+      spaceBeforeBracket: isTableView ? tableSpaceBeforeBracket : undefined,
     }
     setTabs(prev => [...prev, newTab])
     setActiveTab(newId)
@@ -3728,6 +3796,8 @@ function App() {
         onAddTableViewTab={() => handleAddTab('tableview')}
         currentTabType={activeTabData?.type || 'source'}
         currentWaveDisplayUnitPerLoD0={currentWaveDisplayUnitPerLoD0}
+        selectedDisplayUnit={selectedDisplayUnit}
+        onDisplayUnitChange={setSelectedDisplayUnit}
         // TableView time range
         tableStartTime={activeTabData?.type === 'tableview' ? activeTabData.tableStartTime : undefined}
         tableEndTime={activeTabData?.type === 'tableview' ? activeTabData.tableEndTime : undefined}
