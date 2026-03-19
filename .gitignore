@@ -23,6 +23,8 @@ out/
 # Generated files
 *.kdb
 compile_commands.json
+Untitled.png
+hint.md
 
 # Node.js (client)
 node_modules/
