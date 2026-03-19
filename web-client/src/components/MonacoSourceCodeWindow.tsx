@@ -4,6 +4,9 @@ import * as monaco from 'monaco-editor';
 import { kdbManager } from '../modules/knowledge/kdbManager';
 import type { editor } from 'monaco-editor';
 import { LargeFileController, type FileMetadata } from '../services/largeFileController';
+import type { WaveformProviderInterface, WasmSignalInfo } from '../core/waveformProviderInterface';
+import type { DisplayFormat } from '../types/dataProvider';
+import { useWaveformProvider } from '../contexts/WaveformProviderContext';
 
 // Configure monaco loader to use local files
 // Local files are copied to public/monaco-editor during build
@@ -28,6 +31,14 @@ loader.init().catch((err) => {
   console.error('[Monaco] Loader error:', err);
 });
 
+// Global cache for editor state (key: moduleIndex_fileId)
+interface EditorStateCache {
+  viewState: editor.ICodeEditorViewState;
+  expandedLines: number[];
+  topLineNumber: number;
+}
+const editorStateCache = new Map<string, EditorStateCache>();
+
 interface MonacoSourceCodeWindowProps {
   moduleIndex: number | null;  // Selected module (for lookups)
   displayModuleIndex?: number | null;  // Displayed module (for loading source file, e.g., def_module)
@@ -39,11 +50,36 @@ interface MonacoSourceCodeWindowProps {
   moduleFullName?: string;   // Module full hierarchy name for display
   editorRef?: React.MutableRefObject<editor.IStandaloneCodeEditor | null>;
   onWordClick?: (word: string, lineNumber: number, isDoubleClick: boolean) => void;  // Click handler for word lookup
+  // Signal value expansion props
+  currentTime?: number;  // Current cursor time from waveform tab (LoD0Unit)
+  signalRadixMap?: Map<string, DisplayFormat>;  // Signal radix map from waveform tab
+  // Prefix settings for signal name conversion (from WaveformProviderContext)
+  signalPrefix?: string;      // Local prefix (removed from local signal name)
+  serverPrefix?: string;      // Server prefix (added to server signal name)
+  spaceBeforeBracket?: boolean;  // Whether to add space before bracket in signal name
 }
 
 const modelCache = new Map<string, editor.ITextModel>();
 
-function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId, startFromLine1, signalDeclarationLine, moduleStartLine, moduleEndLine, moduleFullName, editorRef: externalEditorRef, onWordClick }: MonacoSourceCodeWindowProps) {
+function MonacoSourceCodeWindow({
+  moduleIndex,
+  displayModuleIndex,
+  fileId,
+  startFromLine1,
+  signalDeclarationLine,
+  moduleStartLine,
+  moduleEndLine,
+  moduleFullName,
+  editorRef: externalEditorRef,
+  onWordClick,
+  currentTime,
+  signalRadixMap,
+  signalPrefix = '',
+  serverPrefix = '',
+  spaceBeforeBracket = false
+}: MonacoSourceCodeWindowProps) {
+  // Get shared provider from context
+  const { provider } = useWaveformProvider();
   const [content, setContent] = useState<string>('');
   const [filePath, setFilePath] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -66,6 +102,17 @@ function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId, start
   const [isDragging, setIsDragging] = useState(false);
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(0);
+
+  // Signal value expansion state
+  const expandedLines = useRef<Set<number>>(new Set());
+  const viewZones = useRef<Record<number, string>>({});
+  const loadingLines = useRef<Set<number>>(new Set());
+  const expandDecorationsRef = useRef<string[]>([]);
+
+  // Debug: log provider changes
+  useEffect(() => {
+    console.log('[MonacoSourceCodeWindow] Provider changed:', { hasProvider: !!provider, provider });
+  }, [provider]);
 
   // Apply highlight to a specific line
   const applyHighlight = useCallback((editor: editor.IStandaloneCodeEditor, line: number) => {
@@ -148,6 +195,498 @@ function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId, start
     }
   }, []);
 
+  // ==================== Signal Value Expansion Functions ====================
+
+  // Extract identifiers from line content
+  const extractIdentifiers = useCallback((lineContent: string): string[] => {
+    const identifierRegex = /\b[a-zA-Z_][a-zA-Z0-9_]*\b/g;
+    const matches = lineContent.match(identifierRegex) || [];
+
+    // Verilog/SystemVerilog keywords to exclude
+    const keywords = new Set([
+      'module', 'endmodule', 'input', 'output', 'inout', 'wire', 'reg', 'logic',
+      'integer', 'real', 'parameter', 'localparam', 'assign', 'always', 'initial',
+      'begin', 'end', 'if', 'else', 'case', 'casex', 'casez', 'endcase', 'for',
+      'while', 'repeat', 'forever', 'posedge', 'negedge', 'or', 'and', 'not',
+      'function', 'endfunction', 'task', 'endtask', 'generate', 'endgenerate',
+      'specify', 'endspecify', 'primitive', 'endprimitive', 'table', 'endtable',
+      'defparam', 'disable', 'force', 'release', 'fork', 'join', 'wait',
+      'event', 'typedef', 'enum', 'struct', 'union', 'packed', 'signed', 'unsigned',
+      'bit', 'byte', 'shortint', 'int', 'longint', 'time', 'shortreal', 'string',
+      'chandle', 'virtual', 'void', 'const', 'var', 'automatic', 'static',
+      'ref', 'extern', 'export', 'context', 'pure', 'import', 'export',
+      'extends', 'implements', 'super', 'null', 'this', 'new', 'return',
+      'break', 'continue', 'do', 'while', 'foreach', 'with', 'inside',
+      'dist', 'rand', 'randc', 'constraint', 'solve', 'before', 'soft',
+      'unique', 'priority', 'matches', 'tagged', 'accept_on', 'reject_on',
+      'sync_accept_on', 'sync_reject_on', 'eventually', 'nexttime', 'always_ff',
+      'always_comb', 'always_latch', 'assert', 'assume', 'cover', 'expect',
+      'property', 'sequence', 'clocking', 'default', 'clocking', 'disable',
+      'iff', 'strong', 'weak', 'until', 's_until', 'until_with', 's_until_with',
+      'implies', 'iff', 'not', 'and', 'or', 'intersect', 'first_match',
+      'throughout', 'within', 'ended', 'matched', 'triggered', 'posedge', 'negedge',
+      'edge', 'deassign', 'release', 'wait', 'wait_order', 'alias', 'modport',
+      'clockvar', 'input', 'output', 'inout', 'ref'
+    ]);
+
+    return [...new Set(matches.filter(id => !keywords.has(id)))];
+  }, []);
+
+  // Convert signal name for server query (apply prefix settings)
+  const convertSignalNameForServer = useCallback((localFullName: string): string => {
+    console.log('[MonacoSourceCodeWindow] Converting signal name:', {
+      localFullName,
+      signalPrefix,
+      serverPrefix,
+      spaceBeforeBracket,
+    });
+
+    // Step 1: Remove local prefix if present
+    let serverName = localFullName;
+    if (signalPrefix && localFullName.startsWith(signalPrefix)) {
+      serverName = localFullName.slice(signalPrefix.length);
+      console.log('[MonacoSourceCodeWindow] Removed local prefix:', signalPrefix, '->', serverName);
+    }
+
+    // Step 2: Add server prefix
+    if (serverPrefix) {
+      serverName = serverPrefix + serverName;
+      console.log('[MonacoSourceCodeWindow] Added server prefix:', serverPrefix, '->', serverName);
+    }
+
+    // Step 3: Handle space before bracket
+    if (spaceBeforeBracket) {
+      // Add space before [ if not already present
+      serverName = serverName.replace(/\[/g, ' [');
+      console.log('[MonacoSourceCodeWindow] Added space before bracket:', serverName);
+    }
+
+    console.log('[MonacoSourceCodeWindow] Final server name:', localFullName, '->', serverName);
+    return serverName;
+  }, [signalPrefix, serverPrefix, spaceBeforeBracket]);
+
+  // Lookup signals in KDB
+  const lookupSignals = useCallback(async (
+    identifiers: string[],
+    lookupModuleIndex: number
+  ): Promise<Array<{
+    globalId: number;
+    shortName: string;
+    fullName: string;
+    width: number;
+    msb: number;
+    lsb: number;
+  }>> => {
+    const signals: Array<{
+      globalId: number;
+      shortName: string;
+      fullName: string;
+      width: number;
+      msb: number;
+      lsb: number;
+    }> = [];
+
+    for (const id of identifiers) {
+      try {
+        const globalId = await kdbManager.findSignalByName(lookupModuleIndex, id);
+        if (globalId !== null) {
+          const signal = kdbManager.buildSignal(globalId);
+          if (signal) {
+            const width = signal.msb !== signal.lsb
+              ? signal.msb - signal.lsb + 1
+              : 1;
+            signals.push({
+              globalId,
+              shortName: signal.name,
+              fullName: signal.fullName,
+              width,
+              msb: signal.msb,
+              lsb: signal.lsb,
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('[MonacoSourceCodeWindow] Failed to lookup signal:', id, err);
+      }
+    }
+
+    return signals;
+  }, []);
+
+  // Create ViewZone for signal values
+  const createSignalValueViewZone = useCallback((
+    editor: editor.IStandaloneCodeEditor,
+    lineNumber: number,
+    signalValues: Array<{
+      shortName: string;
+      fullName: string;
+      value: string;
+      width: number;
+      msb: number;
+      lsb: number;
+      radix: DisplayFormat;
+      valueType: string;
+    }>
+  ) => {
+    const domNode = document.createElement('div');
+    domNode.className = 'signal-value-zone';
+
+    // Format time display
+    const timeNs = currentTime !== undefined ? currentTime / 1000 : 0;
+    const timeDisplay = `${timeNs.toFixed(3)} ns`;
+
+    let html = `
+      <div class="signal-zone-header">
+        <span class="time-icon">⏱</span>
+        <span class="time-label">Cursor Time:</span>
+        <span class="time-value">${timeDisplay}</span>
+      </div>
+      <table class="signal-value-table">
+        <thead>
+          <tr>
+            <th>Signal</th>
+            <th>Value</th>
+            <th>Width</th>
+            <th>Radix</th>
+          </tr>
+        </thead>
+        <tbody>
+    `;
+
+    for (const sig of signalValues) {
+      const valueClass = sig.valueType === 'has_x' ? 'value-x' :
+                         sig.valueType === 'has_z' ? 'value-z' : 'value-normal';
+      const widthStr = sig.width > 1 ? `[${sig.msb}:${sig.lsb}]` : '[0]';
+
+      html += `
+        <tr>
+          <td class="signal-name" title="${sig.fullName}">${sig.shortName}</td>
+          <td class="signal-value ${valueClass}">${sig.value}</td>
+          <td class="signal-width">${widthStr}</td>
+          <td class="signal-radix">${sig.radix}</td>
+        </tr>
+      `;
+    }
+
+    html += '</tbody></table>';
+    domNode.innerHTML = html;
+
+    // Calculate dynamic height - increased for better visibility
+    const rowHeight = 28; // Increased from 22
+    const headerHeight = 32; // Increased from 28
+    const padding = 20; // Increased from 16
+    const heightInPx = headerHeight + signalValues.length * rowHeight + padding;
+
+    editor.changeViewZones(accessor => {
+      // Remove existing zone if any
+      if (viewZones.current[lineNumber]) {
+        accessor.removeZone(viewZones.current[lineNumber]);
+      }
+
+      const zoneId = accessor.addZone({
+        afterLineNumber: lineNumber,
+        heightInPx,
+        domNode,
+      });
+
+      viewZones.current[lineNumber] = zoneId;
+    });
+  }, [currentTime]);
+
+  // Remove ViewZone
+  const removeViewZone = useCallback((
+    editor: editor.IStandaloneCodeEditor,
+    lineNumber: number
+  ) => {
+    if (!viewZones.current[lineNumber]) return;
+
+    editor.changeViewZones(accessor => {
+      accessor.removeZone(viewZones.current[lineNumber]);
+      delete viewZones.current[lineNumber];
+    });
+  }, []);
+
+  // Update expand decorations (only within module range)
+  const updateExpandDecorations = useCallback((
+    editor: editor.IStandaloneCodeEditor,
+    startLine?: number,
+    endLine?: number
+  ) => {
+    const model = editor.getModel();
+    if (!model) return;
+
+    const decorations: monaco.editor.IModelDeltaDecoration[] = [];
+    const lineCount = model.getLineCount();
+
+    // Determine range to show expand icons
+    const effectiveStartLine = startLine || 1;
+    const effectiveEndLine = endLine || lineCount;
+
+    for (let line = 1; line <= lineCount; line++) {
+      // Only show decoration if within module range
+      const isInModuleRange = line >= effectiveStartLine && line <= effectiveEndLine;
+      if (!isInModuleRange) continue;
+
+      let className = 'signal-expand-icon';
+      if (loadingLines.current.has(line)) {
+        className = 'signal-loading-icon';
+      } else if (expandedLines.current.has(line)) {
+        className = 'signal-collapse-icon';
+      }
+
+      decorations.push({
+        range: new monaco.Range(line, 1, line, 1),
+        options: {
+          isWholeLine: true,
+          glyphMarginClassName: className,
+        }
+      });
+    }
+
+    expandDecorationsRef.current = editor.deltaDecorations(
+      expandDecorationsRef.current,
+      decorations
+    );
+  }, []);
+
+  // Expand line to show signal values
+  const expandLine = useCallback(async (
+    editor: editor.IStandaloneCodeEditor,
+    lineNumber: number
+  ) => {
+    const model = editor.getModel();
+    if (!model) return;
+
+    if (!displayModuleIndex) {
+      console.warn('[MonacoSourceCodeWindow] No displayModuleIndex available');
+      return;
+    }
+
+    // Get line content
+    const lineContent = model.getLineContent(lineNumber);
+
+    // Extract identifiers
+    const identifiers = extractIdentifiers(lineContent);
+    if (identifiers.length === 0) {
+      console.log('[MonacoSourceCodeWindow] No identifiers found in line:', lineNumber);
+      return;
+    }
+
+    // Lookup signals in KDB
+    const signals = await lookupSignals(identifiers, displayModuleIndex);
+    if (signals.length === 0) {
+      console.log('[MonacoSourceCodeWindow] No matching signals found');
+      return;
+    }
+
+    // Fetch values for each signal
+    const signalValues: Array<{
+      shortName: string;
+      fullName: string;
+      value: string;
+      width: number;
+      msb: number;
+      lsb: number;
+      radix: DisplayFormat;
+      valueType: string;
+    }> = [];
+
+    // First, fetch data for all signals to populate the cache
+    // This is necessary because getSignalValueAtTime reads from the cache
+    // Use original signal names (not converted), let WASM handle the conversion
+    if (provider && currentTime !== undefined && signals.length > 0) {
+      try {
+        // Build WasmSignalInfo array for all signals using ORIGINAL names
+        // WASM will handle the signal name conversion
+        const allWasmSignals: WasmSignalInfo[] = signals.map(sig => {
+          const serverName = convertSignalNameForServer(sig.fullName);
+          const mapFormat = signalRadixMap?.get(serverName);
+          const radix: DisplayFormat = (mapFormat && mapFormat !== 'auto') ? mapFormat :
+                        (sig.width > 1 ? 'hex' : 'bin');
+          return {
+            globalId: sig.globalId,
+            name: sig.fullName,  // Use ORIGINAL name (local name), not serverName
+            row: 0,
+            width: sig.width,
+            drawSigId: sig.globalId,
+            displayFormat: radix,
+          };
+        });
+
+        // Define a small viewport around the current time to fetch data
+        const timeWindow = 1000; // Fetch 1000 units around current time
+        const viewport = {
+          startTime: Math.max(0, currentTime - timeWindow),
+          endTime: currentTime + timeWindow,
+          width: 800,
+          height: 600,
+        };
+
+        const signalNames = allWasmSignals.map(s => s.name);
+
+        console.log('[MonacoSourceCodeWindow] Fetching signal data for cache:', {
+          signalCount: signals.length,
+          signalNames,
+          viewport,
+        });
+
+        // Fetch data to populate cache
+        await provider.fetchAndGetSegments(
+          signalNames,
+          viewport,
+          allWasmSignals,
+          'hex', // Default format for fetching
+          signalPrefix,
+          serverPrefix,
+          spaceBeforeBracket
+        );
+
+        console.log('[MonacoSourceCodeWindow] Signal data fetched successfully');
+      } catch (err) {
+        console.warn('[MonacoSourceCodeWindow] Failed to fetch signal data:', err);
+      }
+    }
+
+    // Now get values for each signal
+    for (const sig of signals) {
+      // Calculate server name for display and radix lookup
+      const serverName = convertSignalNameForServer(sig.fullName);
+      
+      // Get radix from waveform tab using server name, or use default (exclude 'auto')
+      const mapFormat = signalRadixMap?.get(serverName);
+      const radix: DisplayFormat = (mapFormat && mapFormat !== 'auto') ? mapFormat :
+                    (sig.width > 1 ? 'hex' : 'bin');
+
+      console.log('[MonacoSourceCodeWindow] Processing signal:', {
+        shortName: sig.shortName,
+        fullName: sig.fullName,
+        serverName,
+        globalId: sig.globalId,
+        width: sig.width,
+        radix,
+        currentTime,
+        hasProvider: !!provider,
+      });
+
+      try {
+        if (provider && currentTime !== undefined) {
+          // Use ORIGINAL signal name for cache lookup
+          // The cache is populated by fetchAndGetSegments using original names
+          const originalSignalName = sig.fullName;
+          
+          // Build minimal WasmSignalInfo array for the provider
+          const wasmSignals: WasmSignalInfo[] = [{
+            globalId: sig.globalId,
+            name: originalSignalName,  // Use ORIGINAL name for cache lookup
+            row: 0,
+            width: sig.width,
+            drawSigId: sig.globalId,
+            displayFormat: radix,
+          }];
+
+          console.log('[MonacoSourceCodeWindow] Calling getSignalValueAtTime with:', {
+            signalName: originalSignalName,
+            time: currentTime,
+            wasmSignals,
+            wasmSignalsString: JSON.stringify(wasmSignals),
+            radix,
+          });
+
+          const valueInfo = await provider.getSignalValueAtTime(
+            originalSignalName,  // Use ORIGINAL name for cache lookup
+            currentTime,
+            wasmSignals,
+            radix,
+            signalPrefix,
+            serverPrefix,
+            spaceBeforeBracket
+          );
+
+          console.log('[MonacoSourceCodeWindow] getSignalValueAtTime result:', {
+            signalName: originalSignalName,
+            valueInfo,
+          });
+
+          if (valueInfo) {
+            // Handle both camelCase (displayStr) and snake_case (display_str) from WASM
+            const displayStr = (valueInfo as any).displayStr || (valueInfo as any).display_str || '0x0';
+            const valueType = (valueInfo as any).valueType || (valueInfo as any).value_type || 'normal';
+            
+            signalValues.push({
+              ...sig,
+              value: displayStr,
+              radix,
+              valueType: valueType,
+            });
+          }
+        } else {
+          console.log('[MonacoSourceCodeWindow] Skipping signal - no provider or currentTime:', {
+            hasProvider: !!provider,
+            currentTime,
+          });
+        }
+      } catch (err) {
+        console.warn('[MonacoSourceCodeWindow] Failed to get value for', serverName, err);
+      }
+    }
+
+    console.log('[MonacoSourceCodeWindow] Signal values collected:', {
+      count: signalValues.length,
+      signals: signalValues.map(s => ({ name: s.shortName, value: s.value })),
+    });
+
+    if (signalValues.length === 0) {
+      console.log('[MonacoSourceCodeWindow] No signal values available');
+      return;
+    }
+
+    // Create ViewZone
+    createSignalValueViewZone(editor, lineNumber, signalValues);
+  }, [currentTime, displayModuleIndex, provider, signalRadixMap, extractIdentifiers, lookupSignals, createSignalValueViewZone]);
+
+  // Toggle line expansion
+  const toggleLineExpansion = useCallback(async (
+    editor: editor.IStandaloneCodeEditor,
+    lineNumber: number
+  ) => {
+    const isExpanded = expandedLines.current.has(lineNumber);
+
+    if (isExpanded) {
+      // Collapse
+      removeViewZone(editor, lineNumber);
+      expandedLines.current.delete(lineNumber);
+    } else {
+      // Expand
+      if (!provider) {
+        console.log('[MonacoSourceCodeWindow] No waveform provider available. Please load a waveform first.');
+        alert('No waveform loaded. Please open a waveform file first to view signal values.');
+        return;
+      }
+
+      if (currentTime === undefined) {
+        console.log('[MonacoSourceCodeWindow] No current time available');
+        alert('No cursor time available. Please open a waveform tab first.');
+        return;
+      }
+
+      if (!displayModuleIndex) {
+        console.log('[MonacoSourceCodeWindow] No displayModuleIndex available');
+        return;
+      }
+
+      loadingLines.current.add(lineNumber);
+      updateExpandDecorations(editor, moduleStartLine, moduleEndLine);
+
+      try {
+        await expandLine(editor, lineNumber);
+        expandedLines.current.add(lineNumber);
+      } finally {
+        loadingLines.current.delete(lineNumber);
+        updateExpandDecorations(editor, moduleStartLine, moduleEndLine);
+      }
+    }
+  }, [currentTime, displayModuleIndex, moduleStartLine, moduleEndLine, expandLine, removeViewZone, updateExpandDecorations, provider]);
+
   // Handle drag start for resizing module info width
   const handleDragStart = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -183,6 +722,23 @@ function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId, start
   const handleEditorDidMount = useCallback((editor: editor.IStandaloneCodeEditor) => {
     editorRef.current = editor;
     console.log('[MonacoSourceCodeWindow] Editor mounted');
+
+    // Restore state if available
+    const cacheKey = `${displayModuleIndex}_${fileId}`;
+    const savedState = editorStateCache.get(cacheKey);
+    if (savedState) {
+      // Restore view state (scroll position, cursor position)
+      editor.restoreViewState(savedState.viewState);
+      console.log('[MonacoSourceCodeWindow] Restored view state for:', cacheKey);
+
+      // Restore expanded lines after a short delay to ensure editor is ready
+      setTimeout(() => {
+        savedState.expandedLines.forEach(lineNumber => {
+          expandLine(editor, lineNumber);
+        });
+        console.log('[MonacoSourceCodeWindow] Restored expanded lines:', savedState.expandedLines);
+      }, 100);
+    }
 
     // Handle single click - use onMouseDown
     const handleMouseDown = (e: monaco.editor.IEditorMouseEvent) => {
@@ -253,9 +809,30 @@ function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId, start
       }
     };
 
+    // Handle glyph margin click for signal value expansion
+    const handleGlyphMarginClick = (e: monaco.editor.IEditorMouseEvent) => {
+      if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
+        return;
+      }
+
+      const lineNumber = e.target.position?.lineNumber;
+      if (!lineNumber) return;
+
+      // Check if line is within display module range (same logic as driver lookup)
+      if (moduleStartLine && moduleEndLine) {
+        if (lineNumber < moduleStartLine || lineNumber > moduleEndLine) {
+          console.log('[MonacoSourceCodeWindow] Click outside display module range:', lineNumber);
+          return; // Silently ignore clicks outside module range
+        }
+      }
+
+      toggleLineExpansion(editor, lineNumber);
+    };
+
     // Subscribe to events
     const disposable1 = editor.onMouseDown(handleMouseDown);
     const disposable2 = editor.onDidChangeCursorSelection(handleSelectionChange);
+    const disposable4 = editor.onMouseDown(handleGlyphMarginClick);
 
     // Handle scroll for large file mode
     const disposable3 = editor.onDidScrollChange(async () => {
@@ -288,15 +865,37 @@ function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId, start
       if (moduleStartLine && moduleEndLine && totalLines > 0) {
         applyGrayOutDecoration(editor, moduleStartLine, moduleEndLine, totalLines);
       }
+
+      // Initialize expand decorations (only within module range)
+      updateExpandDecorations(editor, moduleStartLine, moduleEndLine);
     }, 100);
 
     // Cleanup function
     return () => {
+      // Save state before unmounting
+      const cacheKey = `${displayModuleIndex}_${fileId}`;
+      const viewState = editor.saveViewState();
+      const expandedLines = Object.keys(viewZones.current).map(Number);
+      const topLineNumber = editor.getVisibleRanges()[0]?.startLineNumber || 1;
+
+      if (viewState) {
+        editorStateCache.set(cacheKey, {
+          viewState,
+          expandedLines,
+          topLineNumber,
+        });
+        console.log('[MonacoSourceCodeWindow] Saved state for:', cacheKey, {
+          expandedLines,
+          topLineNumber,
+        });
+      }
+
       disposable1.dispose();
       disposable2.dispose();
       disposable3.dispose();
+      disposable4.dispose();
     };
-  }, [highlightLine, applyHighlight, moduleStartLine, moduleEndLine, content, applyGrayOutDecoration, onWordClick, windowStartLine]);
+  }, [highlightLine, applyHighlight, moduleStartLine, moduleEndLine, content, applyGrayOutDecoration, onWordClick, windowStartLine, toggleLineExpansion, displayModuleIndex, fileId]);
 
   // Load source file when module or highlight settings change
   useEffect(() => {
@@ -770,6 +1369,92 @@ function MonacoSourceCodeWindow({ moduleIndex, displayModuleIndex, fileId, start
         }
         .monaco-editor .grayed-out-line {
           background-color: rgba(200, 200, 200, 0.25) !important;
+        }
+        /* Signal value expansion styles */
+        /* Default: hide expand icons */
+        .monaco-editor .signal-expand-icon {
+          background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path fill="%23666" d="M6 4l4 4-4 4V4z"/></svg>') center no-repeat;
+          cursor: pointer;
+          opacity: 0;
+          transition: opacity 0.2s;
+        }
+        /* Show expand icon on line hover */
+        .monaco-editor .view-line:hover .signal-expand-icon {
+          opacity: 0.5;
+        }
+        .monaco-editor .signal-expand-icon:hover {
+          opacity: 1 !important;
+        }
+        /* Collapse icon is always visible when expanded */
+        .monaco-editor .signal-collapse-icon {
+          background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path fill="%231976d2" d="M4 6l4 4 4-4H4z"/></svg>') center no-repeat;
+          cursor: pointer;
+          opacity: 1;
+        }
+        /* Loading icon is always visible when loading */
+        .monaco-editor .signal-loading-icon {
+          background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" stroke="%23999" stroke-width="2" fill="none" stroke-dasharray="20" stroke-dashoffset="0"><animateTransform attributeName="transform" type="rotate" from="0 8 8" to="360 8 8" dur="1s" repeatCount="indefinite"/></circle></svg>') center no-repeat;
+          opacity: 1;
+        }
+        .monaco-editor .signal-value-zone {
+          background: linear-gradient(to right, #f8f9fa, #ffffff);
+          border-left: 3px solid #1976d2;
+          border-radius: 0 4px 4px 0;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          margin: 4px 0 4px 20px;
+          padding: 8px 12px;
+          font-family: 'Consolas', 'Monaco', monospace;
+          font-size: 12px;
+        }
+        .signal-zone-header {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin-bottom: 8px;
+          padding-bottom: 6px;
+          border-bottom: 1px solid #e0e0e0;
+          color: #666;
+          font-size: 11px;
+        }
+        .signal-zone-header .time-value {
+          color: #1976d2;
+          font-weight: 600;
+        }
+        .signal-value-table {
+          width: 100%;
+          border-collapse: collapse;
+        }
+        .signal-value-table th {
+          text-align: left;
+          padding: 4px 8px;
+          color: #999;
+          font-size: 10px;
+          font-weight: normal;
+          text-transform: uppercase;
+        }
+        .signal-value-table td {
+          padding: 4px 8px;
+        }
+        .signal-name {
+          color: #1976d2;
+          font-weight: 500;
+        }
+        .signal-value {
+          font-weight: 500;
+          font-family: 'Consolas', monospace;
+        }
+        .signal-value.value-x {
+          color: #ff5722;
+        }
+        .signal-value.value-z {
+          color: #ff9800;
+        }
+        .signal-value.value-normal {
+          color: #333;
+        }
+        .signal-width, .signal-radix {
+          color: #666;
+          font-size: 10px;
         }
       `}</style>
     </div>

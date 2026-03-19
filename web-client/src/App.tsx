@@ -82,6 +82,7 @@ import type { Signal } from './types/kdb'
 import type { WaveformInfo, ColumnWidths, TimeConfig, Tab, NavigationHistoryEntry, SignalGroup } from './components/TabPanel'
 import { initTimeConfig, parseTimeUnitStr } from './components/TabPanel'
 import type { SignalWithFormat, RawSignalValuesResult } from './core/waveformProviderInterface'
+import type { DisplayFormat } from './types/dataProvider'
 
 // 默认时间配置
 // DisplayUnitPerLoD0Unit = 1 表示 1 DisplayUnit = 1 LoD0Unit
@@ -237,6 +238,50 @@ function App() {
 
   // Get shared waveform provider
   const { provider: waveformProvider, isLoading: isProviderLoading } = useWaveformProvider()
+
+  // Get last active waveform tab's cursor time
+  const getLastActiveWaveformCursorTime = useCallback((): number | undefined => {
+    // First, check if there's a currently active waveform tab
+    const currentWaveformTab = tabs.find(t =>
+      t.id === activeTab && t.type === 'waveform'
+    )
+
+    if (currentWaveformTab?.cursorPosition !== undefined) {
+      return currentWaveformTab.cursorPosition
+    }
+
+    // If no current waveform tab, find the most recent one with cursorPosition
+    // Sort by last access time or just find any waveform tab with cursorPosition
+    for (let i = tabs.length - 1; i >= 0; i--) {
+      const tab = tabs[i]
+      if (tab.type === 'waveform' && tab.cursorPosition !== undefined) {
+        return tab.cursorPosition
+      }
+    }
+
+    return undefined
+  }, [tabs, activeTab])
+
+  // Build signal radix map from active waveform tab
+  const getSignalRadixMap = useCallback((): Map<string, DisplayFormat> => {
+    const radixMap = new Map<string, DisplayFormat>()
+
+    // Find active waveform tab
+    const activeWaveformTab = tabs.find(t =>
+      t.id === activeTab && t.type === 'waveform'
+    )
+
+    if (activeWaveformTab?.signals && activeWaveformTab?.signalDisplayFormats) {
+      for (const signal of activeWaveformTab.signals) {
+        const format = activeWaveformTab.signalDisplayFormats[signal.unique_id]
+        if (format) {
+          radixMap.set(signal.name, format)
+        }
+      }
+    }
+
+    return radixMap
+  }, [tabs, activeTab])
   
   // Panel sizes
   const [hierarchyWidth, setHierarchyWidth] = useState(220)
@@ -3901,10 +3946,16 @@ function App() {
                   signalDeclarationLine={activeTabData.signalDeclarationLine}
                   moduleStartLine={activeTabData.moduleStartLine}
                   moduleEndLine={activeTabData.moduleEndLine}
-                  moduleFullName={activeTabData.displayModuleIndex ? kdbManager.calculateModuleFullName(activeTabData.displayModuleIndex) : 
+                  moduleFullName={activeTabData.displayModuleIndex ? kdbManager.calculateModuleFullName(activeTabData.displayModuleIndex) :
                     activeTabData.moduleIndex ? kdbManager.calculateModuleFullName(activeTabData.moduleIndex) : undefined}
                   editorRef={monacoEditorRef}
                   onWordClick={handleWordClick}
+                  currentTime={getLastActiveWaveformCursorTime()}
+                  signalRadixMap={getSignalRadixMap()}
+
+                  signalPrefix={activeTabData.signalPrefix ?? currentWaveSignalPrefix}
+                  serverPrefix={activeTabData.serverPrefix ?? currentWaveSignalServerPrefix}
+                  spaceBeforeBracket={activeTabData.spaceBeforeBracket ?? currentWaveSignalSpaceBeforeBracket}
                 />
               </Suspense>
             ) : activeTabData?.type === 'tableview' ? (

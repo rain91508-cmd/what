@@ -165,7 +165,10 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
     signalName: string,
     time: number,
     signals: WasmSignalInfo[],
-    displayFormat?: DisplayFormat
+    displayFormat?: DisplayFormat,
+    signalPrefix?: string,
+    serverPrefix?: string,
+    spaceBeforeBracket?: boolean
   ): Promise<ValueInfo | null> {
     try {
       return await this.sendMessage('GET_SIGNAL_VALUE_AT_TIME', {
@@ -173,6 +176,9 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
         time,
         signals,
         displayFormat,
+        signalPrefix,
+        serverPrefix,
+        spaceBeforeBracket,
       });
     } catch (error) {
       console.warn('[WorkerWaveformProvider] getSignalValueAtTime failed:', error);
@@ -186,13 +192,19 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
   async findTransitionsAround(
     signalName: string,
     time: number,
-    signals: WasmSignalInfo[]
+    signals: WasmSignalInfo[],
+    signalPrefix?: string,
+    serverPrefix?: string,
+    spaceBeforeBracket?: boolean
   ): Promise<{ prev: number | null; next: number | null }> {
     try {
       return await this.sendMessage('FIND_TRANSITIONS_AROUND', {
         signalName,
         time,
         signals,
+        signalPrefix,
+        serverPrefix,
+        spaceBeforeBracket,
       });
     } catch (error) {
       console.warn('[WorkerWaveformProvider] findTransitionsAround failed:', error);
@@ -229,7 +241,10 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
     signalNames: string[],
     viewport: ViewportConfig,
     signals: WasmSignalInfo[],
-    displayFormat?: DisplayFormat
+    displayFormat?: DisplayFormat,
+    signalPrefix?: string,
+    serverPrefix?: string,
+    spaceBeforeBracket?: boolean
   ): Promise<RenderSegment[]> {
     try {
       const segments = await this.sendMessage('FETCH_AND_GET_SEGMENTS', {
@@ -237,6 +252,9 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
         viewport,
         signals,
         displayFormat,
+        signalPrefix,
+        serverPrefix,
+        spaceBeforeBracket,
       });
 
       if (!segments || !Array.isArray(segments)) {

@@ -137,8 +137,8 @@ export function TableViewWindow({
     [columnId: string]: 'hex' | 'bin' | 'oct' | 'dec';
   }>(initialColumnRadix || {});
   
-  // Early exit on insufficient transitions
-  const [earlyExitOnInsufficientTransitions, setEarlyExitOnInsufficientTransitions] = useState(false);
+  // Early exit on insufficient transitions (default to true for better performance)
+  const [earlyExitOnInsufficientTransitions, setEarlyExitOnInsufficientTransitions] = useState(true);
   // Max result count
   const [resultMax, setResultMax] = useState(100);
   // Show warning message when transition count < 3

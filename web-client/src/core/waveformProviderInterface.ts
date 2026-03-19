@@ -235,12 +235,18 @@ export interface WaveformProviderInterface {
    * @param time 时间点
    * @param signals 信号列表（参数传递，不依赖内部状态）
    * @param displayFormat 显示格式
+   * @param signalPrefix Local prefix (removed from local signal name)
+   * @param serverPrefix Server prefix (added to server signal name)
+   * @param spaceBeforeBracket Whether to add space before bracket
    */
   getSignalValueAtTime(
     signalName: string,
     time: number,
     signals: WasmSignalInfo[],
-    displayFormat?: DisplayFormat
+    displayFormat?: DisplayFormat,
+    signalPrefix?: string,
+    serverPrefix?: string,
+    spaceBeforeBracket?: boolean
   ): Promise<ValueInfo | null>;
 
   /**
@@ -248,11 +254,17 @@ export interface WaveformProviderInterface {
    * @param signalName 信号名称
    * @param time 时间点
    * @param signals 信号列表（参数传递，不依赖内部状态）
+   * @param signalPrefix Local prefix (removed from local signal name)
+   * @param serverPrefix Server prefix (added to server signal name)
+   * @param spaceBeforeBracket Whether to add space before bracket
    */
   findTransitionsAround(
     signalName: string,
     time: number,
-    signals: WasmSignalInfo[]
+    signals: WasmSignalInfo[],
+    signalPrefix?: string,
+    serverPrefix?: string,
+    spaceBeforeBracket?: boolean
   ): Promise<{ prev: number | null; next: number | null }>;
 
   /**
@@ -271,12 +283,18 @@ export interface WaveformProviderInterface {
    * @param viewport 视口配置
    * @param signals 信号列表
    * @param displayFormat 显示格式
+   * @param signalPrefix Local prefix (removed from local signal name)
+   * @param serverPrefix Server prefix (added to server signal name)
+   * @param spaceBeforeBracket Whether to add space before bracket
    */
   fetchAndGetSegments(
     signalNames: string[],
     viewport: ViewportConfig,
     signals: WasmSignalInfo[],
-    displayFormat?: DisplayFormat
+    displayFormat?: DisplayFormat,
+    signalPrefix?: string,
+    serverPrefix?: string,
+    spaceBeforeBracket?: boolean
   ): Promise<RenderSegment[]>;
 
   /**

@@ -285,10 +285,40 @@ function handleUnregisterCanvas(payload: any, id: number): void {
 async function handleGetSignalValueAtTime(payload: any, id: number): Promise<void> {
   if (!wasmProvider) throw new Error('Provider not initialized');
 
-  const { signalName, time, displayFormat } = payload;
+  const { signalName, time, signals, displayFormat, signalPrefix, serverPrefix, spaceBeforeBracket } = payload;
 
-  // 直接使用传入的 displayFormat，不再从 signals 中查找
-  // 因为 signals 中的 displayFormat 可能不是最新的
+  // Update WASM provider prefix settings if provided
+  if (signalPrefix !== undefined) {
+    wasmProvider.signal_prefix = signalPrefix;
+  }
+  if (serverPrefix !== undefined) {
+    wasmProvider.server_prefix = serverPrefix;
+  }
+  if (spaceBeforeBracket !== undefined) {
+    wasmProvider.space_before_bracket = spaceBeforeBracket;
+  }
+
+  // 设置信号列表（参数传递）
+  if (signals) {
+    const wasmSignals = signals.map((sig: any) => ({
+      global_id: sig.globalId,
+      name: sig.name,
+      row: sig.row,
+      width: sig.width,
+      draw_sig_id: sig.drawSigId,
+      bit_extract: sig.bitExtract
+        ? {
+            parent_name: sig.bitExtract.parentName,
+            msb: sig.bitExtract.msb,
+            lsb: sig.bitExtract.lsb,
+          }
+        : undefined,
+      display_format: sig.displayFormat,
+    }));
+    wasmProvider.set_draw_list(wasmSignals);
+  }
+
+  // 直接使用传入的 displayFormat
   const signalDisplayFormat = displayFormat;
 
   const value = wasmProvider.get_signal_value_at_time(signalName, time, signalDisplayFormat);
@@ -301,7 +331,18 @@ async function handleGetSignalValueAtTime(payload: any, id: number): Promise<voi
 async function handleFindTransitionsAround(payload: any, id: number): Promise<void> {
   if (!wasmProvider) throw new Error('Provider not initialized');
 
-  const { signalName, time, signals } = payload;
+  const { signalName, time, signals, signalPrefix, serverPrefix, spaceBeforeBracket } = payload;
+
+  // Update WASM provider prefix settings if provided
+  if (signalPrefix !== undefined) {
+    wasmProvider.signal_prefix = signalPrefix;
+  }
+  if (serverPrefix !== undefined) {
+    wasmProvider.server_prefix = serverPrefix;
+  }
+  if (spaceBeforeBracket !== undefined) {
+    wasmProvider.space_before_bracket = spaceBeforeBracket;
+  }
 
   // 设置信号列表（参数传递）
   if (signals) {
@@ -410,7 +451,18 @@ async function handleGetSignalValuesAtTransitions(payload: any, id: number): Pro
 async function handleFetchAndGetSegments(payload: any, id: number): Promise<void> {
   if (!wasmProvider) throw new Error('Provider not initialized');
 
-  const { signalNames, viewport, signals, displayFormat } = payload;
+  const { signalNames, viewport, signals, displayFormat, signalPrefix, serverPrefix, spaceBeforeBracket } = payload;
+
+  // Update WASM provider prefix settings if provided
+  if (signalPrefix !== undefined) {
+    wasmProvider.signal_prefix = signalPrefix;
+  }
+  if (serverPrefix !== undefined) {
+    wasmProvider.server_prefix = serverPrefix;
+  }
+  if (spaceBeforeBracket !== undefined) {
+    wasmProvider.space_before_bracket = spaceBeforeBracket;
+  }
 
   // 设置视口（参数传递）
   if (viewport) {
