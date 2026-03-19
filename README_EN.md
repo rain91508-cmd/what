@@ -481,6 +481,13 @@ The source code window is used to view Verilog/SystemVerilog code:
 - Toolbar ← → buttons for forward/backward navigation
 - Support cross-file navigation history
 
+**Signal Value Expansion Display:**
+- Click the expand icon (▶) on the left side of the code line to expand and display all signal values on that line at the current cursor time
+- After expansion, signal name, current value, bit width, and other information are displayed
+- Supports multi-radix display (binary, hexadecimal, etc.), automatically inherits display format settings from the waveform window
+- Click the expand icon again to collapse the display
+- Expansion state is automatically saved and restored when switching tabs
+
 #### 4.3.5 Waveform Window
 
 The waveform window is used to view simulation waveforms:

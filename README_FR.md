@@ -481,6 +481,13 @@ La fenêtre de code source est utilisée pour visualiser le code Verilog/SystemV
 - Boutons ← → de la barre d'outils pour la navigation avant/arrière
 - Support de l'historique de navigation inter-fichiers
 
+**Affichage Développé des Valeurs de Signaux :**
+- Cliquer sur l'icône de développement (▶) à gauche de la ligne de code pour développer et afficher toutes les valeurs des signaux sur cette ligne au temps actuel du curseur
+- Après développement, le nom du signal, la valeur actuelle, la largeur de bits et d'autres informations sont affichés
+- Prend en charge l'affichage multi-base (binaire, hexadécimal, etc.), hérite automatiquement des paramètres de format d'affichage de la fenêtre de formes d'onde
+- Cliquer à nouveau sur l'icône de développement pour réduire l'affichage
+- L'état de développement est automatiquement sauvegardé et restauré lors du changement d'onglet
+
 #### 4.3.5 Fenêtre de Formes d'Onde
 
 La fenêtre de formes d'onde est utilisée pour visualiser les formes d'onde de simulation :

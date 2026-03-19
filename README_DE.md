@@ -481,6 +481,13 @@ Das Quellcode-Fenster wird verwendet, um Verilog/SystemVerilog-Code anzuzeigen:
 - Toolbar-Buttons ← → für Vorwärts-/Rückwärts-Navigation
 - Unterstützung für Cross-File-Navigationsverlauf
 
+**Erweiterte Signalauswertung:**
+- Klicken Sie auf das Erweiterungssymbol (▶) links neben der Codezeile, um alle Signalwerte in dieser Zeile zur aktuellen Cursor-Zeit anzuzeigen
+- Nach dem Erweitern werden Signalname, aktueller Wert, Bitbreite und weitere Informationen angezeigt
+- Unterstützt mehrere Zahlensysteme (Binär, Hexadezimal, etc.) und erbt automatisch die Anzeigeformateinstellungen des Wellenformfensters
+- Klicken Sie erneut auf das Erweiterungssymbol, um die Anzeige zu reduzieren
+- Der Erweiterungszustand wird beim Wechseln von Tabs automatisch gespeichert und wiederhergestellt
+
 #### 4.3.5 Wellenformfenster
 
 Das Wellenformfenster wird verwendet, um Simulationswellenformen anzuzeigen:
