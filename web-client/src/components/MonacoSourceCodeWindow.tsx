@@ -358,7 +358,7 @@ function MonacoSourceCodeWindow({
     // Calculate dynamic height - increased for better visibility
     const rowHeight = 28; // Increased from 22
     const headerHeight = 32; // Increased from 28
-    const padding = 20; // Increased from 16
+    const padding = 24; // Increased from 20 to accommodate bottom margin/padding
     const heightInPx = headerHeight + signalValues.length * rowHeight + padding;
 
     editor.changeViewZones(accessor => {
@@ -1558,8 +1558,8 @@ function MonacoSourceCodeWindow({
           border-left: 3px solid #1976d2;
           border-radius: 0 4px 4px 0;
           box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-          margin: 4px 0 4px 20px;
-          padding: 8px 12px;
+          margin: 4px 0 8px 20px;
+          padding: 8px 12px 12px 12px;
           font-family: 'Consolas', 'Monaco', monospace;
           font-size: 12px;
         }
