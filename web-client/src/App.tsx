@@ -3939,6 +3939,7 @@ function App() {
               <Suspense fallback={<div style={{ padding: '20px', color: '#888' }}>Loading editor...</div>}>
                 <MonacoSourceCodeWindow
                   key={activeTabData.id}
+                  tabId={activeTabData.id}
                   moduleIndex={activeTabData.moduleIndex || null}
                   displayModuleIndex={activeTabData.displayModuleIndex || null}
                   fileId={activeTabData.fileId || null}

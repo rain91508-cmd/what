@@ -36,10 +36,12 @@ interface EditorStateCache {
   viewState: editor.ICodeEditorViewState;
   expandedLines: number[];
   topLineNumber: number;
+  cursorLineNumber: number | null;  // Mouse click line position
 }
 const editorStateCache = new Map<string, EditorStateCache>();
 
 interface MonacoSourceCodeWindowProps {
+  tabId: string;  // Tab ID for state caching
   moduleIndex: number | null;  // Selected module (for lookups)
   displayModuleIndex?: number | null;  // Displayed module (for loading source file, e.g., def_module)
   fileId?: number | null;      // File ID (for loading file directly when displayModuleIndex is 0)
@@ -62,6 +64,7 @@ interface MonacoSourceCodeWindowProps {
 const modelCache = new Map<string, editor.ITextModel>();
 
 function MonacoSourceCodeWindow({
+  tabId,
   moduleIndex,
   displayModuleIndex,
   fileId,
@@ -109,19 +112,14 @@ function MonacoSourceCodeWindow({
   const loadingLines = useRef<Set<number>>(new Set());
   const expandDecorationsRef = useRef<string[]>([]);
 
-  // Debug: log provider changes
-  useEffect(() => {
-    console.log('[MonacoSourceCodeWindow] Provider changed:', { hasProvider: !!provider, provider });
-  }, [provider]);
-
   // Apply highlight to a specific line
-  const applyHighlight = useCallback((editor: editor.IStandaloneCodeEditor, line: number) => {
+  const applyHighlight = useCallback((editor: editor.IStandaloneCodeEditor, line: number, revealInCenter: boolean = true) => {
     if (!line) return;
     
-    console.log('[MonacoSourceCodeWindow] Applying highlight to line:', line);
-    
-    // Reveal the line in center of view
-    editor.revealLineInCenter(line);
+    // Reveal the line in center of view only if requested
+    if (revealInCenter) {
+      editor.revealLineInCenter(line);
+    }
     
     // Use Monaco's built-in line highlighting via selection
     editor.setSelection(new monaco.Range(line, 1, line, 1));
@@ -148,8 +146,6 @@ function MonacoSourceCodeWindow({
   // Apply gray out decoration for lines outside module range
   const applyGrayOutDecoration = useCallback((editor: editor.IStandaloneCodeEditor, startLine: number, endLine: number, totalLines: number) => {
     if (!startLine || !endLine || totalLines <= 0) return;
-
-    console.log('[MonacoSourceCodeWindow] Applying gray out decoration:', startLine, '-', endLine, 'of', totalLines);
 
     // Clear previous gray out decorations
     if (grayOutDecorationsRef.current.length > 0) {
@@ -191,7 +187,6 @@ function MonacoSourceCodeWindow({
 
     if (decorations.length > 0) {
       grayOutDecorationsRef.current = editor.deltaDecorations([], decorations);
-      console.log('[MonacoSourceCodeWindow] Applied', decorations.length, 'gray out decorations');
     }
   }, []);
 
@@ -234,34 +229,23 @@ function MonacoSourceCodeWindow({
 
   // Convert signal name for server query (apply prefix settings)
   const convertSignalNameForServer = useCallback((localFullName: string): string => {
-    console.log('[MonacoSourceCodeWindow] Converting signal name:', {
-      localFullName,
-      signalPrefix,
-      serverPrefix,
-      spaceBeforeBracket,
-    });
-
     // Step 1: Remove local prefix if present
     let serverName = localFullName;
     if (signalPrefix && localFullName.startsWith(signalPrefix)) {
       serverName = localFullName.slice(signalPrefix.length);
-      console.log('[MonacoSourceCodeWindow] Removed local prefix:', signalPrefix, '->', serverName);
     }
 
     // Step 2: Add server prefix
     if (serverPrefix) {
       serverName = serverPrefix + serverName;
-      console.log('[MonacoSourceCodeWindow] Added server prefix:', serverPrefix, '->', serverName);
     }
 
     // Step 3: Handle space before bracket
     if (spaceBeforeBracket) {
       // Add space before [ if not already present
       serverName = serverName.replace(/\[/g, ' [');
-      console.log('[MonacoSourceCodeWindow] Added space before bracket:', serverName);
     }
 
-    console.log('[MonacoSourceCodeWindow] Final server name:', localFullName, '->', serverName);
     return serverName;
   }, [signalPrefix, serverPrefix, spaceBeforeBracket]);
 
@@ -455,29 +439,35 @@ function MonacoSourceCodeWindow({
     lineNumber: number
   ) => {
     const model = editor.getModel();
-    if (!model) return;
+    if (!model) {
+      console.warn('[Expand] No model available for line:', lineNumber);
+      return;
+    }
 
     if (!displayModuleIndex) {
-      console.warn('[MonacoSourceCodeWindow] No displayModuleIndex available');
+      console.warn('[Expand] No displayModuleIndex available for line:', lineNumber);
       return;
     }
 
     // Get line content
     const lineContent = model.getLineContent(lineNumber);
+    console.log('[Expand] Expanding line', lineNumber, 'content:', lineContent.substring(0, 50));
 
     // Extract identifiers
     const identifiers = extractIdentifiers(lineContent);
     if (identifiers.length === 0) {
-      console.log('[MonacoSourceCodeWindow] No identifiers found in line:', lineNumber);
+      console.log('[Expand] No identifiers found in line:', lineNumber);
       return;
     }
+    console.log('[Expand] Found identifiers:', identifiers);
 
     // Lookup signals in KDB
     const signals = await lookupSignals(identifiers, displayModuleIndex);
     if (signals.length === 0) {
-      console.log('[MonacoSourceCodeWindow] No matching signals found');
+      console.log('[Expand] No matching signals found for line:', lineNumber);
       return;
     }
+    console.log('[Expand] Found signals:', signals.map(s => s.shortName));
 
     // Fetch values for each signal
     const signalValues: Array<{
@@ -524,14 +514,8 @@ function MonacoSourceCodeWindow({
 
         const signalNames = allWasmSignals.map(s => s.name);
 
-        console.log('[MonacoSourceCodeWindow] Fetching signal data for cache:', {
-          signalCount: signals.length,
-          signalNames,
-          viewport,
-        });
-
         // Fetch data to populate cache
-        await provider.fetchAndGetSegments(
+        const segments = await provider.fetchAndGetSegments(
           signalNames,
           viewport,
           allWasmSignals,
@@ -540,8 +524,6 @@ function MonacoSourceCodeWindow({
           serverPrefix,
           spaceBeforeBracket
         );
-
-        console.log('[MonacoSourceCodeWindow] Signal data fetched successfully');
       } catch (err) {
         console.warn('[MonacoSourceCodeWindow] Failed to fetch signal data:', err);
       }
@@ -556,17 +538,6 @@ function MonacoSourceCodeWindow({
       const mapFormat = signalRadixMap?.get(serverName);
       const radix: DisplayFormat = (mapFormat && mapFormat !== 'auto') ? mapFormat :
                     (sig.width > 1 ? 'hex' : 'bin');
-
-      console.log('[MonacoSourceCodeWindow] Processing signal:', {
-        shortName: sig.shortName,
-        fullName: sig.fullName,
-        serverName,
-        globalId: sig.globalId,
-        width: sig.width,
-        radix,
-        currentTime,
-        hasProvider: !!provider,
-      });
 
       try {
         if (provider && currentTime !== undefined) {
@@ -584,14 +555,6 @@ function MonacoSourceCodeWindow({
             displayFormat: radix,
           }];
 
-          console.log('[MonacoSourceCodeWindow] Calling getSignalValueAtTime with:', {
-            signalName: originalSignalName,
-            time: currentTime,
-            wasmSignals,
-            wasmSignalsString: JSON.stringify(wasmSignals),
-            radix,
-          });
-
           const valueInfo = await provider.getSignalValueAtTime(
             originalSignalName,  // Use ORIGINAL name for cache lookup
             currentTime,
@@ -601,11 +564,6 @@ function MonacoSourceCodeWindow({
             serverPrefix,
             spaceBeforeBracket
           );
-
-          console.log('[MonacoSourceCodeWindow] getSignalValueAtTime result:', {
-            signalName: originalSignalName,
-            valueInfo,
-          });
 
           if (valueInfo) {
             // Handle both camelCase (displayStr) and snake_case (display_str) from WASM
@@ -619,29 +577,21 @@ function MonacoSourceCodeWindow({
               valueType: valueType,
             });
           }
-        } else {
-          console.log('[MonacoSourceCodeWindow] Skipping signal - no provider or currentTime:', {
-            hasProvider: !!provider,
-            currentTime,
-          });
         }
       } catch (err) {
         console.warn('[MonacoSourceCodeWindow] Failed to get value for', serverName, err);
       }
     }
 
-    console.log('[MonacoSourceCodeWindow] Signal values collected:', {
-      count: signalValues.length,
-      signals: signalValues.map(s => ({ name: s.shortName, value: s.value })),
-    });
-
     if (signalValues.length === 0) {
-      console.log('[MonacoSourceCodeWindow] No signal values available');
+      console.log('[Expand] No signal values to display for line:', lineNumber);
       return;
     }
 
     // Create ViewZone
+    console.log('[Expand] Creating ViewZone for line', lineNumber, 'with', signalValues.length, 'signals');
     createSignalValueViewZone(editor, lineNumber, signalValues);
+    console.log('[Expand] Successfully expanded line:', lineNumber);
   }, [currentTime, displayModuleIndex, provider, signalRadixMap, extractIdentifiers, lookupSignals, createSignalValueViewZone]);
 
   // Toggle line expansion
@@ -655,22 +605,45 @@ function MonacoSourceCodeWindow({
       // Collapse
       removeViewZone(editor, lineNumber);
       expandedLines.current.delete(lineNumber);
+      
+      // Update cache immediately with a copy of the array
+      const cacheKey = tabId;
+      const existingState = editorStateCache.get(cacheKey);
+      const expandedLinesCopy = Array.from(expandedLines.current);
+      if (existingState) {
+        editorStateCache.set(cacheKey, {
+          ...existingState,
+          expandedLines: expandedLinesCopy,
+        });
+        console.log('[State] Collapsed line', lineNumber, '- saved', expandedLinesCopy.length, 'expanded lines to cache');
+      } else {
+        // Cache doesn't exist yet, create it with expandedLines
+        const topLineNumber = editor.getVisibleRanges()[0]?.startLineNumber || 1;
+        const cursorPosition = editor.getPosition();
+        const cursorLineNumber = cursorPosition?.lineNumber || null;
+        const viewState = editor.saveViewState();
+        
+        editorStateCache.set(cacheKey, {
+          viewState: viewState!,
+          expandedLines: expandedLinesCopy,
+          topLineNumber,
+          cursorLineNumber,
+        });
+        console.log('[State] Collapsed line', lineNumber, '- created cache with', expandedLinesCopy.length, 'expanded lines');
+      }
     } else {
       // Expand
       if (!provider) {
-        console.log('[MonacoSourceCodeWindow] No waveform provider available. Please load a waveform first.');
         alert('No waveform loaded. Please open a waveform file first to view signal values.');
         return;
       }
 
       if (currentTime === undefined) {
-        console.log('[MonacoSourceCodeWindow] No current time available');
         alert('No cursor time available. Please open a waveform tab first.');
         return;
       }
 
       if (!displayModuleIndex) {
-        console.log('[MonacoSourceCodeWindow] No displayModuleIndex available');
         return;
       }
 
@@ -680,12 +653,38 @@ function MonacoSourceCodeWindow({
       try {
         await expandLine(editor, lineNumber);
         expandedLines.current.add(lineNumber);
+        
+        // Update cache immediately with a copy of the array
+        const cacheKey = tabId;
+        const existingState = editorStateCache.get(cacheKey);
+        const expandedLinesCopy = Array.from(expandedLines.current);
+        if (existingState) {
+          editorStateCache.set(cacheKey, {
+            ...existingState,
+            expandedLines: expandedLinesCopy,
+          });
+          console.log('[State] Expanded line', lineNumber, '- saved', expandedLinesCopy.length, 'expanded lines to cache');
+        } else {
+          // Cache doesn't exist yet, create it with expandedLines
+          const topLineNumber = editor.getVisibleRanges()[0]?.startLineNumber || 1;
+          const cursorPosition = editor.getPosition();
+          const cursorLineNumber = cursorPosition?.lineNumber || null;
+          const viewState = editor.saveViewState();
+          
+          editorStateCache.set(cacheKey, {
+            viewState: viewState!,
+            expandedLines: expandedLinesCopy,
+            topLineNumber,
+            cursorLineNumber,
+          });
+          console.log('[State] Expanded line', lineNumber, '- created cache with', expandedLinesCopy.length, 'expanded lines');
+        }
       } finally {
         loadingLines.current.delete(lineNumber);
         updateExpandDecorations(editor, moduleStartLine, moduleEndLine);
       }
     }
-  }, [currentTime, displayModuleIndex, moduleStartLine, moduleEndLine, expandLine, removeViewZone, updateExpandDecorations, provider]);
+  }, [currentTime, displayModuleIndex, moduleStartLine, moduleEndLine, expandLine, removeViewZone, updateExpandDecorations, provider, tabId]);
 
   // Handle drag start for resizing module info width
   const handleDragStart = (e: React.MouseEvent) => {
@@ -721,23 +720,68 @@ function MonacoSourceCodeWindow({
   // Handle editor mount
   const handleEditorDidMount = useCallback((editor: editor.IStandaloneCodeEditor) => {
     editorRef.current = editor;
-    console.log('[MonacoSourceCodeWindow] Editor mounted');
+    console.log('[State] Editor mounted for tabId:', tabId);
 
-    // Restore state if available
-    const cacheKey = `${displayModuleIndex}_${fileId}`;
+    // Restore state if available (use tabId as cache key for stable identity)
+    const cacheKey = tabId;
     const savedState = editorStateCache.get(cacheKey);
     if (savedState) {
-      // Restore view state (scroll position, cursor position)
+      console.log('[State] Found saved state for tabId:', cacheKey, {
+        expandedLinesCount: savedState.expandedLines.length,
+        topLineNumber: savedState.topLineNumber,
+        cursorLineNumber: savedState.cursorLineNumber,
+      });
+
+      // Restore view state (includes scroll position and cursor position)
       editor.restoreViewState(savedState.viewState);
-      console.log('[MonacoSourceCodeWindow] Restored view state for:', cacheKey);
 
       // Restore expanded lines after a short delay to ensure editor is ready
-      setTimeout(() => {
+      setTimeout(async () => {
+        console.log('[State] Restoring', savedState.expandedLines.length, 'expanded lines...');
+        
+        // Restore each expanded line sequentially
+        for (const lineNumber of savedState.expandedLines) {
+          console.log('[State] Attempting to restore line:', lineNumber);
+          await expandLine(editor, lineNumber);
+          console.log('[State] Finished restoring line:', lineNumber);
+        }
+        
+        console.log('[State] Successfully restored expanded lines:', savedState.expandedLines);
+
+        // Update expandedLines ref to match restored state
         savedState.expandedLines.forEach(lineNumber => {
-          expandLine(editor, lineNumber);
+          expandedLines.current.add(lineNumber);
         });
-        console.log('[MonacoSourceCodeWindow] Restored expanded lines:', savedState.expandedLines);
+        console.log('[State] Updated expandedLines ref:', Array.from(expandedLines.current));
+
+        // Apply highlight line if exists (from Tab's signalDeclarationLine)
+        // Don't reveal in center when restoring from cache (preserve scroll position)
+        if (highlightLine) {
+          applyHighlight(editor, highlightLine, false);
+        }
+
+        // Restore top line position (what was at the top of the viewport)
+        if (savedState.topLineNumber) {
+          editor.setScrollTop(editor.getTopForLineNumber(savedState.topLineNumber));
+          console.log('[State] Restored top line position to:', savedState.topLineNumber);
+        }
+
+        // After restoration is complete, clear the cache
+        // This ensures that subsequent double-clicks will scroll to the target
+        setTimeout(() => {
+          editorStateCache.delete(cacheKey);
+          console.log('[State] Cleared cache after restoration for tabId:', cacheKey);
+        }, 200);
       }, 100);
+    } else {
+      console.log('[State] No saved state found for tabId:', tabId);
+      // No cached state, but have highlightLine - apply it directly
+      // Reveal in center since there's no previous scroll position to preserve
+      if (highlightLine) {
+        setTimeout(() => {
+          applyHighlight(editor, highlightLine, true);
+        }, 100);
+      }
     }
 
     // Handle single click - use onMouseDown
@@ -752,7 +796,6 @@ function MonacoSourceCodeWindow({
       // Check if line is within module range (if module info is available)
       if (moduleStartLine && moduleEndLine) {
         if (lineNumber < moduleStartLine || lineNumber > moduleEndLine) {
-          console.log('[MonacoSourceCodeWindow] Click outside module range:', lineNumber);
           return; // Outside range, do nothing
         }
       }
@@ -765,7 +808,6 @@ function MonacoSourceCodeWindow({
       if (!wordInfo) return;
 
       const word = wordInfo.word;
-      console.log('[MonacoSourceCodeWindow] Clicked word:', word, 'at line:', lineNumber);
 
       // Call the callback for single click
       if (onWordClick) {
@@ -789,7 +831,6 @@ function MonacoSourceCodeWindow({
       // Check if line is within module range (if module info is available)
       if (moduleStartLine && moduleEndLine) {
         if (lineNumber < moduleStartLine || lineNumber > moduleEndLine) {
-          console.log('[MonacoSourceCodeWindow] Double-click outside module range:', lineNumber);
           return; // Outside range, do nothing
         }
       }
@@ -800,8 +841,6 @@ function MonacoSourceCodeWindow({
 
       const word = model.getValueInRange(selection);
       if (!word) return;
-
-      console.log('[MonacoSourceCodeWindow] Double-clicked word:', word, 'at line:', lineNumber);
 
       // Call the callback for double click
       if (onWordClick) {
@@ -821,7 +860,6 @@ function MonacoSourceCodeWindow({
       // Check if line is within display module range (same logic as driver lookup)
       if (moduleStartLine && moduleEndLine) {
         if (lineNumber < moduleStartLine || lineNumber > moduleEndLine) {
-          console.log('[MonacoSourceCodeWindow] Click outside display module range:', lineNumber);
           return; // Silently ignore clicks outside module range
         }
       }
@@ -853,12 +891,16 @@ function MonacoSourceCodeWindow({
     });
 
     // Check if there's a pending highlight to apply
+    // Only reveal in center if no cached state (preserve scroll position when restoring)
+    const hasCachedState = editorStateCache.has(tabId);
     setTimeout(() => {
       if (pendingHighlightRef.current) {
-        applyHighlight(editor, pendingHighlightRef.current);
+        applyHighlight(editor, pendingHighlightRef.current, !hasCachedState);
         pendingHighlightRef.current = null;
-      } else if (highlightLine) {
-        applyHighlight(editor, highlightLine);
+      } else if (highlightLine && !hasCachedState) {
+        // Only apply highlight with scroll if no cached state
+        // (highlight is already applied in the cache restoration logic above)
+        applyHighlight(editor, highlightLine, true);
       }
 
       // Apply gray out decoration if module range is set
@@ -872,22 +914,33 @@ function MonacoSourceCodeWindow({
 
     // Cleanup function
     return () => {
-      // Save state before unmounting
-      const cacheKey = `${displayModuleIndex}_${fileId}`;
+      // Save state before unmounting (use tabId as cache key for stable identity)
+      const cacheKey = tabId;
       const viewState = editor.saveViewState();
-      const expandedLines = Object.keys(viewZones.current).map(Number);
+      
+      // Use a copy of expandedLines array (already saved in cache by toggleLineExpansion)
+      const expandedLinesArray = Array.from(expandedLines.current);
+      
       const topLineNumber = editor.getVisibleRanges()[0]?.startLineNumber || 1;
+      
+      // Get cursor position (mouse click line)
+      const cursorPosition = editor.getPosition();
+      const cursorLineNumber = cursorPosition?.lineNumber || null;
 
       if (viewState) {
         editorStateCache.set(cacheKey, {
           viewState,
-          expandedLines,
+          expandedLines: expandedLinesArray,
           topLineNumber,
+          cursorLineNumber,
         });
-        console.log('[MonacoSourceCodeWindow] Saved state for:', cacheKey, {
-          expandedLines,
+        console.log('[State] Saved state on unmount for tabId:', cacheKey, {
+          expandedLines: expandedLinesArray,
           topLineNumber,
+          cursorLineNumber,
         });
+      } else {
+        console.log('[State] Failed to save state (no viewState) for tabId:', cacheKey);
       }
 
       disposable1.dispose();
@@ -895,7 +948,64 @@ function MonacoSourceCodeWindow({
       disposable3.dispose();
       disposable4.dispose();
     };
-  }, [highlightLine, applyHighlight, moduleStartLine, moduleEndLine, content, applyGrayOutDecoration, onWordClick, windowStartLine, toggleLineExpansion, displayModuleIndex, fileId]);
+  }, [highlightLine, applyHighlight, moduleStartLine, moduleEndLine, content, applyGrayOutDecoration, onWordClick, windowStartLine, toggleLineExpansion, displayModuleIndex, fileId, tabId]);
+
+  // Save editor state when component unmounts
+  // Note: We don't rely on this for expandedLines since the ref may be reset on remount
+  // expandedLines are saved immediately in toggleLineExpansion
+  useEffect(() => {
+    return () => {
+      const editor = editorRef.current;
+      if (!editor) {
+        console.log('[State] Cannot save state on unmount - no editor for tabId:', tabId);
+        return;
+      }
+      
+      const cacheKey = tabId;
+      const viewState = editor.saveViewState();
+      
+      // Use expandedLines ref directly (it's always up-to-date)
+      const expandedLinesArray = Array.from(expandedLines.current);
+      
+      const topLineNumber = editor.getVisibleRanges()[0]?.startLineNumber || 1;
+      const cursorPosition = editor.getPosition();
+      const cursorLineNumber = cursorPosition?.lineNumber || null;
+
+      if (viewState) {
+        editorStateCache.set(cacheKey, {
+          viewState,
+          expandedLines: expandedLinesArray,
+          topLineNumber,
+          cursorLineNumber,
+        });
+        console.log('[State] Saved state on unmount (useEffect) for tabId:', cacheKey, {
+          expandedLines: expandedLinesArray,
+          topLineNumber,
+          cursorLineNumber,
+        });
+      } else {
+        console.log('[State] Failed to save state on unmount (no viewState) for tabId:', cacheKey);
+      }
+    };
+  }, [tabId]);
+
+  // Update cache when expandedLines changes
+  // Note: This effect won't work because expandedLines is a Set (mutable reference)
+  // We manually update cache in toggleLineExpansion instead
+  // useEffect(() => {
+  //   const cacheKey = tabId;
+  //   const expandedLinesArray = Array.from(expandedLines.current);
+  //   
+  //   // Only update cache if it already exists (don't create new cache entries)
+  //   const existingState = editorStateCache.get(cacheKey);
+  //   if (existingState) {
+  //     editorStateCache.set(cacheKey, {
+  //       ...existingState,
+  //       expandedLines: expandedLinesArray,
+  //     });
+  //     console.log('[MonacoSourceCodeWindow] Updated cache expandedLines:', expandedLinesArray);
+  //   }
+  // }, [tabId]);
 
   // Load source file when module or highlight settings change
   useEffect(() => {
@@ -1017,26 +1127,34 @@ function MonacoSourceCodeWindow({
   }, [monacoInstance]);
 
   // Apply highlight when highlightLine changes and editor is ready
+  // Clear cache after applying highlight to ensure subsequent double-clicks work
   useEffect(() => {
     if (editorRef.current && highlightLine) {
-      applyHighlight(editorRef.current, highlightLine);
+      const cacheKey = tabId;
+      const hasCachedState = editorStateCache.has(cacheKey);
+      
+      // Only reveal in center if no cached state (first time or after cache cleared)
+      const shouldRevealInCenter = !hasCachedState;
+      applyHighlight(editorRef.current, highlightLine, shouldRevealInCenter);
+      
+      // Don't clear cache here - it will be cleared by handleEditorDidMount after restoration
+      // This prevents race condition where cache is cleared before expanded lines are restored
     } else if (highlightLine && !editorRef.current) {
       pendingHighlightRef.current = highlightLine;
     }
-  }, [highlightLine, applyHighlight]);
+  }, [highlightLine, applyHighlight, tabId]);
 
   // Handle signalDeclarationLine change (when jumping to different signal in same file)
+  // Always reveal in center when user explicitly jumps to a signal (double-click)
   useEffect(() => {
     if (editorRef.current && signalDeclarationLine && content) {
-      console.log('[MonacoSourceCodeWindow] signalDeclarationLine changed to:', signalDeclarationLine);
       setHighlightLine(signalDeclarationLine);
-      applyHighlight(editorRef.current, signalDeclarationLine);
+      // Always reveal in center for explicit jumps (double-click from hierarchy/signal panel)
+      applyHighlight(editorRef.current, signalDeclarationLine, true);
     }
-  }, [signalDeclarationLine, content, applyHighlight]);
+  }, [signalDeclarationLine, content, applyHighlight, tabId]);
 
   const loadSourceFile = async () => {
-    console.log('[MonacoSourceCodeWindow] loadSourceFile called, moduleIndex:', moduleIndex, 'displayModuleIndex:', displayModuleIndex, 'fileId:', fileId);
-    
     // Determine how to load the file:
     // 1. If displayModuleIndex > 0, use it to get module and fileId
     // 2. If fileId is provided (for file mode when displayModuleIndex is 0), use it directly
@@ -1069,7 +1187,6 @@ function MonacoSourceCodeWindow({
     }
     
     if (!targetFileId) {
-      console.log('[MonacoSourceCodeWindow] No fileId available');
       setContent('');
       setFilePath('');
       setHighlightLine(null);
@@ -1081,7 +1198,6 @@ function MonacoSourceCodeWindow({
       setLoading(true);
       
       setModuleName(targetModuleName);
-      console.log('[MonacoSourceCodeWindow] Loading source file for fileId:', targetFileId, 'moduleName:', targetModuleName);
       
       // Get file info first
       const fileInfo = await kdbManager.getSourceFileInfo(targetFileId);
@@ -1112,7 +1228,6 @@ function MonacoSourceCodeWindow({
       
       if (isLarge) {
         // Large file mode: use windowed loading
-        console.log('[MonacoSourceCodeWindow] Large file detected, using windowed loading');
         
         // Clean up previous controller
         if (largeFileControllerRef.current) {
@@ -1164,10 +1279,8 @@ function MonacoSourceCodeWindow({
         
       } else {
         // Small file mode: load entire content
-        console.log('[MonacoSourceCodeWindow] Small file, loading entire content');
         
         const fileContent = await kdbManager.getSourceFileContent(targetFileId);
-        console.log('[MonacoSourceCodeWindow] Source file content length:', fileContent?.length || 0);
         
         if (fileContent !== null) {
           setContent(fileContent);
@@ -1175,13 +1288,10 @@ function MonacoSourceCodeWindow({
           
           // Priority: signalDeclarationLine > startFromLine1 > module.startLine
           if (signalDeclarationLine) {
-            console.log('[MonacoSourceCodeWindow] Jumping to signal declaration line:', signalDeclarationLine);
             setHighlightLine(signalDeclarationLine);
           } else if (startFromLine1) {
-            console.log('[MonacoSourceCodeWindow] Opening from line 1 (file mode)');
             setHighlightLine(1);
           } else if (targetModuleStartLine) {
-            console.log('[MonacoSourceCodeWindow] Highlight line:', targetModuleStartLine);
             setHighlightLine(targetModuleStartLine);
           } else {
             setHighlightLine(null);
