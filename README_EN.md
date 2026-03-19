@@ -511,7 +511,44 @@ The waveform window is used to view simulation waveforms:
 - Each window can display different signal combinations
 - Support multiple source code windows open simultaneously
 
-#### 4.3.6 Message Window
+#### 4.3.6 Table View
+
+The table view displays signal values in a tabular format for a specific time range, suitable for viewing and analyzing signal states:
+
+**Creating Table View:**
+- Click the "+" button in the toolbar and select "Table" to create a new table view
+- When creating a table view while a waveform window is active, it automatically inherits:
+  - Current waveform window's time range (View Start / View End)
+  - All signals from expanded groups
+  - Display format (Radix) for each signal
+  - Signal prefix settings
+
+**Signal Management:**
+- Drag signals from design browser to table view
+- Double-click signals in design browser to add to table
+- Click the "×" button in column header to delete signal
+- Drag column headers to reorder signals
+
+**Time Range Settings:**
+- Set time range in the "Start" and "Span" input boxes in the toolbar
+- Click "Apply" button to apply new time range and fetch data
+- Supports pagination, use "Previous" and "Next" buttons to navigate
+- Click "Continue" button to fetch more data (if available)
+
+**Display Format Settings:**
+- Click the dropdown arrow in column header to open format selection menu
+- Supports Binary (BIN), Octal (OCT), Decimal (DEC), Hexadecimal (HEX) display
+- Each signal column can be set independently
+
+**Metadata Filtering:**
+- Filter by signal value characteristics: X state, Z state, mixed state, transition, toggle
+- Multiple filter conditions are combined with "OR" logic
+
+**Column Filtering:**
+- Enter filter conditions in the input box of column header
+- Supports hexadecimal value filtering (e.g., `0x1a`)
+
+#### 4.3.7 Message Window
 
 The message window is located at the bottom panel:
 
@@ -519,7 +556,7 @@ The message window is located at the bottom panel:
 - **System Messages**: Display operation results and error information
 - **Double-click Jump**: Double-click tracing results to jump to corresponding code
 
-#### 4.3.7 Session Management
+#### 4.3.8 Session Management
 
 **Save Session:**
 1. Click menu **File → Save Session**
@@ -529,6 +566,7 @@ The message window is located at the bottom panel:
    - Currently loaded KDB and waveform files
    - All open source code windows
    - All open waveform windows (including signal lists)
+   - All open table views (including signal lists and time ranges)
    - Bookmarks
 
 **Restore Session:**

@@ -511,7 +511,44 @@ La fenêtre de formes d'onde est utilisée pour visualiser les formes d'onde de 
 - Chaque fenêtre peut afficher différentes combinaisons de signaux
 - Support de l'ouverture simultanée de plusieurs fenêtres de code source
 
-#### 4.3.6 Fenêtre de Messages
+#### 4.3.6 Vue Tableau
+
+La vue tableau affiche les valeurs des signaux sous forme de tableau pour une plage de temps spécifique, adaptée à la visualisation et à l'analyse des états des signaux :
+
+**Création de la Vue Tableau :**
+- Cliquer sur le bouton "+" dans la barre d'outils et sélectionner "Table" pour créer une nouvelle vue tableau
+- Lors de la création d'une vue tableau alors qu'une fenêtre de formes d'onde est active, elle hérite automatiquement de :
+  - La plage de temps de la fenêtre de formes d'onde actuelle (View Start / View End)
+  - Tous les signaux des groupes développés
+  - Le format d'affichage (Radix) de chaque signal
+  - Les paramètres de préfixe des signaux
+
+**Gestion des Signaux :**
+- Faire glisser les signaux du navigateur de conception vers la vue tableau
+- Double-cliquer sur les signaux dans le navigateur de conception pour les ajouter au tableau
+- Cliquer sur le bouton "×" dans l'en-tête de colonne pour supprimer le signal
+- Faire glisser les en-têtes de colonne pour réorganiser les signaux
+
+**Paramètres de Plage de Temps :**
+- Définir la plage de temps dans les zones de saisie "Start" et "Span" de la barre d'outils
+- Cliquer sur le bouton "Apply" pour appliquer la nouvelle plage de temps et récupérer les données
+- Support de la pagination, utiliser les boutons "Previous" et "Next" pour naviguer
+- Cliquer sur le bouton "Continue" pour récupérer plus de données (si disponible)
+
+**Paramètres de Format d'Affichage :**
+- Cliquer sur la flèche déroulante dans l'en-tête de colonne pour ouvrir le menu de sélection de format
+- Support de l'affichage Binaire (BIN), Octal (OCT), Décimal (DEC), Hexadécimal (HEX)
+- Chaque colonne de signal peut être configurée indépendamment
+
+**Filtrage de Métadonnées :**
+- Filtrer par caractéristiques des valeurs de signaux : état X, état Z, état mixte, transition, basculement
+- Les conditions de filtrage multiples sont combinées avec une logique "OU"
+
+**Filtrage de Colonnes :**
+- Saisir les conditions de filtrage dans la zone de saisie de l'en-tête de colonne
+- Support du filtrage par valeur hexadécimale (ex : `0x1a`)
+
+#### 4.3.7 Fenêtre de Messages
 
 La fenêtre de messages est située dans le panneau inférieur :
 
@@ -519,7 +556,7 @@ La fenêtre de messages est située dans le panneau inférieur :
 - **Messages Système** : Afficher les résultats d'opérations et les informations d'erreur
 - **Saut par Double-Clic** : Double-cliquer sur les résultats de traçage pour sauter vers le code correspondant
 
-#### 4.3.7 Gestion de Session
+#### 4.3.8 Gestion de Session
 
 **Sauvegarder une Session :**
 1. Cliquer sur le menu **File → Save Session**
@@ -529,6 +566,7 @@ La fenêtre de messages est située dans le panneau inférieur :
    - Fichiers KDB et de formes d'onde actuellement chargés
    - Toutes les fenêtres de code source ouvertes
    - Toutes les fenêtres de formes d'onde ouvertes (incluant les listes de signaux)
+   - Toutes les vues tableau ouvertes (incluant les listes de signaux et les plages de temps)
    - Signets
 
 **Restaurer une Session :**
@@ -544,7 +582,7 @@ La fenêtre de messages est située dans le panneau inférieur :
 - Support de la recherche de sessions sauvegardées
 - Les données de session sont stockées dans le LocalStorage du navigateur
 
-#### 4.3.8 Barre de Menu
+#### 4.3.9 Barre de Menu
 
 | Menu | Fonction |
 |------|----------|

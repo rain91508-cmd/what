@@ -511,7 +511,44 @@ Das Wellenformfenster wird verwendet, um Simulationswellenformen anzuzeigen:
 - Jedes Fenster kann verschiedene Signalkombinationen anzeigen
 - Unterstützung für gleichzeitiges Öffnen mehrerer Quellcode-Fenster
 
-#### 4.3.6 Nachrichtenfenster
+#### 4.3.6 Tabellenansicht
+
+Die Tabellenansicht zeigt Signalwerte in Tabellenform für einen bestimmten Zeitbereich an und ist geeignet für die Anzeige und Analyse von Signalzuständen:
+
+**Tabellenansicht erstellen:**
+- Auf Button "+" in der Symbolleiste klicken und "Table" auswählen, um eine neue Tabellenansicht zu erstellen
+- Beim Erstellen einer Tabellenansicht, während ein Wellenformfenster aktiv ist, wird automatisch geerbt:
+  - Aktueller Zeitbereich des Wellenformfensters (View Start / View End)
+  - Alle Signale aus expandierten Gruppen
+  - Anzeigeformat (Radix) für jedes Signal
+  - Signalpräfix-Einstellungen
+
+**Signalmanagement:**
+- Signale vom Design-Browser in die Tabellenansicht ziehen
+- Signale im Design-Browser doppelklicken, um sie zur Tabelle hinzuzufügen
+- Auf Button "×" in der Spaltenüberschrift klicken, um Signal zu löschen
+- Spaltenüberschriften ziehen, um Signale neu anzuordnen
+
+**Zeitbereichseinstellungen:**
+- Zeitbereich in den Eingabefeldern "Start" und "Span" in der Symbolleiste festlegen
+- Auf Button "Apply" klicken, um neuen Zeitbereich anzuwenden und Daten abzurufen
+- Unterstützung für Seitennummerierung, Buttons "Previous" und "Next" zum Navigieren verwenden
+- Auf Button "Continue" klicken, um mehr Daten abzurufen (falls verfügbar)
+
+**Anzeigeformateinstellungen:**
+- Auf Dropdown-Pfeil in der Spaltenüberschrift klicken, um Formatwahlmenü zu öffnen
+- Unterstützung für Binär (BIN), Oktal (OCT), Dezimal (DEC), Hexadezimal (HEX) Anzeige
+- Jede Signalspalte kann unabhängig konfiguriert werden
+
+**Metadatenfilterung:**
+- Filtern nach Signalwertmerkmalen: X-Zustand, Z-Zustand, gemischter Zustand, Übergang, Toggle
+- Mehrere Filterbedingungen werden mit "ODER"-Logik kombiniert
+
+**Spaltenfilterung:**
+- Filterbedingungen in das Eingabefeld der Spaltenüberschrift eingeben
+- Unterstützung für Hexadezimalwertfilterung (z.B. `0x1a`)
+
+#### 4.3.7 Nachrichtenfenster
 
 Das Nachrichtenfenster befindet sich im unteren Panel:
 
@@ -519,7 +556,7 @@ Das Nachrichtenfenster befindet sich im unteren Panel:
 - **Systemnachrichten**: Betriebsergebnisse und Fehlerinformationen anzeigen
 - **Doppelklick-Sprung**: Auf Tracing-Ergebnisse doppelklicken, um zum entsprechenden Code zu springen
 
-#### 4.3.7 Sitzungsverwaltung
+#### 4.3.8 Sitzungsverwaltung
 
 **Sitzung speichern:**
 1. Auf Menü **File → Save Session** klicken
@@ -529,6 +566,7 @@ Das Nachrichtenfenster befindet sich im unteren Panel:
    - Aktuell geladene KDB- und Wellenformdateien
    - Alle geöffneten Quellcode-Fenster
    - Alle geöffneten Wellenformfenster (einschließlich Signallisten)
+   - Alle geöffneten Tabellenansichten (einschließlich Signallisten und Zeitbereichen)
    - Lesezeichen
 
 **Sitzung wiederherstellen:**
@@ -544,7 +582,7 @@ Das Nachrichtenfenster befindet sich im unteren Panel:
 - Unterstützung für die Suche nach gespeicherten Sitzungen
 - Sitzungsdaten werden im Browser-LocalStorage gespeichert
 
-#### 4.3.8 Menüleiste
+#### 4.3.9 Menüleiste
 
 | Menü | Funktion |
 |------|----------|
