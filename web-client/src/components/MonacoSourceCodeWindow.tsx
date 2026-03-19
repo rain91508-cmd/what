@@ -515,30 +515,42 @@ function MonacoSourceCodeWindow({
         const signalNames = allWasmSignals.map(s => s.name);
 
         // Fetch data to populate cache with current spaceBeforeBracket setting
-        const segments = await provider.fetchAndGetSegments(
-          signalNames,
-          viewport,
-          allWasmSignals,
-          'hex', // Default format for fetching
-          signalPrefix,
-          serverPrefix,
-          spaceBeforeBracket
-        );
-
-        // If there are multi-bit signals, also fetch with opposite spaceBeforeBracket setting
-        // This ensures cache has data for both spacing conventions
-        const hasMultiBitSignals = signals.some(s => s.width > 1);
-        if (hasMultiBitSignals) {
-          console.log('[Expand] Found multi-bit signals, fetching with opposite spaceBeforeBracket');
-          await provider.fetchAndGetSegments(
+        let fetchSuccess = false;
+        try {
+          const segments = await provider.fetchAndGetSegments(
             signalNames,
             viewport,
             allWasmSignals,
-            'hex',
+            'hex', // Default format for fetching
             signalPrefix,
             serverPrefix,
-            !spaceBeforeBracket  // Try opposite setting
+            spaceBeforeBracket
           );
+          fetchSuccess = true;
+          console.log('[Expand] Successfully fetched data with current spaceBeforeBracket');
+        } catch (err) {
+          console.log('[Expand] Failed to fetch with current spaceBeforeBracket, will try opposite');
+        }
+
+        // If fetch failed or there are multi-bit signals, also fetch with opposite spaceBeforeBracket setting
+        // This ensures cache has data for both spacing conventions
+        const hasMultiBitSignals = signals.some(s => s.width > 1);
+        if (!fetchSuccess || hasMultiBitSignals) {
+          console.log('[Expand] Fetching with opposite spaceBeforeBracket (failed=' + !fetchSuccess + ', hasMultiBit=' + hasMultiBitSignals + ')');
+          try {
+            await provider.fetchAndGetSegments(
+              signalNames,
+              viewport,
+              allWasmSignals,
+              'hex',
+              signalPrefix,
+              serverPrefix,
+              !spaceBeforeBracket  // Try opposite setting
+            );
+            console.log('[Expand] Successfully fetched data with opposite spaceBeforeBracket');
+          } catch (err) {
+            console.warn('[MonacoSourceCodeWindow] Failed to fetch signal data with opposite spaceBeforeBracket:', err);
+          }
         }
       } catch (err) {
         console.warn('[MonacoSourceCodeWindow] Failed to fetch signal data:', err);
