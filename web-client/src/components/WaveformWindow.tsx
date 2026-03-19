@@ -209,6 +209,15 @@ export function WaveformWindow({
   // 使用 ref 来跟踪 Canvas 是否已 transfer，防止 StrictMode 下的重复 transfer
   const canvasTransferredRef = useRef(false);
   
+  // 添加一个 forceRender 状态，用于在 tab 切换时强制重新渲染
+  const [forceRender, setForceRender] = useState(false);
+  
+  // 当组件从非激活状态切换到激活状态时，强制触发一次渲染
+  useEffect(() => {
+    console.log(`[WaveformWindow] Component activated, triggering force render`);
+    setForceRender(true);
+  }, []);
+  
   useEffect(() => {
     console.log(`[WaveformWindow] Provider init check: useMockData=${useMockData}, providerLoading=${providerLoading}, sharedProvider=${sharedProvider ? 'yes' : 'no'}`);
 
@@ -226,12 +235,14 @@ export function WaveformWindow({
       return;
     }
     
-    // 如果已经 transfer 过，标记adapter中的canvas为已注册（StrictMode场景）
+    // 如果已经 transfer 过，标记 adapter 中的 canvas 为已注册（StrictMode 场景）
     if (canvasTransferredRef.current) {
       console.log(`[WaveformWindow] Canvas already transferred, marking adapter as registered: ${canvasIdRef.current}`);
       wasmProviderRef.current.markCanvasRegistered();
-      // 触发一次渲染
-      renderWaveform();
+      // 延迟触发一次渲染，确保 canvas 已准备好
+      setTimeout(() => {
+        renderWaveform();
+      }, 50);
       return;
     }
 
@@ -257,8 +268,10 @@ export function WaveformWindow({
         await wasmProviderRef.current!.registerCanvas(offscreenCanvas, 1);
         console.log(`[WaveformWindow] Canvas registered: ${canvasIdRef.current}, dpr=1 (1:1 mapping)`);
         
-        // Canvas注册完成后触发渲染
-        await renderWaveform();
+        // Canvas 注册完成后延迟触发渲染
+        setTimeout(() => {
+          renderWaveform();
+        }, 50);
       } catch (error) {
         console.error('[WaveformWindow] Failed to register canvas:', error);
         canvasTransferredRef.current = false;
@@ -276,7 +289,7 @@ export function WaveformWindow({
       // 不调用 unregisterCanvas，让 Canvas 在 Worker 中保留
       // 因为 StrictMode 下这不是真正的卸载
     };
-  }, [useMockData, sharedProvider, providerLoading]);
+  }, [useMockData, sharedProvider, providerLoading, forceRender]);
   
   // 根据 canvas 宽度和时间配置计算 viewport
   // 所有时间值使用 LoD0Unit（整数）
