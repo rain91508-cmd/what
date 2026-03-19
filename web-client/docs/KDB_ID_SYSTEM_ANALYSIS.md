@@ -156,8 +156,13 @@ if (module) {
 
 KDB 中 Signal 分为两部分存储：
 
-1. **SignalDef (信号定义)**: 存储在 Module 中，包含静态信息
-2. **SignalInst (信号实例)**: 存储在全局数组 `allSignalInsts` 中，包含实例信息
+1. **SignalDef (信号定义)**: 存储在**定义模块**中，包含静态信息
+   - 每个信号的定义只存储一次，在其定义模块的 `signalDefs` 数组中
+   - 所有实例共享同一个 SignalDef
+
+2. **SignalInst (信号实例)**: 存储在全局数组 `allSignalInsts` 中，包含实例特定信息
+   - 每个信号实例都有独立的 SignalInst
+   - 通过 `parentModuleId` 关联到所属模块
 
 ### 2.2 Signal Global ID 分配规则
 
@@ -294,16 +299,77 @@ if (inst) {
 
 ---
 
-## 三、与 OPFS 存储的 draw_sig_id 的关系
+## 三、KDB Manager 帮助函数
 
-### 3.1 为什么需要 draw_sig_id
+KDB Manager 提供了一系列帮助函数来简化 ID 查询操作：
+
+### 3.1 Module 相关函数
+
+```typescript
+// 获取模块
+getModuleById(id: number): Module | null
+
+// 计算模块的完整层次名称
+calculateModuleFullName(moduleIndex: number): string
+
+// 获取模块的显示范围（用于源代码查看）
+// 对于实例，返回定义模块的范围
+getDisplayRange(moduleId: number): { fileId: number; startLine: number; endLine: number } | null
+```
+
+### 3.2 Signal 相关函数
+
+```typescript
+// 获取信号实例
+getSignalInstByGlobalId(globalId: number): SignalInst | null
+
+// 获取模块的信号定义列表
+// 对于实例，从定义模块获取
+getSignalDefs(moduleId: number): SignalDef[]
+
+// 构建完整的 Signal 对象（合并 SignalDef + SignalInst）
+buildSignal(globalId: number): Signal | null
+
+// 计算信号的完整层次名称
+calculateSignalFullName(parentModuleId: number, signalName: string): string
+
+// 获取信号的驱动信息
+getDriverBySignalId(signalGlobalId: number): DriverLocation[]
+```
+
+### 3.3 使用示例
+
+```typescript
+// 获取信号的所有信息
+const signal = kdbManager.buildSignal(globalId);
+if (signal) {
+  console.log(`Name: ${signal.name}`);
+  console.log(`Full Name: ${signal.fullName}`);
+  console.log(`Parent Module: ${signal.parentModuleId}`);
+  console.log(`Declaration: ${signal.declaration?.fileId}:${signal.declaration?.line}`);
+  console.log(`Drivers: ${signal.driverLocations.length}`);
+}
+
+// 获取模块的显示范围（用于源代码高亮）
+const range = kdbManager.getDisplayRange(moduleId);
+if (range) {
+  console.log(`File: ${range.fileId}`);
+  console.log(`Lines: ${range.startLine}-${range.endLine}`);
+}
+```
+
+---
+
+## 四、与 OPFS 存储的 draw_sig_id 的关系
+
+### 4.1 为什么需要 draw_sig_id
 
 - **global_id**: KDB 中的信号全局 ID，范围可能很大且不连续
 - **draw_sig_id**: 用于波形绘制的连续整数 ID，范围 0 ~ N-1
 
 **原因**: WASM 和渲染系统需要连续的 ID 来优化存储和查找性能。
 
-### 3.2 draw_sig_id 分配规则
+### 4.2 draw_sig_id 分配规则
 
 - **ID 类型**: 0-based 连续整数
 - **分配方式**: 单调递增，首次使用时分配
@@ -318,7 +384,7 @@ interface SignalMetadata {
 }
 ```
 
-### 3.3 映射关系
+### 4.3 映射关系
 
 ```
 KDB Global ID (e.g., 1042)  →  SignalIdManager  →  draw_sig_id (e.g., 5)
@@ -333,7 +399,7 @@ KDB Global ID (e.g., 1042)  →  SignalIdManager  →  draw_sig_id (e.g., 5)
                               }
 ```
 
-### 3.4 如何获取 draw_sig_id
+### 4.4 如何获取 draw_sig_id
 
 ```typescript
 // 获取或创建 draw_sig_id
@@ -344,7 +410,7 @@ const drawSigIdMap = signalIdManager.getDrawSigIds([1042, 2056, 3078]);
 // 返回: Map { 1042 => 5, 2056 => 6, ... }
 ```
 
-### 3.5 Group ID 计算
+### 4.5 Group ID 计算
 
 ```typescript
 // 计算信号所属的 group
@@ -359,7 +425,7 @@ getGroupId(draw_sig_id: number): number {
 // draw_sig_id = 300 → group_id = 1
 ```
 
-### 3.6 OPFS 存储结构
+### 4.6 OPFS 存储结构
 
 OPFS 中波形数据按 group 存储：
 
@@ -372,7 +438,7 @@ OPFS 中波形数据按 group 存储：
     ...
 ```
 
-### 3.7 使用流程
+### 4.7 使用流程
 
 1. **添加信号到波形**:
    ```typescript
@@ -394,7 +460,7 @@ OPFS 中波形数据按 group 存储：
 
 ---
 
-## 四、ID 系统总结
+## 五、ID 系统总结
 
 | ID 类型 | 范围 | 存储位置 | 用途 | 计算方式 |
 |---------|------|----------|------|----------|
@@ -417,7 +483,7 @@ Group ID = floor(draw_sig_id / 256)
 
 ---
 
-## 五、常见问题
+## 六、常见问题
 
 ### Q1: 为什么 Module ID 是 1-based，而 Signal Global ID 是 0-based？
 
@@ -437,7 +503,7 @@ Group ID = floor(draw_sig_id / 256)
 
 ---
 
-## 六、相关文件
+## 七、相关文件
 
 - `src/types/kdb.ts` - KDB 类型定义
 - `src/modules/knowledge/kdbManager.ts` - KDB 管理器
