@@ -22,6 +22,7 @@ Remerciements particuliers à :
 - **Navigation Intelligente dans le Code** : Support pour le saut de définition, le traçage des pilotes et des charges
 - **Fonction de Signets** : Marquer et sauter rapidement vers des positions de code clés
 - **Historique de Navigation** : Support pour la navigation avant/arrière des positions de code
+- **Affichage Développé des Valeurs de Signaux** : Afficher les valeurs des signaux au temps actuel du curseur directement dans le code source, supportant l'affichage multi-base
 
 ### Analyse de Formes d'Onde
 - **Support des Fichiers de Formes d'Onde FST** : Lecture haute performance de grands fichiers de formes d'onde
@@ -30,6 +31,7 @@ Remerciements particuliers à :
 - **Opération de Curseur** : Cliquer pour définir la position du curseur, afficher précisément les valeurs des signaux
 - **Fonction de Recherche de Valeurs** : Support pour les recherches de motifs dans plusieurs formats (binaire, hexadécimal, octal)
 - **Historique de Recherche** : Sauvegarder l'historique de recherche pour des recherches répétées rapides
+- **Vue Tableau** : Afficher les valeurs des signaux sous forme de tableau pour des plages de temps spécifiques, supportant l'affichage multi-base, le filtrage de métadonnées et la pagination
 
 ### Fonctionnalités d'Intégration
 - **Liaison Source-Formes d'Onde** : Double-cliquer sur un signal dans le code pour voir sa source de pilote

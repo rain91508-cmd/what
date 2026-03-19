@@ -22,6 +22,7 @@ Besonderer Dank an:
 - **Intelligente Code-Navigation**: Unterstützung für Definitions-Sprung, Driver-Tracing und Load-Tracing
 - **Lesezeichen-Funktion**: Schnelles Markieren und Springen zu wichtigen Code-Positionen
 - **Navigationsverlauf**: Unterstützung für Vorwärts-/Rückwärts-Browsing von Code-Positionen
+- **Erweiterte Signalauswertung**: Anzeigen von Signalwerten zur aktuellen Cursor-Zeit direkt im Quellcode, Unterstützung mehrerer Zahlensysteme
 
 ### Wellenformanalyse
 - **FST-Wellenformdatei-Unterstützung**: Hochleistungslesen großer Wellenformdateien
@@ -30,6 +31,7 @@ Besonderer Dank an:
 - **Cursor-Operation**: Klicken, um Cursor-Position festzulegen und Signalwerte präzise anzuzeigen
 - **Wertesuchfunktion**: Unterstützung für Mustersuchen in verschiedenen Formaten (Binär, Hexadezimal, Oktal)
 - **Suchverlauf**: Speichern des Suchverlaufs für schnelle wiederholte Suchen
+- **Tabellenansicht**: Anzeigen von Signalwerten in Tabellenform für bestimmte Zeitbereiche, Unterstützung von Multi-Radix-Anzeige, Metadatenfilterung und Seitennummerierung
 
 ### Integrationsfunktionen
 - **Quellcode-Wellenform-Verknüpfung**: Doppelklick auf ein Signal im Code, um seine Driver-Quelle anzuzeigen

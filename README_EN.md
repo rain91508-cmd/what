@@ -22,6 +22,7 @@ Special thanks to:
 - **Smart Code Navigation**: Support for definition jumping, driver tracing, and load tracing
 - **Bookmark Function**: Quickly mark and jump to key code locations
 - **Navigation History**: Support for forward/backward browsing of code locations
+- **Signal Value Expansion Display**: View signal values at current cursor time directly in source code, supporting multi-radix display
 
 ### Waveform Analysis
 - **FST Waveform File Support**: High-performance reading of large waveform files
@@ -30,6 +31,7 @@ Special thanks to:
 - **Cursor Operation**: Click to set cursor position, precisely view signal values
 - **Value Search Function**: Support for binary, hexadecimal, octal and other format pattern searches
 - **Search History**: Save search history for quick repeated searches
+- **Table View**: View signal values in tabular format for specific time ranges, supporting multi-radix display, metadata filtering, and pagination
 
 ### Integration Features
 - **Source-Waveform Linkage**: Double-click a signal in the code to view its driver source
