@@ -514,7 +514,7 @@ function MonacoSourceCodeWindow({
 
         const signalNames = allWasmSignals.map(s => s.name);
 
-        // Fetch data to populate cache
+        // Fetch data to populate cache with current spaceBeforeBracket setting
         const segments = await provider.fetchAndGetSegments(
           signalNames,
           viewport,
@@ -524,6 +524,22 @@ function MonacoSourceCodeWindow({
           serverPrefix,
           spaceBeforeBracket
         );
+
+        // If there are multi-bit signals, also fetch with opposite spaceBeforeBracket setting
+        // This ensures cache has data for both spacing conventions
+        const hasMultiBitSignals = signals.some(s => s.width > 1);
+        if (hasMultiBitSignals) {
+          console.log('[Expand] Found multi-bit signals, fetching with opposite spaceBeforeBracket');
+          await provider.fetchAndGetSegments(
+            signalNames,
+            viewport,
+            allWasmSignals,
+            'hex',
+            signalPrefix,
+            serverPrefix,
+            !spaceBeforeBracket  // Try opposite setting
+          );
+        }
       } catch (err) {
         console.warn('[MonacoSourceCodeWindow] Failed to fetch signal data:', err);
       }
@@ -555,7 +571,8 @@ function MonacoSourceCodeWindow({
             displayFormat: radix,
           }];
 
-          const valueInfo = await provider.getSignalValueAtTime(
+          // First attempt: use current spaceBeforeBracket setting
+          let valueInfo = await provider.getSignalValueAtTime(
             originalSignalName,  // Use ORIGINAL name for cache lookup
             currentTime,
             wasmSignals,
@@ -564,6 +581,24 @@ function MonacoSourceCodeWindow({
             serverPrefix,
             spaceBeforeBracket
           );
+
+          // If no value found and this is a multi-bit signal, try with opposite spaceBeforeBracket setting
+          // This handles cases where the waveform file may have different spacing conventions
+          if (!valueInfo && sig.width > 1) {
+            console.log('[Expand] No value found for multi-bit signal, trying with opposite spaceBeforeBracket:', originalSignalName);
+            valueInfo = await provider.getSignalValueAtTime(
+              originalSignalName,
+              currentTime,
+              wasmSignals,
+              radix,
+              signalPrefix,
+              serverPrefix,
+              !spaceBeforeBracket  // Try opposite setting
+            );
+            if (valueInfo) {
+              console.log('[Expand] Successfully got value with opposite spaceBeforeBracket:', originalSignalName);
+            }
+          }
 
           if (valueInfo) {
             // Handle both camelCase (displayStr) and snake_case (display_str) from WASM
