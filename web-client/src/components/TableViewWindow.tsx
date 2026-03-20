@@ -858,6 +858,7 @@ export function TableViewWindow({
                           <button
                             onClick={() => {
                               const signalName = header.column.id;
+                              const signalIndex = signals.findIndex(s => s.name === signalName);
                               const newSignals = signals.filter(s => s.name !== signalName);
                               onSignalsChange(newSignals);
                               // Remove radix and filter settings for this signal
@@ -869,6 +870,18 @@ export function TableViewWindow({
                                 const { [signalName]: _, ...rest } = prev;
                                 return rest;
                               });
+                              // Remove data for this signal from accumulatedData to keep data in sync
+                              if (accumulatedData && signalIndex !== -1) {
+                                const newAccumulatedData: RawSignalValuesResult = {
+                                  ...accumulatedData,
+                                  data: accumulatedData.data.map(row => ({
+                                    time: row.time,
+                                    values: row.values.filter((_, idx) => idx !== signalIndex),
+                                  })),
+                                };
+                                setAccumulatedData(newAccumulatedData);
+                                onFetchData(newAccumulatedData);
+                              }
                             }}
                             style={{
                               padding: '2px 4px',
