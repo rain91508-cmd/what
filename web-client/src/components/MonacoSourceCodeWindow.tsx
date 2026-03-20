@@ -580,20 +580,32 @@ function MonacoSourceCodeWindow({
                     (sig.width > 1 ? 'hex' : 'bin');
 
       try {
-        if (provider && currentTime !== undefined) {
+        if (provider && currentTime !== undefined && waveformName) {
           // Use ORIGINAL signal name for cache lookup
           // The cache is populated by fetchAndGetSegments using original names
           const originalSignalName = sig.fullName;
           
-          // Build minimal WasmSignalInfo array for the provider
-          const wasmSignals: WasmSignalInfo[] = [{
-            globalId: sig.globalId,
-            name: originalSignalName,  // Use ORIGINAL name for cache lookup
+          // Build UI signal format for buildWasmSignals
+          const uiSignal = {
+            global_id: sig.globalId,
+            name: originalSignalName,
             row: 0,
             width: sig.width,
-            drawSigId: sig.globalId,
-            displayFormat: radix,
-          }];
+            displayFormat: radix as 'hex' | 'bin' | 'oct' | 'dec',
+          };
+          
+          // Build wasm signal with correct draw_sig_id from SignalIdManager
+          const wasmSignalsWithDrawId = await buildWasmSignals([uiSignal], waveformName);
+          
+          // Convert to WasmSignalInfo format
+          const wasmSignals: WasmSignalInfo[] = wasmSignalsWithDrawId.map((s) => ({
+            globalId: s.global_id,
+            name: s.name,
+            row: s.row,
+            width: s.width,
+            drawSigId: s.draw_sig_id,  // Use correct draw_sig_id from SignalIdManager
+            displayFormat: s.display_format as DisplayFormat,
+          }));
 
           // First attempt: use current spaceBeforeBracket setting
           let valueInfo = await provider.getSignalValueAtTime(
