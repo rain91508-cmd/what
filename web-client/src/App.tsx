@@ -82,7 +82,7 @@ import type { Signal } from './types/kdb'
 import type { WaveformInfo, ColumnWidths, TimeConfig, Tab, NavigationHistoryEntry, SignalGroup } from './components/TabPanel'
 import { initTimeConfig, parseTimeUnitStr } from './components/TabPanel'
 import type { SignalWithFormat, RawSignalValuesResult } from './core/waveformProviderInterface'
-import type { DisplayFormat } from './types/dataProvider'
+import type { DisplayFormat } from './core/waveformProviderInterface'
 
 // 默认时间配置
 // DisplayUnitPerLoD0Unit = 1 表示 1 DisplayUnit = 1 LoD0Unit

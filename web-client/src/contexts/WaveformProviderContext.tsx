@@ -30,6 +30,7 @@ const WaveformProviderContext = createContext<WaveformProviderContextType>({
   provider: null,
   isLoading: true,
   error: null,
+  waveformName: null,
 });
 
 /**

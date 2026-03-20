@@ -4,10 +4,9 @@ import * as monaco from 'monaco-editor';
 import { kdbManager } from '../modules/knowledge/kdbManager';
 import type { editor } from 'monaco-editor';
 import { LargeFileController, type FileMetadata } from '../services/largeFileController';
-import type { WaveformProviderInterface, WasmSignalInfo } from '../core/waveformProviderInterface';
-import type { DisplayFormat } from '../types/dataProvider';
+import type { WaveformProviderInterface, WasmSignalInfo, DisplayFormat } from '../core/waveformProviderInterface';
 import { useWaveformProvider } from '../contexts/WaveformProviderContext';
-import { buildWasmSignals, getSignalIdManager } from '../wasm/waveformProvider';
+import { buildWasmSignals, getSignalManager } from '../wasm/waveformProvider';
 
 // Configure monaco loader to use local files
 // Local files are copied to public/monaco-editor during build
@@ -541,7 +540,7 @@ function MonacoSourceCodeWindow({
           displayFormat: (() => {
             const serverName = convertSignalNameForServer(sig.fullName);
             const mapFormat = signalRadixMap?.get(serverName);
-            return (mapFormat && mapFormat !== 'auto') ? mapFormat : (sig.width > 1 ? 'hex' as const : 'bin' as const);
+            return mapFormat || (sig.width > 1 ? 'hex' as const : 'bin' as const);
           })(),
         }));
 
@@ -555,7 +554,7 @@ function MonacoSourceCodeWindow({
           row: sig.row,
           width: sig.width,
           drawSigId: sig.draw_sig_id,  // Use correct draw_sig_id from SignalIdManager
-          displayFormat: sig.display_format as DisplayFormat,
+          displayFormat: sig.display_format === 'auto' ? undefined : sig.display_format as DisplayFormat,
         }));
 
         // Define a small viewport around the current time to fetch data
@@ -715,10 +714,9 @@ function MonacoSourceCodeWindow({
       // Calculate server name for display and radix lookup
       const serverName = convertSignalNameForServer(sig.fullName, lastSpaceBeforeBracket);
       
-      // Get radix from waveform tab using server name, or use default (exclude 'auto')
+      // Get radix from waveform tab using server name, or use default
       const mapFormat = signalRadixMap?.get(serverName);
-      const radix: DisplayFormat = (mapFormat && mapFormat !== 'auto') ? mapFormat :
-                    (sig.width > 1 ? 'hex' : 'bin');
+      const radix: DisplayFormat = mapFormat || (sig.width > 1 ? 'hex' : 'bin');
 
       try {
         if (provider && currentTime !== undefined && waveformName) {
@@ -745,7 +743,7 @@ function MonacoSourceCodeWindow({
             row: s.row,
             width: s.width,
             drawSigId: s.draw_sig_id,  // Use correct draw_sig_id from SignalIdManager
-            displayFormat: s.display_format as DisplayFormat,
+            displayFormat: s.display_format === 'auto' ? undefined : s.display_format as DisplayFormat,
           }));
 
           // First attempt: use current spaceBeforeBracket setting

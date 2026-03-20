@@ -343,6 +343,13 @@ export interface WaveformProviderInterface {
   setServerPrefix(prefix: string): void;
 
   /**
+   * 获取信号数据统计信息
+   * @param signalName 信号名称
+   * @returns 统计信息（transitions、buckets、tiles数量）
+   */
+  getSignalDataStats(signalName: string): Promise<{ transitions: number; buckets: number; tiles: number } | null>;
+
+  /**
    * 设置是否在 [ 前加空格
    */
   setSpaceBeforeBracket(enabled: boolean): void;
