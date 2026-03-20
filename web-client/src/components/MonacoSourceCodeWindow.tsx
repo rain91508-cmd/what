@@ -564,6 +564,11 @@ function MonacoSourceCodeWindow({
             console.warn('[MonacoSourceCodeWindow] Failed to fetch signal data with opposite spaceBeforeBracket:', err);
           }
         }
+        
+        // Wait for data to be fully loaded into WASM cache
+        // fetchAndGetSegments is async, data may not be immediately available
+        await new Promise(resolve => setTimeout(resolve, 50));
+        console.log('[Expand] Waited for data to load into cache');
       } catch (err) {
         console.warn('[MonacoSourceCodeWindow] Failed to fetch signal data:', err);
       }
