@@ -1752,6 +1752,255 @@ export function WaveformWindow({
     setEditName('');
   };
 
+  // ===== Drag and Drop State =====
+  const [draggedItem, setDraggedItem] = useState<{ type: 'signal' | 'group'; id: string | number } | null>(null);
+  const [dragOverItem, setDragOverItem] = useState<{ type: 'signal' | 'group'; id: string | number; position: 'before' | 'after' | 'inside' } | null>(null);
+
+  // ===== Drag and Drop Handlers =====
+  const handleDragStart = (e: React.DragEvent, type: 'signal' | 'group', id: string | number) => {
+    setDraggedItem({ type, id });
+    e.dataTransfer.effectAllowed = 'move';
+    // Set drag image (optional)
+    e.dataTransfer.setData('text/plain', `${type}:${id}`);
+  };
+
+  const handleDragOver = (e: React.DragEvent, type: 'signal' | 'group', id: string | number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+
+    if (!draggedItem) return;
+
+    // Calculate drop position based on mouse Y position relative to target
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const midY = rect.top + rect.height / 2;
+    const isBelow = e.clientY > midY;
+
+    // For groups, also support dropping inside (when dragging over group header)
+    let position: 'before' | 'after' | 'inside' = isBelow ? 'after' : 'before';
+    if (type === 'group' && draggedItem.type === 'signal') {
+      // When dragging signal over group header, prefer dropping inside
+      const isOverGroupHeader = e.clientY < rect.top + 20; // Top 20px is header
+      if (isOverGroupHeader) {
+        position = 'inside';
+      }
+    }
+
+    setDragOverItem({ type, id, position });
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    // Only clear if leaving the entire item (not entering a child)
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const x = e.clientX;
+    const y = e.clientY;
+    if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+      setDragOverItem(null);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent, targetType: 'signal' | 'group', targetId: string | number) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (!draggedItem || !dragOverItem) {
+      setDragOverItem(null);
+      setDraggedItem(null);
+      return;
+    }
+
+    const { type: sourceType, id: sourceId } = draggedItem;
+    const { position } = dragOverItem;
+
+    if (sourceType === 'signal') {
+      handleSignalDrop(sourceId as number, targetType, targetId, position);
+    } else if (sourceType === 'group') {
+      handleGroupDrop(sourceId as string, targetType, targetId, position);
+    }
+
+    setDragOverItem(null);
+    setDraggedItem(null);
+  };
+
+  const handleSignalDrop = (signalUniqueId: number, targetType: 'signal' | 'group', targetId: string | number, position: 'before' | 'after' | 'inside') => {
+    // Find the signal and its current group
+    let sourceGroupId: string | null = null;
+    let signal: (Signal & { unique_id: number }) | null = null;
+
+    for (const [gid, group] of Object.entries(groups)) {
+      const found = group.signals.find(s => s.unique_id === signalUniqueId);
+      if (found) {
+        sourceGroupId = gid;
+        signal = found;
+        break;
+      }
+    }
+
+    if (!sourceGroupId || !signal) return;
+
+    // Determine target group and position
+    let targetGroupId: string | null = null;
+    let insertIndex: number = 0;
+
+    if (targetType === 'group') {
+      targetGroupId = targetId as string;
+      const targetGroup = groups[targetGroupId];
+
+      if (position === 'inside') {
+        // Drop inside group at the beginning
+        insertIndex = 0;
+      } else {
+        // Drop before/after the group - need to find position in parent's children list
+        const parentId = targetGroup.parentId || 'root';
+        const parentGroup = groups[parentId];
+        const groupIndex = parentGroup.children.indexOf(targetGroupId);
+
+        if (position === 'before') {
+          // Insert at the position of this group
+          insertIndex = groupIndex;
+        } else {
+          // Insert after this group
+          insertIndex = groupIndex + 1;
+        }
+        targetGroupId = parentId;
+      }
+    } else {
+      // Target is a signal
+      const targetSignalId = targetId as number;
+
+      // Find target signal's group
+      for (const [gid, group] of Object.entries(groups)) {
+        const targetIndex = group.signals.findIndex(s => s.unique_id === targetSignalId);
+        if (targetIndex !== -1) {
+          targetGroupId = gid;
+          if (position === 'before') {
+            insertIndex = targetIndex;
+          } else {
+            insertIndex = targetIndex + 1;
+          }
+          break;
+        }
+      }
+    }
+
+    if (!targetGroupId) return;
+
+    // Don't do anything if dropping in the same position
+    if (sourceGroupId === targetGroupId) {
+      const sourceIndex = groups[sourceGroupId].signals.findIndex(s => s.unique_id === signalUniqueId);
+      if (sourceIndex === insertIndex || sourceIndex === insertIndex - 1) {
+        return;
+      }
+    }
+
+    // Perform the move
+    const newGroups = { ...groups };
+
+    // Remove from source
+    newGroups[sourceGroupId] = {
+      ...newGroups[sourceGroupId],
+      signals: newGroups[sourceGroupId].signals.filter(s => s.unique_id !== signalUniqueId),
+    };
+
+    // Adjust insert index if moving within the same group and source is before target
+    if (sourceGroupId === targetGroupId) {
+      const sourceIndex = groups[sourceGroupId].signals.findIndex(s => s.unique_id === signalUniqueId);
+      if (sourceIndex < insertIndex) {
+        insertIndex--;
+      }
+    }
+
+    // Insert into target
+    newGroups[targetGroupId] = {
+      ...newGroups[targetGroupId],
+      signals: [
+        ...newGroups[targetGroupId].signals.slice(0, insertIndex),
+        signal,
+        ...newGroups[targetGroupId].signals.slice(insertIndex),
+      ],
+    };
+
+    onGroupsUpdate(newGroups);
+  };
+
+  const handleGroupDrop = (sourceGroupId: string, targetType: 'signal' | 'group', targetId: string | number, position: 'before' | 'after' | 'inside') => {
+    // Find source group's parent
+    const sourceGroup = groups[sourceGroupId];
+    if (!sourceGroup) return;
+
+    const sourceParentId = sourceGroup.parentId || 'root';
+
+    // Determine target parent and position
+    let targetParentId: string;
+    let insertIndex: number;
+
+    if (targetType === 'group') {
+      const targetGroupId = targetId as string;
+      const targetGroup = groups[targetGroupId];
+
+      if (position === 'inside') {
+        // Move group inside target group
+        targetParentId = targetGroupId;
+        insertIndex = 0; // Insert at beginning
+      } else {
+        // Move group before/after target group
+        targetParentId = targetGroup.parentId || 'root';
+        const targetIndex = groups[targetParentId].children.indexOf(targetGroupId);
+
+        if (position === 'before') {
+          insertIndex = targetIndex;
+        } else {
+          insertIndex = targetIndex + 1;
+        }
+      }
+    } else {
+      // Cannot drop group on a signal
+      return;
+    }
+
+    // Don't do anything if dropping in the same position
+    if (sourceParentId === targetParentId) {
+      const sourceIndex = groups[sourceParentId].children.indexOf(sourceGroupId);
+      if (sourceIndex === insertIndex || sourceIndex === insertIndex - 1) {
+        return;
+      }
+    }
+
+    // Perform the move
+    const newGroups = { ...groups };
+
+    // Remove from source parent
+    newGroups[sourceParentId] = {
+      ...newGroups[sourceParentId],
+      children: newGroups[sourceParentId].children.filter(id => id !== sourceGroupId),
+    };
+
+    // Adjust insert index if moving within the same parent and source is before target
+    if (sourceParentId === targetParentId) {
+      const sourceIndex = groups[sourceParentId].children.indexOf(sourceGroupId);
+      if (sourceIndex < insertIndex) {
+        insertIndex--;
+      }
+    }
+
+    // Update source group's parent
+    newGroups[sourceGroupId] = {
+      ...newGroups[sourceGroupId],
+      parentId: targetParentId === 'root' ? null : targetParentId,
+    };
+
+    // Insert into target parent
+    newGroups[targetParentId] = {
+      ...newGroups[targetParentId],
+      children: [
+        ...newGroups[targetParentId].children.slice(0, insertIndex),
+        sourceGroupId,
+        ...newGroups[targetParentId].children.slice(insertIndex),
+      ],
+    };
+
+    onGroupsUpdate(newGroups);
+  };
+
   const toggleSignalExpand = (unique_id: number) => {
     const newExpanded = new Set(expandedSignals);
     if (newExpanded.has(unique_id)) {
@@ -2170,9 +2419,16 @@ export function WaveformWindow({
               const group = node.group;
               const isSelected = selectedGroup === group.id;
               
+              const isDragOver = dragOverItem?.type === 'group' && dragOverItem?.id === group.id;
+              const dropIndicatorStyle = isDragOver ? {
+                borderTop: dragOverItem?.position === 'before' ? '2px solid #4080c0' : undefined,
+                borderBottom: dragOverItem?.position === 'after' ? '2px solid #4080c0' : undefined,
+                backgroundColor: dragOverItem?.position === 'inside' ? '#e8f0fe' : undefined,
+              } : {};
+
               return (
                 <div key={group.id}>
-                  <div 
+                  <div
                     className={`waveform-group-header ${isSelected ? 'selected' : ''}`}
                     onClick={() => {
                       // Toggle selection: if already selected, deselect (set to root)
@@ -2182,10 +2438,17 @@ export function WaveformWindow({
                         onSelectedGroupUpdate(group.id);
                       }
                     }}
-                    style={{ 
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, 'group', group.id)}
+                    onDragOver={(e) => handleDragOver(e, 'group', group.id)}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => handleDrop(e, 'group', group.id)}
+                    style={{
                       display: 'flex',
                       alignItems: 'center',
                       paddingLeft: '4px',
+                      cursor: 'move',
+                      ...dropIndicatorStyle,
                     }}
                   >
                     {/* Scope column - empty for groups */}
@@ -2320,15 +2583,28 @@ export function WaveformWindow({
               const signal = node.signal as Signal & { unique_id: number };
               const isSelected = selectedSignal === signal.unique_id;
 
+              const isDragOver = dragOverItem?.type === 'signal' && dragOverItem?.id === signal.unique_id;
+              const dropIndicatorStyle = isDragOver ? {
+                borderTop: dragOverItem?.position === 'before' ? '2px solid #4080c0' : undefined,
+                borderBottom: dragOverItem?.position === 'after' ? '2px solid #4080c0' : undefined,
+              } : {};
+
               return (
                 <div key={signal.unique_id}>
                   <div
                     className={`waveform-signal-item ${isSelected ? 'selected' : ''}`}
                     onClick={() => setSelectedSignal(signal.unique_id)}
-                    style={{ 
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, 'signal', signal.unique_id)}
+                    onDragOver={(e) => handleDragOver(e, 'signal', signal.unique_id)}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => handleDrop(e, 'signal', signal.unique_id)}
+                    style={{
                       display: 'flex',
                       alignItems: 'center',
                       paddingLeft: '4px',
+                      cursor: 'move',
+                      ...dropIndicatorStyle,
                     }}
                   >
                     {/* Scope column - 右对齐，显示完整路径，字体加大黑色，点击弹出选择菜单 */}
