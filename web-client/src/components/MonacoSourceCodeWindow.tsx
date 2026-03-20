@@ -378,6 +378,46 @@ function MonacoSourceCodeWindow({
     });
   }, [currentTime]);
 
+  // Create ViewZone for error messages
+  const createErrorViewZone = useCallback((
+    editor: editor.IStandaloneCodeEditor,
+    lineNumber: number,
+    errorMessage: string
+  ) => {
+    const domNode = document.createElement('div');
+    domNode.className = 'signal-value-zone';
+    domNode.style.borderLeftColor = '#f44336'; // Red for errors
+
+    const html = `
+      <div style="padding: 8px 12px; color: #f44336; font-family: 'Consolas', monospace; font-size: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+          <span>⚠️</span>
+          <span style="font-weight: 600;">Failed to load signal values</span>
+        </div>
+        <div style="color: #666;">${errorMessage}</div>
+      </div>
+    `;
+
+    domNode.innerHTML = html;
+
+    const heightInPx = 60; // Fixed height for error message
+
+    editor.changeViewZones(accessor => {
+      // Remove existing zone if any
+      if (viewZones.current[lineNumber]) {
+        accessor.removeZone(viewZones.current[lineNumber]);
+      }
+
+      const zoneId = accessor.addZone({
+        afterLineNumber: lineNumber,
+        heightInPx,
+        domNode,
+      });
+
+      viewZones.current[lineNumber] = zoneId;
+    });
+  }, []);
+
   // Remove ViewZone
   const removeViewZone = useCallback((
     editor: editor.IStandaloneCodeEditor,
@@ -485,6 +525,9 @@ function MonacoSourceCodeWindow({
     // First, fetch data for all signals to populate the cache
     // This is necessary because getSignalValueAtTime reads from the cache
     // Use original signal names (not converted), let WASM handle the conversion
+    let fetchError: string | null = null;
+    let fetchSuccess = false;
+    
     if (provider && currentTime !== undefined && signals.length > 0 && waveformName) {
       try {
         // Build WasmSignalInfo array for all signals using ORIGINAL names
@@ -526,31 +569,55 @@ function MonacoSourceCodeWindow({
 
         const signalNames = allWasmSignals.map(s => s.name);
 
-        // Fetch data to populate cache with current spaceBeforeBracket setting
-        let fetchSuccess = false;
-        try {
-          const segments = await provider.fetchAndGetSegments(
-            signalNames,
-            viewport,
-            allWasmSignals,
-            'hex', // Default format for fetching
-            signalPrefix,
-            serverPrefix,
-            spaceBeforeBracket
-          );
-          fetchSuccess = true;
-          console.log('[Expand] Successfully fetched data with current spaceBeforeBracket (LoD0, ±' + timeWindow + '), draw_sig_ids:', allWasmSignals.map(s => s.drawSigId));
-        } catch (err) {
-          console.log('[Expand] Failed to fetch with current spaceBeforeBracket, will try opposite');
+        // Fetch data with timeout and retry logic
+        const maxRetries = 2;
+        
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+          try {
+            // Use Promise.race to implement timeout
+            const fetchPromise = provider.fetchAndGetSegments(
+              signalNames,
+              viewport,
+              allWasmSignals,
+              'hex', // Default format for fetching
+              signalPrefix,
+              serverPrefix,
+              spaceBeforeBracket
+            );
+            
+            const timeoutPromise = new Promise<never>((_, reject) => 
+              setTimeout(() => reject(new Error('Fetch timeout')), 5000)
+            );
+            
+            const segments = await Promise.race([fetchPromise, timeoutPromise]);
+            
+            if (segments && segments.length > 0) {
+              fetchSuccess = true;
+              console.log(`[Expand] Successfully fetched ${segments.length} segments with current spaceBeforeBracket (LoD0, ±${timeWindow}), attempt ${attempt + 1}`);
+              break;
+            } else {
+              console.log(`[Expand] Fetch returned empty segments, attempt ${attempt + 1}`);
+              if (attempt >= maxRetries) {
+                fetchError = 'No data returned from fetch';
+              }
+            }
+          } catch (err: any) {
+            if (attempt < maxRetries) {
+              console.log(`[Expand] Fetch failed (attempt ${attempt + 1}), will retry:`, err.message);
+              await new Promise(resolve => setTimeout(resolve, 100)); // Wait before retry
+            } else {
+              console.log(`[Expand] Fetch failed after ${maxRetries + 1} attempts:`, err.message);
+              fetchError = `Failed to fetch data: ${err.message}`;
+            }
+          }
         }
 
-        // If fetch failed or there are multi-bit signals, also fetch with opposite spaceBeforeBracket setting
-        // This ensures cache has data for both spacing conventions
+        // If fetch failed or returned empty, or there are multi-bit signals, try with opposite spaceBeforeBracket
         const hasMultiBitSignals = signals.some(s => s.width > 1);
-        if (!fetchSuccess || hasMultiBitSignals) {
-          console.log('[Expand] Fetching with opposite spaceBeforeBracket (failed=' + !fetchSuccess + ', hasMultiBit=' + hasMultiBitSignals + ')');
+        if ((!fetchSuccess || fetchError) && hasMultiBitSignals) {
+          console.log('[Expand] Fetching with opposite spaceBeforeBracket (success=' + fetchSuccess + ', hasMultiBit=' + hasMultiBitSignals + ')');
           try {
-            await provider.fetchAndGetSegments(
+            const oppositeSegments = await provider.fetchAndGetSegments(
               signalNames,
               viewport,
               allWasmSignals,
@@ -559,19 +626,37 @@ function MonacoSourceCodeWindow({
               serverPrefix,
               !spaceBeforeBracket  // Try opposite setting
             );
-            console.log('[Expand] Successfully fetched data with opposite spaceBeforeBracket (LoD0)');
-          } catch (err) {
-            console.warn('[MonacoSourceCodeWindow] Failed to fetch signal data with opposite spaceBeforeBracket:', err);
+            if (oppositeSegments && oppositeSegments.length > 0) {
+              console.log(`[Expand] Successfully fetched ${oppositeSegments.length} segments with opposite spaceBeforeBracket (LoD0)`);
+              fetchSuccess = true;
+              fetchError = null;
+            } else if (!fetchError) {
+              fetchError = 'No data returned from fetch';
+            }
+          } catch (err: any) {
+            console.warn('[MonacoSourceCodeWindow] Failed to fetch with opposite spaceBeforeBracket:', err.message);
+            if (!fetchError) {
+              fetchError = `Failed to fetch data: ${err.message}`;
+            }
           }
         }
         
-        // Wait for data to be fully loaded into WASM cache
-        // fetchAndGetSegments is async, data may not be immediately available
-        await new Promise(resolve => setTimeout(resolve, 50));
-        console.log('[Expand] Waited for data to load into cache');
-      } catch (err) {
-        console.warn('[MonacoSourceCodeWindow] Failed to fetch signal data:', err);
+        if (!fetchSuccess && !fetchError) {
+          fetchError = 'No data fetched';
+        }
+        
+        console.log('[Expand] Fetch completed, success=' + fetchSuccess + ', error=' + fetchError);
+      } catch (err: any) {
+        console.warn('[MonacoSourceCodeWindow] Failed to fetch signal data:', err.message);
+        fetchError = `Failed to fetch data: ${err.message}`;
       }
+    }
+    
+    // If fetch failed, show error in the view
+    if (fetchError) {
+      console.log('[Expand] Fetch error, will show error in view:', fetchError);
+      createErrorViewZone(editor, lineNumber, fetchError);
+      return; // Don't continue to get values if fetch failed
     }
 
     // Now get values for each signal
