@@ -1716,37 +1716,21 @@ export function WaveformWindow({
     if (!group) return;
 
     const parentId = group.parentId || 'root';
-    const parentGroup = groups[parentId];
     
-    // Check if this is the last child of its parent
-    const isLastChild = parentGroup && parentGroup.children.length === 1 && parentGroup.children[0] === groupId;
+    // Delete the group completely (including all signals and children)
+    const newGroups = { ...groups };
     
-    if (isLastChild) {
-      // If this is the last child, only clear signals but keep the group
-      onGroupsUpdate({
-        ...groups,
-        [groupId]: {
-          ...groups[groupId],
-          signals: [],
-          children: [],
-        },
-      });
-    } else {
-      // Otherwise, delete the group completely
-      const newGroups = { ...groups };
-      
-      // Remove from parent's children
-      newGroups[parentId] = {
-        ...newGroups[parentId],
-        children: newGroups[parentId].children.filter(id => id !== groupId),
-      };
-      
-      // Remove the group
-      delete newGroups[groupId];
-      
-      onGroupsUpdate(newGroups);
-      onSelectedGroupUpdate(parentId);
-    }
+    // Remove from parent's children
+    newGroups[parentId] = {
+      ...newGroups[parentId],
+      children: newGroups[parentId].children.filter(id => id !== groupId),
+    };
+    
+    // Remove the group
+    delete newGroups[groupId];
+    
+    onGroupsUpdate(newGroups);
+    onSelectedGroupUpdate(parentId);
   };
 
   const startRenameGroup = (groupId: string) => {
