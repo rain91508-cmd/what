@@ -2798,7 +2798,7 @@ if tile_missing_signals.is_empty() {
     /// Get render segments for current viewport
     /// 
     /// This is an internal function, use fetch_and_get_segments for JS calls
-    fn get_segments(&self) -> Result<JsValue, JsValue> {
+    fn get_segments(&mut self) -> Result<JsValue, JsValue> {
         // Optimization: if no signals to draw, return empty segments early
         if self.signals.is_empty() {
             // console_log!("[WASM] get_segments: no signals to draw, returning empty segments");
@@ -2808,6 +2808,9 @@ if tile_missing_signals.is_empty() {
 
         let mut segments = Vec::new();
         let time_range = self.viewport.time_end - self.viewport.time_start;
+        
+        // Clear cursor values before generating new segments
+        self.cursor_values.clear();
 
         for signal in self.signals.iter() {
             // Use signal.row provided by UI (accounts for group headers)
@@ -2868,6 +2871,16 @@ if tile_missing_signals.is_empty() {
                     // LoD 0: Use transitions format
                     self.generate_normal_segments(&data.transitions, data.width, y, &signal.name,
                         time_range, &mut segments, display_format, &data.tile_info);
+                }
+            }
+        }
+        
+        // Collect cursor values from segments
+        if let Some(cursor_time) = self.cursor_time {
+            for segment in &segments {
+                // Check if this segment covers the cursor time
+                if segment.x0 <= cursor_time && cursor_time < segment.x1 {
+                    self.cursor_values.insert(segment.signal_name.clone(), segment.value.clone());
                 }
             }
         }
