@@ -1425,7 +1425,7 @@ impl WaveformDataProvider {
                                         let (start_value, buckets) = self.parse_buckets_from_transitions(&transitions);
                                         let tile_end = tile_start + tile_span;
 
-                                        // Store LoD 1+ signal data (skip if tile exists)
+                                        // Store LoD 1+ signal data (merge buckets if tile exists)
                                         self.store_lod1_signal_data(
                                             signal_name,
                                             None, // width will be looked up from signal info
@@ -1433,7 +1433,7 @@ impl WaveformDataProvider {
                                             tile_end,
                                             start_value,
                                             buckets,
-                                            false, // merge_buckets = false for OPFS (skip duplicates)
+                                            true, // merge_buckets = true (unified with server fetch)
                                         );
                                     }
                                 }
@@ -2853,9 +2853,11 @@ if tile_missing_signals.is_empty() {
             }
 
             if let Some(data) = self.signal_data.get(&signal.name) {
-                // Check if we have bucket data (new First/Last format)
-                if !data.bucket_data.is_empty() {
-                    // Use new bucket-based segment generation
+                // Determine which format to use based on current LoD
+                let lod = self.current_lod.unwrap_or(0);
+                
+                if lod > 0 {
+                    // LoD 1+: Use bucket-based segment generation
                     self.generate_lod_segments_from_buckets(
                         &data.bucket_data,
                         data.width,
@@ -2865,119 +2867,10 @@ if tile_missing_signals.is_empty() {
                         &mut segments,
                         display_format,
                     );
-                } else if !data.transitions.is_empty() {
-                    // Check if transitions are in LoD 1+ format (bucket offsets 0-255)
-                    // This handles cache data from old format
-                    // For LoD 0, always use normal segment generation
-                    let lod = self.current_lod.unwrap_or(25);
-                    let is_lod_format = if lod == 0 {
-                        false // LoD 0 always uses normal segments
-                    } else {
-                        self.detect_lod_bucket_format(&data.transitions)
-                    };
-                    
-                    if is_lod_format {
-                        // Parse transitions into bucket data and generate segments
-                        // For LoD 1+ cache data, transitions are bucket offsets (0-255)
-                        // We need to group them by tile and convert offsets to absolute times
-                        let lod = self.current_lod.unwrap_or(25);
-                        let bucket_size = 1u64 << lod;
-                        let tile_span = OpfsCacheManager::get_tile_span(lod);
-                        
-                        let mut tile_buckets: std::collections::HashMap<u64, HashMap<u16, BucketData>> = std::collections::HashMap::new();
-                        
-                        // console_log!("[WASM] Grouping {} transitions by tile (lod={}, bucket_size={})", 
-                            // data.transitions.len(), lod, bucket_size);
-                        
-                        // Group transitions by tile_start (from tile_info)
-                        // Each tile has its own set of transitions in the cache
-                        // We need to filter transitions for each tile based on the tile's time range
-                        for (tile_idx, (tile_start, tile_end, _, _)) in data.tile_info.iter().enumerate() {
-                            // For each tile, filter transitions that belong to this tile
-                            // Transitions with time < tile_end belong to this tile
-                            // But we need to handle the case where transitions are sorted by time
-                            
-                            let tile_transitions: Vec<Transition> = data.transitions
-                                .iter()
-                                .filter(|t| {
-                                    if t.time == BOUNDARY_TIME_START {
-                                        return false; // Skip boundary value
-                                    }
-                                    // For LoD 1+, time is bucket offset (0-255)
-                                    // Convert to absolute time to check if in this tile
-                                    let abs_time = *tile_start + t.time * bucket_size;
-                                    abs_time >= *tile_start && abs_time < *tile_end
-                                })
-                                .cloned()
-                                .collect();
-                            
-                            // console_log!("[WASM]   Tile {}: start={}, end={}, {} transitions", 
-                            //     tile_idx, tile_start, tile_end, tile_transitions.len());
-                            
-                            // Parse this tile's transitions into buckets
-                            if !tile_transitions.is_empty() {
-                                let (_, buckets) = self.parse_buckets_from_transitions(&tile_transitions);
-                                // console_log!("[WASM]   Tile {}: {} buckets parsed", tile_idx, buckets.len());
-                                tile_buckets.insert(*tile_start, buckets);
-                            }
-                        }
-                        
-                        // Convert to vec for generate_lod_segments_from_buckets
-                        // Sort by tile_start to ensure correct order
-                        let mut bucket_data: Vec<(u64, HashMap<u16, BucketData>)> = tile_buckets.into_iter().collect();
-                        bucket_data.sort_by_key(|(start, _)| *start);
-                        
-                        // console_log!("[WASM] Cache data: {} tiles from tile_info, {} bucket entries (sorted)", 
-                        //     data.tile_info.len(), bucket_data.len());
-                        
-                        // Debug: print bucket details for each tile (disabled for performance)
-                        // for (tile_idx, (tile_start, buckets)) in bucket_data.iter().enumerate() {
-                        //     console_log!("[WASM]   Bucket entry {}: start={}, {} buckets", 
-                        //         tile_idx, tile_start, buckets.len());
-                        //     // Print first few bucket offsets
-                        //     let mut offsets: Vec<u32> = buckets.keys().cloned().collect();
-                        //     offsets.sort();
-                        //     for (i, offset) in offsets.iter().take(5).enumerate() {
-                        //         if let Some(bucket) = buckets.get(offset) {
-                        //             let last_str = match &bucket.last {
-                        //                 Some(l) => format!(", last={}", l.value),
-                        //                 None => "".to_string(),
-                        //             };
-                        //             console_log!("[WASM]     Bucket[{}]: offset={}, first={}{}", 
-                        //                 i, offset, bucket.first.value, last_str);
-                        //         }
-                        //     }
-                        // }
-                        
-                        self.generate_lod_segments_from_buckets(
-                            &bucket_data,
-                            data.width,
-                            y,
-                            &signal.name,
-                            time_range,
-                            &mut segments,
-                            display_format,
-                        );
-                    } else {
-                        // For LoD 0, always use normal segment generation
-                        // For LoD 1+, check if it's min/max format
-                        let lod = self.current_lod.unwrap_or(25);
-                        let is_lod_min_max = if lod == 0 {
-                            false // LoD 0 never uses min/max format
-                        } else {
-                            self.detect_min_max_format(&data.transitions)
-                        };
-
-                        if is_lod_min_max {
-                            // Process LoD 1+ min/max format
-                            self.generate_min_max_segments(&data.transitions, data.width, y, &signal.name, 
-                                time_range, &mut segments, display_format);
-                        } else {
-                            // Process LoD 0 format (original)
-                            self.generate_normal_segments(&data.transitions, data.width, y, &signal.name,
-                                time_range, &mut segments, display_format, &data.tile_info);
-                        }
-                    }
+                } else {
+                    // LoD 0: Use transitions format
+                    self.generate_normal_segments(&data.transitions, data.width, y, &signal.name,
+                        time_range, &mut segments, display_format, &data.tile_info);
                 }
             }
         }
@@ -3179,25 +3072,32 @@ if tile_missing_signals.is_empty() {
         signal_name: &str, time_range: f64, segments: &mut Vec<RenderSegment>, display_format: Option<&str>,
         tile_info: &[(u64, u64, u64, Transition)]) {
 
-        // Separate start value (boundary) from normal transitions
-        // First check in transitions array (for cache data), then in tile_info (for server data)
-        let mut start_value = transitions.iter()
-            .find(|t| t.time == BOUNDARY_TIME_START)
-            .cloned();
-        
-        // If not found in transitions, check tile_info (for server fetched data)
-        if start_value.is_none() {
-            // Find the first tile's start value from tile_info
-            // tile_info: (tile_start, tile_end, start_time, start_value_transition)
-            start_value = tile_info.iter()
-                .find(|(_, _, start_time, _)| *start_time == BOUNDARY_TIME_START)
-                .map(|(_, _, _, sv)| sv.clone());
-        }
+        // Get start value from tile_info for the current viewport
+        // tile_info: (tile_start, tile_end, start_time, start_value_transition)
+        let viewport_start = self.viewport.time_start as u64;
+        let viewport_end = self.viewport.time_end as u64;
 
+        // Filter transitions: exclude start value and only keep those in viewport range
         let normal_transitions: Vec<_> = transitions.iter()
             .filter(|t| t.time != BOUNDARY_TIME_START)
+            .filter(|t| {
+                let time = t.actual_time as f64;
+                time >= self.viewport.time_start && time <= self.viewport.time_end
+            })
             .cloned()
             .collect();
+
+        // Find the tile that contains the viewport start time
+        let start_value = tile_info.iter()
+            .find(|(tile_start, tile_end, _, _)| *tile_start <= viewport_start && viewport_start < *tile_end)
+            .map(|(_, _, _, sv)| sv.clone());
+        
+        // Debug warning if start value not found
+        if start_value.is_none() {
+            console_log!("[WASM] Warning: No start value found for viewport {}-{}. Available tiles: {:?}", 
+                viewport_start, viewport_end, 
+                tile_info.iter().map(|(ts, te, _, _)| (*ts, *te)).collect::<Vec<_>>());
+        }
 
         // Helper to convert Transition to display string and classify value
         let transition_to_display = |t: &Transition| -> (String, String, bool) {
@@ -3586,10 +3486,6 @@ if tile_missing_signals.is_empty() {
         display_format: Option<&str>,
     ) {
         const TILE_SPAN_MULTIPLIER: u32 = 256;
-        
-        if bucket_data.is_empty() {
-            return;
-        }
         
         // Helper to convert Transition to display string and classify value
         let transition_to_display = |t: &Transition| -> (String, String, bool) {
@@ -4245,19 +4141,11 @@ if tile_missing_signals.is_empty() {
             // Get parent signal data
             if let Some(parent_data) = self.signal_data.get(&parent_name) {
                 let time_u64 = time as u64;
+                let lod = self.current_lod.unwrap_or(0);
                 
-                // Check if we have bucket_data (new LoD 1+ format)
-                if !parent_data.bucket_data.is_empty() {
+                // LoD 1+: Use bucket_data format
+                if lod > 0 {
                     return self.get_bucket_value_at_time(parent_data, time_u64, 
-                        (msb - lsb + 1) as u32, Some((msb, lsb)), signal_display_format);
-                }
-                
-                // Check if this is LoD > 0 data (min/max format)
-                let is_lod_min_max = self.detect_min_max_format(&parent_data.transitions);
-                
-                if is_lod_min_max {
-                    // Handle LoD > 0 min/max format
-                    return self.get_min_max_value_at_time(&parent_data.transitions, time_u64, 
                         (msb - lsb + 1) as u32, Some((msb, lsb)), signal_display_format);
                 }
                 
@@ -4365,62 +4253,29 @@ if tile_missing_signals.is_empty() {
         // Normal signal lookup
         if let Some(data) = self.signal_data.get(signal_name) {
             let time_u64 = time as u64;
+            let lod = self.current_lod.unwrap_or(0);
 
-            // Check if we have bucket_data (new LoD 1+ format)
-            if !data.bucket_data.is_empty() {
+            // LoD 1+: Use bucket_data format
+            if lod > 0 {
                 return self.get_bucket_value_at_time(data, time_u64, data.width, None, signal_display_format);
-            }
-
-            // Check if this is LoD > 0 data (min/max format)
-            let is_lod_min_max = self.detect_min_max_format(&data.transitions);
-            
-            if is_lod_min_max {
-                // Handle LoD > 0 min/max format
-                return self.get_min_max_value_at_time(&data.transitions, time_u64, data.width, None, signal_display_format);
-            }
-
-            // If no transitions and no buckets, try to get start value from tile_info
-            if data.transitions.is_empty() && data.bucket_data.is_empty() && !data.tile_info.is_empty() {
-                // Get the first tile's start value from tile_info
-                // tile_info: (tile_start, tile_end, start_time, start_value_transition)
-                // Need to find the entry with start_time == BOUNDARY_TIME_START
-                const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
-                let start_value = data.tile_info.iter()
-                    .find(|(_, _, start_time, _)| *start_time == BOUNDARY_TIME_START)
-                    .map(|(_, _, _, sv)| sv);
-                
-                if let Some(start_value) = start_value {
-                    let value_u64 = match server_value_to_u64(start_value.value_type, start_value.value_len, &start_value.value) {
-                        Some(v) => v,
-                        None => 0,
-                    };
-                    
-                    let hex_str = format!("0x{:X}", value_u64);
-                    let display_str = if data.width == 1 {
-                        format!("{}", value_u64)
-                    } else {
-                        self.format_multi_bit_value(&hex_str, data.width, signal_display_format)
-                    };
-                    
-                    let (value_type, has_xz) = Self::classify_value(&display_str, data.width);
-                    
-                    let value_info = ValueInfo {
-                        value_type,
-                        display_str: display_str.clone(),
-                        width: data.width,
-                        has_xz,
-                        min_value: None,
-                        max_value: None,
-                        is_min_max: false,
-                    };
-                    return serde_wasm_bindgen::to_value(&value_info).unwrap_or(JsValue::NULL);
-                }
             }
 
             // Find the transition that covers this time
             // The value is valid from transition.time until the next transition
             let mut current_transition = None;
             let mut boundary_transition = None; // Store boundary value separately
+
+            // LoD 0: Get start value from tile_info for the tile containing current time
+            // tile_info: (tile_start, tile_end, start_time, start_value_transition)
+            if !data.tile_info.is_empty() {
+                let start_value = data.tile_info.iter()
+                    .find(|(tile_start, tile_end, _, _)| *tile_start <= time_u64 && time_u64 < *tile_end)
+                    .map(|(_, _, _, sv)| sv);
+                
+                if let Some(sv) = start_value {
+                    boundary_transition = Some(sv);
+                }
+            }
 
             for transition in &data.transitions {
                 if transition.time == BOUNDARY_TIME_START {
