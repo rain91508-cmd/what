@@ -7,6 +7,7 @@ import { LargeFileController, type FileMetadata } from '../services/largeFileCon
 import type { WaveformProviderInterface, WasmSignalInfo } from '../core/waveformProviderInterface';
 import type { DisplayFormat } from '../types/dataProvider';
 import { useWaveformProvider } from '../contexts/WaveformProviderContext';
+import { buildWasmSignals, getSignalIdManager } from '../wasm/waveformProvider';
 
 // Configure monaco loader to use local files
 // Local files are copied to public/monaco-editor during build
@@ -82,7 +83,7 @@ function MonacoSourceCodeWindow({
   spaceBeforeBracket = false
 }: MonacoSourceCodeWindowProps) {
   // Get shared provider from context
-  const { provider } = useWaveformProvider();
+  const { provider, waveformName } = useWaveformProvider();
   const [content, setContent] = useState<string>('');
   const [filePath, setFilePath] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -484,24 +485,34 @@ function MonacoSourceCodeWindow({
     // First, fetch data for all signals to populate the cache
     // This is necessary because getSignalValueAtTime reads from the cache
     // Use original signal names (not converted), let WASM handle the conversion
-    if (provider && currentTime !== undefined && signals.length > 0) {
+    if (provider && currentTime !== undefined && signals.length > 0 && waveformName) {
       try {
         // Build WasmSignalInfo array for all signals using ORIGINAL names
-        // WASM will handle the signal name conversion
-        const allWasmSignals: WasmSignalInfo[] = signals.map((sig, index) => {
-          const serverName = convertSignalNameForServer(sig.fullName);
-          const mapFormat = signalRadixMap?.get(serverName);
-          const radix: DisplayFormat = (mapFormat && mapFormat !== 'auto') ? mapFormat :
-                        (sig.width > 1 ? 'hex' : 'bin');
-          return {
-            globalId: sig.globalId,
-            name: sig.fullName,  // Use ORIGINAL name (local name), not serverName
-            row: 0,
-            width: sig.width,
-            drawSigId: index,  // Use continuous index (0 ~ N-1) as draw_sig_id
-            displayFormat: radix,
-          };
-        });
+        // Use buildWasmSignals to get correct draw_sig_id from SignalIdManager
+        const uiSignals = signals.map((sig) => ({
+          global_id: sig.globalId,
+          name: sig.fullName,
+          row: 0,
+          width: sig.width,
+          displayFormat: (() => {
+            const serverName = convertSignalNameForServer(sig.fullName);
+            const mapFormat = signalRadixMap?.get(serverName);
+            return (mapFormat && mapFormat !== 'auto') ? mapFormat : (sig.width > 1 ? 'hex' as const : 'bin' as const);
+          })(),
+        }));
+
+        // Build wasm signals with correct draw_sig_id from SignalIdManager
+        const wasmSignalsWithDrawId = await buildWasmSignals(uiSignals, waveformName);
+        
+        // Convert to WasmSignalInfo format
+        const allWasmSignals: WasmSignalInfo[] = wasmSignalsWithDrawId.map((sig, index) => ({
+          globalId: sig.global_id,
+          name: sig.name,
+          row: sig.row,
+          width: sig.width,
+          drawSigId: sig.draw_sig_id,  // Use correct draw_sig_id from SignalIdManager
+          displayFormat: sig.display_format as DisplayFormat,
+        }));
 
         // Define a small viewport around the current time to fetch data
         // Use ±10 to ensure we get LoD0 (original data, no downsampling)
@@ -528,7 +539,7 @@ function MonacoSourceCodeWindow({
             spaceBeforeBracket
           );
           fetchSuccess = true;
-          console.log('[Expand] Successfully fetched data with current spaceBeforeBracket (LoD0, ±' + timeWindow + ')');
+          console.log('[Expand] Successfully fetched data with current spaceBeforeBracket (LoD0, ±' + timeWindow + '), draw_sig_ids:', allWasmSignals.map(s => s.drawSigId));
         } catch (err) {
           console.log('[Expand] Failed to fetch with current spaceBeforeBracket, will try opposite');
         }

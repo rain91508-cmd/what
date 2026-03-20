@@ -20,6 +20,7 @@ interface WaveformProviderContextType {
   provider: WaveformProviderInterface | null;
   isLoading: boolean;
   error: Error | null;
+  waveformName: string | null;
 }
 
 /**
@@ -164,6 +165,7 @@ export function WaveformProviderProvider({
     provider,
     isLoading,
     error,
+    waveformName: waveformName || null,
   };
 
   return (
