@@ -569,72 +569,92 @@ function MonacoSourceCodeWindow({
 
         const signalNames = allWasmSignals.map(s => s.name);
 
-        // Fetch data with timeout and retry logic
-        const maxRetries = 2;
+        // Helper function to check if error is 404 (signal not found)
+        const is404Error = (err: any) => err?.message?.includes('404') || err?.message?.includes('SIGNAL_NOT_FOUND');
         
-        for (let attempt = 0; attempt <= maxRetries; attempt++) {
-          try {
-            // Use Promise.race to implement timeout
-            const fetchPromise = provider.fetchAndGetSegments(
-              signalNames,
-              viewport,
-              allWasmSignals,
-              'hex', // Default format for fetching
-              signalPrefix,
-              serverPrefix,
-              spaceBeforeBracket
-            );
-            
-            const timeoutPromise = new Promise<never>((_, reject) => 
-              setTimeout(() => reject(new Error('Fetch timeout')), 5000)
-            );
-            
-            const segments = await Promise.race([fetchPromise, timeoutPromise]);
-            
-            if (segments && segments.length > 0) {
-              fetchSuccess = true;
-              console.log(`[Expand] Successfully fetched ${segments.length} segments with current spaceBeforeBracket (LoD0, ±${timeWindow}), attempt ${attempt + 1}`);
-              break;
-            } else {
-              console.log(`[Expand] Fetch returned empty segments, attempt ${attempt + 1}`);
-              if (attempt >= maxRetries) {
-                fetchError = 'No data returned from fetch';
+        // Helper function to fetch with timeout
+        const fetchWithTimeout = async (sigNames: string[], spaceBeforeBracketSetting: boolean) => {
+          const fetchPromise = provider.fetchAndGetSegments(
+            sigNames,
+            viewport,
+            allWasmSignals,
+            'hex',
+            signalPrefix,
+            serverPrefix,
+            spaceBeforeBracketSetting
+          );
+          
+          const timeoutPromise = new Promise<never>((_, reject) => 
+            setTimeout(() => reject(new Error('Fetch timeout')), 5000)
+          );
+          
+          return await Promise.race([fetchPromise, timeoutPromise]);
+        };
+
+        // First attempt with current spaceBeforeBracket setting
+        let is404 = false;
+        try {
+          const segments = await fetchWithTimeout(signalNames, spaceBeforeBracket);
+          
+          if (segments && segments.length > 0) {
+            fetchSuccess = true;
+            console.log(`[Expand] Successfully fetched ${segments.length} segments with current spaceBeforeBracket=${spaceBeforeBracket} (LoD0, ±${timeWindow})`);
+          } else {
+            console.log('[Expand] Fetch returned empty segments');
+          }
+        } catch (err: any) {
+          console.log(`[Expand] Fetch failed with current spaceBeforeBracket:`, err.message);
+          
+          if (is404Error(err)) {
+            // 404 error means signal not found - don't retry, try opposite space immediately
+            is404 = true;
+            console.log('[Expand] 404 error detected - will try opposite spaceBeforeBracket');
+          } else {
+            // Timeout or other error - retry with current setting
+            console.log('[Expand] Timeout or other error - will retry');
+            const maxRetries = 2;
+            for (let attempt = 1; attempt <= maxRetries && !fetchSuccess; attempt++) {
+              try {
+                console.log(`[Expand] Retrying (attempt ${attempt + 1}/${maxRetries + 1})...`);
+                const retrySegments = await fetchWithTimeout(signalNames, spaceBeforeBracket);
+                
+                if (retrySegments && retrySegments.length > 0) {
+                  fetchSuccess = true;
+                  console.log(`[Expand] Retry succeeded: ${retrySegments.length} segments`);
+                  break;
+                }
+              } catch (retryErr: any) {
+                if (is404Error(retryErr)) {
+                  is404 = true;
+                  console.log('[Expand] 404 error on retry - will try opposite space');
+                  break;
+                }
+                console.log(`[Expand] Retry failed (attempt ${attempt + 1}):`, retryErr.message);
+                
+                if (attempt < maxRetries) {
+                  await new Promise(resolve => setTimeout(resolve, 100));
+                }
               }
-            }
-          } catch (err: any) {
-            if (attempt < maxRetries) {
-              console.log(`[Expand] Fetch failed (attempt ${attempt + 1}), will retry:`, err.message);
-              await new Promise(resolve => setTimeout(resolve, 100)); // Wait before retry
-            } else {
-              console.log(`[Expand] Fetch failed after ${maxRetries + 1} attempts:`, err.message);
-              fetchError = `Failed to fetch data: ${err.message}`;
             }
           }
         }
 
-        // If fetch failed or returned empty, or there are multi-bit signals, try with opposite spaceBeforeBracket
+        // If fetch failed (404, timeout, or empty), try with opposite spaceBeforeBracket
         const hasMultiBitSignals = signals.some(s => s.width > 1);
-        if ((!fetchSuccess || fetchError) && hasMultiBitSignals) {
-          console.log('[Expand] Fetching with opposite spaceBeforeBracket (success=' + fetchSuccess + ', hasMultiBit=' + hasMultiBitSignals + ')');
+        if (!fetchSuccess && (is404 || hasMultiBitSignals || !fetchError)) {
+          console.log(`[Expand] Trying opposite spaceBeforeBracket (is404=${is404}, hasMultiBit=${hasMultiBitSignals})`);
           try {
-            const oppositeSegments = await provider.fetchAndGetSegments(
-              signalNames,
-              viewport,
-              allWasmSignals,
-              'hex',
-              signalPrefix,
-              serverPrefix,
-              !spaceBeforeBracket  // Try opposite setting
-            );
+            const oppositeSegments = await fetchWithTimeout(signalNames, !spaceBeforeBracket);
+            
             if (oppositeSegments && oppositeSegments.length > 0) {
-              console.log(`[Expand] Successfully fetched ${oppositeSegments.length} segments with opposite spaceBeforeBracket (LoD0)`);
+              console.log(`[Expand] Successfully fetched ${oppositeSegments.length} segments with opposite spaceBeforeBracket=${!spaceBeforeBracket} (LoD0)`);
               fetchSuccess = true;
               fetchError = null;
-            } else if (!fetchError) {
-              fetchError = 'No data returned from fetch';
+            } else {
+              fetchError = 'No data returned from fetch (both space settings)';
             }
           } catch (err: any) {
-            console.warn('[MonacoSourceCodeWindow] Failed to fetch with opposite spaceBeforeBracket:', err.message);
+            console.log(`[Expand] Failed with opposite spaceBeforeBracket:`, err.message);
             if (!fetchError) {
               fetchError = `Failed to fetch data: ${err.message}`;
             }
