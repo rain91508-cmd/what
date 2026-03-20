@@ -1767,6 +1767,76 @@ function App() {
     }
   }
 
+  // Handle double-click on signal in waveform window
+  // Uses globalId to build full signal info and jump to declaration
+  const handleWaveformSignalDoubleClick = (signal: Signal & { unique_id: number }) => {
+    console.log('[App] handleWaveformSignalDoubleClick called, signal:', signal.name, 'globalId:', signal.globalId);
+
+    // Use kdbManager to build full signal info from globalId
+    const fullSignal = kdbManager.buildSignal(signal.globalId);
+    if (!fullSignal) {
+      addMessage(`Cannot find signal info for ${signal.name}`);
+      return;
+    }
+    
+    if (!fullSignal.declaration) {
+      addMessage(`No declaration info for ${signal.name}`);
+      return;
+    }
+    
+    const line = fullSignal.declaration.line;
+    const fileId = fullSignal.declaration.fileId;
+    
+    // Determine display range based on signal's parent module
+    let displayStartLine: number | undefined;
+    let displayEndLine: number | undefined;
+    let displayModuleIndex = fullSignal.parentModuleId;
+    
+    // Get the parent module of this signal
+    const parentModuleId = fullSignal.parentModuleId;
+    if (parentModuleId > 0) {
+      const parentModule = kdbManager.getModuleById(parentModuleId);
+      
+      if (parentModule) {
+        if (!parentModule.isInstance) {
+          // Parent is a module definition, use its range
+          displayStartLine = parentModule.definition?.startLine;
+          displayEndLine = parentModule.definition?.endLine;
+        } else {
+          // Parent is an instance, find the def_module_id
+          const defModuleId = parentModule.defModuleId;
+          if (defModuleId > 0) {
+            const defModule = kdbManager.getModuleById(defModuleId);
+            displayStartLine = defModule?.definition?.startLine;
+            displayEndLine = defModule?.definition?.endLine;
+          }
+        }
+      }
+    }
+    
+    console.log('[App] Waveform signal display range:', displayStartLine, '-', displayEndLine, 'for parentModuleId:', parentModuleId);
+    
+    // Always create a new source tab (simplified approach)
+    const sourceCounter = tabCounters.current.source++;
+    const newId = `source-${sourceCounter}`;
+    const newTab: Tab = {
+      id: newId,
+      label: `Source ${sourceCounter}`,
+      type: 'source',
+      moduleIndex: displayModuleIndex,
+      displayModuleIndex: displayModuleIndex,
+      signalDeclarationLine: line,
+      moduleStartLine: displayStartLine,
+      moduleEndLine: displayEndLine,
+    };
+    setTabs(prev => [...prev, newTab]);
+    setActiveTab(newId);
+    
+    // Add navigation entry after tab is created
+    setTimeout(() => addNavigationEntry(fileId, line, displayModuleIndex), 0);
+    addMessage(`Open source at ${signal.name} declaration (line ${line})`);
+  };
+
   const handleSignalSelect = async (signal: Signal) => {
     console.log('[App] handleSignalSelect called:', signal?.name, 'activeTab:', activeTab);
 
@@ -4071,6 +4141,7 @@ function App() {
                     } : tab
                   ));
                 }}
+                onSignalDoubleClick={handleWaveformSignalDoubleClick}
               />
             ) : null}
           </TabPanel>

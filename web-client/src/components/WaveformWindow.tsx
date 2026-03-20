@@ -125,6 +125,8 @@ interface WaveformWindowProps {
   wavemarks?: Wavemark[];
   // Signal selection callback
   onSignalSelect?: (signal: Signal & { unique_id: number }) => void;
+  // Signal double click callback (jump to declaration)
+  onSignalDoubleClick?: (signal: Signal & { unique_id: number }) => void;
 }
 
 interface CursorState {
@@ -188,6 +190,7 @@ export function WaveformWindow({
   onSignalSettingsChange,
   wavemarks = [],
   onSignalSelect,
+  onSignalDoubleClick,
 }: WaveformWindowProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -2663,7 +2666,12 @@ export function WaveformWindow({
                         onClick={() => {
                           onSignalSelect?.(signal);
                         }}
+                        onDoubleClick={(e) => {
+                          e.stopPropagation();
+                          onSignalDoubleClick?.(signal);
+                        }}
                         style={{ cursor: 'pointer' }}
+                        title="Double-click to jump to declaration"
                       >
                         {getSignalDisplayName(signal)}
                       </span>
