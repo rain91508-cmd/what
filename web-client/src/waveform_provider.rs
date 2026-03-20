@@ -516,8 +516,6 @@ pub struct WaveformDataProvider {
     enable_opfs: bool,  // OPFS cache enabled flag
     current_lod: Option<u32>,  // Current LoD level for bucket size calculation
     display_unit_per_lod0_unit: f64,  // Time unit conversion factor (display unit / LoD0 unit)
-    cursor_time: Option<f64>,  // Cursor time for value lookup
-    cursor_values: HashMap<String, ValueInfo>,  // Cached cursor values for each signal
 }
 
 #[wasm_bindgen]
@@ -553,8 +551,6 @@ impl WaveformDataProvider {
             enable_opfs: false,  // Disabled by default
             current_lod: None,  // Will be set when fetching data
             display_unit_per_lod0_unit: 1.0,  // Default to 1.0 (no conversion)
-            cursor_time: None,  // No cursor by default
-            cursor_values: HashMap::new(),  // Empty cursor values
         }
     }
 
@@ -2798,7 +2794,7 @@ if tile_missing_signals.is_empty() {
     /// Get render segments for current viewport
     /// 
     /// This is an internal function, use fetch_and_get_segments for JS calls
-    fn get_segments(&mut self) -> Result<JsValue, JsValue> {
+    fn get_segments(&self) -> Result<JsValue, JsValue> {
         // Optimization: if no signals to draw, return empty segments early
         if self.signals.is_empty() {
             // console_log!("[WASM] get_segments: no signals to draw, returning empty segments");
@@ -2808,9 +2804,6 @@ if tile_missing_signals.is_empty() {
 
         let mut segments = Vec::new();
         let time_range = self.viewport.time_end - self.viewport.time_start;
-        
-        // Clear cursor values before generating new segments
-        self.cursor_values.clear();
 
         for signal in self.signals.iter() {
             // Use signal.row provided by UI (accounts for group headers)
@@ -2871,16 +2864,6 @@ if tile_missing_signals.is_empty() {
                     // LoD 0: Use transitions format
                     self.generate_normal_segments(&data.transitions, data.width, y, &signal.name,
                         time_range, &mut segments, display_format, &data.tile_info);
-                }
-            }
-        }
-        
-        // Collect cursor values from segments
-        if let Some(cursor_time) = self.cursor_time {
-            for segment in &segments {
-                // Check if this segment covers the cursor time
-                if segment.x0 <= cursor_time && cursor_time < segment.x1 {
-                    self.cursor_values.insert(segment.signal_name.clone(), segment.value.clone());
                 }
             }
         }
@@ -4115,30 +4098,14 @@ if tile_missing_signals.is_empty() {
         serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
     }
 
-    /// Set cursor time for value lookup
-    /// This should be called before get_segments to enable cursor value collection
-    #[wasm_bindgen(js_name = setCursorTime)]
-    pub fn set_cursor_time(&mut self, time: f64) {
-        self.cursor_time = Some(time);
-        self.cursor_values.clear(); // Clear cached values when cursor moves
-    }
-
-    /// Clear cursor time
-    #[wasm_bindgen(js_name = clearCursorTime)]
-    pub fn clear_cursor_time(&mut self) {
-        self.cursor_time = None;
-        self.cursor_values.clear();
-    }
-
-    /// Get signal value at cursor time
-    /// Must call setCursorTime and get_segments before this
+    /// Get signal value at a specific time
+    /// Returns the value of the signal at the given time (from cached data)
+    /// If data is not cached, returns null
+    /// Handles BOUNDARY_TIME_START (0xFFFFFFFFFFFFFFFF) as the start-of-range value
+    /// display_format: optional display format override ("hex", "bin", "oct", "dec")
     #[wasm_bindgen(js_name = get_signal_value_at_time)]
-    pub fn get_signal_value_at_time_js(&self, signal_name: &str) -> JsValue {
-        if let Some(value_info) = self.cursor_values.get(signal_name) {
-            serde_wasm_bindgen::to_value(value_info).unwrap_or(JsValue::NULL)
-        } else {
-            JsValue::NULL
-        }
+    pub fn get_signal_value_at_time_js(&self, signal_name: &str, time: f64, display_format: Option<String>) -> JsValue {
+        self.get_signal_value_at_time_internal(signal_name, time, display_format.as_deref())
     }
 
     /// Check if signal_data has data for the given signal
@@ -4157,153 +4124,243 @@ if tile_missing_signals.is_empty() {
     }
  
     /// Internal implementation of get_signal_value_at_time
+    /// Structure mirrors get_segments() to ensure consistency
     fn get_signal_value_at_time_internal(&self, signal_name: &str, time: f64, display_format: Option<&str>) -> JsValue {
-        // Use provided display_format, no longer rely on self.signals
         let signal_display_format = display_format;
+        let time_u64 = time as u64;
+        let lod = self.current_lod.unwrap_or(0);
         
-        // Check if this is a bit extraction signal
-        if let Some((parent_name, (msb, lsb))) = Self::parse_bit_extract(signal_name) {
-            // console_log!("[WASM] get_signal_value_at_time: bit extraction '{}' -> parent '{}' [{}:{}]", 
-            //     signal_name, parent_name, msb, lsb);
-            
+        // Check if this is a bit extraction signal (same logic as get_segments)
+        if let Some((ref parent_name, (msb, lsb))) = Self::parse_bit_extract(signal_name) {
             // Get parent signal data
-            if let Some(parent_data) = self.signal_data.get(&parent_name) {
-                let time_u64 = time as u64;
-                let lod = self.current_lod.unwrap_or(0);
+            if let Some(parent_data) = self.signal_data.get(parent_name) {
+                let width = if msb == lsb { 1 } else { msb - lsb + 1 };
                 
-                // LoD 1+: Use bucket_data format
+                // Same LoD branching as get_segments
                 if lod > 0 {
-                    return self.get_bucket_value_at_time(parent_data, time_u64, 
-                        (msb - lsb + 1) as u32, Some((msb, lsb)), signal_display_format);
-                }
-                
-                // Find the transition that covers this time
-                let mut current_transition = None;
-                let mut boundary_transition = None;
-                
-                for transition in &parent_data.transitions {
-                    if transition.time == BOUNDARY_TIME_START {
-                        boundary_transition = Some(transition);
-                    } else if transition.time <= time_u64 {
-                        current_transition = Some(transition);
-                    } else {
-                        break;
-                    }
-                }
-                
-                if let Some(value_trans) = current_transition.or(boundary_transition) {
-                    // Parse and extract bits
-                    let value_u64 = match server_value_to_u64(value_trans.value_type, value_trans.value_len, &value_trans.value) {
-                        Some(v) => v,
-                        None => 0,
-                    };
-                    
-                    let bit_count = msb - lsb + 1;
-                    let mask = if bit_count >= 64 {
-                        u64::MAX
-                    } else {
-                        ((1u64 << bit_count) - 1) << lsb
-                    };
-                    let extracted_value = (value_u64 & mask) >> lsb;
-                    
-                    // Format display string using signal_display_format
-                    let hex_str = format!("0x{:X}", extracted_value);
-                    let display_str = if bit_count == 1 {
-                        // Single bit: always show as 0 or 1
-                        format!("{}", extracted_value)
-                    } else {
-                        // Multi-bit: use signal_display_format
-                        self.format_multi_bit_value(&hex_str, bit_count as u32, signal_display_format)
-                    };
-                    
-                    let (value_type, has_xz) = Self::classify_value(&display_str, bit_count as u32);
-                    
-                    let value_info = ValueInfo {
-                        value_type,
-                        display_str,
-                        width: bit_count as u32,
-                        has_xz,
-                        min_value: None,
-                        max_value: None,
-                        is_min_max: false,
-                    };
-                    return serde_wasm_bindgen::to_value(&value_info).unwrap_or(JsValue::NULL);
+                    // LoD 1+: Extract bits from bucket data, then get value
+                    let extracted_buckets = self.extract_bits_from_buckets(
+                        &parent_data.bucket_data, parent_data.width, msb, lsb);
+                    return self.get_value_from_buckets(parent_name, &extracted_buckets, time_u64, width, signal_display_format);
+                } else {
+                    // LoD 0: Extract bits from transitions, then get value
+                    let extracted_transitions = self.extract_bits_from_transitions(
+                        &parent_data.transitions, parent_data.width, msb, lsb);
+                    return self.get_value_from_transitions(&extracted_transitions, time_u64, width, signal_display_format, &[]);
                 }
             }
             return JsValue::NULL;
         }
         
-        // Normal signal lookup
+        // Normal signal lookup (same structure as get_segments)
         if let Some(data) = self.signal_data.get(signal_name) {
-            let time_u64 = time as u64;
-            let lod = self.current_lod.unwrap_or(0);
-
-            // LoD 1+: Use bucket_data format
             if lod > 0 {
-                return self.get_bucket_value_at_time(data, time_u64, data.width, None, signal_display_format);
-            }
-
-            // Find the transition that covers this time
-            // The value is valid from transition.time until the next transition
-            let mut current_transition = None;
-            let mut boundary_transition = None; // Store boundary value separately
-
-            // LoD 0: Get start value from tile_info for the tile containing current time
-            // tile_info: (tile_start, tile_end, start_time, start_value_transition)
-            if !data.tile_info.is_empty() {
-                let start_value = data.tile_info.iter()
-                    .find(|(tile_start, tile_end, _, _)| *tile_start <= time_u64 && time_u64 < *tile_end)
-                    .map(|(_, _, _, sv)| sv);
-                
-                if let Some(sv) = start_value {
-                    boundary_transition = Some(sv);
-                }
-            }
-
-            for transition in &data.transitions {
-                if transition.time == BOUNDARY_TIME_START {
-                    // Boundary value represents the value at range start
-                    boundary_transition = Some(transition);
-                } else if transition.time <= time_u64 {
-                    current_transition = Some(transition);
-                } else {
-                    break; // transition.time > time_u64, stop searching
-                }
-            }
-
-            // Use boundary value if no normal transition found before this time
-            let transition_to_return = current_transition.or(boundary_transition);
-
-            // Return the value info
-            if let Some(value_trans) = transition_to_return {
-                let value_str = server_value_to_string(value_trans.value_type, value_trans.value_len, &value_trans.value);
-                let (value_type, has_xz) = Self::classify_value(&value_str, data.width);
-
-                // Format display string with prefix for multi-bit values
-                let display_str = if data.width > 1 {
-                    self.format_multi_bit_value(&value_str, data.width, signal_display_format)
-                } else {
-                    value_str.clone()
-                };
-
-                let value_info = ValueInfo {
-                    value_type,
-                    display_str,
-                    width: data.width,
-                    has_xz,
-                    min_value: None,
-                    max_value: None,
-                    is_min_max: false,
-                };
-                serde_wasm_bindgen::to_value(&value_info).unwrap_or(JsValue::NULL)
+                // LoD 1+: Use bucket-based value lookup
+                return self.get_value_from_buckets(signal_name, &data.bucket_data, time_u64, data.width, signal_display_format);
             } else {
-                // No transition found before this time (and no boundary value)
-                JsValue::NULL
+                // LoD 0: Use transitions-based value lookup
+                return self.get_value_from_transitions(&data.transitions, time_u64, data.width, signal_display_format, &data.tile_info);
             }
-        } else {
-            // Signal data not cached
-            JsValue::NULL
         }
+        
+        // Signal data not cached
+        JsValue::NULL
+    }
+    
+    /// Get value at time from transitions (LoD 0)
+    /// Algorithm matches generate_normal_segments exactly
+    fn get_value_from_transitions(
+        &self,
+        transitions: &[Transition],
+        time_u64: u64,
+        width: u32,
+        display_format: Option<&str>,
+        tile_info: &[(u64, u64, u64, Transition)],
+    ) -> JsValue {
+        // Step 1: Get start value from tile_info for the tile containing time_u64
+        // (same method as generate_normal_segments, but for time_u64 instead of viewport_start)
+        let start_value = if !tile_info.is_empty() {
+            tile_info.iter()
+                .find(|(tile_start, tile_end, _, _)| *tile_start <= time_u64 && time_u64 < *tile_end)
+                .map(|(_, _, _, sv)| sv.clone())
+        } else {
+            None
+        };
+
+        // Step 2: Filter transitions - exclude start value (same as generate_normal_segments)
+        let normal_transitions: Vec<_> = transitions.iter()
+            .filter(|t| t.time != BOUNDARY_TIME_START)
+            .collect();
+
+        // Step 3: If no transitions, return start value (same as generate_normal_segments)
+        if normal_transitions.is_empty() {
+            if let Some(start_val) = start_value {
+                return self.transition_to_value_info(&start_val, width, display_format);
+            }
+            return JsValue::NULL;
+        }
+
+        // Step 4: Find the last transition at or before time_u64
+        // (same logic as generate_normal_segments when building segments)
+        let mut current_value_trans: Option<&Transition> = None;
+        
+        for transition in &normal_transitions {
+            if transition.actual_time <= time_u64 {
+                current_value_trans = Some(transition);
+            } else {
+                break;
+            }
+        }
+
+        // Step 5: Use found transition, or fall back to start value
+        let value_trans = if let Some(trans) = current_value_trans {
+            trans
+        } else if let Some(ref start_val) = start_value {
+            start_val
+        } else {
+            return JsValue::NULL;
+        };
+
+        // Step 6: Convert to ValueInfo
+        self.transition_to_value_info(value_trans, width, display_format)
+    }
+    
+    /// Get value at time from bucket_data (LoD 1+)
+    /// Algorithm matches generate_lod_segments_from_buckets exactly
+    fn get_value_from_buckets(
+        &self,
+        signal_name: &str,
+        bucket_data: &[(u64, HashMap<u16, BucketData>)],
+        time_u64: u64,
+        width: u32,
+        display_format: Option<&str>,
+    ) -> JsValue {
+        let lod = self.current_lod.unwrap_or(25);
+        let bucket_size = 1u64 << lod;
+        let tile_span = bucket_size * 256; // TILE_SPAN_MULTIPLIER = 256
+        
+        // Find which tile contains this time (same as generate_lod_segments_from_buckets)
+        for (tile_idx, (tile_start, buckets)) in bucket_data.iter().enumerate() {
+            let tile_end = tile_start + tile_span;
+            
+            if time_u64 >= *tile_start && time_u64 < tile_end {
+                // Calculate bucket index (same as generate_lod_segments_from_buckets)
+                let offset_in_tile = (time_u64 - *tile_start) / bucket_size;
+                let bucket_idx = offset_in_tile as u16;
+                
+                // Get the value transition for this bucket
+                // Logic mirrors generate_lod_segments_from_buckets
+                let value_transition = self.find_bucket_value_at_time(
+                    signal_name, bucket_data, tile_idx, *tile_start, buckets, bucket_idx, lod
+                );
+                
+                return self.transition_to_value_info(&value_transition, width, display_format);
+            }
+        }
+        
+        JsValue::NULL
+    }
+    
+    /// Find the value transition at a specific bucket index
+    /// Mirrors the logic in generate_lod_segments_from_buckets for handling empty buckets
+    fn find_bucket_value_at_time(
+        &self,
+        signal_name: &str,
+        bucket_data: &[(u64, HashMap<u16, BucketData>)],
+        tile_idx: usize,
+        tile_start: u64,
+        buckets: &HashMap<u16, BucketData>,
+        bucket_idx: u16,
+        lod: u32,
+    ) -> Transition {
+        // Try to find the bucket at this index
+        if let Some(bucket) = buckets.get(&bucket_idx) {
+            // Found bucket at exact index
+            // For toggle bucket, use last value; for single transition, use first value
+            // (same logic as generate_lod_segments_from_buckets)
+            if bucket.has_toggle() {
+                return bucket.last.as_ref().unwrap().clone();
+            } else {
+                return bucket.first.clone();
+            }
+        }
+        
+        // Empty bucket - need to find previous non-empty bucket
+        // (same logic as generate_lod_segments_from_buckets)
+        
+        // Search backwards from bucket_idx-1 to 0 within current tile
+        for prev_idx in (0..bucket_idx).rev() {
+            if let Some(prev_bucket) = buckets.get(&prev_idx) {
+                return if prev_bucket.has_toggle() {
+                    prev_bucket.last.as_ref().unwrap().clone()
+                } else {
+                    prev_bucket.first.clone()
+                };
+            }
+        }
+        
+        // Not found in current tile - use previous tile's last value or start value
+        if tile_idx > 0 {
+            // Use previous tile's last bucket value
+            let (_, prev_buckets) = &bucket_data[tile_idx - 1];
+            let mut last_transition: Option<Transition> = None;
+            
+            for idx in 0..256u16 {
+                if let Some(bucket) = prev_buckets.get(&idx) {
+                    last_transition = Some(if bucket.has_toggle() {
+                        bucket.last.as_ref().unwrap().clone()
+                    } else {
+                        bucket.first.clone()
+                    });
+                }
+            }
+            
+            if let Some(trans) = last_transition {
+                return trans;
+            }
+        }
+        
+        // First tile - use start value from tile_info (same as generate_lod_segments_from_buckets)
+        if let Some(data) = self.signal_data.get(signal_name) {
+            if let Some(start_value) = data.tile_info.iter()
+                .find(|(start, _, _, _)| *start == tile_start)
+                .map(|(_, _, _, value)| value.clone()) {
+                return start_value;
+            }
+        }
+        
+        // Fallback: return a default transition
+        Transition {
+            time: 0,
+            actual_time: tile_start,
+            value_type: 0,
+            value_len: 1,
+            value: vec![b'0'],
+        }
+    }
+    
+    /// Convert a Transition to ValueInfo
+    fn transition_to_value_info(&self, transition: &Transition, width: u32, display_format: Option<&str>) -> JsValue {
+        let value_str = server_value_to_string(transition.value_type, transition.value_len, &transition.value);
+        let (value_type, has_xz) = Self::classify_value(&value_str, width);
+
+        let display_str = if width > 1 {
+            self.format_multi_bit_value(&value_str, width, display_format)
+        } else {
+            value_str
+        };
+
+        let value_info = ValueInfo {
+            value_type,
+            display_str,
+            width,
+            has_xz,
+            min_value: None,
+            max_value: None,
+            is_min_max: false,
+        };
+        
+        serde_wasm_bindgen::to_value(&value_info).unwrap_or(JsValue::NULL)
     }
 
     /// Get value at time from bucket_data (new LoD 1+ format)
