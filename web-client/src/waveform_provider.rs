@@ -1895,7 +1895,7 @@ if tile_missing_signals.is_empty() {
         };
         
         // For LoD > 0: find value from bucket_data using actual_time
-        if requested_lod > 0 && !signal_data.bucket_data.is_empty() {
+        if requested_lod > 0 {
             // First, check if target_time matches exactly a first or last transition's actual_time
             for (tile_start, buckets) in &signal_data.bucket_data {
                 for (bucket_offset, bucket) in buckets {
@@ -2815,9 +2815,10 @@ if tile_missing_signals.is_empty() {
                 // Get parent signal data
                 if let Some(parent_data) = self.signal_data.get(parent_name) {
                     let width = if msb == lsb { 1 } else { msb - lsb + 1 };
+                    let lod = self.current_lod.unwrap_or(0);
                     
-                    // Check if we have bucket data (LoD 1+ format)
-                    if !parent_data.bucket_data.is_empty() {
+                    // LoD 1+: Use bucket data format
+                    if lod > 0 {
                         // Extract bits from bucket data
                         let extracted_buckets = self.extract_bits_from_buckets(
                             &parent_data.bucket_data, parent_data.width, msb, lsb);
@@ -2832,21 +2833,13 @@ if tile_missing_signals.is_empty() {
                             &mut segments,
                             display_format,
                         );
-                    } else if !parent_data.transitions.is_empty() {
-                        // Extract bits from transitions (LoD 0 format)
+                    } else {
+                        // LoD 0: Extract bits from transitions (even if empty)
                         let extracted_transitions = self.extract_bits_from_transitions(
                             &parent_data.transitions, parent_data.width, msb, lsb);
-                        
-                        // Generate segments from extracted data
-                        let is_lod_min_max = self.detect_min_max_format(&extracted_transitions);
-                        if is_lod_min_max {
-                            self.generate_min_max_segments(&extracted_transitions, width, y, &signal.name,
-                                time_range, &mut segments, display_format);
-                        } else {
-                            // For bit-extracted signals, pass empty tile_info (start value not available)
-                            self.generate_normal_segments(&extracted_transitions, width, y, &signal.name,
-                                time_range, &mut segments, display_format, &[]);
-                        }
+                        // For bit-extracted signals, pass empty tile_info (start value not available)
+                        self.generate_normal_segments(&extracted_transitions, width, y, &signal.name,
+                            time_range, &mut segments, display_format, &[]);
                     }
                 }
                 continue;
@@ -3999,12 +3992,14 @@ if tile_missing_signals.is_empty() {
         // console_log!("[WASM] find_transitions_around: signal='{}', time={}", signal_name, time);
 
         if let Some(data) = self.signal_data.get(signal_name) {
-            // Check if we have bucket_data (new LoD 1+ format)
-            if !data.bucket_data.is_empty() {
+            let lod = self.current_lod.unwrap_or(0);
+            
+            // LoD 1+: Use bucket_data format
+            if lod > 0 {
                 return self.find_transitions_around_from_buckets(data, time);
             }
             
-            // Fall back to transitions (LoD 0 or old format)
+            // LoD 0: Use transitions
             // console_log!("[WASM]   Found signal data, transitions count: {}", data.transitions.len());
 
             let mut prev: Option<u64> = None;
@@ -4200,51 +4195,6 @@ if tile_missing_signals.is_empty() {
                         is_min_max: false,
                     };
                     return serde_wasm_bindgen::to_value(&value_info).unwrap_or(JsValue::NULL);
-                }
-                
-                // If no transitions and no buckets, try to get start value from parent signal's tile_info
-                if parent_data.transitions.is_empty() && parent_data.bucket_data.is_empty() && !parent_data.tile_info.is_empty() {
-                    // Get the first tile's start value from parent signal's tile_info
-                    // Need to find the entry with start_time == BOUNDARY_TIME_START
-                    const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
-                    let start_value = parent_data.tile_info.iter()
-                        .find(|(_, _, start_time, _)| *start_time == BOUNDARY_TIME_START)
-                        .map(|(_, _, _, sv)| sv);
-                    
-                    if let Some(start_value) = start_value {
-                        let value_u64 = match server_value_to_u64(start_value.value_type, start_value.value_len, &start_value.value) {
-                            Some(v) => v,
-                            None => 0,
-                        };
-                        
-                        let bit_count_inner = msb - lsb + 1;
-                        let mask = if bit_count_inner >= 64 {
-                            u64::MAX
-                        } else {
-                            ((1u64 << bit_count_inner) - 1) << lsb
-                        };
-                        let extracted_value = (value_u64 & mask) >> lsb;
-                        
-                        let hex_str = format!("0x{:X}", extracted_value);
-                        let display_str = if bit_count_inner == 1 {
-                            format!("{}", extracted_value)
-                        } else {
-                            self.format_multi_bit_value(&hex_str, bit_count_inner as u32, signal_display_format)
-                        };
-                        
-                        let (value_type, has_xz) = Self::classify_value(&display_str, bit_count_inner as u32);
-                        
-                        let value_info = ValueInfo {
-                            value_type,
-                            display_str: display_str.clone(),
-                            width: bit_count_inner as u32,
-                            has_xz,
-                            min_value: None,
-                            max_value: None,
-                            is_min_max: false,
-                        };
-                        return serde_wasm_bindgen::to_value(&value_info).unwrap_or(JsValue::NULL);
-                    }
                 }
             }
             return JsValue::NULL;
