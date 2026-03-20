@@ -481,83 +481,8 @@ function MonacoSourceCodeWindow({
       valueType: string;
     }> = [];
 
-    // First, fetch data for all signals to populate the cache
-    // This is necessary because getSignalValueAtTime reads from the cache
-    // Use original signal names (not converted), let WASM handle the conversion
-    if (provider && currentTime !== undefined && signals.length > 0) {
-      try {
-        // Build WasmSignalInfo array for all signals using ORIGINAL names
-        // WASM will handle the signal name conversion
-        const allWasmSignals: WasmSignalInfo[] = signals.map(sig => {
-          const serverName = convertSignalNameForServer(sig.fullName);
-          const mapFormat = signalRadixMap?.get(serverName);
-          const radix: DisplayFormat = (mapFormat && mapFormat !== 'auto') ? mapFormat :
-                        (sig.width > 1 ? 'hex' : 'bin');
-          return {
-            globalId: sig.globalId,
-            name: sig.fullName,  // Use ORIGINAL name (local name), not serverName
-            row: 0,
-            width: sig.width,
-            drawSigId: sig.globalId,
-            displayFormat: radix,
-          };
-        });
-
-        // Define a small viewport around the current time to fetch data
-        const timeWindow = 1000; // Fetch 1000 units around current time
-        const viewport = {
-          startTime: Math.max(0, currentTime - timeWindow),
-          endTime: currentTime + timeWindow,
-          width: 800,
-          height: 600,
-        };
-
-        const signalNames = allWasmSignals.map(s => s.name);
-
-        // Fetch data to populate cache with current spaceBeforeBracket setting
-        let fetchSuccess = false;
-        try {
-          const segments = await provider.fetchAndGetSegments(
-            signalNames,
-            viewport,
-            allWasmSignals,
-            'hex', // Default format for fetching
-            signalPrefix,
-            serverPrefix,
-            spaceBeforeBracket
-          );
-          fetchSuccess = true;
-          console.log('[Expand] Successfully fetched data with current spaceBeforeBracket');
-        } catch (err) {
-          console.log('[Expand] Failed to fetch with current spaceBeforeBracket, will try opposite');
-        }
-
-        // If fetch failed or there are multi-bit signals, also fetch with opposite spaceBeforeBracket setting
-        // This ensures cache has data for both spacing conventions
-        const hasMultiBitSignals = signals.some(s => s.width > 1);
-        if (!fetchSuccess || hasMultiBitSignals) {
-          console.log('[Expand] Fetching with opposite spaceBeforeBracket (failed=' + !fetchSuccess + ', hasMultiBit=' + hasMultiBitSignals + ')');
-          try {
-            await provider.fetchAndGetSegments(
-              signalNames,
-              viewport,
-              allWasmSignals,
-              'hex',
-              signalPrefix,
-              serverPrefix,
-              !spaceBeforeBracket  // Try opposite setting
-            );
-            console.log('[Expand] Successfully fetched data with opposite spaceBeforeBracket');
-          } catch (err) {
-            console.warn('[MonacoSourceCodeWindow] Failed to fetch signal data with opposite spaceBeforeBracket:', err);
-          }
-        }
-      } catch (err) {
-        console.warn('[MonacoSourceCodeWindow] Failed to fetch signal data:', err);
-      }
-    }
-
-    // Now get values for each signal
+    // Get values for each signal using getSignalValueAtTime (similar to cursor value retrieval)
+    // This can get values at any time point, not just at transitions
     for (const sig of signals) {
       // Calculate server name for display and radix lookup
       const serverName = convertSignalNameForServer(sig.fullName);
@@ -569,14 +494,13 @@ function MonacoSourceCodeWindow({
 
       try {
         if (provider && currentTime !== undefined) {
-          // Use ORIGINAL signal name for cache lookup
-          // The cache is populated by fetchAndGetSegments using original names
+          // Use ORIGINAL signal name
           const originalSignalName = sig.fullName;
           
           // Build minimal WasmSignalInfo array for the provider
           const wasmSignals: WasmSignalInfo[] = [{
             globalId: sig.globalId,
-            name: originalSignalName,  // Use ORIGINAL name for cache lookup
+            name: originalSignalName,
             row: 0,
             width: sig.width,
             drawSigId: sig.globalId,
@@ -585,7 +509,7 @@ function MonacoSourceCodeWindow({
 
           // First attempt: use current spaceBeforeBracket setting
           let valueInfo = await provider.getSignalValueAtTime(
-            originalSignalName,  // Use ORIGINAL name for cache lookup
+            originalSignalName,
             currentTime,
             wasmSignals,
             radix,
