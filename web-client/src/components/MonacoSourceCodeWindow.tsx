@@ -229,7 +229,7 @@ function MonacoSourceCodeWindow({
   }, []);
 
   // Convert signal name for server query (apply prefix settings)
-  const convertSignalNameForServer = useCallback((localFullName: string): string => {
+  const convertSignalNameForServer = useCallback((localFullName: string, localspaceBeforeBracket: boolean = spaceBeforeBracket): string => {
     // Step 1: Remove local prefix if present
     let serverName = localFullName;
     if (signalPrefix && localFullName.startsWith(signalPrefix)) {
@@ -242,7 +242,7 @@ function MonacoSourceCodeWindow({
     }
 
     // Step 3: Handle space before bracket
-    if (spaceBeforeBracket) {
+    if (localspaceBeforeBracket) {
       // Add space before [ if not already present
       serverName = serverName.replace(/\[/g, ' [');
     }
@@ -527,6 +527,7 @@ function MonacoSourceCodeWindow({
     // Use original signal names (not converted), let WASM handle the conversion
     let fetchError: string | null = null;
     let fetchSuccess = false;
+    let lastSpaceBeforeBracket = false;
     
     if (provider && currentTime !== undefined && signals.length > 0 && waveformName) {
       try {
@@ -570,9 +571,15 @@ function MonacoSourceCodeWindow({
         const signalNames = allWasmSignals.map(s => s.name);
 
         // Helper function to check if error is 404 (signal not found)
-        const is404Error = (err: any) => err?.message?.includes('404') || err?.message?.includes('SIGNAL_NOT_FOUND');
+        // Check both the error message and the cause (for wrapped errors)
+        const is404Error = (err: any) => {
+          const message = err?.message || '';
+          const causeMessage = err?.cause?.message || '';
+          return message.includes('404') || message.includes('SIGNAL_NOT_FOUND') ||
+                 causeMessage.includes('404') || causeMessage.includes('SIGNAL_NOT_FOUND');
+        };
         
-        // Helper function to fetch with timeout
+        // Helper function to fetch with timeout and wait for WASM to be ready
         const fetchWithTimeout = async (sigNames: string[], spaceBeforeBracketSetting: boolean) => {
           const fetchPromise = provider.fetchAndGetSegments(
             sigNames,
@@ -588,19 +595,38 @@ function MonacoSourceCodeWindow({
             setTimeout(() => reject(new Error('Fetch timeout')), 5000)
           );
           
-          return await Promise.race([fetchPromise, timeoutPromise]);
+          const result = await Promise.race([fetchPromise, timeoutPromise]);
+          
+          // Wait for WASM to process the fetched data
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          return result;
         };
 
         // First attempt with current spaceBeforeBracket setting
         let is404 = false;
+        lastSpaceBeforeBracket = spaceBeforeBracket;
+        let hasActualData = false;  // Track if signal_data has actual data
+        
         try {
           const segments = await fetchWithTimeout(signalNames, spaceBeforeBracket);
           
           if (segments && segments.length > 0) {
             fetchSuccess = true;
-            console.log(`[Expand] Successfully fetched ${segments.length} segments with current spaceBeforeBracket=${spaceBeforeBracket} (LoD0, ±${timeWindow})`);
+            hasActualData = true;
           } else {
             console.log('[Expand] Fetch returned empty segments');
+            // Check if signal_data has actual data (transitions or buckets > 0)
+            for (const sigName of signalNames) {
+              const stats = await (provider as any).getSignalDataStats?.(sigName);
+              if (stats && (stats.transitions > 0 || stats.buckets > 0)) {
+                hasActualData = true;
+                break;
+              }
+            }
+            if (hasActualData) {
+              fetchSuccess = true;
+            }
           }
         } catch (err: any) {
           console.log(`[Expand] Fetch failed with current spaceBeforeBracket:`, err.message);
@@ -643,21 +669,30 @@ function MonacoSourceCodeWindow({
         const hasMultiBitSignals = signals.some(s => s.width > 1);
         if (!fetchSuccess && (is404 || hasMultiBitSignals || !fetchError)) {
           console.log(`[Expand] Trying opposite spaceBeforeBracket (is404=${is404}, hasMultiBit=${hasMultiBitSignals})`);
+          let oppositeFetchSuccess = false;
           try {
             const oppositeSegments = await fetchWithTimeout(signalNames, !spaceBeforeBracket);
             
             if (oppositeSegments && oppositeSegments.length > 0) {
               console.log(`[Expand] Successfully fetched ${oppositeSegments.length} segments with opposite spaceBeforeBracket=${!spaceBeforeBracket} (LoD0)`);
               fetchSuccess = true;
+              oppositeFetchSuccess = true;
               fetchError = null;
+              lastSpaceBeforeBracket = !spaceBeforeBracket;  // Use opposite space for getSignalValueAtTime
             } else {
-              fetchError = 'No data returned from fetch (both space settings)';
+              console.log('[Expand] Fetch returned empty segments with opposite space setting');
+              // Revert to original space setting for getSignalValueAtTime
+              lastSpaceBeforeBracket = spaceBeforeBracket;
             }
           } catch (err: any) {
             console.log(`[Expand] Failed with opposite spaceBeforeBracket:`, err.message);
-            if (!fetchError) {
-              fetchError = `Failed to fetch data: ${err.message}`;
-            }
+            // Revert to original space setting for getSignalValueAtTime
+            lastSpaceBeforeBracket = spaceBeforeBracket;
+          }
+          
+          // If opposite space fetch failed, use original space for getSignalValueAtTime
+          if (!oppositeFetchSuccess) {
+            console.log(`[Expand] Opposite space fetch failed, will use original spaceBeforeBracket=${spaceBeforeBracket} for getSignalValueAtTime`);
           }
         }
         
@@ -672,17 +707,13 @@ function MonacoSourceCodeWindow({
       }
     }
     
-    // If fetch failed, show error in the view
-    if (fetchError) {
-      console.log('[Expand] Fetch error, will show error in view:', fetchError);
-      createErrorViewZone(editor, lineNumber, fetchError);
-      return; // Don't continue to get values if fetch failed
-    }
+    // Note: Don't return early on fetch error - continue to getSignalValueAtTime which has retry logic
+    // The getSignalValueAtTime will handle the case where data is not yet available
 
     // Now get values for each signal
     for (const sig of signals) {
       // Calculate server name for display and radix lookup
-      const serverName = convertSignalNameForServer(sig.fullName);
+      const serverName = convertSignalNameForServer(sig.fullName, lastSpaceBeforeBracket);
       
       // Get radix from waveform tab using server name, or use default (exclude 'auto')
       const mapFormat = signalRadixMap?.get(serverName);
@@ -725,24 +756,25 @@ function MonacoSourceCodeWindow({
             radix,
             signalPrefix,
             serverPrefix,
-            spaceBeforeBracket
+            lastSpaceBeforeBracket
           );
 
-          // If no value found and this is a multi-bit signal, try with opposite spaceBeforeBracket setting
-          // This handles cases where the waveform file may have different spacing conventions
-          if (!valueInfo && sig.width > 1) {
-            console.log('[Expand] No value found for multi-bit signal, trying with opposite spaceBeforeBracket:', originalSignalName);
-            valueInfo = await provider.getSignalValueAtTime(
-              originalSignalName,
-              currentTime,
-              wasmSignals,
-              radix,
-              signalPrefix,
-              serverPrefix,
-              !spaceBeforeBracket  // Try opposite setting
-            );
-            if (valueInfo) {
-              console.log('[Expand] Successfully got value with opposite spaceBeforeBracket:', originalSignalName);
+          // If no value found, retry with delay (WASM may still be processing fetched data)
+          if (!valueInfo) {
+            for (let retryCount = 0; retryCount < 10 && !valueInfo; retryCount++) {
+              await new Promise(resolve => setTimeout(resolve, 500));
+              valueInfo = await provider.getSignalValueAtTime(
+                originalSignalName,
+                currentTime,
+                wasmSignals,
+                radix,
+                signalPrefix,
+                serverPrefix,
+                lastSpaceBeforeBracket
+              );
+              if (valueInfo) {
+                break;
+              }
             }
           }
 
@@ -766,6 +798,10 @@ function MonacoSourceCodeWindow({
 
     if (signalValues.length === 0) {
       console.log('[Expand] No signal values to display for line:', lineNumber);
+      // Show error message if fetch had an error
+      if (fetchError) {
+        createErrorViewZone(editor, lineNumber, fetchError);
+      }
       return;
     }
 

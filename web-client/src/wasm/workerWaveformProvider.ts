@@ -187,6 +187,20 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
   }
 
   /**
+   * Get signal_data stats for debugging
+   */
+  async getSignalDataStats(signalName: string): Promise<{ transitions: number; buckets: number; tiles: number } | null> {
+    try {
+      return await this.sendMessage('GET_SIGNAL_DATA_STATS', {
+        signalName,
+      });
+    } catch (error) {
+      console.warn('[WorkerWaveformProvider] getSignalDataStats failed:', error);
+      return null;
+    }
+  }
+
+  /**
    * 查找指定时间点前后的跳变（参数化）
    */
   async findTransitionsAround(

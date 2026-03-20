@@ -1399,15 +1399,41 @@ impl WaveformDataProvider {
                                     // For LoD 0: store transitions directly
                                     // For LoD 1+: parse into bucket_data
                                     if lod == 0 {
+                                        // Extract start_value from transitions (same as server fetch does)
+                                        let start_value = transitions.iter()
+                                            .find(|t| t.time == BOUNDARY_TIME_START)
+                                            .map(|t| Transition { time: t.time, actual_time: t.actual_time, value_type: t.value_type, value_len: t.value_len, value: t.value.clone() });
+                                        
+                                        // Also check for first non-boundary transition as fallback
+                                        let fallback_start = transitions.iter()
+                                            .filter(|t| t.time != BOUNDARY_TIME_START)
+                                            .min_by_key(|t| t.time)
+                                            .map(|t| Transition { time: t.time, actual_time: t.actual_time, value_type: t.value_type, value_len: t.value_len, value: t.value.clone() });
+                                        
+                                        let final_start_value = start_value.or(fallback_start);
+                                        
+                                        let tile_end = tile_start + tile_span;
+                                        
                                         // Merge with existing signal_data
                                         if let Some(existing) = self.signal_data.get_mut(signal_name) {
                                             // Append transitions
                                             existing.transitions.extend(transitions);
+                                            // Store tile info if not already present
+                                            if let Some(ref sv) = final_start_value {
+                                                let has_tile = existing.tile_info.iter().any(|(ts, _, _, _)| *ts == tile_start);
+                                                if !has_tile {
+                                                    existing.tile_info.push((tile_start, tile_end, sv.time, sv.clone()));
+                                                }
+                                            }
                                         } else {
                                             // Insert new signal_data with transitions
                                             let width = self.get_signal_width(signal_name);
                                             let mut signal_data = SignalWaveData::new(signal_name.clone(), width);
                                             signal_data.transitions = transitions;
+                                            // Store tile info
+                                            if let Some(ref sv) = final_start_value {
+                                                signal_data.tile_info.push((tile_start, tile_end, sv.time, sv.clone()));
+                                            }
                                             self.signal_data.insert(signal_name.clone(), signal_data);
                                         }
                                     } else {
@@ -1435,6 +1461,8 @@ impl WaveformDataProvider {
                                             if let Some(sv) = start_value {
                                                 signal_data.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv));
                                             }
+                                            let bucket_count = signal_data.bucket_data.len();
+                                            let tile_count = signal_data.tile_info.len();
                                             self.signal_data.insert(signal_name.clone(), signal_data);
                                         }
                                     }
@@ -4148,7 +4176,22 @@ if tile_missing_signals.is_empty() {
     pub fn get_signal_value_at_time_js(&self, signal_name: &str, time: f64, display_format: Option<String>) -> JsValue {
         self.get_signal_value_at_time_internal(signal_name, time, display_format.as_deref())
     }
-    
+
+    /// Check if signal_data has data for the given signal
+    /// Returns an object with transition count and bucket count, or null if signal not found
+    #[wasm_bindgen(js_name = getSignalDataStats)]
+    pub fn get_signal_data_stats(&self, signal_name: &str) -> JsValue {
+        if let Some(data) = self.signal_data.get(signal_name) {
+            let obj = js_sys::Object::new();
+            js_sys::Reflect::set(&obj, &"transitions".into(), &JsValue::from(data.transitions.len() as i32)).unwrap();
+            js_sys::Reflect::set(&obj, &"buckets".into(), &JsValue::from(data.bucket_data.len() as i32)).unwrap();
+            js_sys::Reflect::set(&obj, &"tiles".into(), &JsValue::from(data.tile_info.len() as i32)).unwrap();
+            obj.into()
+        } else {
+            JsValue::NULL
+        }
+    }
+ 
     /// Internal implementation of get_signal_value_at_time
     fn get_signal_value_at_time_internal(&self, signal_name: &str, time: f64, display_format: Option<&str>) -> JsValue {
         // Use provided display_format, no longer rely on self.signals
@@ -4230,6 +4273,45 @@ if tile_missing_signals.is_empty() {
                     };
                     return serde_wasm_bindgen::to_value(&value_info).unwrap_or(JsValue::NULL);
                 }
+                
+                // If no transitions and no buckets, try to get start value from parent signal's tile_info
+                if parent_data.transitions.is_empty() && parent_data.bucket_data.is_empty() && !parent_data.tile_info.is_empty() {
+                    // Get the first tile's start value from parent signal's tile_info
+                    if let Some((_, _, _, start_value)) = parent_data.tile_info.first() {
+                        let value_u64 = match server_value_to_u64(start_value.value_type, start_value.value_len, &start_value.value) {
+                            Some(v) => v,
+                            None => 0,
+                        };
+                        
+                        let bit_count_inner = msb - lsb + 1;
+                        let mask = if bit_count_inner >= 64 {
+                            u64::MAX
+                        } else {
+                            ((1u64 << bit_count_inner) - 1) << lsb
+                        };
+                        let extracted_value = (value_u64 & mask) >> lsb;
+                        
+                        let hex_str = format!("0x{:X}", extracted_value);
+                        let display_str = if bit_count_inner == 1 {
+                            format!("{}", extracted_value)
+                        } else {
+                            self.format_multi_bit_value(&hex_str, bit_count_inner as u32, signal_display_format)
+                        };
+                        
+                        let (value_type, has_xz) = Self::classify_value(&display_str, bit_count_inner as u32);
+                        
+                        let value_info = ValueInfo {
+                            value_type,
+                            display_str: display_str.clone(),
+                            width: bit_count_inner as u32,
+                            has_xz,
+                            min_value: None,
+                            max_value: None,
+                            is_min_max: false,
+                        };
+                        return serde_wasm_bindgen::to_value(&value_info).unwrap_or(JsValue::NULL);
+                    }
+                }
             }
             return JsValue::NULL;
         }
@@ -4249,6 +4331,38 @@ if tile_missing_signals.is_empty() {
             if is_lod_min_max {
                 // Handle LoD > 0 min/max format
                 return self.get_min_max_value_at_time(&data.transitions, time_u64, data.width, None, signal_display_format);
+            }
+
+            // If no transitions and no buckets, try to get start value from tile_info
+            if data.transitions.is_empty() && data.bucket_data.is_empty() && !data.tile_info.is_empty() {
+                // Get the first tile's start value from tile_info
+                // tile_info: (tile_start, tile_end, start_time, start_value_transition)
+                if let Some((_, _, _, start_value)) = data.tile_info.first() {
+                    let value_u64 = match server_value_to_u64(start_value.value_type, start_value.value_len, &start_value.value) {
+                        Some(v) => v,
+                        None => 0,
+                    };
+                    
+                    let hex_str = format!("0x{:X}", value_u64);
+                    let display_str = if data.width == 1 {
+                        format!("{}", value_u64)
+                    } else {
+                        self.format_multi_bit_value(&hex_str, data.width, signal_display_format)
+                    };
+                    
+                    let (value_type, has_xz) = Self::classify_value(&display_str, data.width);
+                    
+                    let value_info = ValueInfo {
+                        value_type,
+                        display_str: display_str.clone(),
+                        width: data.width,
+                        has_xz,
+                        min_value: None,
+                        max_value: None,
+                        is_min_max: false,
+                    };
+                    return serde_wasm_bindgen::to_value(&value_info).unwrap_or(JsValue::NULL);
+                }
             }
 
             // Find the transition that covers this time
@@ -4298,7 +4412,6 @@ if tile_missing_signals.is_empty() {
             }
         } else {
             // Signal data not cached
-            // console_log!("[WASM] get_signal_value_at_time: No cached data for signal '{}'", signal_name);
             JsValue::NULL
         }
     }

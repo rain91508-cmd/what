@@ -104,6 +104,11 @@ self.onmessage = async (event) => {
         break;
       }
 
+      case 'GET_SIGNAL_DATA_STATS': {
+        await enqueueRequest(() => handleGetSignalDataStats(payload, id));
+        break;
+      }
+
       case 'GET_SIGNAL_VALUES_AT_TRANSITIONS': {
         await enqueueRequest(() => handleGetSignalValuesAtTransitions(payload, id));
         break;
@@ -366,6 +371,18 @@ async function handleFindTransitionsAround(payload: any, id: number): Promise<vo
 
   const transitions = wasmProvider.find_transitions_around(signalName, time);
   sendSuccess(id, transitions);
+}
+
+/**
+ * 处理 GET_SIGNAL_DATA_STATS
+ */
+async function handleGetSignalDataStats(payload: any, id: number): Promise<void> {
+  if (!wasmProvider) throw new Error('Provider not initialized');
+
+  const { signalName } = payload;
+
+  const stats = wasmProvider.getSignalDataStats(signalName);
+  sendSuccess(id, stats);
 }
 
 /**

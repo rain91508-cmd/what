@@ -170,6 +170,10 @@ export class WaveformProviderAdapter {
     );
   }
 
+  async getSignalDataStats(signalName: string): Promise<{ transitions: number; buckets: number; tiles: number } | null> {
+    return this.provider.getSignalDataStats(signalName);
+  }
+
   async find_transitions_around(signalName: string, time: number): Promise<(number | null)[]> {
     // 转换信号列表格式
     const newSignals = this.convertSignals(this.currentSignals);

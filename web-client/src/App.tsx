@@ -1768,12 +1768,12 @@ function App() {
   }
 
   // Handle double-click on signal in waveform window
-  // Uses globalId to build full signal info and jump to declaration
+  // Uses unique_id to build full signal info and jump to declaration
   const handleWaveformSignalDoubleClick = (signal: Signal & { unique_id: number }) => {
-    console.log('[App] handleWaveformSignalDoubleClick called, signal:', signal.name, 'globalId:', signal.globalId);
-
-    // Use kdbManager to build full signal info from globalId
-    const fullSignal = kdbManager.buildSignal(signal.globalId);
+    console.log('[App] handleWaveformSignalDoubleClick called, signal:', signal.name, 'unique_id:', signal.unique_id);
+    
+    // Use kdbManager to build full signal info from unique_id (globalId)
+    const fullSignal = kdbManager.buildSignal(signal.unique_id);
     if (!fullSignal) {
       addMessage(`Cannot find signal info for ${signal.name}`);
       return;
