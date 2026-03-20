@@ -1396,75 +1396,45 @@ impl WaveformDataProvider {
                                         })
                                         .collect();
                                     
-                                    // For LoD 0: store transitions directly
+                                    // For LoD 0: use same processing as server fetch
                                     // For LoD 1+: parse into bucket_data
                                     if lod == 0 {
-                                        // Extract start_value from transitions (same as server fetch does)
-                                        let start_value = transitions.iter()
-                                            .find(|t| t.time == BOUNDARY_TIME_START)
-                                            .map(|t| Transition { time: t.time, actual_time: t.actual_time, value_type: t.value_type, value_len: t.value_len, value: t.value.clone() });
-                                        
-                                        // Also check for first non-boundary transition as fallback
-                                        let fallback_start = transitions.iter()
-                                            .filter(|t| t.time != BOUNDARY_TIME_START)
-                                            .min_by_key(|t| t.time)
-                                            .map(|t| Transition { time: t.time, actual_time: t.actual_time, value_type: t.value_type, value_len: t.value_len, value: t.value.clone() });
-                                        
-                                        let final_start_value = start_value.or(fallback_start);
-                                        
                                         let tile_end = tile_start + tile_span;
                                         
-                                        // Merge with existing signal_data
-                                        if let Some(existing) = self.signal_data.get_mut(signal_name) {
-                                            // Append transitions
-                                            existing.transitions.extend(transitions);
-                                            // Store tile info if not already present
-                                            if let Some(ref sv) = final_start_value {
-                                                let has_tile = existing.tile_info.iter().any(|(ts, _, _, _)| *ts == tile_start);
-                                                if !has_tile {
-                                                    existing.tile_info.push((tile_start, tile_end, sv.time, sv.clone()));
-                                                }
-                                            }
-                                        } else {
-                                            // Insert new signal_data with transitions
-                                            let width = self.get_signal_width(signal_name);
-                                            let mut signal_data = SignalWaveData::new(signal_name.clone(), width);
-                                            signal_data.transitions = transitions;
-                                            // Store tile info
-                                            if let Some(ref sv) = final_start_value {
-                                                signal_data.tile_info.push((tile_start, tile_end, sv.time, sv.clone()));
-                                            }
-                                            self.signal_data.insert(signal_name.clone(), signal_data);
-                                        }
+                                        // Use same function as server fetch to get start_value and filtered_transitions
+                                        let (start_value, filtered_transitions) = self.process_tile_transitions(
+                                            transitions,
+                                            true, // is_first_tile
+                                            tile_start,
+                                            tile_end,
+                                            tile_start, // viewport_start = tile_start for cache data
+                                            tile_end,   // viewport_end = tile_end for cache data
+                                        );
+                                        
+                                        // Store LoD 0 signal data
+                                        self.store_lod0_signal_data(
+                                            signal_name,
+                                            None, // width will be looked up from signal info
+                                            tile_start,
+                                            tile_end,
+                                            start_value,
+                                            filtered_transitions,
+                                        );
                                     } else {
                                         // Parse into bucket_data directly (like server fetch)
                                         let (start_value, buckets) = self.parse_buckets_from_transitions(&transitions);
                                         let tile_end = tile_start + tile_span;
-                                        
-                                        // Merge with existing signal_data
-                                        if let Some(existing) = self.signal_data.get_mut(signal_name) {
-                                            // Check if this tile already exists (avoid duplicates for repeated signals)
-                                            let tile_exists = existing.bucket_data.iter().any(|(ts, _)| *ts == tile_start);
-                                            if !tile_exists {
-                                                // Add bucket_data for this tile
-                                                existing.bucket_data.push((tile_start, buckets));
-                                                // Store tile info
-                                                if let Some(sv) = start_value {
-                                                    existing.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv));
-                                                }
-                                            }
-                                        } else {
-                                            // Insert new signal_data with bucket_data
-                                            let width = self.get_signal_width(signal_name);
-                                            let mut signal_data = SignalWaveData::new(signal_name.clone(), width);
-                                            signal_data.bucket_data.push((tile_start, buckets));
-                                            if let Some(sv) = start_value {
-                                                signal_data.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv));
-                                            }
-                                            let bucket_count = signal_data.bucket_data.len();
-                                            let tile_count = signal_data.tile_info.len();
-                                            self.signal_data.insert(signal_name.clone(), signal_data);
-                                        }
+
+                                        // Store LoD 1+ signal data (skip if tile exists)
+                                        self.store_lod1_signal_data(
+                                            signal_name,
+                                            None, // width will be looked up from signal info
+                                            tile_start,
+                                            tile_end,
+                                            start_value,
+                                            buckets,
+                                            false, // merge_buckets = false for OPFS (skip duplicates)
+                                        );
                                     }
                                 }
                                 Ok(None) => {
@@ -2212,32 +2182,17 @@ if tile_missing_signals.is_empty() {
             if header.level > 0 {
                 // Parse transitions into bucket data (First/Last format)
                 let (start_value, buckets) = self.parse_buckets_from_transitions(&transitions);
-                
-                // Store signal data with bucket info
-                if let Some(existing_data) = self.signal_data.get_mut(signal_name) {
-                    // Merge bucket data
-                    if let Some((_, existing_buckets)) = existing_data.bucket_data.iter_mut()
-                        .find(|(start, _)| *start == tile_start) {
-                        // Merge with existing buckets for this tile
-                        for (offset, bucket) in buckets {
-                            existing_buckets.insert(offset, bucket);
-                        }
-                    } else {
-                        // Add new tile bucket data
-                        existing_data.bucket_data.push((tile_start, buckets));
-                    }
-                    // Also store start value in tile_info for compatibility
-                    if let Some(ref sv) = start_value {
-                        existing_data.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv.clone()));
-                    }
-                } else {
-                    let mut signal_data = SignalWaveData::new(signal_name.clone(), width);
-                    signal_data.bucket_data.push((tile_start, buckets));
-                    if let Some(ref sv) = start_value {
-                        signal_data.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv.clone()));
-                    }
-                    self.signal_data.insert(signal_name.clone(), signal_data);
-                }
+
+                // Store LoD 1+ signal data (merge buckets if tile exists)
+                self.store_lod1_signal_data(
+                    signal_name,
+                    Some(width),
+                    tile_start,
+                    tile_end,
+                    start_value,
+                    buckets,
+                    true, // merge_buckets = true for server fetch
+                );
             } else {
                 // LoD 0: use traditional transition processing
                 let (start_value, filtered_transitions) = self.process_tile_transitions(
@@ -2249,23 +2204,15 @@ if tile_missing_signals.is_empty() {
                     viewport_end,
                 );
 
-                // Store signal data - merge with existing data if present
-                if let Some(existing_data) = self.signal_data.get_mut(signal_name) {
-                    existing_data.transitions.extend(filtered_transitions);
-                    existing_data.transitions.sort_by_key(|t| t.time);
-                    // Store tile info
-                    if let Some(sv) = start_value {
-                        existing_data.tile_info.push((tile_start, tile_end, sv.time, sv));
-                    }
-                } else {
-                    let mut signal_data = SignalWaveData::new(signal_name.clone(), width);
-                    signal_data.transitions = filtered_transitions;
-                    // Store tile info
-                    if let Some(sv) = start_value {
-                        signal_data.tile_info.push((tile_start, tile_end, sv.time, sv));
-                    }
-                    self.signal_data.insert(signal_name.clone(), signal_data);
-                }
+                // Store LoD 0 signal data
+                self.store_lod0_signal_data(
+                    signal_name,
+                    Some(width),
+                    tile_start,
+                    tile_end,
+                    start_value,
+                    filtered_transitions,
+                );
             }
 
             offset += block_header_size;
@@ -2323,6 +2270,99 @@ if tile_missing_signals.is_empty() {
             .collect();
         
         (start_value, normal_transitions)
+    }
+
+    /// Store LoD 0 signal data (transitions and tile_info) into signal_data
+    /// 
+    /// # Arguments
+    /// * `signal_name` - Name of the signal
+    /// * `width` - Signal width (if None, will be looked up from signal info)
+    /// * `tile_start` - Start time of the tile
+    /// * `tile_end` - End time of the tile
+    /// * `start_value` - Optional start value transition
+    /// * `filtered_transitions` - Filtered transitions within viewport
+    fn store_lod0_signal_data(
+        &mut self,
+        signal_name: &str,
+        width: Option<u32>,
+        tile_start: u64,
+        tile_end: u64,
+        start_value: Option<Transition>,
+        filtered_transitions: Vec<Transition>,
+    ) {
+        if let Some(existing_data) = self.signal_data.get_mut(signal_name) {
+            // Append filtered transitions
+            existing_data.transitions.extend(filtered_transitions);
+            existing_data.transitions.sort_by_key(|t| t.time);
+            // Store tile info
+            if let Some(sv) = start_value {
+                existing_data.tile_info.push((tile_start, tile_end, sv.time, sv));
+            }
+        } else {
+            let width = width.unwrap_or_else(|| self.get_signal_width(signal_name));
+            let mut signal_data = SignalWaveData::new(signal_name.to_string(), width);
+            signal_data.transitions = filtered_transitions;
+            // Store tile info
+            if let Some(sv) = start_value {
+                signal_data.tile_info.push((tile_start, tile_end, sv.time, sv));
+            }
+            self.signal_data.insert(signal_name.to_string(), signal_data);
+        }
+    }
+
+    /// Store LoD 1+ signal data (bucket_data and tile_info) into signal_data
+    ///
+    /// # Arguments
+    /// * `signal_name` - Name of the signal
+    /// * `width` - Signal width (if None, will be looked up from signal info)
+    /// * `tile_start` - Start time of the tile
+    /// * `tile_end` - End time of the tile
+    /// * `start_value` - Optional start value transition
+    /// * `buckets` - Bucket data (offset -> BucketData map)
+    /// * `merge_buckets` - If true, merge with existing buckets; if false, skip if tile exists
+    fn store_lod1_signal_data(
+        &mut self,
+        signal_name: &str,
+        width: Option<u32>,
+        tile_start: u64,
+        tile_end: u64,
+        start_value: Option<Transition>,
+        buckets: HashMap<u16, BucketData>,
+        merge_buckets: bool,
+    ) {
+        if let Some(existing_data) = self.signal_data.get_mut(signal_name) {
+            // Check if this tile already exists
+            let tile_exists = existing_data.bucket_data.iter().any(|(ts, _)| *ts == tile_start);
+
+            if tile_exists {
+                if merge_buckets {
+                    // Merge with existing buckets for this tile
+                    if let Some((_, existing_buckets)) = existing_data.bucket_data.iter_mut()
+                        .find(|(start, _)| *start == tile_start) {
+                        for (offset, bucket) in buckets {
+                            existing_buckets.insert(offset, bucket);
+                        }
+                    }
+                }
+                // If not merge_buckets, skip (do nothing)
+            } else {
+                // Add new tile bucket data
+                existing_data.bucket_data.push((tile_start, buckets));
+            }
+
+            // Store start value in tile_info for compatibility
+            if let Some(sv) = start_value {
+                existing_data.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv));
+            }
+        } else {
+            let width = width.unwrap_or_else(|| self.get_signal_width(signal_name));
+            let mut signal_data = SignalWaveData::new(signal_name.to_string(), width);
+            signal_data.bucket_data.push((tile_start, buckets));
+            if let Some(sv) = start_value {
+                signal_data.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv));
+            }
+            self.signal_data.insert(signal_name.to_string(), signal_data);
+        }
     }
 
     /// Parse chunk binary data for single signal (legacy method)
@@ -4277,7 +4317,13 @@ if tile_missing_signals.is_empty() {
                 // If no transitions and no buckets, try to get start value from parent signal's tile_info
                 if parent_data.transitions.is_empty() && parent_data.bucket_data.is_empty() && !parent_data.tile_info.is_empty() {
                     // Get the first tile's start value from parent signal's tile_info
-                    if let Some((_, _, _, start_value)) = parent_data.tile_info.first() {
+                    // Need to find the entry with start_time == BOUNDARY_TIME_START
+                    const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
+                    let start_value = parent_data.tile_info.iter()
+                        .find(|(_, _, start_time, _)| *start_time == BOUNDARY_TIME_START)
+                        .map(|(_, _, _, sv)| sv);
+                    
+                    if let Some(start_value) = start_value {
                         let value_u64 = match server_value_to_u64(start_value.value_type, start_value.value_len, &start_value.value) {
                             Some(v) => v,
                             None => 0,
@@ -4337,7 +4383,13 @@ if tile_missing_signals.is_empty() {
             if data.transitions.is_empty() && data.bucket_data.is_empty() && !data.tile_info.is_empty() {
                 // Get the first tile's start value from tile_info
                 // tile_info: (tile_start, tile_end, start_time, start_value_transition)
-                if let Some((_, _, _, start_value)) = data.tile_info.first() {
+                // Need to find the entry with start_time == BOUNDARY_TIME_START
+                const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
+                let start_value = data.tile_info.iter()
+                    .find(|(_, _, start_time, _)| *start_time == BOUNDARY_TIME_START)
+                    .map(|(_, _, _, sv)| sv);
+                
+                if let Some(start_value) = start_value {
                     let value_u64 = match server_value_to_u64(start_value.value_type, start_value.value_len, &start_value.value) {
                         Some(v) => v,
                         None => 0,

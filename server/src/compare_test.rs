@@ -443,20 +443,27 @@ pub async fn run_detailed_signal_test(config: &ServerConfig) {
     println!("[DETAILED-TEST] 指定信号详细对比测试");
     println!("========================================\n");
     
-    // 测试参数
+    // 测试参数 - 对应API请求: /api/wave/picorv32/lod/0/tile/2550387200/256/1/...
+    // signals: testbench.top.uut.picorv32_core.mem_addr [31:0], testbench.top.uut.picorv32_core.clk
     let wave_name = "picorv32";
-    let signal_name = "testbench.top.uut.picorv32_core.mem_addr [31:0]";
-    let test_signals = vec![signal_name.to_string()];
-    let lod: u32 = 10;
-    let start_time: u64 = 784342160;  // 指定的 view start
+    let test_signals = vec![
+        "testbench.top.uut.picorv32_core.mem_addr [31:0]".to_string(),
+        "testbench.top.uut.picorv32_core.clk".to_string(),
+    ];
+    let lod: u32 = 0;  // LoD = 0, bucket_size = 1
+    let start_time: u64 = 2550387200;  // API指定的 tile start
     let num_buckets = 256usize;
-    let num_tiles = 2usize;  // 2个 tiles
+    let num_tiles = 1usize;  // 1个 tile
     
     let bucket_size = 2u64.pow(lod);
     let tile_span = bucket_size * num_buckets as u64;
     
+    // 为文件名生成信号摘要（取第一个信号名）
+    let signal_name_for_file = &test_signals[0];
+    let signals_display = test_signals.join(", ");
+    
     println!("[DETAILED-TEST] 波形文件: {}", wave_name);
-    println!("[DETAILED-TEST] 测试信号: {}", signal_name);
+    println!("[DETAILED-TEST] 测试信号: {}", signals_display);
     println!("[DETAILED-TEST] LoD: {} (bucket_size={})", lod, bucket_size);
     println!("[DETAILED-TEST] 起始时间: {}", start_time);
     println!("[DETAILED-TEST] tile_span: {} ({} 个 bucket)", tile_span, num_buckets);
@@ -490,13 +497,13 @@ pub async fn run_detailed_signal_test(config: &ServerConfig) {
     let api_multi = MultiTileChunkSerializer::deserialize(&api_tiles);
     
     // 创建 FSTAPI 输出文件
-    let fstapi_output_file = format!("fstapi_{}_{}_lod{}.txt", wave_name, signal_name.replace(['.', ' ', '[', ']', ':'], "_"), lod);
+    let fstapi_output_file = format!("fstapi_{}_{}_lod{}.txt", wave_name, signal_name_for_file.replace(['.', ' ', '[', ']', ':'], "_"), lod);
     let mut fstapi_content = String::new();
     
     fstapi_content.push_str(&format!("FSTAPI 详细测试报告\n"));
     fstapi_content.push_str(&format!("================\n\n"));
     fstapi_content.push_str(&format!("波形文件: {}\n", wave_name));
-    fstapi_content.push_str(&format!("测试信号: {}\n", signal_name));
+    fstapi_content.push_str(&format!("测试信号: {}\n", signals_display));
     fstapi_content.push_str(&format!("LoD: {} (bucket_size={})\n", lod, bucket_size));
     fstapi_content.push_str(&format!("起始时间: {}\n", start_time));
     fstapi_content.push_str(&format!("tile_span: {} ({} 个 bucket)\n", tile_span, num_buckets));
@@ -571,13 +578,13 @@ pub async fn run_detailed_signal_test(config: &ServerConfig) {
     let cache = crate::services::fst_reader_cache::get_fst_reader_cache();
     
     // 创建 LOD_LOW 输出文件
-    let lodlow_output_file = format!("lodlow_{}_{}_lod{}.txt", wave_name, signal_name.replace(['.', ' ', '[', ']', ':'], "_"), lod);
+    let lodlow_output_file = format!("lodlow_{}_{}_lod{}.txt", wave_name, signal_name_for_file.replace(['.', ' ', '[', ']', ':'], "_"), lod);
     let mut lodlow_content = String::new();
-    
+
     lodlow_content.push_str(&format!("LOD_LOW 详细测试报告\n"));
     lodlow_content.push_str(&format!("================\n\n"));
     lodlow_content.push_str(&format!("波形文件: {}\n", wave_name));
-    lodlow_content.push_str(&format!("测试信号: {}\n", signal_name));
+    lodlow_content.push_str(&format!("测试信号: {}\n", signals_display));
     lodlow_content.push_str(&format!("LoD: {} (bucket_size={})\n", lod, bucket_size));
     lodlow_content.push_str(&format!("起始时间: {}\n", start_time));
     lodlow_content.push_str(&format!("tile_span: {} ({} 个 bucket)\n", tile_span, num_buckets));
@@ -655,13 +662,13 @@ pub async fn run_detailed_signal_test(config: &ServerConfig) {
     println!("\n[DETAILED-TEST] ===== 3. LOD_HIGH 读取 =====");
     
     // 创建 LOD_HIGH 输出文件
-    let lodhigh_output_file = format!("lodhigh_{}_{}_lod{}.txt", wave_name, signal_name.replace(['.', ' ', '[', ']', ':'], "_"), lod);
+    let lodhigh_output_file = format!("lodhigh_{}_{}_lod{}.txt", wave_name, signal_name_for_file.replace(['.', ' ', '[', ']', ':'], "_"), lod);
     let mut lodhigh_content = String::new();
-    
+
     lodhigh_content.push_str(&format!("LOD_HIGH 详细测试报告\n"));
     lodhigh_content.push_str(&format!("================\n\n"));
     lodhigh_content.push_str(&format!("波形文件: {}\n", wave_name));
-    lodhigh_content.push_str(&format!("测试信号: {}\n", signal_name));
+    lodhigh_content.push_str(&format!("测试信号: {}\n", signals_display));
     lodhigh_content.push_str(&format!("LoD: {} (bucket_size={})\n", lod, bucket_size));
     lodhigh_content.push_str(&format!("起始时间: {}\n", start_time));
     lodhigh_content.push_str(&format!("tile_span: {} ({} 个 bucket)\n", tile_span, num_buckets));
