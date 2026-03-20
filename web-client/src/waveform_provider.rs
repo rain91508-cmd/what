@@ -516,6 +516,8 @@ pub struct WaveformDataProvider {
     enable_opfs: bool,  // OPFS cache enabled flag
     current_lod: Option<u32>,  // Current LoD level for bucket size calculation
     display_unit_per_lod0_unit: f64,  // Time unit conversion factor (display unit / LoD0 unit)
+    cursor_time: Option<f64>,  // Cursor time for value lookup
+    cursor_values: HashMap<String, ValueInfo>,  // Cached cursor values for each signal
 }
 
 #[wasm_bindgen]
@@ -551,6 +553,8 @@ impl WaveformDataProvider {
             enable_opfs: false,  // Disabled by default
             current_lod: None,  // Will be set when fetching data
             display_unit_per_lod0_unit: 1.0,  // Default to 1.0 (no conversion)
+            cursor_time: None,  // No cursor by default
+            cursor_values: HashMap::new(),  // Empty cursor values
         }
     }
 
@@ -4098,14 +4102,30 @@ if tile_missing_signals.is_empty() {
         serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
     }
 
-    /// Get signal value at a specific time
-    /// Returns the value of the signal at the given time (from cached data)
-    /// If data is not cached, returns null
-    /// Handles BOUNDARY_TIME_START (0xFFFFFFFFFFFFFFFF) as the start-of-range value
-    /// display_format: optional display format override ("hex", "bin", "oct", "dec")
+    /// Set cursor time for value lookup
+    /// This should be called before get_segments to enable cursor value collection
+    #[wasm_bindgen(js_name = setCursorTime)]
+    pub fn set_cursor_time(&mut self, time: f64) {
+        self.cursor_time = Some(time);
+        self.cursor_values.clear(); // Clear cached values when cursor moves
+    }
+
+    /// Clear cursor time
+    #[wasm_bindgen(js_name = clearCursorTime)]
+    pub fn clear_cursor_time(&mut self) {
+        self.cursor_time = None;
+        self.cursor_values.clear();
+    }
+
+    /// Get signal value at cursor time
+    /// Must call setCursorTime and get_segments before this
     #[wasm_bindgen(js_name = get_signal_value_at_time)]
-    pub fn get_signal_value_at_time_js(&self, signal_name: &str, time: f64, display_format: Option<String>) -> JsValue {
-        self.get_signal_value_at_time_internal(signal_name, time, display_format.as_deref())
+    pub fn get_signal_value_at_time_js(&self, signal_name: &str) -> JsValue {
+        if let Some(value_info) = self.cursor_values.get(signal_name) {
+            serde_wasm_bindgen::to_value(value_info).unwrap_or(JsValue::NULL)
+        } else {
+            JsValue::NULL
+        }
     }
 
     /// Check if signal_data has data for the given signal
