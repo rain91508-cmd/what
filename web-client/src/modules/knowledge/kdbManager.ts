@@ -697,6 +697,26 @@ class KdbManager {
   }
 
   /**
+   * Get signal index (0-based) within a module by global ID
+   * @param moduleId Module ID (1-based)
+   * @param globalId Signal global ID
+   * @returns Signal index within module (0-based), or -1 if not found
+   */
+  getSignalIndexInModule(moduleId: number, globalId: number): number {
+    const module = this.getModuleById(moduleId);
+    if (!module) return -1;
+
+    const signalDefs = this.getSignalDefs(moduleId);
+    const localIndex = globalId - module.signalInstsStartId;
+
+    if (localIndex >= 0 && localIndex < signalDefs.length) {
+      return localIndex;
+    }
+
+    return -1;
+  }
+
+  /**
    * Store KDB in WASM memory for fast lookup
    */
   async storeKdbInWasmMemory(): Promise<void> {

@@ -175,9 +175,12 @@ function App() {
   
   // Expanded modules in hierarchy panel (1-based module indices)
   const [expandedModules, setExpandedModules] = useState<Set<number>>(new Set())
-  
+
   // Pagination state for hierarchy panel: nodeId -> { startPosition, pageSize }
   const [hierarchyPagination, setHierarchyPagination] = useState<Map<number, { startPosition: number; pageSize: number }>>(new Map())
+
+  // Pending signal to select in Signal Panel (from drag-drop)
+  const [pendingSelectedSignal, setPendingSelectedSignal] = useState<number | null>(null)
 
   // Info text for MenuBar (full hierarchy name)
   const [menuBarInfoText, setMenuBarInfoText] = useState<string>('')
@@ -1836,6 +1839,62 @@ function App() {
     setTimeout(() => addNavigationEntry(fileId, line, displayModuleIndex), 0);
     addMessage(`Open source at ${signal.name} declaration (line ${line})`);
   };
+
+  // Calculate module chain from root to target module
+  const getModuleChain = (targetModuleId: number): number[] => {
+    const chain: number[] = [];
+    let currentId = targetModuleId;
+
+    while (currentId > 0) {
+      chain.unshift(currentId); // Add to beginning to maintain root -> child order
+      const module = kdbManager.getModuleById(currentId);
+      currentId = module?.parentModuleId || 0;
+    }
+
+    return chain; // [rootModule, childModule, ..., targetModule]
+  };
+
+  // Expand hierarchy to target module (reuses session manager mechanism)
+  const expandHierarchyToModule = useCallback((targetModuleId: number) => {
+    console.log('[App] Expanding hierarchy to module:', targetModuleId);
+
+    // 1. Calculate all modules to expand (from root to target)
+    const chain = getModuleChain(targetModuleId);
+    console.log('[App] Module chain:', chain);
+
+    // 2. Update expandedModules (triggers DesignBrowser useEffect)
+    setExpandedModules(prev => {
+      const newExpanded = new Set(prev);
+      chain.forEach(id => newExpanded.add(id));
+      return newExpanded;
+    });
+
+    // 3. Set selected module
+    setSelectedModuleIndex(targetModuleId);
+  }, []);
+
+  // Handle signal drop from waveform to signal panel
+  const handleSignalDropFromWaveform = useCallback((signalData: {
+    globalId: number;
+    parentModuleId: number;
+    name: string;
+    fullName: string;
+  }) => {
+    console.log('[App] Signal dropped from waveform:', signalData);
+
+    if (!kdbManager.isLoaded()) {
+      addMessage('KDB not loaded, cannot navigate to signal');
+      return;
+    }
+
+    // 1. Expand hierarchy to signal's parent module
+    if (signalData.parentModuleId > 0) {
+      expandHierarchyToModule(signalData.parentModuleId);
+    }
+
+    // 2. Set pending signal to select (for SignalPanel highlight)
+    setPendingSelectedSignal(signalData.globalId);
+  }, [expandHierarchyToModule]);
 
   const handleSignalSelect = async (signal: Signal) => {
     console.log('[App] handleSignalSelect called:', signal?.name, 'activeTab:', activeTab);
@@ -3989,6 +4048,8 @@ function App() {
             onSignalDoubleClick={handleSignalDoubleClick}
             onSignalSelect={handleSignalSelect}
             activeTabType={tabs.find(t => t.id === activeTab)?.type}
+            onSignalDrop={handleSignalDropFromWaveform}
+            pendingSelectedSignal={pendingSelectedSignal}
           />
         </div>
 

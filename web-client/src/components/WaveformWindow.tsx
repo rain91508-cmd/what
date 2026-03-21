@@ -2663,6 +2663,16 @@ export function WaveformWindow({
                       
                       <span
                         className="waveform-signal-name"
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData('application/json', JSON.stringify({
+                            globalId: signal.globalId,
+                            parentModuleId: signal.parentModuleId,
+                            name: signal.name,
+                            fullName: signal.fullName
+                          }));
+                          e.dataTransfer.effectAllowed = 'move';
+                        }}
                         onClick={() => {
                           onSignalSelect?.(signal);
                         }}
@@ -2671,7 +2681,7 @@ export function WaveformWindow({
                           onSignalDoubleClick?.(signal);
                         }}
                         style={{ cursor: 'pointer' }}
-                        title="Double-click to jump to declaration"
+                        title="Double-click to jump to declaration, drag to Signal Panel"
                       >
                         {getSignalDisplayName(signal)}
                       </span>

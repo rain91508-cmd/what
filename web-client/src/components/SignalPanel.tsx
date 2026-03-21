@@ -11,11 +11,18 @@ interface SignalPanelProps {
   onSignalDoubleClick?: (signal: Signal, moduleIndex: number) => void;
   onSignalSelect?: (signal: Signal) => void;  // Called when a signal is selected
   activeTabType?: 'source' | 'waveform' | 'tableview' | null;  // Current active tab type
+  onSignalDrop?: (signalData: {
+    globalId: number;
+    parentModuleId: number;
+    name: string;
+    fullName: string;
+  }) => void;
+  pendingSelectedSignal?: number | null;
 }
 
 const DEFAULT_PAGE_SIZE = 50;
 
-export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSignalAddToTableView, onSignalDoubleClick, onSignalSelect, activeTabType }: SignalPanelProps) {
+export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSignalAddToTableView, onSignalDoubleClick, onSignalSelect, activeTabType, onSignalDrop, pendingSelectedSignal }: SignalPanelProps) {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -77,6 +84,72 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
     setCurrentRangeEnd(-1);
     loadSignalsForward(0);
   }, [searchTerm, ioFilters]);
+
+  // Handle pending selected signal from drag-drop
+  useEffect(() => {
+    if (pendingSelectedSignal && selectedModuleIndex) {
+      // Check if the signal is in current signals list
+      const signal = signals.find(s => s.globalId === pendingSelectedSignal);
+      if (signal) {
+        // Signal is in current page, select it
+        setSelectedSignalGlobalId(pendingSelectedSignal);
+        onSignalSelect?.(signal);
+        // Scroll to the signal element
+        scrollToSignal(pendingSelectedSignal);
+      } else {
+        // Signal is not in current page, need to navigate to it
+        const signalIndex = kdbManager.getSignalIndexInModule(selectedModuleIndex, pendingSelectedSignal);
+        if (signalIndex >= 0) {
+          // Navigate to the page containing this signal
+          navigateToSignalIndex(signalIndex);
+        }
+      }
+    }
+  }, [pendingSelectedSignal, selectedModuleIndex]);
+
+  // Navigate to specific signal index (for drag-drop)
+  const navigateToSignalIndex = async (targetIndex: number) => {
+    if (!selectedModuleIndex) return;
+
+    // Check if signal is already in current range
+    if (targetIndex >= currentRangeStart && targetIndex <= currentRangeEnd) {
+      // Signal should be in current signals, but might be filtered out
+      const signal = signals.find(s => {
+        const idx = kdbManager.getSignalIndexInModule(selectedModuleIndex, s.globalId);
+        return idx === targetIndex;
+      });
+      if (signal) {
+        setSelectedSignalGlobalId(signal.globalId);
+        onSignalSelect?.(signal);
+        scrollToSignal(signal.globalId);
+        return;
+      }
+    }
+
+    // Need to load the page containing this signal
+    // Clear filters to ensure signal is visible
+    if (searchTerm || !ioFilters.has('all')) {
+      setSearchTerm('');
+      setIoFilters(new Set(['all']));
+      // After filters are cleared, the useEffect will trigger loadSignalsForward(0)
+      // We need to wait for that and then navigate
+      setTimeout(() => {
+        navigateToSignalIndex(targetIndex);
+      }, 100);
+      return;
+    }
+
+    // Load signals starting from target index
+    await loadSignalsForward(targetIndex);
+  };
+
+  // Scroll to signal element in the list
+  const scrollToSignal = (globalId: number) => {
+    const signalElement = document.querySelector(`[data-signal-global-id="${globalId}"]`);
+    if (signalElement) {
+      signalElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
 
   const createFilterFn = (): ((signal: Signal) => boolean) => {
     return (signal: Signal): boolean => {
@@ -324,7 +397,26 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
   const isPagedMode = totalSignalCount > 50;
 
   return (
-    <div className="signal-panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div
+      className="signal-panel"
+      style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        const data = e.dataTransfer.getData('application/json');
+        if (data) {
+          try {
+            const signalData = JSON.parse(data);
+            onSignalDrop?.(signalData);
+          } catch (err) {
+            console.error('[SignalPanel] Failed to parse drop data:', err);
+          }
+        }
+      }}
+    >
       {/* Header */}
       <div className="panel-header" style={{ 
         padding: '8px 12px', 
@@ -603,6 +695,7 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
             {signals.map((signal, index) => (
               <div
                 key={`${signal.globalId}-${index}`}
+                data-signal-global-id={signal.globalId}
                 style={{
                   padding: '6px 12px',
                   borderBottom: '1px solid #f0f0f0',
