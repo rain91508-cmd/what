@@ -2720,7 +2720,13 @@ export function WaveformWindow({
                       title={getHierarchyDisplay(signal)}
                       onClick={(e) => {
                         e.stopPropagation();
-                        setShowHierarchyDropdown(signal.unique_id);
+                        if (isMultiSelectMode && selectedSignals.size > 0) {
+                          // 多选模式：显示共有部分选择菜单
+                          setShowHierarchyDropdown(signal.unique_id);
+                        } else {
+                          // 单选模式：显示该信号的 hierarchy 选择菜单
+                          setShowHierarchyDropdown(signal.unique_id);
+                        }
                       }}
                     >
                       {getHierarchyDisplay(signal)}
@@ -2890,92 +2896,195 @@ export function WaveformWindow({
                           onMouseDown={(e) => e.stopPropagation()}
                         >
                           {(() => {
-                            // 分割 hierarchy 路径
-                            const fullPath = signal.fullName;
-                            const parts = fullPath.split(/[@.]/);
-                            parts.pop(); // 去掉信号名
-                            
-                            if (parts.length === 0) return null;
-                            
-                            // 获取当前选择
-                            const currentSelection = signalHierarchySelections.get(signal.unique_id);
-                            const allIndices = new Set(parts.map((_, i) => i));
-                            const isAllSelected = !currentSelection || currentSelection.size === parts.length;
-                            
-                            return (
-                              <>
-                                {/* 全选 / 全不选 */}
-                                <div
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setSignalHierarchySelections(prev => {
-                                      const newMap = new Map(prev);
-                                      if (isAllSelected) {
-                                        // 全不选
-                                        newMap.set(signal.unique_id, new Set());
-                                      } else {
-                                        // 全选
-                                        newMap.set(signal.unique_id, new Set(parts.map((_, i) => i)));
-                                      }
-                                      return newMap;
-                                    });
-                                  }}
-                                  style={{
+                            // 判断是否为多选模式
+                            const isMultiMode = isMultiSelectMode && selectedSignals.size > 0;
+
+                            if (isMultiMode) {
+                              // 多选模式：计算共有部分
+                              const selectedSignalList = allSignals.filter(s => selectedSignals.has(s.unique_id));
+                              if (selectedSignalList.length === 0) return null;
+
+                              // 获取所有信号的 hierarchy 部分
+                              const allPartsList = selectedSignalList.map(s => {
+                                const parts = s.fullName.split(/[@.]/);
+                                parts.pop(); // 去掉信号名
+                                return parts;
+                              });
+
+                              // 找出最短的 hierarchy 长度（共有部分的最大长度）
+                              const minLength = Math.min(...allPartsList.map(parts => parts.length));
+
+                              // 计算共有部分：所有信号在该位置都相同的部分
+                              const commonParts: { index: number; name: string }[] = [];
+                              for (let i = 0; i < minLength; i++) {
+                                const firstValue = allPartsList[0][i];
+                                const isCommon = allPartsList.every(parts => parts[i] === firstValue);
+                                if (isCommon) {
+                                  commonParts.push({ index: i, name: firstValue });
+                                }
+                              }
+
+                              if (commonParts.length === 0) {
+                                return (
+                                  <div style={{ padding: '8px', fontSize: '11px', color: '#666' }}>
+                                    No common parts
+                                  </div>
+                                );
+                              }
+
+                              // 计算每个共有部分的选中状态（所有信号都选中才算选中）
+                              const getCommonPartSelected = (index: number): boolean => {
+                                return selectedSignalList.every(s => {
+                                  const selection = signalHierarchySelections.get(s.unique_id);
+                                  // 如果没有设置，默认为全选
+                                  if (!selection) return true;
+                                  return selection.has(index);
+                                });
+                              };
+
+                              return (
+                                <>
+                                  <div style={{
                                     padding: '6px 8px',
                                     fontSize: '11px',
-                                    cursor: 'pointer',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '6px',
-                                    borderBottom: '1px solid #e0e0e0',
                                     fontWeight: 'bold',
-                                  }}
-                                >
-                                  <span style={{ width: '12px', textAlign: 'center' }}>
-                                    {isAllSelected ? '✓' : '○'}
-                                  </span>
-                                  <span>{isAllSelected ? '全不选' : '全选'}</span>
-                                </div>
-                                
-                                {/* 每个 hierarchy 部分 */}
-                                {parts.map((part, index) => {
-                                  const isSelected = currentSelection?.has(index) ?? true;
-                                  return (
-                                    <div
-                                      key={index}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setSignalHierarchySelections(prev => {
-                                          const newMap = new Map(prev);
-                                          const currentSet = new Set(prev.get(signal.unique_id) ?? parts.map((_, i) => i));
-                                          if (currentSet.has(index)) {
-                                            currentSet.delete(index);
-                                          } else {
-                                            currentSet.add(index);
-                                          }
-                                          newMap.set(signal.unique_id, currentSet);
-                                          return newMap;
-                                        });
-                                      }}
-                                      style={{
-                                        padding: '4px 8px',
-                                        fontSize: '11px',
-                                        cursor: 'pointer',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '6px',
-                                        backgroundColor: isSelected ? '#e3f2fd' : 'white',
-                                      }}
-                                    >
-                                      <span style={{ width: '12px', textAlign: 'center' }}>
-                                        {isSelected ? '✓' : ''}
-                                      </span>
-                                      <span>{part}</span>
-                                    </div>
-                                  );
-                                })}
-                              </>
-                            );
+                                    borderBottom: '1px solid #e0e0e0',
+                                    backgroundColor: '#f5f5f5',
+                                  }}>
+                                    Common Parts ({selectedSignalList.length} signals)
+                                  </div>
+                                  {commonParts.map(({ index, name }) => {
+                                    const isSelected = getCommonPartSelected(index);
+                                    return (
+                                      <div
+                                        key={index}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          // 为所有选中的信号统一设置该部分
+                                          setSignalHierarchySelections(prev => {
+                                            const newMap = new Map(prev);
+                                            selectedSignalList.forEach(s => {
+                                              const parts = s.fullName.split(/[@.]/);
+                                              parts.pop();
+                                              const currentSet = new Set(prev.get(s.unique_id) ?? parts.map((_, i) => i));
+                                              if (isSelected) {
+                                                currentSet.delete(index);
+                                              } else {
+                                                currentSet.add(index);
+                                              }
+                                              newMap.set(s.unique_id, currentSet);
+                                            });
+                                            return newMap;
+                                          });
+                                        }}
+                                        style={{
+                                          padding: '4px 8px',
+                                          fontSize: '11px',
+                                          cursor: 'pointer',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: '6px',
+                                          backgroundColor: isSelected ? '#e3f2fd' : 'white',
+                                        }}
+                                      >
+                                        <span style={{ width: '12px', textAlign: 'center' }}>
+                                          {isSelected ? '✓' : ''}
+                                        </span>
+                                        <span>{name}</span>
+                                      </div>
+                                    );
+                                  })}
+                                </>
+                              );
+                            } else {
+                              // 单选模式：原有逻辑
+                              // 分割 hierarchy 路径
+                              const fullPath = signal.fullName;
+                              const parts = fullPath.split(/[@.]/);
+                              parts.pop(); // 去掉信号名
+
+                              if (parts.length === 0) return null;
+
+                              // 获取当前选择
+                              const currentSelection = signalHierarchySelections.get(signal.unique_id);
+                              const allIndices = new Set(parts.map((_, i) => i));
+                              const isAllSelected = !currentSelection || currentSelection.size === parts.length;
+
+                              return (
+                                <>
+                                  {/* Select All / Select None */}
+                                  <div
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSignalHierarchySelections(prev => {
+                                        const newMap = new Map(prev);
+                                        if (isAllSelected) {
+                                          // Select none
+                                          newMap.set(signal.unique_id, new Set());
+                                        } else {
+                                          // Select all
+                                          newMap.set(signal.unique_id, new Set(parts.map((_, i) => i)));
+                                        }
+                                        return newMap;
+                                      });
+                                    }}
+                                    style={{
+                                      padding: '6px 8px',
+                                      fontSize: '11px',
+                                      cursor: 'pointer',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '6px',
+                                      borderBottom: '1px solid #e0e0e0',
+                                      fontWeight: 'bold',
+                                    }}
+                                  >
+                                    <span style={{ width: '12px', textAlign: 'center' }}>
+                                      {isAllSelected ? '✓' : '○'}
+                                    </span>
+                                    <span>{isAllSelected ? 'Select None' : 'Select All'}</span>
+                                  </div>
+
+                                  {/* 每个 hierarchy 部分 */}
+                                  {parts.map((part, index) => {
+                                    const isSelected = currentSelection?.has(index) ?? true;
+                                    return (
+                                      <div
+                                        key={index}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setSignalHierarchySelections(prev => {
+                                            const newMap = new Map(prev);
+                                            const currentSet = new Set(prev.get(signal.unique_id) ?? parts.map((_, i) => i));
+                                            if (currentSet.has(index)) {
+                                              currentSet.delete(index);
+                                            } else {
+                                              currentSet.add(index);
+                                            }
+                                            newMap.set(signal.unique_id, currentSet);
+                                            return newMap;
+                                          });
+                                        }}
+                                        style={{
+                                          padding: '4px 8px',
+                                          fontSize: '11px',
+                                          cursor: 'pointer',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: '6px',
+                                          backgroundColor: isSelected ? '#e3f2fd' : 'white',
+                                        }}
+                                      >
+                                        <span style={{ width: '12px', textAlign: 'center' }}>
+                                          {isSelected ? '✓' : ''}
+                                        </span>
+                                        <span>{part}</span>
+                                      </div>
+                                    );
+                                  })}
+                                </>
+                              );
+                            }
                           })()}
                         </div>
                       )}
