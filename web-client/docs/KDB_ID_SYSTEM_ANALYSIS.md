@@ -1,10 +1,10 @@
 # KDB ID 系统分析文档
 
-## 概述
+## 概述ji
 
-本文档详细分析 KDB (Knowledge Database) 中的 ID 系统，包括 Module ID 和 Signal Global ID 的设计、查询方法以及与 OPFS 存储的 draw_sig_id 的关系。
+本文档详细分析 KDB (Knowledge Database) 中的 ID 系统，包括 Module ID 和 Signal Global ID 的设计、查询方法以及与 OPFS 存储的 draw\_sig\_id 的关系。
 
----
+***
 
 ## 一、Module ID 系统
 
@@ -61,9 +61,10 @@ calculateModuleFullName(moduleIndex: number): string {
 ```
 
 **示例**:
+
 - Module ID: 5
 - Parent Chain: 5 → 3 → 1 → 0
-- Names: ["core", "picorv32", "work"]
+- Names: \["core", "picorv32", "work"]
 - Full Name: `work.picorv32.core`
 
 ### 1.4 如何查找 Parent Module
@@ -105,6 +106,7 @@ if (module) {
 ### 1.7 Source Location 信息
 
 #### Definition Source Location (定义位置)
+
 ```typescript
 interface ModuleSourceLocation {
   fileId: number;      // 源文件 ID
@@ -114,6 +116,7 @@ interface ModuleSourceLocation {
 ```
 
 **获取方法**:
+
 ```typescript
 const module = getModuleById(moduleId);
 if (module && module.definition) {
@@ -122,12 +125,14 @@ if (module && module.definition) {
 ```
 
 #### Instance Source Location (实例位置)
+
 - 每个 Module（包括实例）都有自己的 `definition` 字段，存储该模块在源代码中的位置
 - 对于**实例模块**：
   - `definition` 字段存储的是**实例位置**（即实例化该模块的代码位置）
   - 要获取其**定义位置**，需要通过 `defModuleId` 查找定义模块，再获取定义模块的 `definition`
 
 **获取方法**:
+
 ```typescript
 const module = getModuleById(moduleId);
 if (module) {
@@ -148,7 +153,7 @@ if (module) {
 }
 ```
 
----
+***
 
 ## 二、Signal Global ID 系统
 
@@ -159,7 +164,6 @@ KDB 中 Signal 分为两部分存储：
 1. **SignalDef (信号定义)**: 存储在**定义模块**中，包含静态信息
    - 每个信号的定义只存储一次，在其定义模块的 `signalDefs` 数组中
    - 所有实例共享同一个 SignalDef
-
 2. **SignalInst (信号实例)**: 存储在全局数组 `allSignalInsts` 中，包含实例特定信息
    - 每个信号实例都有独立的 SignalInst
    - 通过 `parentModuleId` 关联到所属模块
@@ -215,6 +219,7 @@ const globalId = module.signalInstsStartId + localIndex;
 ```
 
 **示例**:
+
 - Module ID: 3
 - signalInstsStartId: 100
 - 要获取第 5 个信号 (localIndex = 4)
@@ -297,7 +302,7 @@ if (inst) {
 }
 ```
 
----
+***
 
 ## 三、KDB Manager 帮助函数
 
@@ -358,23 +363,23 @@ if (range) {
 }
 ```
 
----
+***
 
-## 四、与 OPFS 存储的 draw_sig_id 的关系
+## 四、与 OPFS 存储的 draw\_sig\_id 的关系
 
-### 4.1 为什么需要 draw_sig_id
+### 4.1 为什么需要 draw\_sig\_id
 
-- **global_id**: KDB 中的信号全局 ID，范围可能很大且不连续
-- **draw_sig_id**: 用于波形绘制的连续整数 ID，范围 0 ~ N-1
+- **global\_id**: KDB 中的信号全局 ID，范围可能很大且不连续
+- **draw\_sig\_id**: 用于波形绘制的连续整数 ID，范围 0 \~ N-1
 
 **原因**: WASM 和渲染系统需要连续的 ID 来优化存储和查找性能。
 
-### 4.2 draw_sig_id 分配规则
+### 4.2 draw\_sig\_id 分配规则
 
 - **ID 类型**: 0-based 连续整数
 - **分配方式**: 单调递增，首次使用时分配
 - **存储位置**: OPFS 中的 `signals.json` 文件
-- **分组**: 每 256 个信号为一组 (GROUP_SIZE = 256)
+- **分组**: 每 256 个信号为一组 (GROUP\_SIZE = 256)
 
 ```typescript
 interface SignalMetadata {
@@ -399,7 +404,7 @@ KDB Global ID (e.g., 1042)  →  SignalIdManager  →  draw_sig_id (e.g., 5)
                               }
 ```
 
-### 4.4 如何获取 draw_sig_id
+### 4.4 如何获取 draw\_sig\_id
 
 ```typescript
 // 获取或创建 draw_sig_id
@@ -445,29 +450,27 @@ OPFS 中波形数据按 group 存储：
    const global_id = signal.globalId;  // 从 KDB 获取
    const draw_sig_id = signalIdManager.getOrCreateDrawSigId(global_id);
    ```
-
 2. **获取信号数据**:
    ```typescript
    const group_id = signalIdManager.getGroupId(draw_sig_id);
    const data = await opfsCache.readGroup(group_id);
    ```
-
 3. **WASM 绘制**:
    ```typescript
    // WASM 内部通过 draw_sig_id 查找信号数据
    const signal_data = get_signal_data(draw_sig_id);
    ```
 
----
+***
 
 ## 五、ID 系统总结
 
-| ID 类型 | 范围 | 存储位置 | 用途 | 计算方式 |
-|---------|------|----------|------|----------|
-| Module ID | 1-based | modules[] 数组 | 模块标识 | 数组索引 + 1 |
-| Signal Global ID | 0-based | allSignalInsts[] 数组 | 信号全局标识 | 数组索引 |
-| draw_sig_id | 0-based (连续) | OPFS signals.json | 波形绘制 | 动态分配 |
-| Group ID | 0-based | OPFS group_*.bin | 数据分块 | draw_sig_id / 256 |
+| ID 类型            | 范围           | 存储位置                 | 用途     | 计算方式                |
+| ---------------- | ------------ | -------------------- | ------ | ------------------- |
+| Module ID        | 1-based      | modules\[] 数组        | 模块标识   | 数组索引 + 1            |
+| Signal Global ID | 0-based      | allSignalInsts\[] 数组 | 信号全局标识 | 数组索引                |
+| draw\_sig\_id    | 0-based (连续) | OPFS signals.json    | 波形绘制   | 动态分配                |
+| Group ID         | 0-based      | OPFS group\_\*.bin   | 数据分块   | draw\_sig\_id / 256 |
 
 ### 关键转换关系
 
@@ -481,7 +484,7 @@ draw_sig_id = signal_map[global_id]  (通过 SignalIdManager)
 Group ID = floor(draw_sig_id / 256)
 ```
 
----
+***
 
 ## 六、常见问题
 
@@ -493,15 +496,15 @@ Group ID = floor(draw_sig_id / 256)
 
 **A**: 需要遍历所有信号，计算每个信号的 full name 进行匹配。或者使用搜索服务建立的索引。
 
-### Q3: draw_sig_id 在会话之间保持一致吗？
+### Q3: draw\_sig\_id 在会话之间保持一致吗？
 
-**A**: 是的，draw_sig_id 存储在 OPFS 的 signals.json 中，会话之间保持一致。但不同的 waveform 有独立的映射。
+**A**: 是的，draw\_sig\_id 存储在 OPFS 的 signals.json 中，会话之间保持一致。但不同的 waveform 有独立的映射。
 
-### Q4: 如何清除 draw_sig_id 映射？
+### Q4: 如何清除 draw\_sig\_id 映射？
 
 **A**: 删除 OPFS 中的 `signals.json` 文件，下次启动时会重新分配。
 
----
+***
 
 ## 七、相关文件
 
@@ -510,3 +513,4 @@ Group ID = floor(draw_sig_id / 256)
 - `src/core/cache/signalIdManager.ts` - Signal ID 管理器
 - `src/opfs_cache.rs` - OPFS 缓存 (Rust/WASM)
 - `src/waveform_provider.rs` - 波形数据提供器 (Rust/WASM)
+

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { apiService } from '../services/api';
+import { useT } from '../i18n';
 
 interface KdbInfo {
   name: string;
@@ -13,6 +14,7 @@ interface KdbSelectionDialogProps {
 }
 
 export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogProps) {
+  const { t } = useT();
   const [kdbs, setKdbs] = useState<KdbInfo[]>([]);
   const [selectedKdb, setSelectedKdb] = useState<string>('');
   const [loading, setLoading] = useState(true);
@@ -27,9 +29,9 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
     try {
       setLoading(true);
       setError(null);
-      setKdbs([]); // Clear previous list
+      setKdbs([]);
       setSelectedKdb('');
-      
+
       const response = await apiService.getKdbList();
       if (response.status === 'success' && response.data && response.data.kdbs) {
         const validKdbs = response.data.kdbs.filter((kdb: KdbInfo) => kdb.is_valid);
@@ -38,11 +40,11 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
           setSelectedKdb(validKdbs[0].name);
         }
       } else {
-        setError('Failed to load KDB list - server may be disconnected');
+        setError(t('dialog.kdbSelection.error'));
         setKdbs([]);
       }
     } catch (err) {
-      setError('Error loading KDB list - server may be disconnected');
+      setError(t('dialog.kdbSelection.error'));
       setKdbs([]);
     } finally {
       setLoading(false);
@@ -94,10 +96,10 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
       <div className="dialog-overlay" onClick={onCancel}>
         <div className="dialog" onClick={e => e.stopPropagation()}>
           <div className="dialog-header">
-            <span className="dialog-title">Select Knowledge Base</span>
+            <span className="dialog-title">{t('dialog.kdbSelection.title')}</span>
           </div>
           <div className="dialog-body">
-            <div style={{ textAlign: 'center', padding: '20px' }}>Loading KDB list...</div>
+            <div style={{ textAlign: 'center', padding: '20px' }}>{t('dialog.kdbSelection.loading')}</div>
           </div>
         </div>
       </div>
@@ -109,15 +111,15 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
       <div className="dialog-overlay" onClick={onCancel}>
         <div className="dialog" onClick={e => e.stopPropagation()}>
           <div className="dialog-header">
-            <span className="dialog-title">Select Knowledge Base</span>
+            <span className="dialog-title">{t('dialog.kdbSelection.title')}</span>
             <button className="dialog-close" onClick={onCancel}>×</button>
           </div>
           <div className="dialog-body">
             <div style={{ color: '#d32f2f', padding: '10px' }}>{error}</div>
           </div>
           <div className="dialog-footer">
-            <button className="btn" onClick={onCancel}>Cancel</button>
-            <button className="btn btn-primary" onClick={loadKdbList}>Retry</button>
+            <button className="btn" onClick={onCancel}>{t('dialog.cancel')}</button>
+            <button className="btn btn-primary" onClick={loadKdbList}>{t('dialog.retry')}</button>
           </div>
         </div>
       </div>
@@ -129,14 +131,14 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
       <div className="dialog-overlay" onClick={onCancel}>
         <div className="dialog" onClick={e => e.stopPropagation()}>
           <div className="dialog-header">
-            <span className="dialog-title">Select Knowledge Base</span>
+            <span className="dialog-title">{t('dialog.kdbSelection.title')}</span>
             <button className="dialog-close" onClick={onCancel}>×</button>
           </div>
           <div className="dialog-body">
-            <div style={{ padding: '10px' }}>No valid KDB files found on server.</div>
+            <div style={{ padding: '10px' }}>{t('dialog.kdbSelection.empty')}</div>
           </div>
           <div className="dialog-footer">
-            <button className="btn" onClick={onCancel}>Cancel</button>
+            <button className="btn" onClick={onCancel}>{t('dialog.cancel')}</button>
           </div>
         </div>
       </div>
@@ -147,18 +149,18 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
     <div className="dialog-overlay" onClick={onCancel}>
       <div className="dialog" onClick={e => e.stopPropagation()}>
         <div className="dialog-header">
-          <span className="dialog-title">Select Knowledge Base</span>
+          <span className="dialog-title">{t('dialog.kdbSelection.title')}</span>
           <button className="dialog-close" onClick={onCancel}>×</button>
         </div>
         <form onSubmit={handleSubmit}>
           <div className="dialog-body">
             <div style={{ marginBottom: '10px', color: '#666', fontSize: '12px' }}>
-              Select a knowledge base to download and load:
+              {t('dialog.kdbSelection.selectPrompt')}
             </div>
             <div style={{ marginBottom: '10px' }}>
               <input
                 type="text"
-                placeholder="Filter (* wildcard)..."
+                placeholder={t('dialog.kdbSelection.filterPlaceholder')}
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 style={{
@@ -174,7 +176,7 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
             <div className="kdb-list" style={{ maxHeight: '200px', overflowY: 'auto' }}>
               {filteredKdbs.length === 0 ? (
                 <div style={{ padding: '10px', color: '#999', textAlign: 'center' }}>
-                  No matching KDB files
+                  {t('dialog.kdbSelection.noMatching')}
                 </div>
               ) : (
                 filteredKdbs.map((kdb) => (
@@ -197,7 +199,7 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
                       {kdb.name}
                     </div>
                     <div style={{ fontSize: '11px', color: '#666' }}>
-                      Size: {formatBytes(kdb.file_size)}
+                      {t('dialog.kdbSelection.size')}: {formatBytes(kdb.file_size)}
                     </div>
                   </div>
                 ))
@@ -206,10 +208,10 @@ export function KdbSelectionDialog({ onSelect, onCancel }: KdbSelectionDialogPro
           </div>
           <div className="dialog-footer">
             <button type="button" className="btn" onClick={onCancel}>
-              Cancel
+              {t('dialog.cancel')}
             </button>
             <button type="submit" className="btn btn-primary" disabled={!selectedKdb}>
-              Download & Load
+              {t('dialog.downloadAndLoad')}
             </button>
           </div>
         </form>

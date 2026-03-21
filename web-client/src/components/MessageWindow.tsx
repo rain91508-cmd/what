@@ -6,6 +6,7 @@ import type { DriverGroup, DriverEntry } from '../types/driver';
 import type { Wavemark } from '../types/wavemark';
 import { WAVEMARK_COLORS } from '../types/wavemark';
 import type { SearchResultGroup, SearchResultItem } from '../types/search';
+import { useT } from '../i18n';
 
 interface MessageWindowProps {
   messages: string[];
@@ -136,6 +137,7 @@ const DEFAULT_WAVEMARK_COL_WIDTHS = {
 };
 
 export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavemarks = [], onWavemarkClick, onWavemarkDelete, onWavemarkRename, onWavemarkColorChange, onWavemarkGroupsChange, availableGroups = [], searchResults = [], onSearchResultClick, onSearchResultDelete }: MessageWindowProps) {
+  const { t } = useT();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<TabType>('messages');
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
@@ -347,7 +349,7 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
             alignItems: 'center',
           }}
         >
-          Messages ({messages.length})
+          {t('panel.message.title')} ({messages.length})
         </div>
         <div
           onClick={() => setActiveTab('bookmarks')}
@@ -364,7 +366,7 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
             alignItems: 'center',
           }}
         >
-          Bookmarks ({bookmarks.length})
+          {t('messageTabs.bookmarks')} ({bookmarks.length})
         </div>
         <div
           onClick={() => setActiveTab('wavemarks')}
@@ -381,7 +383,7 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
             alignItems: 'center',
           }}
         >
-          Wavemarks ({wavemarks.length})
+          {t('messageTabs.wavemarks')} ({wavemarks.length})
         </div>
         <div
           onClick={() => setActiveTab('search')}
@@ -398,7 +400,7 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
             alignItems: 'center',
           }}
         >
-          Search ({searchResults.length})
+          {t('messageTabs.search')} ({searchResults.length})
         </div>
         <div
           onClick={() => setActiveTab('drivers')}
@@ -415,7 +417,7 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
             alignItems: 'center',
           }}
         >
-          Drivers ({driverGroups.length})
+          {t('messageTabs.drivers')} ({driverGroups.length})
         </div>
       </div>
 
@@ -425,7 +427,7 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
           // Messages Tab
           <div ref={scrollRef} className="message-window" style={{ flex: 1, overflow: 'auto' }}>
             {messages.length === 0 ? (
-              <div style={{ color: '#999', padding: '8px' }}>No messages</div>
+              <div style={{ color: '#999', padding: '8px' }}>{t('panel.message.title')}</div>
             ) : (
               messages.map((msg, index) => (
                 <div key={index} className="message-item">
@@ -446,28 +448,28 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
               padding: '4px 0',
               marginBottom: '4px',
             }}>
-              <div style={{ width: bookmarkColWidths.name, minWidth: 50, paddingRight: '4px' }}>Name</div>
+              <div style={{ width: bookmarkColWidths.name, minWidth: 50, paddingRight: '4px' }}>{t('panel.signal.name')}</div>
               <div 
                 style={{ width: '4px', cursor: 'col-resize', background: '#ddd' }}
                 onMouseDown={(e) => handleResizeStart(e, 'bookmarks', 'name')}
               />
-              <div style={{ width: bookmarkColWidths.file, minWidth: 50, paddingRight: '4px' }}>File</div>
+              <div style={{ width: bookmarkColWidths.file, minWidth: 50, paddingRight: '4px' }}>{t('panel.source.title')}</div>
               <div 
                 style={{ width: '4px', cursor: 'col-resize', background: '#ddd' }}
                 onMouseDown={(e) => handleResizeStart(e, 'bookmarks', 'file')}
               />
-              <div style={{ width: bookmarkColWidths.line, minWidth: 40, paddingRight: '4px', textAlign: 'center' }}>Line</div>
+              <div style={{ width: bookmarkColWidths.line, minWidth: 40, paddingRight: '4px', textAlign: 'center' }}>{t('panel.source.line')}</div>
               <div 
                 style={{ width: '4px', cursor: 'col-resize', background: '#ddd' }}
                 onMouseDown={(e) => handleResizeStart(e, 'bookmarks', 'line')}
               />
-              <div style={{ flex: 1, paddingRight: '4px' }}>Content</div>
+              <div style={{ flex: 1, paddingRight: '4px' }}>{t('panel.signal.value')}</div>
               <div style={{ width: '30px' }}></div>
             </div>
             
             {bookmarks.length === 0 ? (
               <div style={{ color: '#999', padding: '8px', fontSize: '12px' }}>
-                No bookmarks. Click "Add Bookmark" button in toolbar to add one.
+                {t('panel.hierarchy.noResults')}
               </div>
             ) : (
               bookmarks.map((bookmark) => (
@@ -484,7 +486,7 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
                     fontSize: '11px',
                     cursor: 'pointer',
                   }}
-                  title={`Line ${bookmark.lineNumber}\n${bookmark.lineContent}`}
+                  title={`${t('panel.source.line')} ${bookmark.lineNumber}\n${bookmark.lineContent}`}
                 >
                   {/* Name (editable) */}
                   <div
@@ -521,7 +523,7 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
                         }}
                         title="Click to edit name"
                       >
-                        {bookmark.name || 'Unnamed'}
+                        {bookmark.name || t('panel.signal.noSignals')}
                       </span>
                     )}
                   </div>
@@ -598,7 +600,7 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
           <div style={{ padding: '4px', overflow: 'auto', flex: 1 }}>
             {wavemarks.length === 0 ? (
               <div style={{ color: '#999', padding: '8px', fontSize: '12px' }}>
-                No wavemarks. Click the bookmark button in the toolbar to add a wavemark at the current cursor position.
+                {t('panel.waveform.noSignals')}
               </div>
             ) : (
               <div>
@@ -611,17 +613,17 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
                   padding: '4px 0',
                   marginBottom: '4px',
                 }}>
-                  <div style={{ width: wavemarkColWidths.color, minWidth: 20, paddingRight: '4px' }}>Color</div>
+                  <div style={{ width: wavemarkColWidths.color, minWidth: 20, paddingRight: '4px' }}>{t('panel.signal.value')}</div>
                   <div 
                     style={{ width: '4px', cursor: 'col-resize', background: '#ddd' }}
                     onMouseDown={(e) => handleResizeStart(e, 'wavemarks', 'color')}
                   />
-                  <div style={{ width: wavemarkColWidths.name, minWidth: 50, paddingRight: '4px' }}>Name</div>
+                  <div style={{ width: wavemarkColWidths.name, minWidth: 50, paddingRight: '4px' }}>{t('panel.signal.name')}</div>
                   <div 
                     style={{ width: '4px', cursor: 'col-resize', background: '#ddd' }}
                     onMouseDown={(e) => handleResizeStart(e, 'wavemarks', 'name')}
                   />
-                  <div style={{ width: wavemarkColWidths.time, minWidth: 50, paddingRight: '4px' }}>Time</div>
+                  <div style={{ width: wavemarkColWidths.time, minWidth: 50, paddingRight: '4px' }}>{t('panel.waveform.time')}</div>
                   <div 
                     style={{ width: '4px', cursor: 'col-resize', background: '#ddd' }}
                     onMouseDown={(e) => handleResizeStart(e, 'wavemarks', 'time')}
@@ -896,7 +898,7 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
           <div style={{ padding: '4px', overflow: 'auto', flex: 1 }}>
             {searchResults.length === 0 ? (
               <div style={{ color: '#999', padding: '8px', fontSize: '12px' }}>
-                No search results. Use the search box in the toolbar to search for modules or signals.
+                {t('panel.hierarchy.noResults')}
               </div>
             ) : (
               <div>
@@ -962,7 +964,7 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
                             {result.fullName}
                           </span>
                           <span style={{ color: '#999', fontSize: '10px', marginLeft: '8px' }}>
-                            {result.type === 'signal' ? 'Signal' : 'Module'}
+                            {result.type === 'signal' ? t('panel.signal.title') : 'Module'}
                           </span>
                         </div>
                       ))}
@@ -977,7 +979,7 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
           <div style={{ overflow: 'auto' }}>
             {driverGroups.length === 0 ? (
               <div style={{ color: '#999', padding: '8px', fontSize: '12px' }}>
-                No drivers. Double-click on a signal in the source code to view its drivers.
+                {t('panel.hierarchy.noResults')}
               </div>
             ) : (
               <>
@@ -997,19 +999,19 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
                   }}
                 >
                   <div style={{ width: '20px' }}></div>
-                  <div style={{ width: driverColWidths.signal, minWidth: 50, paddingRight: '4px' }}>Driver Signal</div>
+                  <div style={{ width: driverColWidths.signal, minWidth: 50, paddingRight: '4px' }}>{t('panel.signal.name')}</div>
                   <div
                     style={{ width: '4px', cursor: 'col-resize', background: '#eee' }}
                     onMouseDown={(e) => handleResizeStart(e, 'drivers', 'signal')}
                   />
-                  <div style={{ width: driverColWidths.file, minWidth: 50, paddingRight: '4px' }}>File</div>
+                  <div style={{ width: driverColWidths.file, minWidth: 50, paddingRight: '4px' }}>{t('panel.source.title')}</div>
                   <div
                     style={{ width: '4px', cursor: 'col-resize', background: '#eee' }}
                     onMouseDown={(e) => handleResizeStart(e, 'drivers', 'file')}
                   />
-                  <div style={{ width: driverColWidths.line, minWidth: 40, paddingRight: '4px', textAlign: 'center' }}>Line</div>
+                  <div style={{ width: driverColWidths.line, minWidth: 40, paddingRight: '4px', textAlign: 'center' }}>{t('panel.source.line')}</div>
                   <div style={{ width: '4px' }} />
-                  <div style={{ width: '60px', textAlign: 'center' }}>Source</div>
+                  <div style={{ width: '60px', textAlign: 'center' }}>{t('panel.source.title')}</div>
                   <div style={{ width: '24px' }} />
                 </div>
 
@@ -1213,7 +1215,7 @@ function DriverGroupComponent({
 
               {/* Source Info */}
               <div style={{ width: '60px', textAlign: 'center', fontSize: '10px', color: '#999' }}>
-                -{'>'.replace('>', '')}
+                {'>'}
               </div>
 
               {/* Spacer for delete button alignment */}

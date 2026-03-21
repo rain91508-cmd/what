@@ -84,6 +84,9 @@ import { initTimeConfig, parseTimeUnitStr } from './components/TabPanel'
 import type { SignalWithFormat, RawSignalValuesResult } from './core/waveformProviderInterface'
 import type { DisplayFormat } from './core/waveformProviderInterface'
 
+// i18n
+import { useT } from './i18n'
+
 // 默认时间配置
 // DisplayUnitPerLoD0Unit = 1 表示 1 DisplayUnit = 1 LoD0Unit
 // 这样时间标尺上显示的数值就是 LoD0Unit 的值
@@ -98,6 +101,7 @@ const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
 };
 
 function App() {
+  const { t } = useT()
   const [initialized, setInitialized] = useState(false)
   const [connected, setConnected] = useState(false)
   const [showConnectionDialog, setShowConnectionDialog] = useState(false)
@@ -371,7 +375,7 @@ function App() {
         // Initialize storage layers but don't auto-connect to server
         // Server starts in disconnected state - user must manually connect
         setConnected(false)
-        addMessage('Application initialized - please connect to server')
+        addMessage(`${t('messages.appInitialized')} - ${t('messages.pleaseConnect')}`)
 
         // Don't restore previous connection automatically
         // User can manually connect via Connect button
@@ -2866,7 +2870,7 @@ function App() {
           tableColumnRadix = columnRadixMap
         }
 
-        addMessage(`Created TableView from waveform: ${extractedSignals.length} signals, time range ${tableStartTime}-${tableEndTime}`)
+        addMessage(`${t('messages.createdTableView')}: ${extractedSignals.length} ${t('messages.signals')}, ${t('messages.timeRange')} ${tableStartTime}-${tableEndTime}`)
       }
     }
 

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useT } from '../i18n';
 
 interface ConnectionDialogProps {
   onConnect: (host: string, port: number) => void;
@@ -6,19 +7,16 @@ interface ConnectionDialogProps {
 }
 
 function getCurrentHost(): string {
-  // Get current hostname from browser URL, remove port if present
   let hostname = window.location.hostname;
-  
-  // Replace GitHub Pages domain with custom domain
+
   if (hostname === 'what.chenp.eu.org') {
     hostname = 'rain91508-cmd.chenp.eu.org';
   }
-  
+
   return hostname || 'localhost';
 }
 
 function getDefaultPort(): string {
-  // Use port 443 for custom domain (HTTPS)
   const hostname = window.location.hostname;
   if (hostname === 'what.chenp.eu.org') {
     return '443';
@@ -27,6 +25,7 @@ function getDefaultPort(): string {
 }
 
 export function ConnectionDialog({ onConnect, onClose }: ConnectionDialogProps) {
+  const { t } = useT();
   const [host, setHost] = useState(getCurrentHost);
   const [port, setPort] = useState(getDefaultPort);
 
@@ -40,13 +39,13 @@ export function ConnectionDialog({ onConnect, onClose }: ConnectionDialogProps) 
     <div className="dialog-overlay" onClick={onClose}>
       <div className="dialog" onClick={e => e.stopPropagation()}>
         <div className="dialog-header">
-          <span className="dialog-title">Connect to Server</span>
+          <span className="dialog-title">{t('dialog.connection.title')}</span>
           <button className="dialog-close" onClick={onClose}>×</button>
         </div>
         <form onSubmit={handleSubmit}>
           <div className="dialog-body">
             <div className="form-group">
-              <label className="form-label">Host</label>
+              <label className="form-label">{t('dialog.connection.host')}</label>
               <input
                 type="text"
                 className="form-input"
@@ -56,7 +55,7 @@ export function ConnectionDialog({ onConnect, onClose }: ConnectionDialogProps) 
               />
             </div>
             <div className="form-group">
-              <label className="form-label">Port</label>
+              <label className="form-label">{t('dialog.connection.port')}</label>
               <input
                 type="number"
                 className="form-input"
@@ -68,10 +67,10 @@ export function ConnectionDialog({ onConnect, onClose }: ConnectionDialogProps) 
           </div>
           <div className="dialog-footer">
             <button type="button" className="btn" onClick={onClose}>
-              Cancel
+              {t('dialog.cancel')}
             </button>
             <button type="submit" className="btn btn-primary">
-              Connect
+              {t('dialog.connect')}
             </button>
           </div>
         </form>

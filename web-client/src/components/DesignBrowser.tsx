@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { kdbManager, type TreeNode } from '../modules/knowledge/kdbManager';
 import type { SourceFileInfo } from '../types/kdb';
+import { useT } from '../i18n';
 
 interface DesignBrowserProps {
   onModuleSelect: (moduleIndex: number) => void;
@@ -42,6 +43,7 @@ export function DesignBrowser({
   paginationMap: controlledPagination,
   onPaginationChange
 }: DesignBrowserProps) {
+  const { t } = useT();
   const [activeTab, setActiveTab] = useState<TabType>('hierarchy');
   // Use controlled expanded modules if provided, otherwise use internal state
   const isControlled = controlledExpanded !== undefined;
@@ -175,7 +177,7 @@ export function DesignBrowser({
       }
     } catch (err) {
       console.error('[DesignBrowser] Failed to load top-level modules:', err);
-      setError('Failed to load design hierarchy');
+      setError(t('panel.hierarchy.loading'));
       setLoading(false);
     }
   };
@@ -363,7 +365,7 @@ export function DesignBrowser({
     const isExpanded = expandedNodes.has(nodeId);
     const isSelected = selectedModuleIndex === nodeId;
     const hasChildren = node.hasChildren;
-    const isLoading = node.loading;
+    const isLoadingNode = node.loading;
 
     const indentWidth = 16;
     const lineHeight = 24;
@@ -453,7 +455,7 @@ export function DesignBrowser({
               flexShrink: 0,
             }}
           >
-            {isLoading ? '⏳' : hasChildren ? (isExpanded ? '▼' : '▶') : ''}
+            {isLoadingNode ? '⏳' : hasChildren ? (isExpanded ? '▼' : '▶') : ''}
           </span>
 
           <span 
@@ -473,9 +475,9 @@ export function DesignBrowser({
 
         {hasChildren && isExpanded && (
           <div>
-            {isLoading ? (
+            {isLoadingNode ? (
               <div style={{ paddingLeft: `${(depth + 1) * indentWidth + 20}px`, padding: '4px 8px', fontSize: '11px', color: '#999' }}>
-                Loading...
+                {t('panel.hierarchy.loading')}
               </div>
             ) : (
               (() => {
@@ -624,7 +626,7 @@ export function DesignBrowser({
     if (loading) {
       return (
         <div style={{ padding: '20px', textAlign: 'center', color: '#999', flex: 1 }}>
-          Loading...
+          {t('panel.hierarchy.loading')}
         </div>
       );
     }
@@ -641,8 +643,8 @@ export function DesignBrowser({
       return (
         <div style={{ padding: '20px', textAlign: 'center', color: '#999', flex: 1, fontSize: '11px' }}>
           {kdbManager.isLoaded() 
-            ? 'No design hierarchy available' 
-            : 'Connect to server to load design'}
+            ? t('panel.hierarchy.noResults')
+            : t('status.disconnected')}
         </div>
       );
     }
@@ -658,7 +660,7 @@ export function DesignBrowser({
     if (filesLoading) {
       return (
         <div style={{ padding: '20px', textAlign: 'center', color: '#999', flex: 1 }}>
-          Loading files...
+          {t('panel.hierarchy.loading')}
         </div>
       );
     }
@@ -669,7 +671,7 @@ export function DesignBrowser({
         <div style={{ padding: '8px', borderBottom: '1px solid #e0e0e0' }}>
           <input
             type="text"
-            placeholder="Filter files (* wildcard)"
+            placeholder={t('panel.hierarchy.searchPlaceholder')}
             value={fileFilter}
             onChange={(e) => setFileFilter(e.target.value)}
             style={{
@@ -723,7 +725,7 @@ export function DesignBrowser({
           ))}
           {filteredFiles.length === 0 && (
             <div style={{ padding: '20px', textAlign: 'center', color: '#999', fontSize: '11px' }}>
-              No files match the filter
+              {t('panel.hierarchy.noResults')}
             </div>
           )}
         </div>
@@ -759,7 +761,7 @@ export function DesignBrowser({
             marginBottom: activeTab === 'hierarchy' ? '-1px' : '0',
           }}
         >
-          Hierarchy
+          {t('panel.hierarchy.title')}
         </button>
         <button
           onClick={() => setActiveTab('files')}
@@ -779,7 +781,7 @@ export function DesignBrowser({
             marginBottom: activeTab === 'files' ? '-1px' : '0',
           }}
         >
-          Files
+          {t('panel.hierarchy.files')}
         </button>
       </div>
 

@@ -4,6 +4,7 @@ import { FilterInput } from './FilterInput';
 import { wildcardMatch } from '../utils/wildcardMatch';
 import { kdbManager } from '../modules/knowledge';
 import { waveManager } from '../modules/wSignal';
+import { useT } from '../i18n';
 
 interface SignalListProps {
   moduleIndex: number | null;  // 1-based module index
@@ -23,6 +24,7 @@ const isIOSignal = (signal: Signal): boolean => {
 };
 
 export function SignalList({ moduleIndex, onSignalSelect, onSignalAddToWaveform }: SignalListProps) {
+  const { t } = useT();
   const [signals, setSignals] = useState<Signal[]>([]);
   const [selectedSignal, setSelectedSignal] = useState<Signal | null>(null);
   const [ioFilter, setIoFilter] = useState<'all' | 'input' | 'output' | 'inout' | 'internal'>('all');
@@ -97,17 +99,17 @@ export function SignalList({ moduleIndex, onSignalSelect, onSignalAddToWaveform 
     return signal.name;
   };
 
-  if (!module) {
+  if (!moduleIndex) {
     return (
       <div className="signal-panel">
-        <div className="panel-header">Signals</div>
+        <div className="panel-header">{t('panel.signal.title')}</div>
         <div style={{ 
           padding: '20px', 
           textAlign: 'center', 
           color: '#999',
           fontSize: '11px'
         }}>
-          Select a module to view signals
+          {t('panel.signal.noSignals')}
         </div>
       </div>
     );
@@ -116,14 +118,14 @@ export function SignalList({ moduleIndex, onSignalSelect, onSignalAddToWaveform 
   if (loading) {
     return (
       <div className="signal-panel">
-        <div className="panel-header">Signals</div>
+        <div className="panel-header">{t('panel.signal.title')}</div>
         <div style={{ 
           padding: '20px', 
           textAlign: 'center', 
           color: '#999',
           fontSize: '11px'
         }}>
-          Loading signals...
+          {t('panel.signal.loading')}
         </div>
       </div>
     );
@@ -131,7 +133,7 @@ export function SignalList({ moduleIndex, onSignalSelect, onSignalAddToWaveform 
 
   return (
     <div className="signal-panel">
-      <div className="panel-header">Signals</div>
+      <div className="panel-header">{t('panel.signal.title')}</div>
       
       {/* Filter bar - name filter and IO filter in one row */}
       <div style={{ 
@@ -145,7 +147,7 @@ export function SignalList({ moduleIndex, onSignalSelect, onSignalAddToWaveform 
         <FilterInput
           value={nameFilter}
           onChange={setNameFilter}
-          placeholder="Filter signals..."
+          placeholder={t('panel.signal.searchPlaceholder')}
           storageKey="signal_list_filter_history"
           style={{
             padding: '3px 6px',
@@ -181,7 +183,7 @@ export function SignalList({ moduleIndex, onSignalSelect, onSignalAddToWaveform 
             color: '#999',
             fontSize: '11px'
           }}>
-            {signals.length === 0 ? 'No signals found for this module' : 'No signals match filter'}
+            {signals.length === 0 ? t('panel.signal.noSignals') : t('panel.hierarchy.noResults')}
           </div>
         ) : (
           filteredSignals.map(signal => (
@@ -190,7 +192,7 @@ export function SignalList({ moduleIndex, onSignalSelect, onSignalAddToWaveform 
               className={`signal-item ${selectedSignal?.globalId === signal.globalId ? 'selected' : ''}`}
               onClick={() => handleSignalClick(signal)}
               onDoubleClick={() => handleDoubleClick(signal)}
-              title={`Double-click to add to waveform\n${signal.fullName}`}
+              title={`${t('panel.signal.addToWaveform')}\n${signal.fullName}`}
             >
               <span className="signal-name">
                 {getSignalDisplayName(signal)}
@@ -217,7 +219,7 @@ export function SignalList({ moduleIndex, onSignalSelect, onSignalAddToWaveform 
         fontSize: '10px',
         color: '#666'
       }}>
-        {filteredSignals.length} / {signals.length} signals
+        {filteredSignals.length} / {signals.length} {t('panel.signal.title').toLowerCase()}
       </div>
     </div>
   );

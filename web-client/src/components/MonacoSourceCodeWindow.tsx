@@ -7,6 +7,7 @@ import { LargeFileController, type FileMetadata } from '../services/largeFileCon
 import type { WaveformProviderInterface, WasmSignalInfo, DisplayFormat } from '../core/waveformProviderInterface';
 import { useWaveformProvider } from '../contexts/WaveformProviderContext';
 import { buildWasmSignals, getSignalManager } from '../wasm/waveformProvider';
+import { useT } from '../i18n';
 
 // Configure monaco loader to use local files
 // Local files are copied to public/monaco-editor during build
@@ -83,6 +84,7 @@ function MonacoSourceCodeWindow({
 }: MonacoSourceCodeWindowProps) {
   // Get shared provider from context
   const { provider, waveformName } = useWaveformProvider();
+  const { t } = useT();
   const [content, setContent] = useState<string>('');
   const [filePath, setFilePath] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -322,7 +324,7 @@ function MonacoSourceCodeWindow({
     let html = `
       <div class="signal-zone-header">
         <span class="time-icon">⏱</span>
-        <span class="time-label">Cursor Time:</span>
+        <span class="time-label">{t('panel.source.cursorTime')}</span>
         <span class="time-value">${timeDisplay}</span>
       </div>
       <table class="signal-value-table">
@@ -1586,7 +1588,7 @@ function MonacoSourceCodeWindow({
         color: '#999',
         fontSize: '12px',
       }}>
-        {moduleName ? `No source file for: ${moduleName}` : 'Select an instance to view source code'}
+        {moduleName ? `No source file for: ${moduleName}` : t('panel.source.selectInstance')}
       </div>
     );
   }

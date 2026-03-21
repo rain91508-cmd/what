@@ -11,6 +11,7 @@ import { wildcardMatch } from '../utils/wildcardMatch';
 import { zoomIn, zoomOut } from '../utils/zoomHelpers';
 import { sanitizeTimeRange, type TimeRangeOnly } from '../utils/viewport';
 import { buildWasmSignals } from '../wasm/waveformProvider';
+import { useT } from '../i18n';
 
 import { WaveformProviderAdapter } from '../wasm/waveformProviderAdapter';
 import { useWaveformProvider } from '../contexts/WaveformProviderContext';
@@ -192,6 +193,7 @@ export function WaveformWindow({
   onSignalSelect,
   onSignalDoubleClick,
 }: WaveformWindowProps) {
+  const { t } = useT();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const signalPanelRef = useRef<HTMLDivElement>(null);
@@ -2363,7 +2365,7 @@ export function WaveformWindow({
           <FilterInput
             value={nameFilter}
             onChange={setNameFilter}
-            placeholder="Filter..."
+            placeholder={t('panel.hierarchy.searchPlaceholder')}
             storageKey="waveform_filter_history"
             style={{
               height: '22px',
@@ -2437,13 +2439,13 @@ export function WaveformWindow({
 
         {/* Header with 3 columns and visible dividers - 增加高度到20px */}
         <div className="waveform-header" style={{ display: 'flex', position: 'relative', borderBottom: '1px solid #c0c0c0', height: '20px', boxSizing: 'border-box' }}>
-          <span style={{ width: hierarchyColumnWidth, paddingLeft: '4px', fontSize: '10px', borderRight: '1px solid #c0c0c0' }}>Scope</span>
-          <span style={{ width: nameColumnWidth, paddingLeft: '4px', borderRight: '1px solid #c0c0c0' }}>Name</span>
+          <span style={{ width: hierarchyColumnWidth, paddingLeft: '4px', fontSize: '10px', borderRight: '1px solid #c0c0c0' }}>{t('panel.waveform.scope')}</span>
+          <span style={{ width: nameColumnWidth, paddingLeft: '4px', borderRight: '1px solid #c0c0c0' }}>{t('panel.waveform.name')}</span>
           <span style={{ 
             flex: 1,
             textAlign: 'right',
             paddingRight: '4px',
-          }}>Value</span>
+          }}>{t('panel.waveform.value')}</span>
           
           {/* Resizers - positioned on the right edge of each column */}
           <div
@@ -3158,7 +3160,7 @@ export function WaveformWindow({
               color: '#999',
               fontSize: '11px',
             }}>
-              No signals added
+              {t('panel.waveform.noSignalsAdded')}
             </div>
           )}
         </div>
@@ -3246,7 +3248,7 @@ export function WaveformWindow({
           {/* Cursor info - 两行显示：第一行Cursor，第二行时间 */}
           {cursor.visible && (() => {
             const cursorTimeStr = formatNumberWithCommas(Math.round(lod0ToDisplay(cursor.position, timeConfig)));
-            const line1 = 'Cursor';
+            const line1 = t('panel.waveform.cursor');
             const line2 = cursorTimeStr;
             // 估计每个字符8px宽度，取两行中较长的一行
             const charWidth = 8;

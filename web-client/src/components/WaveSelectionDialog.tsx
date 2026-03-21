@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { waveManager } from '../modules/wSignal';
 import { apiService } from '../services/api';
+import { useT } from '../i18n';
 
 interface ServerWaveformInfo {
   name: string;
@@ -14,12 +15,13 @@ interface WaveSelectionDialogProps {
 }
 
 export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogProps) {
+  const { t } = useT();
   const [waves, setWaves] = useState<ServerWaveformInfo[]>([]);
   const [selectedWave, setSelectedWave] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
-  
+
   // Time range settings (in LoD0 units - time_unit)
   const [useCustomRange, setUseCustomRange] = useState(false);
   const [startTime, setStartTime] = useState('');
@@ -36,17 +38,17 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
       setError(null);
       setWaves([]);
       setSelectedWave('');
-      
+
       console.log('[WaveSelectionDialog] Loading waveform list...');
       const waveList = await waveManager.fetchWaveformList();
       console.log('[WaveSelectionDialog] Got wave list:', waveList);
-      
+
       if (!waveList || waveList.length === 0) {
-        setError('No waveforms available - server may be disconnected');
+        setError(t('dialog.waveSelection.error'));
         setWaves([]);
         return;
       }
-      
+
       const validWaves = (waveList as unknown as ServerWaveformInfo[]).filter((wave) => wave.is_valid);
       console.log('[WaveSelectionDialog] Valid waves:', validWaves);
       setWaves(validWaves);
@@ -57,7 +59,7 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
       }
     } catch (err) {
       console.error('[WaveSelectionDialog] Error loading waveform list:', err);
-      setError(`Error loading waveform list: ${err instanceof Error ? err.message : String(err)}`);
+      setError(t('dialog.waveSelection.error'));
       setWaves([]);
     } finally {
       setLoading(false);
@@ -96,7 +98,7 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
       if (infoResponse.status === 'success' && infoResponse.data?.wave_info) {
         const waveInfo = infoResponse.data.wave_info;
         console.log('[WaveSelectionDialog] Wave info:', waveInfo);
-        
+
         // Parse time_unit to get multiplier
         const timeUnit = waveInfo.time_unit || '1fs';
         const match = timeUnit.match(/(\d+)([a-z]+)/i);
@@ -112,12 +114,12 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
             case 'ms': _multiplier = 1000000000000; break;
           }
         }
-        
+
         // waveInfo times are already in LoD0 units (time_unit)
         // No conversion needed
         const startLod0 = waveInfo.start_time || 0;
         const endLod0 = waveInfo.end_time || 0;
-        
+
         setStartTime(startLod0.toString());
         setEndTime(endLod0.toString());
         console.log(`[WaveSelectionDialog] Pre-filled range: ${startLod0} - ${endLod0} LoD0 units`);
@@ -162,10 +164,10 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
       <div className="dialog-overlay" onClick={onCancel}>
         <div className="dialog" onClick={e => e.stopPropagation()}>
           <div className="dialog-header">
-            <span className="dialog-title">Select Waveform</span>
+            <span className="dialog-title">{t('dialog.waveSelection.title')}</span>
           </div>
           <div className="dialog-body">
-            <div style={{ textAlign: 'center', padding: '20px' }}>Loading waveform list...</div>
+            <div style={{ textAlign: 'center', padding: '20px' }}>{t('dialog.waveSelection.loading')}</div>
           </div>
         </div>
       </div>
@@ -177,15 +179,15 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
       <div className="dialog-overlay" onClick={onCancel}>
         <div className="dialog" onClick={e => e.stopPropagation()}>
           <div className="dialog-header">
-            <span className="dialog-title">Select Waveform</span>
+            <span className="dialog-title">{t('dialog.waveSelection.title')}</span>
             <button className="dialog-close" onClick={onCancel}>×</button>
           </div>
           <div className="dialog-body">
             <div style={{ color: '#d32f2f', padding: '10px' }}>{error}</div>
           </div>
           <div className="dialog-footer">
-            <button className="btn" onClick={onCancel}>Cancel</button>
-            <button className="btn btn-primary" onClick={loadWaveList}>Retry</button>
+            <button className="btn" onClick={onCancel}>{t('dialog.cancel')}</button>
+            <button className="btn btn-primary" onClick={loadWaveList}>{t('dialog.retry')}</button>
           </div>
         </div>
       </div>
@@ -197,14 +199,14 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
       <div className="dialog-overlay" onClick={onCancel}>
         <div className="dialog" onClick={e => e.stopPropagation()}>
           <div className="dialog-header">
-            <span className="dialog-title">Select Waveform</span>
+            <span className="dialog-title">{t('dialog.waveSelection.title')}</span>
             <button className="dialog-close" onClick={onCancel}>×</button>
           </div>
           <div className="dialog-body">
-            <div style={{ padding: '10px' }}>No valid waveform files found on server.</div>
+            <div style={{ padding: '10px' }}>{t('dialog.waveSelection.empty')}</div>
           </div>
           <div className="dialog-footer">
-            <button className="btn" onClick={onCancel}>Cancel</button>
+            <button className="btn" onClick={onCancel}>{t('dialog.cancel')}</button>
           </div>
         </div>
       </div>
@@ -215,7 +217,7 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
     <div className="dialog-overlay" onClick={onCancel}>
       <div className="dialog" onClick={e => e.stopPropagation()} style={{ maxWidth: '500px' }}>
         <div className="dialog-header">
-          <span className="dialog-title">Select Waveform</span>
+          <span className="dialog-title">{t('dialog.waveSelection.title')}</span>
           <button className="dialog-close" onClick={onCancel}>×</button>
         </div>
         <form onSubmit={handleSubmit}>
@@ -226,7 +228,7 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
             <div style={{ marginBottom: '8px' }}>
               <input
                 type="text"
-                placeholder="Filter (* wildcard)..."
+                placeholder={t('dialog.kdbSelection.filterPlaceholder')}
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 style={{
@@ -242,7 +244,7 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
             <div className="wave-list" style={{ maxHeight: '150px', overflowY: 'auto', marginBottom: '12px' }}>
               {filteredWaves.length === 0 ? (
                 <div style={{ padding: '8px', color: '#999', textAlign: 'center', fontSize: '12px' }}>
-                  No matching waveform files
+                  {t('dialog.kdbSelection.noMatching')}
                 </div>
               ) : (
                 filteredWaves.map((wave) => (
@@ -291,17 +293,17 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
                   </span>
                 )}
               </label>
-              
+
               {useCustomRange && (
                 <div style={{ paddingLeft: '18px' }}>
                   <div style={{ marginBottom: '8px', fontSize: '11px', color: '#666' }}>
                     Time range in LoD0 units (time_unit). Leave empty to use full range.
                   </div>
-                  
+
                   <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end' }}>
                     <div style={{ flex: 1 }}>
                       <label style={{ display: 'block', fontSize: '11px', color: '#666', marginBottom: '2px' }}>
-                        Start
+                        {t('toolbar.start')}
                       </label>
                       <input
                         type="number"
@@ -344,10 +346,10 @@ export function WaveSelectionDialog({ onSelect, onCancel }: WaveSelectionDialogP
           </div>
           <div className="dialog-footer">
             <button type="button" className="btn" onClick={onCancel}>
-              Cancel
+              {t('dialog.cancel')}
             </button>
             <button type="submit" className="btn btn-primary" disabled={!selectedWave}>
-              Select Waveform
+              {t('dialog.ok')}
             </button>
           </div>
         </form>

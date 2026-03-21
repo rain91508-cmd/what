@@ -3,6 +3,7 @@ import { kdbManager } from '../modules/knowledge/kdbManager';
 import type { Signal } from '../types/kdb';
 import { SignalType } from '../types/kdb';
 import { FilterInput } from './FilterInput';
+import { useT } from '../i18n';
 
 interface SignalPanelProps {
   selectedModuleIndex: number | null;  // 1-based module index
@@ -23,6 +24,7 @@ interface SignalPanelProps {
 const DEFAULT_PAGE_SIZE = 50;
 
 export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSignalAddToTableView, onSignalDoubleClick, onSignalSelect, activeTabType, onSignalDrop, pendingSelectedSignal }: SignalPanelProps) {
+  const { t } = useT();
   const [signals, setSignals] = useState<Signal[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -426,10 +428,10 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
         justifyContent: 'space-between',
         alignItems: 'center',
       }}>
-        <span>Signals</span>
+        <span>{t('panel.signal.title')}</span>
         {selectedModuleIndex && (
           <span style={{ fontSize: '11px', color: '#666', fontWeight: 'normal' }}>
-            {totalSignalCount} signals
+            {totalSignalCount} {t('panel.signal.title').toLowerCase()}
           </span>
         )}
       </div>
@@ -446,7 +448,7 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
         <FilterInput
           value={searchTerm}
           onChange={setSearchTerm}
-          placeholder="Search (* wildcard)..."
+          placeholder={t('panel.signal.searchPlaceholder')}
           storageKey="signal_panel_search_history"
           style={{
             padding: '4px 8px',
@@ -491,12 +493,18 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
                 minWidth: '100px',
               }}
             >
-              {['all', 'input', 'output', 'inout', 'internal'].map(filter => (
+              {[
+                { key: 'all', label: 'All' },
+                { key: 'input', label: 'Input' },
+                { key: 'output', label: 'Output' },
+                { key: 'inout', label: 'InOut' },
+                { key: 'internal', label: 'Internal' },
+              ].map(({ key, label }) => (
                 <div
-                  key={filter}
+                  key={key}
                   onClick={(e) => {
                     e.stopPropagation();
-                    toggleIoFilter(filter);
+                    toggleIoFilter(key);
                   }}
                   style={{
                     padding: '4px 8px',
@@ -505,13 +513,13 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
                     display: 'flex',
                     alignItems: 'center',
                     gap: '6px',
-                    backgroundColor: ioFilters.has(filter) ? '#e3f2fd' : 'white',
+                    backgroundColor: ioFilters.has(key) ? '#e3f2fd' : 'white',
                   }}
                 >
                   <span style={{ width: '12px', textAlign: 'center' }}>
-                    {ioFilters.has(filter) ? '✓' : ''}
+                    {ioFilters.has(key) ? '✓' : ''}
                   </span>
-                  <span>{filter === 'all' ? 'All' : filter === 'inout' ? 'InOut' : filter.charAt(0).toUpperCase() + filter.slice(1)}</span>
+                  <span>{label}</span>
                 </div>
               ))}
             </div>
@@ -547,14 +555,14 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
           >
             ◀
           </button>
-          
-          <div 
+
+          <div
             ref={jumpDialogRef}
             style={{ position: 'relative' }}
           >
             <span
               onDoubleClick={handleRangeDoubleClick}
-              style={{ 
+              style={{
                 cursor: 'pointer',
                 padding: '2px 6px',
                 borderRadius: '3px',
@@ -564,7 +572,7 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
             >
               {displayStart} - {displayEnd} / {totalSignalCount}
             </span>
-            
+
             {showJumpDialog && (
               <div
                 style={{
@@ -670,7 +678,7 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
             color: '#999',
             fontSize: '12px',
           }}>
-            Select a module to view signals
+            {t('panel.signal.selectModule')}
           </div>
         ) : loading ? (
           <div style={{ 

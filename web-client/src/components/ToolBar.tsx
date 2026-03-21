@@ -1,11 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import type { TimeConfig } from './TabPanel';
 import { displayToLod0, lod0ToDisplay, initTimeConfig } from './TabPanel';
+import { useT } from '../i18n';
 
-// 时间单位类型（用户可选择）
 type TimeUnit = 'fs' | 'ps' | 'ns' | 'us' | 'ms' | 's';
 
-// 时间单位到 fs 乘数的映射（以 fs 为基准）
 const TIME_UNIT_MULTIPLIERS: Record<TimeUnit, number> = {
   fs: 1,
   ps: 1000,
@@ -15,7 +14,6 @@ const TIME_UNIT_MULTIPLIERS: Record<TimeUnit, number> = {
   s: 1000000000000000,
 };
 
-// 数字枚举到单位字符串的映射
 const TIME_UNIT_ENUM_TO_STR: Record<number, TimeUnit> = {
   0: 'fs',
   1: 'ps',
@@ -32,50 +30,38 @@ interface ToolBarProps {
   onSearch: () => void;
   onAddSourceTab?: () => void;
   onAddWaveformTab?: () => void;
-  // Source navigation history
   onNavigatePrevious?: () => void;
   onNavigateNext?: () => void;
   canNavigatePrevious?: boolean;
   canNavigateNext?: boolean;
-  // Time configuration for waveform tabs
   timeConfig?: TimeConfig;
   onTimeConfigChange?: (config: TimeConfig) => void;
-  // Waveform info for time unit conversion
-  waveformTimeUnit?: number; // WaveformInfo.timeUnit (0=fs, 1=ps, 2=ns, 3=us, 4=ms, 5=s)
-  // Global display unit selection (shared across all tabs)
+  waveformTimeUnit?: number;
   selectedDisplayUnit?: TimeUnit;
   onDisplayUnitChange?: (unit: TimeUnit) => void;
-  // Maximum waveform time in LoD0Unit (for validation)
   maxWaveformTimeLod0?: number;
-  // Connection and file actions
   onConnect?: () => void;
   onOpenKdb?: () => void;
   onOpenWaveform?: () => void;
   connected?: boolean;
-  // File change detection
   onRefreshCheck?: () => void;
   onToggleAutoCheck?: () => void;
   autoCheckEnabled?: boolean;
-  // Bookmark
   onAddBookmark?: () => void;
-  // Viewport and cursor for time display
-  viewportStart?: number;  // viewport timeStart in LoD0 units
-  viewportEnd?: number;    // viewport timeEnd in LoD0 units
-  cursorPosition?: number; // cursor position in LoD0 units
-  onViewportStartChange?: (newStart: number) => void; // callback when user changes start time
-  onCursorPositionChange?: (newPosition: number) => void; // callback when user changes cursor position
-  // Search functionality
+  viewportStart?: number;
+  viewportEnd?: number;
+  cursorPosition?: number;
+  onViewportStartChange?: (newStart: number) => void;
+  onCursorPositionChange?: (newPosition: number) => void;
   searchPattern?: string;
   onSearchPatternChange?: (pattern: string) => void;
   onSearchExecute?: () => void;
   onSearchCancel?: () => void;
   isSearching?: boolean;
   searchHistory?: string[];
-  // Hierarchy search mode (when no tab or source tab active)
   isHierarchySearchMode?: boolean;
   searchSignals?: boolean;
   onSearchSignalsChange?: (searchSignals: boolean) => void;
-  // Waveform search mode (when waveform tab active)
   isWaveformSearchMode?: boolean;
   waveformSearchType?: 'value' | 'edge' | 'transition';
   onWaveformSearchTypeChange?: (type: 'value' | 'edge' | 'transition') => void;
@@ -87,29 +73,24 @@ interface ToolBarProps {
   onWaveformToValueChange?: (value: string) => void;
   onWaveformSearchForward?: () => void;
   onWaveformSearchBackward?: () => void;
-  // Waveform search history
   waveformSearchHistory?: string[];
   waveformFromValueHistory?: string[];
   waveformToValueHistory?: string[];
-  // TableView
   onAddTableViewTab?: () => void;
-  // TableView time range (shown when tableview tab is active)
-  tableStartTime?: number;  // LoD0 units
-  tableEndTime?: number;    // LoD0 units
+  tableStartTime?: number;
+  tableEndTime?: number;
   onTableStartTimeChange?: (time: number) => void;
   onTableEndTimeChange?: (time: number) => void;
-  onTableStartTimeChangeWithSpan?: (start: number, end: number) => void;  // Update start and end together
-  onTableTimeApply?: () => void;  // Apply time range and fetch data
-  // Current tab type to show appropriate controls
+  onTableStartTimeChangeWithSpan?: (start: number, end: number) => void;
+  onTableTimeApply?: () => void;
   currentTabType?: 'source' | 'waveform' | 'tableview';
-  // Fallback for when tab doesn't have timeConfig
   currentWaveDisplayUnitPerLoD0?: number;
 }
 
-export function ToolBar({ 
-  onZoomIn, 
-  onZoomOut, 
-  onZoomFull, 
+export function ToolBar({
+  onZoomIn,
+  onZoomOut,
+  onZoomFull,
   onSearch,
   onAddSourceTab,
   onAddWaveformTab,
@@ -119,8 +100,8 @@ export function ToolBar({
   canNavigateNext = false,
   timeConfig,
   onTimeConfigChange,
-  waveformTimeUnit = 2, // Default to ns (2)
-  maxWaveformTimeLod0 = 1000000, // Default 1,000,000 LoD0Units
+  waveformTimeUnit = 2,
+  maxWaveformTimeLod0 = 1000000,
   onConnect,
   onOpenKdb,
   onOpenWaveform,
@@ -129,13 +110,11 @@ export function ToolBar({
   onToggleAutoCheck,
   autoCheckEnabled = false,
   onAddBookmark,
-  // Viewport and cursor
   viewportStart,
   viewportEnd,
   cursorPosition,
   onViewportStartChange,
   onCursorPositionChange,
-  // Search functionality
   searchPattern = '',
   onSearchPatternChange,
   onSearchExecute,
@@ -145,7 +124,6 @@ export function ToolBar({
   isHierarchySearchMode = false,
   searchSignals = false,
   onSearchSignalsChange,
-  // Waveform search mode
   isWaveformSearchMode = false,
   waveformSearchType = 'value',
   onWaveformSearchTypeChange,
@@ -157,11 +135,9 @@ export function ToolBar({
   onWaveformToValueChange,
   onWaveformSearchForward,
   onWaveformSearchBackward,
-  // Waveform search history
   waveformSearchHistory = [],
   waveformFromValueHistory = [],
   waveformToValueHistory = [],
-  // TableView
   onAddTableViewTab,
   tableStartTime,
   tableEndTime,
@@ -171,43 +147,34 @@ export function ToolBar({
   onTableTimeApply,
   currentTabType = 'source',
   currentWaveDisplayUnitPerLoD0 = 1.0,
-  // Global display unit selection
   selectedDisplayUnit,
   onDisplayUnitChange,
 }: ToolBarProps) {
-  // Local state for display unit input value (only committed on Enter)
+  const { t } = useT();
   const [inputValue, setInputValue] = useState<string>('');
-  // Use global selectedDisplayUnit if provided, otherwise fall back to local state
   const [localSelectedUnit, setLocalSelectedUnit] = useState<TimeUnit>('ns');
   const selectedUnit = selectedDisplayUnit ?? localSelectedUnit;
   const [isEditing, setIsEditing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Local state for start time input
   const [startInputValue, setStartInputValue] = useState<string>('');
   const [isStartEditing, setIsStartEditing] = useState(false);
   const startInputRef = useRef<HTMLInputElement>(null);
 
-  // Local state for cursor position input
   const [cursorInputValue, setCursorInputValue] = useState<string>('');
   const [isCursorEditing, setIsCursorEditing] = useState(false);
   const cursorInputRef = useRef<HTMLInputElement>(null);
 
-  // Local state for TableView time inputs
-  // Display: Start and Span (user-friendly)
-  // Internal: Start and End (stored in tab)
   const [tableStartInputValue, setTableStartInputValue] = useState<string>('0');
   const [tableSpanInputValue, setTableSpanInputValue] = useState<string>('0');
   const tableStartInputRef = useRef<HTMLInputElement>(null);
   const tableSpanInputRef = useRef<HTMLInputElement>(null);
 
-  // Search state
   const [showSearchHistory, setShowSearchHistory] = useState(false);
   const [localSearchPattern, setLocalSearchPattern] = useState(searchPattern);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
 
-  // Waveform search history state
   const [showWaveformSearchHistory, setShowWaveformSearchHistory] = useState(false);
   const [showFromValueHistory, setShowFromValueHistory] = useState(false);
   const [showToValueHistory, setShowToValueHistory] = useState(false);
@@ -218,26 +185,20 @@ export function ToolBar({
   const fromValueContainerRef = useRef<HTMLDivElement>(null);
   const toValueContainerRef = useRef<HTMLDivElement>(null);
 
-  // 获取 fs 乘数（根据 waveformTimeUnit）
   const getFsPerLod0Unit = (): number => {
-    // 使用数字枚举（如 2 = ns）
     return TIME_UNIT_MULTIPLIERS[TIME_UNIT_ENUM_TO_STR[waveformTimeUnit] ?? 'ns'];
   };
 
-  // 根据 waveformTimeUnit 更新选中单位（仅当没有全局设置时）
   useEffect(() => {
-    // 如果有全局设置的 selectedDisplayUnit，则使用它，不根据 waveformTimeUnit 自动更新
     if (selectedDisplayUnit !== undefined) {
       return;
     }
     const unit = TIME_UNIT_ENUM_TO_STR[waveformTimeUnit ?? 2] ?? 'ns';
-    // 只更新为有效的单位选项
     if (unit in TIME_UNIT_MULTIPLIERS) {
       setLocalSelectedUnit(unit);
     }
   }, [waveformTimeUnit, selectedDisplayUnit]);
 
-  // Update display unit input value when timeConfig changes
   useEffect(() => {
     if (!isEditing && timeConfig) {
       const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;
@@ -248,7 +209,6 @@ export function ToolBar({
     }
   }, [timeConfig, isEditing, waveformTimeUnit, selectedUnit]);
 
-  // Update start time input when viewport changes
   useEffect(() => {
     if (!isStartEditing && viewportStart !== undefined && timeConfig) {
       const displayValue = lod0ToDisplay(viewportStart, timeConfig);
@@ -256,15 +216,13 @@ export function ToolBar({
     }
   }, [viewportStart, timeConfig, isStartEditing]);
 
-  // Update cursor position input when cursor changes
   useEffect(() => {
     if (!isCursorEditing && cursorPosition !== undefined && timeConfig) {
       const displayValue = lod0ToDisplay(cursorPosition, timeConfig);
-      setCursorInputValue(displayValue.toFixed(1)); // Show 1 decimal place
+      setCursorInputValue(displayValue.toFixed(1));
     }
   }, [cursorPosition, timeConfig, isCursorEditing]);
 
-  // Initialize input values
   useEffect(() => {
     if (timeConfig && inputValue === '') {
       const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;
@@ -275,7 +233,6 @@ export function ToolBar({
     }
   }, [timeConfig, waveformTimeUnit, selectedUnit]);
 
-  // Close search history when clicking outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
@@ -295,20 +252,33 @@ export function ToolBar({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // ==================== Display Unit Handlers ====================
+  useEffect(() => {
+    const effectiveTimeConfig = timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
+    if (tableStartTime !== undefined) {
+      const displayValue = lod0ToDisplay(tableStartTime, effectiveTimeConfig);
+      setTableStartInputValue(displayValue.toString());
+    }
+  }, [tableStartTime, timeConfig, currentWaveDisplayUnitPerLoD0]);
+
+  useEffect(() => {
+    const effectiveTimeConfig = timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
+    if (tableStartTime !== undefined && tableEndTime !== undefined) {
+      const spanLod0 = tableEndTime - tableStartTime;
+      const displaySpan = lod0ToDisplay(spanLod0, effectiveTimeConfig);
+      setTableSpanInputValue(displaySpan.toString());
+    }
+  }, [tableStartTime, tableEndTime, timeConfig, currentWaveDisplayUnitPerLoD0]);
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInputValue(e.target.value);
     setIsEditing(true);
   };
 
   const handleUnitChange = (newUnit: TimeUnit) => {
-    // Update local state as fallback
     setLocalSelectedUnit(newUnit);
-    // Notify parent component if callback provided (global state management)
     if (onDisplayUnitChange) {
       onDisplayUnitChange(newUnit);
     }
-    // 单位改变时，重新计算输入值
     if (timeConfig && !isEditing) {
       const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;
       const fsPerLod0Unit = getFsPerLod0Unit();
@@ -322,7 +292,6 @@ export function ToolBar({
     if (e.key === 'Enter') {
       commitInputValue();
     } else if (e.key === 'Escape') {
-      // Restore original value
       if (timeConfig) {
         const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;
         const fsPerLod0Unit = getFsPerLod0Unit();
@@ -336,7 +305,6 @@ export function ToolBar({
   };
 
   const handleInputBlur = () => {
-    // Restore original value on blur (cancel edit)
     if (timeConfig) {
       const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;
       const fsPerLod0Unit = getFsPerLod0Unit();
@@ -352,7 +320,6 @@ export function ToolBar({
 
     const numValue = parseFloat(inputValue);
     if (isNaN(numValue) || numValue <= 0) {
-      // Invalid input, restore original value
       const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;
       const fsPerLod0Unit = getFsPerLod0Unit();
       const fsPerDisplayUnit = lod0PerDisplayUnit * fsPerLod0Unit;
@@ -362,20 +329,11 @@ export function ToolBar({
       return;
     }
 
-    // 用户输入的是绝对时间数值（带单位）
-    // LoD0Unit = time_unit (服务器的时间单位)
-    // 1. 转换为 fs: inputValue * TIME_UNIT_MULTIPLIERS[selectedUnit]
     const inputFs = numValue * TIME_UNIT_MULTIPLIERS[selectedUnit];
-
-    // 2. 转换为 LoD0Unit: fs / fsPerLod0Unit
-    // fsPerLod0Unit 是通过 time_unit 计算得到的
     const fsPerLod0Unit = getFsPerLod0Unit();
     const lod0Units = Math.floor(inputFs / fsPerLod0Unit);
-
-    // 3. 这就是新的 DisplayUnitPerLoD0Unit（必须是整数）
     const newDisplayUnitPerLoD0Unit = Math.max(1, lod0Units);
 
-    // Validate: cannot be too large
     if (newDisplayUnitPerLoD0Unit > maxWaveformTimeLod0) {
       const lod0PerDisplayUnit = timeConfig.DisplayUnitPerLoD0Unit;
       const fsPerDisplayUnit = lod0PerDisplayUnit * fsPerLod0Unit;
@@ -385,7 +343,6 @@ export function ToolBar({
       return;
     }
 
-    // Commit the change
     onTimeConfigChange({
       ...timeConfig,
       DisplayUnitPerLoD0Unit: newDisplayUnitPerLoD0Unit,
@@ -394,7 +351,6 @@ export function ToolBar({
     setIsEditing(false);
   };
 
-  // ==================== Start Time Handlers ====================
   const handleStartInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setStartInputValue(e.target.value);
     setIsStartEditing(true);
@@ -404,7 +360,6 @@ export function ToolBar({
     if (e.key === 'Enter') {
       commitStartValue();
     } else if (e.key === 'Escape') {
-      // Restore original value
       if (viewportStart !== undefined && timeConfig) {
         const displayValue = lod0ToDisplay(viewportStart, timeConfig);
         setStartInputValue(displayValue.toString());
@@ -415,7 +370,6 @@ export function ToolBar({
   };
 
   const handleStartInputBlur = () => {
-    // Restore original value on blur (cancel edit)
     if (viewportStart !== undefined && timeConfig) {
       const displayValue = lod0ToDisplay(viewportStart, timeConfig);
       setStartInputValue(displayValue.toString());
@@ -431,34 +385,27 @@ export function ToolBar({
 
     const numValue = parseFloat(startInputValue);
     if (isNaN(numValue) || numValue < 0) {
-      // Invalid input, restore original value
       const displayValue = lod0ToDisplay(viewportStart, timeConfig);
       setStartInputValue(displayValue.toString());
       setIsStartEditing(false);
       return;
     }
 
-    // Convert display unit value to LoD0 units
     const newStartLod0 = displayToLod0(numValue, timeConfig);
-
-    // Sanity check: ensure start is within valid range
     const timeSpan = viewportEnd - viewportStart;
     const maxStart = maxWaveformTimeLod0 - timeSpan;
-    
+
     if (newStartLod0 < 0 || newStartLod0 > maxStart) {
-      // Invalid range, restore original value
       const displayValue = lod0ToDisplay(viewportStart, timeConfig);
       setStartInputValue(displayValue.toString());
       setIsStartEditing(false);
       return;
     }
 
-    // Commit the change - keep the same time span, just move the window
     onViewportStartChange(newStartLod0);
     setIsStartEditing(false);
   };
 
-  // ==================== Cursor Position Handlers ====================
   const handleCursorInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setCursorInputValue(e.target.value);
     setIsCursorEditing(true);
@@ -468,7 +415,6 @@ export function ToolBar({
     if (e.key === 'Enter') {
       commitCursorValue();
     } else if (e.key === 'Escape') {
-      // Restore original value
       if (cursorPosition !== undefined && timeConfig) {
         const displayValue = lod0ToDisplay(cursorPosition, timeConfig);
         setCursorInputValue(displayValue.toString());
@@ -479,7 +425,6 @@ export function ToolBar({
   };
 
   const handleCursorInputBlur = () => {
-    // Restore original value on blur (cancel edit)
     if (cursorPosition !== undefined && timeConfig) {
       const displayValue = lod0ToDisplay(cursorPosition, timeConfig);
       setCursorInputValue(displayValue.toString());
@@ -495,52 +440,24 @@ export function ToolBar({
 
     const numValue = parseFloat(cursorInputValue);
     if (isNaN(numValue) || numValue < 0) {
-      // Invalid input, restore original value
       const displayValue = lod0ToDisplay(cursorPosition, timeConfig);
       setCursorInputValue(displayValue.toString());
       setIsCursorEditing(false);
       return;
     }
 
-    // Convert display unit value to LoD0 units
     const newCursorLod0 = displayToLod0(numValue, timeConfig);
 
-    // Sanity check: ensure cursor is within valid range
     if (newCursorLod0 < 0 || newCursorLod0 > maxWaveformTimeLod0) {
-      // Invalid range, restore original value
       const displayValue = lod0ToDisplay(cursorPosition, timeConfig);
       setCursorInputValue(displayValue.toString());
       setIsCursorEditing(false);
       return;
     }
 
-    // Commit the change
     onCursorPositionChange(newCursorLod0);
     setIsCursorEditing(false);
   };
-
-  // ==================== TableView Time Handlers ====================
-
-  // Update TableView input values when props change
-  // Display: Start and Span (user-friendly)
-  // Internal: Start and End (stored in tab)
-  useEffect(() => {
-    const effectiveTimeConfig = timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
-    if (tableStartTime !== undefined) {
-      const displayValue = lod0ToDisplay(tableStartTime, effectiveTimeConfig);
-      setTableStartInputValue(displayValue.toString());
-    }
-  }, [tableStartTime, timeConfig, currentWaveDisplayUnitPerLoD0]);
-
-  useEffect(() => {
-    const effectiveTimeConfig = timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
-    if (tableStartTime !== undefined && tableEndTime !== undefined) {
-      // Calculate span from start and end
-      const spanLod0 = tableEndTime - tableStartTime;
-      const displaySpan = lod0ToDisplay(spanLod0, effectiveTimeConfig);
-      setTableSpanInputValue(displaySpan.toString());
-    }
-  }, [tableStartTime, tableEndTime, timeConfig, currentWaveDisplayUnitPerLoD0]);
 
   const handleTableStartInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setTableStartInputValue(e.target.value);
@@ -554,7 +471,6 @@ export function ToolBar({
     if (e.key === 'Enter') {
       commitTableStartValue();
     } else if (e.key === 'Escape') {
-      // Restore original value
       if (tableStartTime !== undefined) {
         const effectiveTimeConfig = timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
         const displayValue = lod0ToDisplay(tableStartTime, effectiveTimeConfig);
@@ -567,7 +483,6 @@ export function ToolBar({
     if (e.key === 'Enter') {
       commitTableSpanValue();
     } else if (e.key === 'Escape') {
-      // Restore original span value
       if (tableStartTime !== undefined && tableEndTime !== undefined) {
         const effectiveTimeConfig = timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
         const spanLod0 = tableEndTime - tableStartTime;
@@ -583,7 +498,6 @@ export function ToolBar({
 
     const numValue = parseFloat(tableStartInputValue);
     if (isNaN(numValue) || numValue < 0) {
-      // Invalid input, restore original value
       if (tableStartTime !== undefined) {
         const displayValue = lod0ToDisplay(tableStartTime, effectiveTimeConfig);
         setTableStartInputValue(displayValue.toString());
@@ -591,18 +505,14 @@ export function ToolBar({
       return;
     }
 
-    // Convert display unit value to LoD0 units
     const newStartLod0 = displayToLod0(numValue, effectiveTimeConfig);
-
-    // Calculate new end time based on current span (span remains unchanged, even if 0 or negative)
     const spanValue = parseFloat(tableSpanInputValue);
     let newEndLod0 = newStartLod0;
     if (!isNaN(spanValue)) {
       const spanLod0 = displayToLod0(spanValue, effectiveTimeConfig);
       newEndLod0 = newStartLod0 + spanLod0;
     }
-    
-    // Use the combined handler to update both start and end atomically
+
     if (onTableStartTimeChangeWithSpan) {
       onTableStartTimeChangeWithSpan(newStartLod0, newEndLod0);
     } else {
@@ -613,16 +523,14 @@ export function ToolBar({
 
   const commitTableSpanValue = (currentStartLod0?: number, effectiveTimeConfig?: TimeConfig) => {
     const config = effectiveTimeConfig || timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
-    
+
     if (!onTableEndTimeChange) return;
 
-    // Use provided start time (if just updated) or fall back to prop
     const baseStartLod0 = currentStartLod0 !== undefined ? currentStartLod0 : tableStartTime;
     if (baseStartLod0 === undefined) return;
 
     const numValue = parseFloat(tableSpanInputValue);
     if (isNaN(numValue) || numValue < 0) {
-      // Invalid input, restore original span value
       if (tableEndTime !== undefined && tableStartTime !== undefined) {
         const spanLod0 = tableEndTime - tableStartTime;
         const displaySpan = lod0ToDisplay(spanLod0, config);
@@ -631,18 +539,14 @@ export function ToolBar({
       return;
     }
 
-    // Convert span from display units to LoD0 units
     const spanLod0 = displayToLod0(numValue, config);
-    // Calculate new end time: start + span
     const newEndLod0 = baseStartLod0 + spanLod0;
     onTableEndTimeChange(newEndLod0);
   };
 
   const handleTableTimeApply = () => {
-    // Use fallback timeConfig if tab doesn't have one
     const effectiveTimeConfig = timeConfig || initTimeConfig(currentWaveDisplayUnitPerLoD0);
 
-    // Commit start value first and get the new start time
     const numStartValue = parseFloat(tableStartInputValue);
     let newStartLod0: number | undefined;
     if (!isNaN(numStartValue) && numStartValue >= 0 && effectiveTimeConfig && onTableStartTimeChange) {
@@ -650,13 +554,11 @@ export function ToolBar({
       onTableStartTimeChange(newStartLod0);
     }
 
-    // Commit span value using the new start time (if updated)
     commitTableSpanValue(newStartLod0, effectiveTimeConfig);
 
     onTableTimeApply?.();
   };
 
-  // Calculate step size based on current unit
   const getStepSize = (): string => {
     switch (selectedUnit) {
       case 's': return '0.001';
@@ -670,52 +572,49 @@ export function ToolBar({
 
   return (
     <div className="tool-bar">
-      {/* Connection and file actions */}
-      <button 
-        className="tool-bar-button" 
-        title={connected ? "Connected" : "Connect to Server"}
+      <button
+        className="tool-bar-button"
+        title={connected ? t('toolbar.connected') : t('toolbar.connect')}
         onClick={onConnect}
         style={{ color: connected ? '#4caf50' : '#666' }}
       >
         {connected ? '🟢' : '🔌'}
       </button>
-      <button 
-        className="tool-bar-button" 
-        title="Open KDB"
+      <button
+        className="tool-bar-button"
+        title={t('toolbar.openKdb')}
         onClick={onOpenKdb}
       >
         📂
       </button>
-      <button 
-        className="tool-bar-button" 
-        title="Open Waveform"
+      <button
+        className="tool-bar-button"
+        title={t('toolbar.openWaveform')}
         onClick={onOpenWaveform}
       >
         📊
       </button>
-      
+
       <div className="tool-bar-separator"></div>
-      <button className="tool-bar-button" title="Zoom In" onClick={onZoomIn}>
+      <button className="tool-bar-button" title={t('toolbar.zoomIn')} onClick={onZoomIn}>
         🔍+
       </button>
-      <button className="tool-bar-button" title="Zoom Out" onClick={onZoomOut}>
+      <button className="tool-bar-button" title={t('toolbar.zoomOut')} onClick={onZoomOut}>
         🔍-
       </button>
-      <button className="tool-bar-button" title="Zoom Full" onClick={onZoomFull}>
+      <button className="tool-bar-button" title={t('toolbar.zoomFull')} onClick={onZoomFull}>
         ⬛
       </button>
-      
-      {/* Time configuration - always visible */}
+
       <div className="tool-bar-separator"></div>
-      
-      {/* Display Unit Input */}
-      <div style={{ 
-        display: 'flex', 
-        alignItems: 'center', 
+
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
         gap: '4px',
         padding: '0 4px',
       }}>
-        <span style={{ fontSize: '11px', color: '#666' }}>Display:</span>
+        <span style={{ fontSize: '11px', color: '#666' }}>{t('toolbar.display')}</span>
         <input
           ref={inputRef}
           type="number"
@@ -733,7 +632,7 @@ export function ToolBar({
           }}
           min="0.000001"
           step={getStepSize()}
-          title={timeConfig ? `Time per division (${selectedUnit}, press Enter to confirm)` : 'Time scale'}
+          title={timeConfig ? `${t('toolbar.display')} (${selectedUnit}, press Enter to confirm)` : t('toolbar.display')}
         />
         <select
           value={selectedUnit}
@@ -757,15 +656,14 @@ export function ToolBar({
         </select>
       </div>
 
-      {/* Start Time Input */}
       {viewportStart !== undefined && (
-        <div style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
           gap: '4px',
           padding: '0 4px',
         }}>
-          <span style={{ fontSize: '11px', color: '#666' }}>Start:</span>
+          <span style={{ fontSize: '11px', color: '#666' }}>{t('toolbar.start')}</span>
           <input
             ref={startInputRef}
             type="number"
@@ -788,15 +686,14 @@ export function ToolBar({
         </div>
       )}
 
-      {/* Cursor Position Input */}
       {cursorPosition !== undefined && (
-        <div style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
           gap: '4px',
           padding: '0 4px',
         }}>
-          <span style={{ fontSize: '11px', color: '#666' }}>Cursor:</span>
+          <span style={{ fontSize: '11px', color: '#666' }}>{t('toolbar.cursor')}</span>
           <input
             ref={cursorInputRef}
             type="number"
@@ -819,16 +716,15 @@ export function ToolBar({
         </div>
       )}
 
-      {/* TableView Time Range Input */}
       {currentTabType === 'tableview' && (
         <>
-          <div style={{ 
-            display: 'flex', 
-            alignItems: 'center', 
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
             gap: '4px',
             padding: '0 4px',
           }}>
-            <span style={{ fontSize: '11px', color: '#666' }}>Start:</span>
+            <span style={{ fontSize: '11px', color: '#666' }}>{t('toolbar.start')}</span>
             <input
               ref={tableStartInputRef}
               type="number"
@@ -854,7 +750,7 @@ export function ToolBar({
             gap: '4px',
             padding: '0 4px',
           }}>
-            <span style={{ fontSize: '11px', color: '#666' }}>Span:</span>
+            <span style={{ fontSize: '11px', color: '#666' }}>{t('toolbar.span')}</span>
             <input
               ref={tableSpanInputRef}
               type="number"
@@ -876,26 +772,23 @@ export function ToolBar({
           </div>
           <button
             className="tool-bar-button"
-            title="Apply time range and fetch data"
+            title={t('toolbar.apply')}
             onClick={handleTableTimeApply}
             style={{
               padding: '4px 8px',
               fontSize: '11px',
             }}
           >
-            Apply
+            {t('toolbar.apply')}
           </button>
         </>
       )}
-      
+
       <div className="tool-bar-separator"></div>
-      
-      {/* Search Section */}
+
       <div ref={searchContainerRef} style={{ display: 'flex', alignItems: 'center', gap: '4px', position: 'relative' }}>
-        {/* Waveform Search Mode */}
         {isWaveformSearchMode ? (
           <>
-            {/* Search Type Dropdown */}
             <select
               value={waveformSearchType}
               onChange={(e) => onWaveformSearchTypeChange?.(e.target.value as 'value' | 'edge' | 'transition')}
@@ -908,12 +801,11 @@ export function ToolBar({
                 width: '90px',
               }}
             >
-              <option value="value">Value</option>
-              <option value="edge">Edge</option>
-              <option value="transition">Transition</option>
+              <option value="value">{t('toolbar.value')}</option>
+              <option value="edge">{t('toolbar.edge')}</option>
+              <option value="transition">{t('toolbar.transition')}</option>
             </select>
-            
-            {/* Value Mode: Single input with history */}
+
             {waveformSearchType === 'value' && (
               <div ref={waveformSearchContainerRef} style={{ position: 'relative' }}>
                 <input
@@ -931,7 +823,7 @@ export function ToolBar({
                       onWaveformSearchForward?.();
                     }
                   }}
-                  placeholder="Pattern..."
+                  placeholder={t('toolbar.pattern')}
                   style={{
                     width: '80px',
                     padding: '4px 6px',
@@ -982,8 +874,7 @@ export function ToolBar({
                 )}
               </div>
             )}
-            
-            {/* Edge Mode: Edge type dropdown */}
+
             {waveformSearchType === 'edge' && (
               <select
                 value={waveformEdgeType}
@@ -997,13 +888,12 @@ export function ToolBar({
                   width: '70px',
                 }}
               >
-                <option value="rising">Rising</option>
-                <option value="falling">Falling</option>
-                <option value="any">Any</option>
+                <option value="rising">{t('toolbar.rising')}</option>
+                <option value="falling">{t('toolbar.falling')}</option>
+                <option value="any">{t('toolbar.any')}</option>
               </select>
             )}
-            
-            {/* Transition Mode: From and To inputs with history */}
+
             {waveformSearchType === 'transition' && (
               <>
                 <div ref={fromValueContainerRef} style={{ position: 'relative' }}>
@@ -1018,7 +908,7 @@ export function ToolBar({
                         setShowFromValueHistory(false);
                       }
                     }}
-                    placeholder="From..."
+                    placeholder={t('toolbar.from')}
                     style={{
                       width: '60px',
                       padding: '4px 6px',
@@ -1080,7 +970,7 @@ export function ToolBar({
                         setShowToValueHistory(false);
                       }
                     }}
-                    placeholder="To..."
+                    placeholder={t('toolbar.to')}
                     style={{
                       width: '60px',
                       padding: '4px 6px',
@@ -1131,21 +1021,19 @@ export function ToolBar({
                 </div>
               </>
             )}
-            
-            {/* Search Backward Button */}
+
             <button
               className="tool-bar-button"
-              title="Search Backward"
+              title={t('toolbar.searchBackward')}
               onClick={() => onWaveformSearchBackward?.()}
               style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '1px' }}
             >
               <span>🔍</span><span>◀</span>
             </button>
-            
-            {/* Search Forward Button */}
+
             <button
               className="tool-bar-button"
-              title="Search Forward"
+              title={t('toolbar.searchForward')}
               onClick={() => onWaveformSearchForward?.()}
               style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '1px' }}
             >
@@ -1154,7 +1042,6 @@ export function ToolBar({
           </>
         ) : (
           <>
-            {/* Signal/Instance Checkbox (only in hierarchy search mode) */}
             {isHierarchySearchMode && (
               <label style={{ display: 'flex', alignItems: 'center', gap: '2px', fontSize: '11px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                 <input
@@ -1163,11 +1050,10 @@ export function ToolBar({
                   onChange={(e) => onSearchSignalsChange?.(e.target.checked)}
                   style={{ margin: 0 }}
                 />
-                <span>Signals</span>
+                <span>{t('toolbar.signals')}</span>
               </label>
             )}
-            
-            {/* Search Input */}
+
             <div style={{ position: 'relative' }}>
               <input
                 ref={searchInputRef}
@@ -1188,7 +1074,7 @@ export function ToolBar({
                     }
                   }
                 }}
-                placeholder="Search..."
+                placeholder={t('toolbar.search')}
                 style={{
                   width: '120px',
                   padding: '4px 6px',
@@ -1198,8 +1084,7 @@ export function ToolBar({
                   height: '24px',
                 }}
               />
-              
-              {/* Search History Dropdown */}
+
               {showSearchHistory && searchHistory.length > 0 && (
                 <div
                   style={{
@@ -1240,11 +1125,10 @@ export function ToolBar({
                 </div>
               )}
             </div>
-            
-            {/* Search/Cancel Button */}
+
             <button
               className="tool-bar-button"
-              title={isSearching ? 'Cancel Search' : 'Search'}
+              title={isSearching ? t('toolbar.cancelSearch') : t('toolbar.search')}
               onClick={() => {
                 if (isSearching) {
                   onSearchCancel?.();
@@ -1262,55 +1146,54 @@ export function ToolBar({
           </>
         )}
       </div>
-      
+
       <div className="tool-bar-separator"></div>
-      <button className="tool-bar-button" title="Add Source Tab" onClick={onAddSourceTab}>
+      <button className="tool-bar-button" title={t('toolbar.addSourceTab')} onClick={onAddSourceTab}>
         📄+
       </button>
-      <button className="tool-bar-button" title="Add Waveform Tab" onClick={onAddWaveformTab}>
+      <button className="tool-bar-button" title={t('toolbar.addWaveformTab')} onClick={onAddWaveformTab}>
         <span style={{ fontSize: '12px', fontFamily: 'monospace' }}>⌇+</span>
       </button>
-      <button className="tool-bar-button" title="Add TableView Tab" onClick={onAddTableViewTab}>
+      <button className="tool-bar-button" title={t('toolbar.addTableViewTab')} onClick={onAddTableViewTab}>
         <span style={{ fontSize: '12px', fontFamily: 'monospace' }}>📊+</span>
       </button>
-      <button className="tool-bar-button" title="Add Bookmark" onClick={onAddBookmark}>
+      <button className="tool-bar-button" title={t('toolbar.addBookmark')} onClick={onAddBookmark}>
         🔖
       </button>
-      
-      {/* File change detection buttons */}
+
       <div className="tool-bar-separator"></div>
-      <button 
-        className="tool-bar-button" 
-        title="Refresh Check - Check if KDB/Waveform has changed"
+      <button
+        className="tool-bar-button"
+        title={t('toolbar.refreshCheck')}
         onClick={onRefreshCheck}
       >
         🔄
       </button>
-      <button 
-        className="tool-bar-button" 
-        title={autoCheckEnabled ? "Auto Check: ON" : "Auto Check: OFF"}
+      <button
+        className="tool-bar-button"
+        title={autoCheckEnabled ? t('toolbar.autoCheckOn') : t('toolbar.autoCheckOff')}
         onClick={onToggleAutoCheck}
-        style={{ 
+        style={{
           color: autoCheckEnabled ? '#4caf50' : '#666',
           fontWeight: autoCheckEnabled ? 'bold' : 'normal'
         }}
       >
         {autoCheckEnabled ? '⏱️' : '⏸️'}
       </button>
-      
+
       <div className="tool-bar-separator"></div>
-      <button 
-        className="tool-bar-button" 
-        title="Previous Location"
+      <button
+        className="tool-bar-button"
+        title={t('toolbar.previousLocation')}
         onClick={onNavigatePrevious}
         disabled={!canNavigatePrevious}
         style={{ opacity: canNavigatePrevious ? 1 : 0.3 }}
       >
         ◀
       </button>
-      <button 
-        className="tool-bar-button" 
-        title="Next Location"
+      <button
+        className="tool-bar-button"
+        title={t('toolbar.nextLocation')}
         onClick={onNavigateNext}
         disabled={!canNavigateNext}
         style={{ opacity: canNavigateNext ? 1 : 0.3 }}

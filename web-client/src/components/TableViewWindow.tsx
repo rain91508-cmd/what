@@ -26,6 +26,7 @@ import { lod0ToDisplay } from './TabPanel';
 import { useWaveformProvider } from '../contexts/WaveformProviderContext';
 import { WaveformProviderAdapter } from '../wasm/waveformProviderAdapter';
 import { buildWasmSignals } from '../wasm/waveformProvider';
+import { useT } from '../i18n';
 
 interface TableViewWindowProps {
   tabId: string;
@@ -96,6 +97,7 @@ export function TableViewWindow({
   onColumnMetadataFiltersChange,
   onColumnRadixChange,
 }: TableViewWindowProps) {
+  const { t } = useT();
   // Get shared provider from context (same as WaveformWindow)
   const { provider: sharedProvider, isLoading: providerLoading } = useWaveformProvider();
 
@@ -628,7 +630,7 @@ export function TableViewWindow({
             cursor: providerReady ? 'pointer' : 'not-allowed',
           }}
         >
-          {isFetching ? 'Fetching...' : 'Refresh Data'}
+          {isFetching ? t('tableView.fetching') : t('tableView.refreshData')}
         </button>
 
         {!providerReady && (
@@ -644,12 +646,12 @@ export function TableViewWindow({
             checked={earlyExitOnInsufficientTransitions}
             onChange={(e) => setEarlyExitOnInsufficientTransitions(e.target.checked)}
           />
-          Early Exit
+          {t('tableView.earlyExit')}
         </label>
 
         {/* Max Result Input */}
         <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}>
-          Max Rows:
+          {t('tableView.maxRows')}
           <input
             type="number"
             value={resultMax}
@@ -726,7 +728,7 @@ export function TableViewWindow({
               cursor: 'pointer',
             }}
           >
-            Columns
+            {t('tableView.columns')}
           </button>
 
           {showColumnVisibility && (
@@ -747,7 +749,7 @@ export function TableViewWindow({
               }}
             >
               <div style={{ marginBottom: '8px', fontWeight: 'bold', fontSize: '12px' }}>
-                Toggle Columns
+                {t('tableView.toggleColumns')}
               </div>
               {table.getAllLeafColumns().map((column) => {
                 if (column.id === 'time') return null; // Always show time column
