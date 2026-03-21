@@ -341,7 +341,11 @@ export function WaveformWindow({
   const [selectedSignal, setSelectedSignal] = useState<number | null>(null);
   const [expandedSignals, setExpandedSignals] = useState<Set<number>>(new Set());
   const [displayFormat, setDisplayFormat] = useState<'hex' | 'bin' | 'oct' | 'dec'>('hex');
-  
+
+  // 多选信号状态（使用 unique_id 作为 key）
+  const [selectedSignals, setSelectedSignals] = useState<Set<number>>(new Set());
+  const [lastSelectedSignal, setLastSelectedSignal] = useState<number | null>(null);
+
   // 每个信号独立的显示格式（使用 unique_id 作为 key）
   // 使用 initialSignalDisplayFormats 初始化
   const [signalDisplayFormats, setSignalDisplayFormats] = useState<Map<number, 'hex' | 'bin' | 'oct' | 'dec'>>(() => {
@@ -543,10 +547,69 @@ export function WaveformWindow({
       return newMap;
     });
     setShowFormatDropdown(null);
-    
+
     // 增加计数器，强制触发 updateSignalValues
     setSignalFormatVersion(prev => prev + 1);
   };
+
+  // 为多个信号设置统一的显示格式
+  const setMultiSignalDisplayFormat = (uniqueIds: number[], format: 'hex' | 'bin' | 'oct' | 'dec') => {
+    setSignalDisplayFormats(prev => {
+      const newMap = new Map(prev);
+      uniqueIds.forEach(id => {
+        newMap.set(id, format);
+      });
+      return newMap;
+    });
+    setShowFormatDropdown(null);
+
+    // 增加计数器，强制触发 updateSignalValues
+    setSignalFormatVersion(prev => prev + 1);
+  };
+
+  // 处理信号多选点击
+  const handleSignalMultiSelect = (
+    signal: Signal & { unique_id: number },
+    isCtrlClick: boolean,
+    isShiftClick: boolean,
+    allSignals: Array<Signal & { unique_id: number }>
+  ) => {
+    if (isShiftClick && lastSelectedSignal !== null) {
+      // Shift + 点击：范围选择
+      const currentIndex = allSignals.findIndex(s => s.unique_id === signal.unique_id);
+      const lastIndex = allSignals.findIndex(s => s.unique_id === lastSelectedSignal);
+
+      if (currentIndex !== -1 && lastIndex !== -1) {
+        const startIndex = Math.min(currentIndex, lastIndex);
+        const endIndex = Math.max(currentIndex, lastIndex);
+        const rangeSignals = allSignals.slice(startIndex, endIndex + 1).map(s => s.unique_id);
+
+        setSelectedSignals(new Set(rangeSignals));
+        setLastSelectedSignal(signal.unique_id);
+      }
+    } else if (isCtrlClick) {
+      // Ctrl/Cmd + 点击：切换选择状态
+      setSelectedSignals(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(signal.unique_id)) {
+          newSet.delete(signal.unique_id);
+        } else {
+          newSet.add(signal.unique_id);
+        }
+        return newSet;
+      });
+      setLastSelectedSignal(signal.unique_id);
+    } else {
+      // 普通点击：单选，清除多选
+      setSelectedSignals(new Set());
+      setSelectedSignal(signal.unique_id);
+      setLastSelectedSignal(signal.unique_id);
+      onSignalSelect?.(signal);
+    }
+  };
+
+  // 检查是否处于多选模式
+  const isMultiSelectMode = selectedSignals.size > 0;
 
   // rAF-throttled mouse position update for smooth rendering
   useEffect(() => {
@@ -2269,10 +2332,22 @@ export function WaveformWindow({
     <div className="waveform-container" style={{ display: 'flex', flexDirection: 'column' }}>
       {/* Main content area - signal panel + canvas */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        <div 
-          className="waveform-signal-panel" 
+        <div
+          className="waveform-signal-panel"
           ref={signalPanelRef}
           style={{ width: signalPanelWidth }}
+          onClick={(e) => {
+            // 点击空白处取消多选（如果不是点击在信号行上）
+            const target = e.target as HTMLElement;
+            const isSignalRow = target.closest('.waveform-signal-item');
+            const isValueColumn = target.closest('.waveform-signal-value');
+            const isScopeColumn = target.closest('[title]'); // Scope column has title attribute
+
+            if (!isSignalRow && !isValueColumn && selectedSignals.size > 0) {
+              setSelectedSignals(new Set());
+              setLastSelectedSignal(null);
+            }
+          }}
         >
         {/* Filter bar - 增加高度到40px */}
         <div style={{
@@ -2584,7 +2659,9 @@ export function WaveformWindow({
               );
             } else if (node.type === 'signal' && node.signal) {
               const signal = node.signal as Signal & { unique_id: number };
-              const isSelected = selectedSignal === signal.unique_id;
+              const isSingleSelected = selectedSignal === signal.unique_id;
+              const isMultiSelected = selectedSignals.has(signal.unique_id);
+              const isSelected = isSingleSelected || isMultiSelected;
 
               const isDragOver = dragOverItem?.type === 'signal' && dragOverItem?.id === signal.unique_id;
               const dropIndicatorStyle = isDragOver ? {
@@ -2592,13 +2669,25 @@ export function WaveformWindow({
                 borderBottom: dragOverItem?.position === 'after' ? '2px solid #4080c0' : undefined,
               } : {};
 
+              // 获取所有信号节点用于 shift 选择
+              const allSignalNodes = treeNodes.filter(n => n.type === 'signal' && n.signal) as Array<TreeNode & { signal: Signal & { unique_id: number } }>;
+              const allSignals = allSignalNodes.map(n => n.signal);
+
               return (
                 <div key={signal.unique_id}>
                   <div
                     className={`waveform-signal-item ${isSelected ? 'selected' : ''}`}
-                    onClick={() => setSelectedSignal(signal.unique_id)}
-                    draggable
-                    onDragStart={(e) => handleDragStart(e, 'signal', signal.unique_id)}
+                    onClick={(e) => {
+                      const isCtrlClick = e.ctrlKey || e.metaKey;
+                      const isShiftClick = e.shiftKey;
+                      handleSignalMultiSelect(signal, isCtrlClick, isShiftClick, allSignals);
+                    }}
+                    draggable={!isMultiSelectMode}
+                    onDragStart={(e) => {
+                      if (!isMultiSelectMode) {
+                        handleDragStart(e, 'signal', signal.unique_id);
+                      }
+                    }}
                     onDragOver={(e) => handleDragOver(e, 'signal', signal.unique_id)}
                     onDragLeave={handleDragLeave}
                     onDrop={(e) => handleDrop(e, 'signal', signal.unique_id)}
@@ -2606,7 +2695,8 @@ export function WaveformWindow({
                       display: 'flex',
                       alignItems: 'center',
                       paddingLeft: '4px',
-                      cursor: 'move',
+                      cursor: isMultiSelectMode ? 'default' : 'move',
+                      backgroundColor: isSelected ? '#e3f2fd' : undefined,
                       ...dropIndicatorStyle,
                     }}
                   >
@@ -2703,15 +2793,27 @@ export function WaveformWindow({
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (showFormatDropdown === signal.unique_id) {
-                          setShowFormatDropdown(null);
-                          dropdownPositionRef.current = null;
+                        if (isMultiSelectMode && selectedSignals.size > 0) {
+                          // 多选模式下：为所有选中的信号设置统一的格式
+                          if (showFormatDropdown === signal.unique_id) {
+                            setShowFormatDropdown(null);
+                            dropdownPositionRef.current = null;
+                          } else {
+                            dropdownPositionRef.current = { x: e.clientX, y: e.clientY };
+                            setShowFormatDropdown(signal.unique_id);
+                          }
                         } else {
-                          dropdownPositionRef.current = { x: e.clientX, y: e.clientY };
-                          setShowFormatDropdown(signal.unique_id);
+                          // 单选模式：保持原有行为
+                          if (showFormatDropdown === signal.unique_id) {
+                            setShowFormatDropdown(null);
+                            dropdownPositionRef.current = null;
+                          } else {
+                            dropdownPositionRef.current = { x: e.clientX, y: e.clientY };
+                            setShowFormatDropdown(signal.unique_id);
+                          }
                         }
                       }}
-                      title={getSignalValue(signal)}
+                      title={isMultiSelectMode ? `Click to set format for ${selectedSignals.size} selected signals` : getSignalValue(signal)}
                     >
                       <span style={{
                         textAlign: 'right',
@@ -2722,7 +2824,7 @@ export function WaveformWindow({
                       }}>
                         {getSignalValue(signal)}
                       </span>
-                      
+
                       {/* 进制选择下拉菜单 */}
                       {showFormatDropdown === signal.unique_id && (
                         <div
@@ -2743,7 +2845,13 @@ export function WaveformWindow({
                               key={format}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setSignalDisplayFormat(signal.unique_id, format as any);
+                                if (isMultiSelectMode && selectedSignals.size > 0) {
+                                  // 多选模式：为所有选中的信号设置格式
+                                  setMultiSignalDisplayFormat(Array.from(selectedSignals), format as any);
+                                } else {
+                                  // 单选模式：只为当前信号设置格式
+                                  setSignalDisplayFormat(signal.unique_id, format as any);
+                                }
                               }}
                               style={{
                                 padding: '4px 8px',
