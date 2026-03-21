@@ -534,11 +534,14 @@ export function WaveformWindow({
     // 先检查是否有自定义格式（使用 ref 获取最新值）
     const customFormat = signalDisplayFormatsRef.current.get(signal.unique_id);
     if (customFormat) {
+      console.log(`[getSignalDisplayFormat] Signal ${signal.name} (unique_id: ${signal.unique_id}) has custom format: ${customFormat}`);
       return customFormat;
     }
     // 没有自定义格式，根据位宽返回默认值
     const isSingleBit = signal.msb === signal.lsb;
-    return isSingleBit ? 'bin' : 'hex';
+    const defaultFormat = isSingleBit ? 'bin' : 'hex';
+    console.log(`[getSignalDisplayFormat] Signal ${signal.name} (msb: ${signal.msb}, lsb: ${signal.lsb}) using default format: ${defaultFormat}`);
+    return defaultFormat;
   };
 
   // 设置信号的显示格式

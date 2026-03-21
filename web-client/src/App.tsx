@@ -3087,6 +3087,11 @@ function App() {
     const signalFormatKey = (selectedSignal as Signal & { unique_id?: number }).unique_id || selectedSignal.globalId;
     const signalFormat = signalFormatKey !== undefined ? activeTabData.signalDisplayFormats?.[signalFormatKey] : undefined;
     
+    // Determine default format based on signal bit width
+    // Single bit: binary, Multi-bit: hex
+    const isSingleBit = selectedSignal.msb === selectedSignal.lsb;
+    const defaultFormat = isSingleBit ? 'bin' : 'hex';
+    
     // Convert display format to API radix format
     // Display: 'bin' | 'hex' | 'oct' | 'dec'
     // API: 'binary' | 'hex' | 'octal' | 'decimal'
@@ -3096,7 +3101,7 @@ function App() {
       'oct': 'octal',
       'dec': 'decimal',
     };
-    const radix = radixMap[signalFormat || 'bin'] || 'binary';
+    const radix = radixMap[signalFormat || defaultFormat] || 'binary';
 
     setIsWaveformSearching(true);
 
