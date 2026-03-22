@@ -324,7 +324,7 @@ function MonacoSourceCodeWindow({
     let html = `
       <div class="signal-zone-header">
         <span class="time-icon">⏱</span>
-        <span class="time-label">{t('panel.source.cursorTime')}</span>
+        <span class="time-label">${t('panel.source.cursorTime')}</span>
         <span class="time-value">${timeDisplay}</span>
       </div>
       <table class="signal-value-table">
