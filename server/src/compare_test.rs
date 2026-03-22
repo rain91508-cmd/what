@@ -443,17 +443,17 @@ pub async fn run_detailed_signal_test(config: &ServerConfig) {
     println!("[DETAILED-TEST] 指定信号详细对比测试");
     println!("========================================\n");
     
-    // 测试参数 - 对应API请求: /api/wave/picorv32/lod/0/tile/2550387200/256/1/...
+    // 测试参数 - 对应API请求: /api/wave/picorv32/lod/10/tile/784342160/256/2/...
     // signals: testbench.top.uut.picorv32_core.mem_addr [31:0], testbench.top.uut.picorv32_core.clk
     let wave_name = "picorv32";
     let test_signals = vec![
         "testbench.top.uut.picorv32_core.mem_addr [31:0]".to_string(),
         "testbench.top.uut.picorv32_core.clk".to_string(),
     ];
-    let lod: u32 = 0;  // LoD = 0, bucket_size = 1
-    let start_time: u64 = 2550387200;  // API指定的 tile start
+    let lod: u32 = 10;  // LoD = 10, bucket_size = 1024
+    let start_time: u64 = 784342160;  // API指定的 tile start
     let num_buckets = 256usize;
-    let num_tiles = 1usize;  // 1个 tile
+    let num_tiles = 2usize;  // 2个 tiles
     
     let bucket_size = 2u64.pow(lod);
     let tile_span = bucket_size * num_buckets as u64;
