@@ -193,6 +193,10 @@ const translations: Translations = {
       loading: 'Загрузка...',
       selectInstance: 'Выберите экземпляр для просмотра исходного кода',
       cursorTime: 'Время курсора:',
+      signal: 'Сигнал',
+      value: 'Значение',
+      width: 'Ширина',
+      radix: 'Основание',
     },
     table: {
       title: 'Табличный вид',

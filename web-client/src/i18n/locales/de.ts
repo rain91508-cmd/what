@@ -193,6 +193,10 @@ const translations: Translations = {
       loading: 'Laden...',
       selectInstance: 'Wählen Sie eine Instanz aus, um Quellcode anzuzeigen',
       cursorTime: 'Cursor-Zeit:',
+      signal: 'Signal',
+      value: 'Wert',
+      width: 'Breite',
+      radix: 'Basis',
     },
     table: {
       title: 'Tabellenansicht',

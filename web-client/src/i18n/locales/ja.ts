@@ -193,6 +193,10 @@ const translations: Translations = {
       loading: '読み込み中...',
       selectInstance: 'インスタンスを選択してソースコードを表示',
       cursorTime: 'カーソル時間:',
+      signal: '信号',
+      value: '値',
+      width: '幅',
+      radix: '基数',
     },
     table: {
       title: 'テーブルビュー',

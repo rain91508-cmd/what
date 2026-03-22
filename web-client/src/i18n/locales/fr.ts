@@ -193,6 +193,10 @@ const translations: Translations = {
       loading: 'Chargement...',
       selectInstance: 'Sélectionnez une instance pour afficher le code source',
       cursorTime: 'Temps du curseur:',
+      signal: 'Signal',
+      value: 'Valeur',
+      width: 'Largeur',
+      radix: 'Base',
     },
     table: {
       title: 'Vue tableau',

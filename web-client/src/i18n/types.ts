@@ -223,6 +223,10 @@ export interface Translations {
       loading: string;
       selectInstance: string;
       cursorTime: string;
+      signal: string;
+      value: string;
+      width: string;
+      radix: string;
     };
     // Table View
     table: {

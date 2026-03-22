@@ -193,6 +193,10 @@ const translations: Translations = {
       loading: '加载中...',
       selectInstance: '选择一个实例以查看源代码',
       cursorTime: '光标时间:',
+      signal: '信号',
+      value: '值',
+      width: '宽度',
+      radix: '进制',
     },
     table: {
       title: '表格视图',

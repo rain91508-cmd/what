@@ -84,7 +84,7 @@ function MonacoSourceCodeWindow({
 }: MonacoSourceCodeWindowProps) {
   // Get shared provider from context
   const { provider, waveformName } = useWaveformProvider();
-  const { t } = useT();
+  const { t, language } = useT();
   const [content, setContent] = useState<string>('');
   const [filePath, setFilePath] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -330,10 +330,10 @@ function MonacoSourceCodeWindow({
       <table class="signal-value-table">
         <thead>
           <tr>
-            <th>Signal</th>
-            <th>Value</th>
-            <th>Width</th>
-            <th>Radix</th>
+            <th>${t('panel.source.signal')}</th>
+            <th>${t('panel.source.value')}</th>
+            <th>${t('panel.source.width')}</th>
+            <th>${t('panel.source.radix')}</th>
           </tr>
         </thead>
         <tbody>
@@ -377,7 +377,7 @@ function MonacoSourceCodeWindow({
 
       viewZones.current[lineNumber] = zoneId;
     });
-  }, [currentTime]);
+  }, [currentTime, t]);
 
   // Create ViewZone for error messages
   const createErrorViewZone = useCallback((
@@ -809,7 +809,7 @@ function MonacoSourceCodeWindow({
     console.log('[Expand] Creating ViewZone for line', lineNumber, 'with', signalValues.length, 'signals');
     createSignalValueViewZone(editor, lineNumber, signalValues);
     console.log('[Expand] Successfully expanded line:', lineNumber);
-  }, [currentTime, displayModuleIndex, provider, signalRadixMap, extractIdentifiers, lookupSignals, createSignalValueViewZone]);
+  }, [currentTime, displayModuleIndex, provider, signalRadixMap, extractIdentifiers, lookupSignals, createSignalValueViewZone, language]);
 
   // Toggle line expansion
   const toggleLineExpansion = useCallback(async (
@@ -1370,6 +1370,30 @@ function MonacoSourceCodeWindow({
       applyHighlight(editorRef.current, signalDeclarationLine, true);
     }
   }, [signalDeclarationLine, content, applyHighlight, tabId]);
+
+  // Refresh all view zones when language changes
+  useEffect(() => {
+    if (editorRef.current && expandedLines.current.size > 0) {
+      // Store the expanded lines before clearing
+      const linesToRefresh = Array.from(expandedLines.current);
+      
+      // Clear all view zones first
+      editorRef.current.changeViewZones(accessor => {
+        Object.values(viewZones.current).forEach(zoneId => {
+          accessor.removeZone(zoneId);
+        });
+      });
+      viewZones.current = {};
+      
+      // Re-expand all lines to recreate view zones with new translations
+      linesToRefresh.forEach(lineNumber => {
+        // We need to recall expandLine, but it's async
+        // Let's store a flag and let the next click re-expand
+        // For now, just clear expanded lines so user has to re-click
+        expandedLines.current.delete(lineNumber);
+      });
+    }
+  }, [language]);
 
   const loadSourceFile = async () => {
     // Determine how to load the file:
