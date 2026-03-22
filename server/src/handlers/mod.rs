@@ -48,8 +48,7 @@ pub fn create_router(state: ServerState) -> Router<ServerState> {
         .route("/stats", get(get_stats))
         .route("/config", get(get_config))
         .route("/api/cache/clear", post(clear_cache))
-        .route("/api/cache/wave-chunk/clear", post(clear_wave_chunk_cache))
-        .route("/api/cache/wave-metadata/clear", post(clear_wave_metadata_cache));
+        .route("/api/cache/signal-data/clear", post(clear_signal_data_cache));
 
     // 知识库 API 路由
     let kdb_routes = Router::new()

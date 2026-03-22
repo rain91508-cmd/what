@@ -1,5 +1,6 @@
 use crate::config::ServerConfig;
 use crate::services::fst_reader_cache::FstReaderCache;
+use crate::services::wave_data::SignalWaveData;
 use moka::future::Cache;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -11,21 +12,10 @@ pub struct ServerState {
     /// 服务器配置
     pub config: Arc<ServerConfig>,
 
-    /// 知识库元数据缓存
-    /// 缓存 key: 知识库名称，value: 元数据 JSON
-    pub kdb_metadata_cache: KdbMetadataCache,
-
-    /// 波形文件元数据缓存
-    /// 缓存 key: 波形文件路径，value: 元数据
-    pub wave_metadata_cache: WaveMetadataCache,
-
-    /// 波形数据块缓存 (LRU)
-    /// 缓存 key: (waveform_name, signal_name, lod, time_range)
-    pub wave_chunk_cache: WaveChunkCache,
-
-    /// 源文件内容缓存
-    /// 缓存 key: 文件路径，value: 文件内容
-    pub source_cache: SourceCache,
+    /// 信号数据缓存 (LRU)
+    /// 缓存 key: (波形路径, 信号名)，value: 信号完整数据 (LoD 0)
+    /// 用于缓存从 FST 文件读取的原始信号数据，避免重复读取
+    pub signal_data_cache: SignalDataCache,
 
     /// FST Reader 缓存
     /// 缓存 key: 文件路径，value: 缓存的 FST Reader
@@ -35,17 +25,9 @@ pub struct ServerState {
     pub stats: Arc<ServerStats>,
 }
 
-/// 知识库元数据缓存类型
-pub type KdbMetadataCache = Cache<String, serde_json::Value>;
-
-/// 波形文件元数据缓存类型
-pub type WaveMetadataCache = Cache<String, WaveMetadata>;
-
-/// 波形数据块缓存类型
-pub type WaveChunkCache = Cache<String, Arc<Vec<u8>>>;
-
-/// 源文件缓存类型
-pub type SourceCache = Cache<String, Arc<String>>;
+/// 信号数据缓存类型
+/// Key: (波形路径, 信号名)，Value: 信号完整数据
+pub type SignalDataCache = Cache<(String, String), Arc<SignalWaveData>>;
 
 /// 波形元数据结构
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -173,28 +155,16 @@ impl ServerState {
     pub fn new(config: ServerConfig) -> Self {
         let cache_capacity = config.cache_capacity_bytes();
 
-        // 创建缓存
-        // KDB 元数据缓存：较小，因为元数据不大
-        let kdb_metadata_cache = Cache::new(100);
-
-        // 波形元数据缓存：中等大小
-        let wave_metadata_cache = Cache::new(1000);
-
-        // 波形数据块缓存：较大，存储实际的波形数据
-        let wave_chunk_cache = Cache::new(cache_capacity / 2);
-
-        // 源文件缓存：中等大小
-        let source_cache = Cache::new(cache_capacity / 4);
+        // 信号数据缓存：存储从 FST 读取的原始信号数据 (LoD 0)
+        // 使用配置的缓存容量
+        let signal_data_cache = Cache::new(cache_capacity);
 
         // FST Reader 缓存：缓存打开的 FST 文件 reader
         let fst_reader_cache = FstReaderCache::new(10);
 
         Self {
             config: Arc::new(config),
-            kdb_metadata_cache,
-            wave_metadata_cache,
-            wave_chunk_cache,
-            source_cache,
+            signal_data_cache,
             fst_reader_cache,
             stats: Arc::new(ServerStats::default()),
         }
@@ -202,45 +172,18 @@ impl ServerState {
 
     /// 清除所有缓存
     pub fn clear_all_caches(&self) {
-        self.kdb_metadata_cache.invalidate_all();
-        self.wave_metadata_cache.invalidate_all();
-        self.wave_chunk_cache.invalidate_all();
-        self.source_cache.invalidate_all();
+        self.signal_data_cache.invalidate_all();
         // FST Reader 缓存不需要显式清除，它有 TTL
     }
 
-    /// 清除波形数据块缓存
-    pub fn clear_wave_chunk_cache(&self) {
-        self.wave_chunk_cache.invalidate_all();
+    /// 清除信号数据缓存
+    pub fn clear_signal_data_cache(&self) {
+        self.signal_data_cache.invalidate_all();
     }
 
-    /// 清除波形元数据缓存
-    pub fn clear_wave_metadata_cache(&self) {
-        self.wave_metadata_cache.invalidate_all();
-    }
-
-    /// 生成波形数据块的缓存键
-    pub fn make_wave_chunk_key(
-        waveform_name: &str,
-        signal_name: &str,
-        lod: u32,
-        start_time: i64,
-        end_time: i64,
-    ) -> String {
-        format!(
-            "{}:{}:{}:{}:{}",
-            waveform_name, signal_name, lod, start_time, end_time
-        )
-    }
-
-    /// 生成波形元数据的缓存键
-    pub fn make_wave_metadata_key(waveform_name: &str) -> String {
-        waveform_name.to_string()
-    }
-
-    /// 生成知识库元数据的缓存键
-    pub fn make_kdb_metadata_key(kdb_name: &str) -> String {
-        kdb_name.to_string()
+    /// 生成信号数据缓存的键
+    pub fn make_signal_data_key(wave_path: &str, signal_name: &str) -> (String, String) {
+        (wave_path.to_string(), signal_name.to_string())
     }
 }
 
@@ -248,10 +191,8 @@ impl std::fmt::Debug for ServerState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServerState")
             .field("config", &self.config)
-            .field("kdb_metadata_cache", &"Cache<...>")
-            .field("wave_metadata_cache", &"Cache<...>")
-            .field("wave_chunk_cache", &"Cache<...>")
-            .field("source_cache", &"Cache<...>")
+            .field("signal_data_cache", &"Cache<...>")
+            .field("fst_reader_cache", &"FstReaderCache<...>")
             .field("stats", &self.stats)
             .finish()
     }
@@ -275,8 +216,8 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_key_generation() {
-        let key = ServerState::make_wave_chunk_key("wave1", "sig1", 2, 0, 1000);
-        assert_eq!(key, "wave1:sig1:2:0:1000");
+    fn test_signal_data_key_generation() {
+        let key = ServerState::make_signal_data_key("./waves/test.fst", "top.signal1");
+        assert_eq!(key, ("./waves/test.fst".to_string(), "top.signal1".to_string()));
     }
 }

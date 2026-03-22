@@ -63,27 +63,14 @@ pub async fn clear_cache(State(state): State<ServerState>) -> Json<serde_json::V
     }))
 }
 
-/// 清除波形数据块缓存
-pub async fn clear_wave_chunk_cache(State(state): State<ServerState>) -> Json<serde_json::Value> {
-    state.clear_wave_chunk_cache();
-    
-    Json(serde_json::json!({
-        "status": "success",
-        "data": {
-            "message": "Wave chunk cache cleared successfully"
-        },
-        "error": null
-    }))
-}
+/// 清除信号数据缓存
+pub async fn clear_signal_data_cache(State(state): State<ServerState>) -> Json<serde_json::Value> {
+    state.clear_signal_data_cache();
 
-/// 清除波形元数据缓存
-pub async fn clear_wave_metadata_cache(State(state): State<ServerState>) -> Json<serde_json::Value> {
-    state.clear_wave_metadata_cache();
-    
     Json(serde_json::json!({
         "status": "success",
         "data": {
-            "message": "Wave metadata cache cleared successfully"
+            "message": "Signal data cache cleared successfully"
         },
         "error": null
     }))
