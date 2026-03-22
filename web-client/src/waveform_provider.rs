@@ -1601,6 +1601,22 @@ if tile_missing_signals.is_empty() {
         result
     }
 
+    /// Check if there are pending render requests in the worker queue
+    /// This is called by prefetch to determine if it should yield
+    fn has_pending_render_requests(&self) -> bool {
+        // Access the global function exposed by the worker
+        if let Ok(global) = js_sys::global().dyn_into::<js_sys::Object>() {
+            if let Ok(func) = js_sys::Reflect::get(&global, &JsValue::from_str("hasPendingRenderRequests")) {
+                if let Ok(func) = func.dyn_into::<js_sys::Function>() {
+                    if let Ok(result) = func.call0(&JsValue::UNDEFINED) {
+                        return result.as_bool().unwrap_or(false);
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Prefetch tiles for the current viewport signals
     /// 
     /// This function prefetches tiles in the background to improve user experience.
@@ -1746,7 +1762,11 @@ if tile_missing_signals.is_empty() {
         console_log!("[WASM] Prefetch: {} tiles need fetch from server for LOD {}", tile_missing_signals.len(), lod);
 
         // Fetch missing data from server (similar to fetch_signals_data_batch_internal)
-        self.fetch_missing_for_opfs_only(tile_missing_signals, lod, tile_span).await;
+        let completed = self.fetch_missing_for_opfs_only(tile_missing_signals, lod, tile_span).await;
+        if !completed {
+            console_log!("[WASM] Prefetch: interrupted during LOD {}", lod);
+            return; // Early exit if interrupted
+        }
     }
 
     /// Fetch missing data from server and store only in OPFS (not in signal_data)
@@ -1754,12 +1774,13 @@ if tile_missing_signals.is_empty() {
     /// This is similar to fetch_signals_data_batch_internal but:
     /// 1. Only fetches specific missing tiles
     /// 2. Only stores to OPFS (not to signal_data memory cache)
+    /// Returns true if completed, false if interrupted by pending render requests
     async fn fetch_missing_for_opfs_only(
         &mut self,
         tile_missing_signals: std::collections::HashMap<u64, Vec<(String, u32)>>,
         lod: u32,
         tile_span: u64,
-    ) {
+    ) -> bool {
         const MAX_BATCH_SIZE: usize = 256;
         const MAX_TILES_PER_REQUEST: usize = 100;
 
@@ -1772,7 +1793,7 @@ if tile_missing_signals.is_empty() {
         }
 
         if missing_signals_map.is_empty() {
-            return;
+            return true;
         }
 
         let missing_signal_names: Vec<String> = missing_signals_map.keys().cloned().collect();
@@ -1831,6 +1852,12 @@ if tile_missing_signals.is_empty() {
                     encoded_batch,
                     self.time_stamp);
 
+                // Check if there are pending render requests before fetching
+                if self.has_pending_render_requests() {
+                    console_log!("[WASM] Prefetch: interrupted - pending render requests detected");
+                    return false; // Early exit, let render take priority
+                }
+
                 // Fetch data
                 console_log!("[WASM] Prefetch: fetching from server - LOD {} tile {} num_tiles {} signals {}", lod, start_tile, num_tiles, unique_local_names.len());
                 match fetch_data(&url).await {
@@ -1863,6 +1890,7 @@ if tile_missing_signals.is_empty() {
         }
 
         // console_log!("[WASM] Prefetch: fetch completed for OPFS only");
+        true
     }
 
     // ============================================================================

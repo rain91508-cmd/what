@@ -56,6 +56,18 @@ let isProcessingQueue = false;
 const requestMetadata = new WeakMap<() => Promise<void>, { type: 'render' | 'prefetch' | 'other'; id: number; timestamp: number }>();
 let requestIdCounter = 0;
 
+// 暴露给 WASM 的检查函数：是否有待处理的高优先级请求（render）
+(self as any).hasPendingRenderRequests = (): boolean => {
+  // 检查队列中是否有 render 请求（prefetch 应该让路）
+  for (const request of requestQueue) {
+    const meta = requestMetadata.get(request);
+    if (meta && meta.type === 'render') {
+      return true;
+    }
+  }
+  return false;
+};
+
 // ==================== 初始化 ====================
 
 /**
