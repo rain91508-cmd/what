@@ -550,7 +550,6 @@ export function WaveformWindow({
     // 没有自定义格式，根据位宽返回默认值
     const isSingleBit = signal.msb === signal.lsb;
     const defaultFormat = isSingleBit ? 'bin' : 'hex';
-    console.log(`[getSignalDisplayFormat] Signal ${signal.name} (msb: ${signal.msb}, lsb: ${signal.lsb}) using default format: ${defaultFormat}`);
     return defaultFormat;
   };
 
@@ -1064,8 +1063,9 @@ export function WaveformWindow({
       }
     }
 
-    // 绘制选择区域高亮（只在水平拖动时显示）
-    if (isSelecting && selectionStartX !== null && selectionEndX !== null && selectionStartY !== null && selectionEndY !== null) {
+    // 绘制选择区域高亮（只在水平拖动时显示，且只在 Mock 模式下）
+    // Worker 模式下 canvas 已转移到 Worker，主线程无法访问
+    if (useMockData && isSelecting && selectionStartX !== null && selectionEndX !== null && selectionStartY !== null && selectionEndY !== null) {
       const deltaX = Math.abs(selectionEndX - selectionStartX);
       const deltaY = Math.abs(selectionEndY - selectionStartY);
 

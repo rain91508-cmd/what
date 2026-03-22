@@ -1601,6 +1601,270 @@ if tile_missing_signals.is_empty() {
         result
     }
 
+    /// Prefetch tiles for the current viewport signals
+    /// 
+    /// This function prefetches tiles in the background to improve user experience.
+    /// It checks tiles 4x before and after the current viewport, fetches missing data,
+    /// and stores it in OPFS cache only (not in signal_data memory cache).
+    /// 
+    /// # Arguments
+    /// * `signal_names` - List of signal names to prefetch (typically the current draw list)
+    /// 
+    /// # Returns
+    /// * Ok(()) if prefetch completed (errors are logged but not returned)
+    #[wasm_bindgen]
+    pub async fn prefetch_tiles(&mut self, signal_names: Vec<String>) -> Result<(), JsValue> {
+        // Skip if both OPFS and memory cache are disabled
+        if !self.opfs_cache.enabled && !self.opfs_cache.memory_cache_enabled {
+            return Ok(());
+        }
+
+        // Skip if no signals
+        if signal_names.is_empty() {
+            return Ok(());
+        }
+
+        // Filter out bit extraction signals
+        let signals_to_prefetch: Vec<String> = signal_names.iter()
+            .filter(|name| !name.contains("@["))
+            .cloned()
+            .collect();
+
+        if signals_to_prefetch.is_empty() {
+            return Ok(());
+        }
+
+        // Get current LOD and calculate LOD range (current ± 2, within 0-32)
+        let current_lod = self.current_lod.unwrap_or_else(|| select_lod(&self.viewport, self.canvas_width));
+        let min_lod = current_lod.saturating_sub(2);
+        let max_lod = (current_lod + 2).min(32);
+
+        // console_log!("[WASM] Prefetch: current LOD {}, range [{}-{}]", current_lod, min_lod, max_lod);
+
+        // Prefetch for each LOD in range
+        for lod in min_lod..=max_lod {
+            let tile_span = OpfsCacheManager::get_tile_span(lod);
+            
+            // Calculate tile range that covers current viewport for this LOD
+            let current_start_tile = self.viewport.time_start as u64 / tile_span;
+            let current_end_tile = self.viewport.time_end as u64 / tile_span;
+            let current_tile_count = current_end_tile - current_start_tile + 1;
+
+            // Calculate prefetch ranges: 4x for current LOD, 1x for other LODs
+            let prefetch_multiplier = if lod == current_lod { 4 } else { 1 };
+            let prefetch_range = prefetch_multiplier * current_tile_count;
+            
+            // Forward prefetch: [end_tile + 1, end_tile + prefetch_range]
+            let forward_start = current_end_tile + 1;
+            let forward_end = current_end_tile + prefetch_range;
+            
+            // Backward prefetch: [start_tile - prefetch_range, start_tile - 1]
+            let backward_start = if current_start_tile >= prefetch_range {
+                current_start_tile - prefetch_range
+            } else {
+                0
+            };
+            let backward_end = if current_start_tile > 0 {
+                current_start_tile - 1
+            } else {
+                0
+            };
+
+            // console_log!("[WASM] Prefetch LOD {}: current tiles [{}-{}], forward [{}-{}], backward [{}-{}]",
+            //     lod, current_start_tile, current_end_tile, forward_start, forward_end, backward_start, backward_end);
+
+            // Prefetch forward tiles
+            if forward_start <= forward_end {
+                self.prefetch_tile_range(forward_start, forward_end, lod, tile_span, &signals_to_prefetch).await;
+            }
+
+            // Prefetch backward tiles
+            if backward_start <= backward_end {
+                self.prefetch_tile_range(backward_start, backward_end, lod, tile_span, &signals_to_prefetch).await;
+            }
+        }
+
+        // console_log!("[WASM] Prefetch completed");
+        Ok(())
+    }
+
+    /// Prefetch a specific tile range for given signals
+    /// 
+    /// This function:
+    /// 1. Checks OPFS cache for each signal+tile combination
+    /// 2. Collects missing tiles
+    /// 3. Fetches missing data from server
+    /// 4. Stores data in OPFS only (not in signal_data)
+    async fn prefetch_tile_range(
+        &mut self,
+        start_tile: u64,
+        end_tile: u64,
+        lod: u32,
+        tile_span: u64,
+        signal_names: &[String],
+    ) {
+        // console_log!("[WASM] Prefetching tile range [{}-{}] for {} signals", start_tile, end_tile, signal_names.len());
+
+        // Collect missing tiles and signals
+        let mut tile_missing_signals: std::collections::HashMap<u64, Vec<(String, u32)>> = std::collections::HashMap::new();
+
+        for tile_id in start_tile..=end_tile {
+            for signal_name in signal_names {
+                if let Some(draw_sig_id) = self.get_draw_sig_id(signal_name) {
+                    let group_id = OpfsCacheManager::get_group_id(draw_sig_id);
+                    let block = crate::opfs_cache::DataBlock {
+                        lod,
+                        tile: tile_id,
+                        group: group_id,
+                    };
+
+                    // Check if signal exists in cache
+                    let cache_hit = match self.opfs_cache.read(&block).await {
+                        Ok(Some(data)) => {
+                            match crate::opfs_cache::read_signal_from_group_v2(&data, draw_sig_id, lod) {
+                                Ok(Some(_)) => true,
+                                _ => false,
+                            }
+                        }
+                        _ => false,
+                    };
+
+                    if !cache_hit {
+                        tile_missing_signals.entry(tile_id)
+                            .or_insert_with(Vec::new)
+                            .push((signal_name.clone(), draw_sig_id));
+                    }
+                }
+            }
+        }
+
+        if tile_missing_signals.is_empty() {
+            // console_log!("[WASM] Prefetch: all data already cached for range [{}-{}]", start_tile, end_tile);
+            return;
+        }
+
+        console_log!("[WASM] Prefetch: {} tiles need fetch from server for LOD {}", tile_missing_signals.len(), lod);
+
+        // Fetch missing data from server (similar to fetch_signals_data_batch_internal)
+        self.fetch_missing_for_opfs_only(tile_missing_signals, lod, tile_span).await;
+    }
+
+    /// Fetch missing data from server and store only in OPFS (not in signal_data)
+    /// 
+    /// This is similar to fetch_signals_data_batch_internal but:
+    /// 1. Only fetches specific missing tiles
+    /// 2. Only stores to OPFS (not to signal_data memory cache)
+    async fn fetch_missing_for_opfs_only(
+        &mut self,
+        tile_missing_signals: std::collections::HashMap<u64, Vec<(String, u32)>>,
+        lod: u32,
+        tile_span: u64,
+    ) {
+        const MAX_BATCH_SIZE: usize = 256;
+        const MAX_TILES_PER_REQUEST: usize = 100;
+
+        // Collect unique missing signals
+        let mut missing_signals_map: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        for signals in tile_missing_signals.values() {
+            for (signal_name, draw_sig_id) in signals {
+                missing_signals_map.insert(signal_name.clone(), *draw_sig_id);
+            }
+        }
+
+        if missing_signals_map.is_empty() {
+            return;
+        }
+
+        let missing_signal_names: Vec<String> = missing_signals_map.keys().cloned().collect();
+        
+        // console_log!("[WASM] Prefetch: fetching {} signals from server", missing_signal_names.len());
+
+        // Get tile IDs sorted
+        let mut tile_ids: Vec<u64> = tile_missing_signals.keys().cloned().collect();
+        tile_ids.sort();
+
+        // Fetch data in batches
+        for batch in missing_signal_names.chunks(MAX_BATCH_SIZE) {
+            // Build server names and local names
+            let mut seen = std::collections::HashSet::new();
+            let mut server_names: Vec<String> = Vec::new();
+            let mut unique_local_names: Vec<String> = Vec::new();
+            let mut unique_draw_sig_ids: Vec<u32> = Vec::new();
+
+            for local_name in batch.iter() {
+                let server_name = self.build_server_signal_name(local_name);
+                if seen.insert(server_name.clone()) {
+                    server_names.push(server_name);
+                    unique_local_names.push(local_name.clone());
+                    if let Some(&draw_sig_id) = missing_signals_map.get(local_name) {
+                        unique_draw_sig_ids.push(draw_sig_id);
+                    }
+                }
+            }
+
+            // Join and encode signal names
+            let names_batch = server_names.join(",");
+            let encoded_batch = general_purpose::STANDARD.encode(&names_batch);
+
+            // Group contiguous tiles
+            let mut tile_idx = 0;
+            while tile_idx < tile_ids.len() {
+                let start_tile = tile_ids[tile_idx];
+                let start_time = start_tile * tile_span;
+
+                // Find contiguous tiles
+                let mut num_tiles = 1;
+                while tile_idx + num_tiles < tile_ids.len()
+                    && tile_ids[tile_idx + num_tiles] == start_tile + num_tiles as u64
+                    && num_tiles < MAX_TILES_PER_REQUEST {
+                    num_tiles += 1;
+                }
+
+                // Build URL
+                let url = format!("{}/api/wave/{}/lod/{}/tile/{}/{}/{}/compress/none/signals/b64:{}/data?time_stamp={}",
+                    self.server_url,
+                    self.waveform_name,
+                    lod,
+                    start_time,
+                    tile_span,
+                    num_tiles,
+                    encoded_batch,
+                    self.time_stamp);
+
+                // Fetch data
+                console_log!("[WASM] Prefetch: fetching from server - LOD {} tile {} num_tiles {} signals {}", lod, start_tile, num_tiles, unique_local_names.len());
+                match fetch_data(&url).await {
+                    Ok(array_buffer) => {
+                        let uint8_array = js_sys::Uint8Array::new(&array_buffer);
+                        let mut bytes = vec![0u8; uint8_array.length() as usize];
+                        uint8_array.copy_to(&mut bytes);
+
+                        // Store to OPFS using multi-tile response parser (same as normal render)
+                        // Use a dummy viewport range since we only care about caching
+                        let viewport_start = start_time;
+                        let viewport_end = start_time + (num_tiles as u64 * tile_span);
+                        match self.parse_multi_tile_response_for_prefetch(&bytes, &unique_local_names, &unique_draw_sig_ids, viewport_start, viewport_end, tile_span).await {
+                            Ok(_) => {
+                                console_log!("[WASM] Prefetch: successfully stored {} bytes to OPFS for tile {}", bytes.len(), start_tile);
+                            }
+                            Err(e) => {
+                                console_log!("[WASM] Prefetch: error storing to OPFS: {:?}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        console_log!("[WASM] Prefetch: error fetching data: {:?}", e);
+                        // Continue with next batch even if this one fails
+                    }
+                }
+
+                tile_idx += num_tiles;
+            }
+        }
+
+        // console_log!("[WASM] Prefetch: fetch completed for OPFS only");
+    }
+
     // ============================================================================
     // Get Signal Values at Transitions - Main Implementation
     // ============================================================================
@@ -2102,6 +2366,52 @@ if tile_missing_signals.is_empty() {
             
             // Store in OPFS cache for future use
             // Use draw_sig_ids directly instead of looking up from signal_names
+            self.process_server_chunk_with_ids(tile_data, signal_names, draw_sig_ids).await?;
+        }
+        
+        Ok(())
+    }
+
+    /// Parse multi-tile response for prefetch - only stores to OPFS, no memory parsing
+    /// This is a lightweight version that doesn't load data into signal_data
+    async fn parse_multi_tile_response_for_prefetch(
+        &mut self,
+        data: &[u8],
+        signal_names: &[String],
+        draw_sig_ids: &[u32],
+        _viewport_start: u64,
+        _viewport_end: u64,
+        tile_span: u64,
+    ) -> Result<(), JsValue> {
+        // Parse multi-tile header
+        let header = MultiTileHeader::from_bytes(data)
+            .map_err(|e| JsValue::from_str(&e))?;
+        
+        // Read tile offset table
+        let offset_table_start = MultiTileHeader::SIZE;
+        let mut tile_offsets = Vec::with_capacity(header.num_tiles as usize);
+        
+        for i in 0..header.num_tiles {
+            let offset_pos = offset_table_start + (i as usize * 8);
+            let offset = u64::from_le_bytes([
+                data[offset_pos], data[offset_pos + 1], data[offset_pos + 2], data[offset_pos + 3],
+                data[offset_pos + 4], data[offset_pos + 5], data[offset_pos + 6], data[offset_pos + 7],
+            ]);
+            tile_offsets.push(offset);
+        }
+        
+        // Process each tile - only store to OPFS, don't parse to memory
+        for (tile_idx, offset) in tile_offsets.iter().enumerate() {
+            // Extract tile data (from offset to next tile or end of data)
+            let tile_end_offset = if tile_idx + 1 < tile_offsets.len() {
+                tile_offsets[tile_idx + 1]
+            } else {
+                data.len() as u64
+            };
+            
+            let tile_data = &data[*offset as usize..tile_end_offset as usize];
+            
+            // Store in OPFS cache only (no memory parsing for prefetch)
             self.process_server_chunk_with_ids(tile_data, signal_names, draw_sig_ids).await?;
         }
         

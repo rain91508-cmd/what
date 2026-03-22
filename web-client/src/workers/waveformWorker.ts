@@ -43,9 +43,18 @@ interface RenderTask {
 }
 let currentRenderTask: RenderTask | null = null;
 
+// 预取任务管理
+let prefetchTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingPrefetchSignals: string[] | null = null;
+const PREFETCH_DELAY_MS = 500; // 延迟500ms后才开始预取，避免频繁渲染时触发
+
 // 请求队列（用于处理并发请求）
 const requestQueue: Array<() => Promise<void>> = [];
 let isProcessingQueue = false;
+
+// 请求类型标识（用于队列去重）
+const requestMetadata = new WeakMap<() => Promise<void>, { type: 'render' | 'prefetch' | 'other'; id: number; timestamp: number }>();
+let requestIdCounter = 0;
 
 // ==================== 初始化 ====================
 
@@ -117,12 +126,12 @@ self.onmessage = async (event) => {
       // ==================== 渲染（参数化）====================
 
       case 'FETCH_AND_GET_SEGMENTS': {
-        await enqueueRequest(() => handleFetchAndGetSegments(payload, id));
+        await enqueueRequest(() => handleFetchAndGetSegments(payload, id), 'render');
         break;
       }
 
       case 'RENDER_WAVEFORM': {
-        await enqueueRequest(() => handleRenderWaveform(payload, id));
+        await enqueueRequest(() => handleRenderWaveform(payload, id), 'render');
         break;
       }
 
@@ -170,42 +179,124 @@ self.onmessage = async (event) => {
 // ==================== 请求队列管理 ====================
 
 /**
- * 将请求加入队列
+ * 将请求加入队列（带类型标识）
  */
-async function enqueueRequest(request: () => Promise<void>): Promise<void> {
+async function enqueueRequest(request: () => Promise<void>, type: 'render' | 'prefetch' | 'other' = 'other'): Promise<void> {
   return new Promise((resolve, reject) => {
-    requestQueue.push(async () => {
+    const wrappedRequest = async () => {
       try {
         await request();
         resolve();
       } catch (error) {
         reject(error);
       }
+    };
+    // 添加元数据用于去重
+    requestMetadata.set(wrappedRequest, {
+      type,
+      id: ++requestIdCounter,
+      timestamp: Date.now()
     });
+    requestQueue.push(wrappedRequest);
     processQueue();
   });
 }
 
 /**
  * 处理请求队列
+ * 批量读取、去重、优先级处理：
+ * 1. 一次性取出队列中所有请求
+ * 2. 对 render 和 prefetch 去重，只保留最新的
+ * 3. 如果 render 比 prefetch 新，取消 prefetch
+ * 4. 按顺序执行优化后的请求
  */
 async function processQueue(): Promise<void> {
   if (isProcessingQueue || requestQueue.length === 0) return;
 
   isProcessingQueue = true;
 
-  while (requestQueue.length > 0) {
-    const request = requestQueue.shift();
-    if (request) {
-      try {
-        await request();
-      } catch (error) {
-        console.error('[WaveformWorker] Request failed:', error);
+  // 一次性取出所有请求
+  const allRequests = [...requestQueue];
+  requestQueue.length = 0;
+
+  // 分类并找出最新的 render 和 prefetch
+  let latestRender: { request: () => Promise<void>; meta: { type: 'render' | 'prefetch' | 'other'; id: number; timestamp: number } } | null = null;
+  let latestPrefetch: { request: () => Promise<void>; meta: { type: 'render' | 'prefetch' | 'other'; id: number; timestamp: number } } | null = null;
+  const otherRequests: { request: () => Promise<void>; meta: { type: 'render' | 'prefetch' | 'other'; id: number; timestamp: number } }[] = [];
+
+  for (const request of allRequests) {
+    const meta = requestMetadata.get(request);
+    if (!meta) {
+      // 没有元数据的请求，直接执行
+      otherRequests.push({ request, meta: { type: 'other', id: 0, timestamp: 0 } });
+      continue;
+    }
+
+    if (meta.type === 'render') {
+      // 保留最新的 render
+      if (!latestRender || meta.id > latestRender.meta.id) {
+        latestRender = { request, meta };
       }
+    } else if (meta.type === 'prefetch') {
+      // 保留最新的 prefetch
+      if (!latestPrefetch || meta.id > latestPrefetch.meta.id) {
+        latestPrefetch = { request, meta };
+      }
+    } else {
+      otherRequests.push({ request, meta });
+    }
+  }
+
+  // 构建优化后的执行队列，保持原始插入顺序
+  const optimizedQueue: (() => Promise<void>)[] = [];
+
+  // 收集所有需要保留的请求（去重后）
+  const requestsToKeep: { request: () => Promise<void>; meta: { type: 'render' | 'prefetch' | 'other'; id: number; timestamp: number } }[] = [];
+
+  // 先添加其他请求
+  for (const item of otherRequests) {
+    requestsToKeep.push(item);
+  }
+
+  // 添加最新的 render（如果有）
+  if (latestRender) {
+    requestsToKeep.push(latestRender);
+  }
+
+  // 添加最新的 prefetch（仅当没有 render 或 prefetch 比 render 更新时）
+  if (latestPrefetch) {
+    const shouldIncludePrefetch = !latestRender || latestPrefetch.meta.id > latestRender.meta.id;
+    if (shouldIncludePrefetch) {
+      requestsToKeep.push(latestPrefetch);
+    } else {
+      // prefetch 比 render 旧，取消 prefetch
+      // console.log('[WaveformWorker] Cancelling outdated prefetch, render is newer');
+    }
+  }
+
+  // 按照原始插入顺序（id）排序
+  requestsToKeep.sort((a, b) => a.meta.id - b.meta.id);
+
+  // 添加到执行队列
+  for (const { request } of requestsToKeep) {
+    optimizedQueue.push(request);
+  }
+
+  // 执行优化后的队列
+  for (const request of optimizedQueue) {
+    try {
+      await request();
+    } catch (error) {
+      console.error('[WaveformWorker] Request failed:', error);
     }
   }
 
   isProcessingQueue = false;
+
+  // 如果队列又有新请求，继续处理
+  if (requestQueue.length > 0) {
+    processQueue();
+  }
 }
 
 // ==================== 处理器函数 ====================
@@ -555,6 +646,9 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
 
   const { canvas, ctx } = canvasEntry;
 
+  // 取消任何待执行的预取任务（优先处理当前渲染）
+  cancelPendingPrefetch();
+
   // 记录当前渲染任务
   const renderTask: RenderTask = {
     id,
@@ -616,7 +710,7 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
     const signalNames = signals?.map((sig: any) => sig.name) || [];
     // Debug: console.log('[WaveformWorker] Fetching segments for signals:', signalNames);
 
-    // 6. 获取 segments
+    // 6. 获取 segments（内部会自动触发预取）
     const segments = await wasmProvider.fetch_and_get_segments(signalNames);
 
     // 检查任务是否已过期（被新任务覆盖）
@@ -655,13 +749,60 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
       canvasConfig.rowHeight
     );
 
-    // 8. 返回成功
+    // 8. 调度预取任务（延迟执行，避免阻塞下一次渲染）
+    schedulePrefetch(signalNames);
+
+    // 9. 返回成功
     // Debug: console.log('[WaveformWorker] Render complete');
     sendSuccess(id, { rendered: true, segmentCount: segments.length });
   } catch (error) {
     console.error('[WaveformWorker] Error in handleRenderWaveform:', error);
     sendError(id, error instanceof Error ? error.message : String(error));
   }
+}
+
+/**
+ * 取消待执行的预取任务
+ * 在新渲染任务开始时被调用，确保优先处理当前渲染
+ */
+function cancelPendingPrefetch(): void {
+  if (prefetchTimer) {
+    clearTimeout(prefetchTimer);
+    prefetchTimer = null;
+    pendingPrefetchSignals = null;
+    // Debug: console.log('[WaveformWorker] Cancelled pending prefetch');
+  }
+}
+
+/**
+ * 调度预取任务
+ * 延迟一段时间后执行，如果期间有新的渲染任务则会取消
+ */
+function schedulePrefetch(signalNames: string[]): void {
+  // 取消之前的预取任务（如果有）
+  cancelPendingPrefetch();
+
+  // 保存信号列表
+  pendingPrefetchSignals = signalNames;
+
+  // 设置延迟预取
+  prefetchTimer = setTimeout(() => {
+    if (wasmProvider && pendingPrefetchSignals) {
+      // 将预取任务加入队列，避免与渲染任务并发执行导致Rust重入错误
+      const signalsToPrefetch = [...pendingPrefetchSignals];
+      enqueueRequest(async () => {
+        try {
+          // Debug: console.log('[WaveformWorker] Starting prefetch for', signalsToPrefetch.length, 'signals');
+          await wasmProvider!.prefetch_tiles(signalsToPrefetch);
+        } catch (err: any) {
+          // 预取失败不影响主流程，只记录日志
+          console.warn('[WaveformWorker] Prefetch failed:', err);
+        }
+      }, 'prefetch');
+    }
+    prefetchTimer = null;
+    pendingPrefetchSignals = null;
+  }, PREFETCH_DELAY_MS);
 }
 
 /**
