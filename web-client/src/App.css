@@ -382,6 +382,11 @@ body {
 .waveform-signal-list {
   flex: 1;
   overflow: auto;
+  scroll-snap-type: y mandatory;
+}
+
+.waveform-signal-list > div {
+  scroll-snap-align: start;
 }
 
 .waveform-group-header {

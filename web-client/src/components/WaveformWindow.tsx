@@ -197,7 +197,12 @@ export function WaveformWindow({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const signalPanelRef = useRef<HTMLDivElement>(null);
+  const signalListRef = useRef<HTMLDivElement>(null);
   const [canvasWidth, setCanvasWidth] = useState(0);
+
+  // 可见信号范围状态（用于虚拟滚动）
+  const [visibleRange, setVisibleRange] = useState<{ start: number; end: number }>({ start: 0, end: 100 });
+  const visibleRangeRef = useRef(visibleRange);
 
   // 使用共享 Provider
   const { provider: sharedProvider, isLoading: providerLoading } = useWaveformProvider();
@@ -365,7 +370,12 @@ export function WaveformWindow({
   useEffect(() => {
     signalDisplayFormatsRef.current = signalDisplayFormats;
   }, [signalDisplayFormats]);
-  
+
+  // 同步 visibleRange 到 ref
+  useEffect(() => {
+    visibleRangeRef.current = visibleRange;
+  }, [visibleRange]);
+
   // 当前显示进制选择下拉菜单的信号 unique_id
   const [showFormatDropdown, setShowFormatDropdown] = useState<number | null>(null);
   const formatDropdownRef = useRef<HTMLDivElement>(null);
@@ -875,6 +885,11 @@ export function WaveformWindow({
       const signalList: SignalInfo[] = [];
       let currentRow = 0;
 
+      // 获取当前可见范围（使用 ref 获取最新值）
+      const range = visibleRangeRef.current;
+      const visibleStartRow = range.start;
+      const visibleEndRow = range.end;
+
       treeNodes.forEach((node) => {
       if (node.type === 'group') {
         // Group row - no waveform, just increment row counter
@@ -889,15 +904,18 @@ export function WaveformWindow({
 
         if (isBus && isExpanded) {
           // 展开状态：先绘制原始多bit信号（第一行），再绘制各个bit
-          signalList.push({
-            uniqueId: signal.unique_id,
-            globalId: signal.globalId,
-            name: signal.fullName || signal.name,
-            row: currentRow,
-            displayName: signal.name,
-            width: signal.msb - signal.lsb + 1,  // 提供位宽
-            displayFormat: signalDisplayFormat,
-          });
+          // 只添加可见范围内的信号
+          if (currentRow >= visibleStartRow && currentRow <= visibleEndRow) {
+            signalList.push({
+              uniqueId: signal.unique_id,
+              globalId: signal.globalId,
+              name: signal.fullName || signal.name,
+              row: currentRow,
+              displayName: signal.name,
+              width: signal.msb - signal.lsb + 1,  // 提供位宽
+              displayFormat: signalDisplayFormat,
+            });
+          }
           currentRow++;
 
           // 为每个bit创建单独的信号项
@@ -908,29 +926,35 @@ export function WaveformWindow({
           for (let i = 0; i < bitCount; i++) {
             const bitIndex = signal.msb - i;
             const baseName = signal.fullName || signal.name;
-            signalList.push({
-              uniqueId: signal.unique_id,  // bit信号使用相同的uniqueId
-              globalId: signal.globalId,  // bit信号使用相同的globalId
-              name: `${baseName}@[${bitIndex}]`,  // 特殊格式，WASM 从父信号提取 bit
-              row: currentRow,
-              displayName: `${signal.name}[${bitIndex}]`,
-              width: 1,  // 单个bit
-              displayFormat: 'bin',  // bit信号始终用binary显示
-            });
+            // 只添加可见范围内的 bit 信号
+            if (currentRow >= visibleStartRow && currentRow <= visibleEndRow) {
+              signalList.push({
+                uniqueId: signal.unique_id,  // bit信号使用相同的uniqueId
+                globalId: signal.globalId,  // bit信号使用相同的globalId
+                name: `${baseName}@[${bitIndex}]`,  // 特殊格式，WASM 从父信号提取 bit
+                row: currentRow,
+                displayName: `${signal.name}[${bitIndex}]`,
+                width: 1,  // 单个bit
+                displayFormat: 'bin',  // bit信号始终用binary显示
+              });
+            }
             currentRow++;
           }
         } else {
           // 折叠状态或单bit信号：作为一个整体
           const width = signal.msb !== signal.lsb ? signal.msb - signal.lsb + 1 : 1;
-          signalList.push({
-            uniqueId: signal.unique_id,
-            globalId: signal.globalId,
-            name: signal.fullName || signal.name,
-            row: currentRow,
-            displayName: signal.name,
-            width,  // 提供位宽
-            displayFormat: signalDisplayFormat,
-          });
+          // 只添加可见范围内的信号
+          if (currentRow >= visibleStartRow && currentRow <= visibleEndRow) {
+            signalList.push({
+              uniqueId: signal.unique_id,
+              globalId: signal.globalId,
+              name: signal.fullName || signal.name,
+              row: currentRow,
+              displayName: signal.name,
+              width,  // 提供位宽
+              displayFormat: signalDisplayFormat,
+            });
+          }
           currentRow++;
         }
       }
@@ -973,13 +997,16 @@ export function WaveformWindow({
 
     // Render with timeConfig for proper ruler display
     if (!useMockData && wasmProviderRef.current) {
-      // Worker 模式下直接使用 Adapter，传递完整的参数
-      
-      // 构建旧格式的信号列表
+      // Worker 模式下直接使用 Adapter ，传递完整的参数
+
+      // 获取可见范围的起始行，用于调整 row 值
+      const visibleStartRow = visibleRangeRef.current.start;
+
+      // 构建旧格式的信号列表，调整 row 值使其相对于可见区域顶部
       const uiSignals = signalList.map((s) => ({
         global_id: s.globalId,
         name: s.name,
-        row: s.row,
+        row: s.row - visibleStartRow, // 调整 row 值，使可见区域从 0 开始
         width: s.width || 1,
         displayFormat: s.displayFormat as 'hex' | 'bin' | 'oct' | 'dec' | undefined,
       }));
@@ -1243,7 +1270,9 @@ export function WaveformWindow({
       // 根据点击的 Y 坐标计算对应的 treeNode 索引（考虑 group 占位）
       // 从 RULER_HEIGHT 开始计算信号位置（canvas 内坐标）
       const signalY = y - RULER_HEIGHT;
-      const nodeIndex = Math.floor(signalY / SIGNAL_ROW_HEIGHT);
+      const visibleRowIndex = Math.floor(signalY / SIGNAL_ROW_HEIGHT);
+      // 加上可见范围的起始行，得到全局的 treeNode 索引
+      const nodeIndex = visibleRowIndex + visibleRangeRef.current.start;
 
       // 找到对应的 treeNode
       const targetNode = treeNodes[nodeIndex];
@@ -2201,6 +2230,56 @@ export function WaveformWindow({
     nameFilter,
   ]);
 
+  // 当 treeNodes 变化时，重新计算可见范围并触发重绘
+  useEffect(() => {
+    if (signalListRef.current) {
+      const scrollTop = signalListRef.current.scrollTop;
+      const clientHeight = signalListRef.current.clientHeight;
+      const SIGNAL_ROW_HEIGHT = 24;
+
+      const startRow = Math.floor(scrollTop / SIGNAL_ROW_HEIGHT);
+      const visibleRows = Math.ceil(clientHeight / SIGNAL_ROW_HEIGHT);
+      const endRow = startRow + visibleRows + 1;
+
+      setVisibleRange({ start: Math.max(0, startRow), end: endRow });
+
+      // 触发重绘
+      if (renderWaveformRef.current) {
+        renderWaveformRef.current().catch(console.error);
+      }
+    }
+  }, [treeNodes]);
+
+  // 监听 scrollend 事件（scroll-snap 动画结束后触发）
+  useEffect(() => {
+    const signalList = signalListRef.current;
+    if (!signalList) return;
+
+    const handleScrollEnd = () => {
+      // scroll-snap 结束后再次计算可见范围并触发重绘
+      const scrollTop = signalList.scrollTop;
+      const clientHeight = signalList.clientHeight;
+      const SIGNAL_ROW_HEIGHT = 24;
+
+      const startRow = Math.floor(scrollTop / SIGNAL_ROW_HEIGHT);
+      const visibleRows = Math.ceil(clientHeight / SIGNAL_ROW_HEIGHT);
+      const endRow = startRow + visibleRows + 1;
+
+      setVisibleRange({ start: Math.max(0, startRow), end: endRow });
+
+      if (renderWaveformRef.current) {
+        renderWaveformRef.current().catch(console.error);
+      }
+    };
+
+    // 使用 scrollend 事件（现代浏览器支持）
+    signalList.addEventListener('scrollend', handleScrollEnd);
+
+    return () => {
+      signalList.removeEventListener('scrollend', handleScrollEnd);
+    };
+  }, []);
+
   // 监听 cursor 或 displayFormat 变化，更新信号值
   // Note: This must be after treeNodes is defined
   useEffect(() => {
@@ -2483,8 +2562,28 @@ export function WaveformWindow({
         
         {/* Group and signal list */}
         <div
+          ref={signalListRef}
           className="waveform-signal-list"
           tabIndex={0}
+          onScroll={(e) => {
+            // 计算可见范围并触发重绘
+            const target = e.target as HTMLDivElement;
+            const scrollTop = target.scrollTop;
+            const clientHeight = target.clientHeight;
+            const SIGNAL_ROW_HEIGHT = 24; // 与 CSS 中的行高一致
+
+            const startRow = Math.floor(scrollTop / SIGNAL_ROW_HEIGHT);
+            const visibleRows = Math.ceil(clientHeight / SIGNAL_ROW_HEIGHT);
+            const endRow = startRow + visibleRows + 1; // +1 确保部分可见的行也被包含
+
+            // 更新可见范围（使用函数式更新避免依赖循环）
+            setVisibleRange({ start: Math.max(0, startRow), end: endRow });
+
+            // 触发重绘
+            if (renderWaveformRef.current) {
+              renderWaveformRef.current().catch(console.error);
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Delete' && selectedSignal) {
               // Find the selected signal and remove it
