@@ -33,6 +33,13 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
   const [selectedSignalGlobalId, setSelectedSignalGlobalId] = useState<number | null>(null);
   const ioDropdownRef = useRef<HTMLDivElement>(null);
 
+  // Multi-select state
+  const [selectedSignalGlobalIds, setSelectedSignalGlobalIds] = useState<Set<number>>(new Set());
+  const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+
+  // Ref to track click timeout for distinguishing single vs double click
+  const clickTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   // Pagination state - stores the actual signal index range in the module
   const [currentRangeStart, setCurrentRangeStart] = useState(0); // 0-based index in module
   const [currentRangeEnd, setCurrentRangeEnd] = useState(-1);    // 0-based index in module
@@ -67,6 +74,9 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
     setSignals([]);
     setHasMoreForward(false);
     setHasMoreBackward(false);
+    // Clear multi-selection when module changes
+    setSelectedSignalGlobalIds(new Set());
+    setLastSelectedIndex(null);
     if (selectedModuleIndex) {
       const count = kdbManager.getModuleSignalCount(selectedModuleIndex);
       setTotalSignalCount(count);
@@ -431,7 +441,9 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
         <span>{t('panel.signal.title')}</span>
         {selectedModuleIndex && (
           <span style={{ fontSize: '11px', color: '#666', fontWeight: 'normal' }}>
-            {totalSignalCount} {t('panel.signal.title').toLowerCase()}
+            {selectedSignalGlobalIds.size > 1 
+              ? `${selectedSignalGlobalIds.size} selected / ${totalSignalCount}`
+              : `${totalSignalCount} ${t('panel.signal.title').toLowerCase()}`}
           </span>
         )}
       </div>
@@ -712,34 +724,105 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
                   alignItems: 'center',
                   cursor: 'pointer',
                   userSelect: 'none',
-                  backgroundColor: selectedSignalGlobalId === signal.globalId ? '#e3f2fd' : 'transparent',
+                  backgroundColor: selectedSignalGlobalIds.has(signal.globalId) ? '#e3f2fd' : 'transparent',
                 }}
                 onClick={(e) => {
-                  setSelectedSignalGlobalId(signal.globalId);
-                  // Notify parent component about signal selection
-                  // For tableview tab, only select on click, don't add (add is on double-click)
-                  if (activeTabType === 'tableview') {
-                    // Just select the signal, don't add to tableview
-                    console.log('[SignalPanel] Signal selected (tableview):', signal.name);
-                  } else if (onSignalSelect) {
-                    onSignalSelect(signal);
-                  } else {
-                    console.log('[SignalPanel] onSignalSelect is not defined');
+                  // Clear any pending click timeout
+                  if (clickTimeoutRef.current) {
+                    clearTimeout(clickTimeoutRef.current);
+                    clickTimeoutRef.current = null;
                   }
+
+                  // Delay click handling to distinguish from double-click
+                  clickTimeoutRef.current = setTimeout(() => {
+                    if (e.ctrlKey || e.metaKey) {
+                      // Ctrl/Cmd + Click: Toggle selection
+                      setSelectedSignalGlobalIds(prev => {
+                        const newSet = new Set(prev);
+                        if (newSet.has(signal.globalId)) {
+                          newSet.delete(signal.globalId);
+                        } else {
+                          newSet.add(signal.globalId);
+                        }
+                        return newSet;
+                      });
+                      setLastSelectedIndex(index);
+                    } else if (e.shiftKey && lastSelectedIndex !== null) {
+                      // Shift + Click: Select range
+                      const start = Math.min(lastSelectedIndex, index);
+                      const end = Math.max(lastSelectedIndex, index);
+                      setSelectedSignalGlobalIds(prev => {
+                        const newSet = new Set(prev);
+                        for (let i = start; i <= end; i++) {
+                          if (signals[i]) {
+                            newSet.add(signals[i].globalId);
+                          }
+                        }
+                        return newSet;
+                      });
+                      setLastSelectedIndex(index);
+                    } else {
+                      // Normal click: Clear selection and select current
+                      setSelectedSignalGlobalIds(new Set([signal.globalId]));
+                      setLastSelectedIndex(index);
+                      // Notify parent component about signal selection
+                      if (activeTabType === 'tableview') {
+                        console.log('[SignalPanel] Signal selected (tableview):', signal.name);
+                      } else if (onSignalSelect) {
+                        onSignalSelect(signal);
+                      }
+                    }
+                  }, 200); // 200ms delay to wait for potential double-click
                 }}
                 onDoubleClick={() => {
+                  // Clear the pending click timeout to prevent single-click handler from running
+                  if (clickTimeoutRef.current) {
+                    clearTimeout(clickTimeoutRef.current);
+                    clickTimeoutRef.current = null;
+                  }
+
+                  // Get all selected signals
+                  const selectedSignals = signals.filter(s => selectedSignalGlobalIds.has(s.globalId));
+
+                  if (selectedSignals.length === 0) {
+                    // No signals selected, use current signal
+                    selectedSignals.push(signal);
+                  }
+
                   // If source tab is active or no tab, jump to declaration (will open source tab)
+                  // For source tab, only handle the first selected signal
                   if ((activeTabType === 'source' || !activeTabType) && onSignalDoubleClick && selectedModuleIndex) {
-                    onSignalDoubleClick(signal, selectedModuleIndex);
+                    onSignalDoubleClick(selectedSignals[0], selectedModuleIndex);
                   } else if (activeTabType === 'waveform' && onSignalAddToWaveform) {
-                    // Only add to waveform when waveform tab is explicitly active
-                    onSignalAddToWaveform(signal);
+                    // Add selected signals one by one, removing each from selection after adding
+                    // This allows user to continue with remaining signals if a dialog interrupts
+                    selectedSignals.forEach(s => {
+                      onSignalAddToWaveform(s);
+                      // Remove from selection after adding
+                      setSelectedSignalGlobalIds(prev => {
+                        const newSet = new Set(prev);
+                        newSet.delete(s.globalId);
+                        return newSet;
+                      });
+                    });
                   } else if (activeTabType === 'tableview' && onSignalAddToTableView) {
-                    // Add to tableview when tableview tab is active (double-click)
-                    onSignalAddToTableView(signal);
+                    // Add selected signals one by one, removing each from selection after adding
+                    selectedSignals.forEach(s => {
+                      onSignalAddToTableView(s);
+                      // Remove from selection after adding
+                      setSelectedSignalGlobalIds(prev => {
+                        const newSet = new Set(prev);
+                        newSet.delete(s.globalId);
+                        return newSet;
+                      });
+                    });
                   }
                 }}
-                title={activeTabType === 'waveform' ? 'Double-click to add to waveform' : 'Double-click to jump to declaration'}
+                title={activeTabType === 'waveform' 
+                  ? `Ctrl/Cmd+Click: Multi-select, Shift+Click: Range select, Double-click: Add ${selectedSignalGlobalIds.size > 1 ? selectedSignalGlobalIds.size + ' signals' : 'signal'} to waveform`
+                  : activeTabType === 'tableview'
+                  ? `Ctrl/Cmd+Click: Multi-select, Shift+Click: Range select, Double-click: Add ${selectedSignalGlobalIds.size > 1 ? selectedSignalGlobalIds.size + ' signals' : 'signal'} to tableview`
+                  : 'Double-click to jump to declaration'}
               >
                 <span style={{ 
                   flex: 1,
