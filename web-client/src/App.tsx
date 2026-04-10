@@ -291,9 +291,9 @@ function App() {
   }, [tabs, activeTab])
   
   // Panel sizes
-  const [hierarchyWidth, setHierarchyWidth] = useState(220)
-  const [signalWidth, setSignalWidth] = useState(200)
-  const [messageHeight, setMessageHeight] = useState(100)
+  const [hierarchyWidth, setHierarchyWidth] = useState(300)
+  const [signalWidth, setSignalWidth] = useState(250)
+  const [messageHeight, setMessageHeight] = useState(180)
 
   // Hierarchy Search state
   const [searchPattern, setSearchPattern] = useState('')
@@ -4023,49 +4023,83 @@ function App() {
 
       {/* Main Content */}
       <div className="main-content">
-        {/* Left Panel - Design Browser (Hierarchy) */}
-        <div 
-          className="left-panel hierarchy-panel"
-          style={{ width: hierarchyWidth, minWidth: 100 }}
-        >
-          <DesignBrowser
-            key={kdbLoaded ? 'kdb-loaded' : 'no-kdb'}
-            onModuleSelect={handleModuleSelect}
-            onModuleDoubleClick={handleModuleDoubleClick}
-            onFileDoubleClick={handleFileDoubleClick}
-            selectedModuleIndex={selectedModuleIndex}
-            kdbLoaded={kdbLoaded}
-            expandedModules={expandedModules}
-            onExpandedModulesChange={setExpandedModules}
-            paginationMap={hierarchyPagination}
-            onPaginationChange={setHierarchyPagination}
-          />
+        {/* Left Side Container - Hierarchy + Signal + Bottom Panel */}
+        <div className="left-side-container">
+          {/* Left Panels Container - Hierarchy + Signal */}
+          <div className="left-panels">
+            {/* Left Panel - Design Browser (Hierarchy) */}
+            <div 
+              className="left-panel hierarchy-panel"
+              style={{ width: hierarchyWidth, minWidth: 100 }}
+            >
+              <DesignBrowser
+                key={kdbLoaded ? 'kdb-loaded' : 'no-kdb'}
+                onModuleSelect={handleModuleSelect}
+                onModuleDoubleClick={handleModuleDoubleClick}
+                onFileDoubleClick={handleFileDoubleClick}
+                selectedModuleIndex={selectedModuleIndex}
+                kdbLoaded={kdbLoaded}
+                expandedModules={expandedModules}
+                onExpandedModulesChange={setExpandedModules}
+                paginationMap={hierarchyPagination}
+                onPaginationChange={setHierarchyPagination}
+              />
+            </div>
+
+            {/* Splitter between hierarchy and signal panel */}
+            <Splitter direction="horizontal" onDrag={handleHierarchyResize} onDragStart={handleHierarchyResizeStart} onDragEnd={handleHierarchyResizeEnd} />
+
+            {/* Middle Panel - Signal Panel */}
+            <div 
+              className="signal-panel"
+              style={{ width: signalWidth, minWidth: 100 }}
+            >
+              <SignalPanel
+                selectedModuleIndex={selectedModuleIndex}
+                onSignalAddToWaveform={handleSignalAddToWaveform}
+                onSignalAddToTableView={handleSignalAddToTableView}
+                onSignalDoubleClick={handleSignalDoubleClick}
+                onSignalSelect={handleSignalSelect}
+                activeTabType={tabs.find(t => t.id === activeTab)?.type}
+                onSignalDrop={handleSignalDropFromWaveform}
+                pendingSelectedSignal={pendingSelectedSignal}
+              />
+            </div>
+          </div>
+
+          {/* Splitter between left panels and bottom panel */}
+          <Splitter direction="vertical" onDrag={handleMessageResize} onDragStart={handleMessageResizeStart} onDragEnd={handleMessageResizeEnd} />
+
+          {/* Bottom Panel - Messages (only under left panels) */}
+          <div 
+            className="bottom-panel"
+            style={{ height: messageHeight, minHeight: 60 }}
+          >
+            <MessageWindow
+              messages={messages}
+              onBookmarkClick={handleBookmarkClick}
+              onDriverClick={handleDriverClick}
+              wavemarks={activeTabData?.wavemarks || []}
+              onWavemarkClick={handleWavemarkClick}
+              onWavemarkDelete={handleWavemarkDelete}
+              onWavemarkRename={handleWavemarkRename}
+              onWavemarkColorChange={handleWavemarkColorChange}
+              onWavemarkGroupsChange={handleWavemarkGroupsChange}
+              availableGroups={activeTabData?.type === 'waveform'
+                ? Object.values(activeTabData.groups || {}).map(g => ({ id: g.id, name: g.name }))
+                : []
+              }
+              searchResults={searchResults}
+              onSearchResultClick={handleSearchResultClick}
+              onSearchResultDelete={handleSearchResultDelete}
+            />
+          </div>
         </div>
 
-        {/* Splitter between hierarchy and signal panel */}
-        <Splitter direction="horizontal" onDrag={handleHierarchyResize} onDragStart={handleHierarchyResizeStart} onDragEnd={handleHierarchyResizeEnd} />
-
-        {/* Middle Panel - Signal Panel */}
-        <div 
-          className="signal-panel"
-          style={{ width: signalWidth, minWidth: 100 }}
-        >
-          <SignalPanel
-            selectedModuleIndex={selectedModuleIndex}
-            onSignalAddToWaveform={handleSignalAddToWaveform}
-            onSignalAddToTableView={handleSignalAddToTableView}
-            onSignalDoubleClick={handleSignalDoubleClick}
-            onSignalSelect={handleSignalSelect}
-            activeTabType={tabs.find(t => t.id === activeTab)?.type}
-            onSignalDrop={handleSignalDropFromWaveform}
-            pendingSelectedSignal={pendingSelectedSignal}
-          />
-        </div>
-
-        {/* Splitter between signal panel and main panel */}
+        {/* Splitter between left side and right panel */}
         <Splitter direction="horizontal" onDrag={handleSignalPanelResize} onDragStart={handleSignalPanelResizeStart} onDragEnd={handleSignalPanelResizeEnd} />
 
-        {/* Right Panel - Tab Panel (Source/Waveform) */}
+        {/* Right Panel - Tab Panel (Source/Waveform) - extends to bottom */}
         <div className="right-panel">
           <TabPanel
             activeTab={activeTab}
@@ -4216,34 +4250,6 @@ function App() {
             ) : null}
           </TabPanel>
         </div>
-      </div>
-
-      {/* Splitter between main content and messages */}
-      <Splitter direction="vertical" onDrag={handleMessageResize} onDragStart={handleMessageResizeStart} onDragEnd={handleMessageResizeEnd} />
-
-      {/* Bottom Panel - Messages */}
-      <div 
-        className="bottom-panel"
-        style={{ height: messageHeight, minHeight: 60 }}
-      >
-        <MessageWindow
-          messages={messages}
-          onBookmarkClick={handleBookmarkClick}
-          onDriverClick={handleDriverClick}
-          wavemarks={activeTabData?.wavemarks || []}
-          onWavemarkClick={handleWavemarkClick}
-          onWavemarkDelete={handleWavemarkDelete}
-          onWavemarkRename={handleWavemarkRename}
-          onWavemarkColorChange={handleWavemarkColorChange}
-          onWavemarkGroupsChange={handleWavemarkGroupsChange}
-          availableGroups={activeTabData?.type === 'waveform'
-            ? Object.values(activeTabData.groups || {}).map(g => ({ id: g.id, name: g.name }))
-            : []
-          }
-          searchResults={searchResults}
-          onSearchResultClick={handleSearchResultClick}
-          onSearchResultDelete={handleSearchResultDelete}
-        />
       </div>
 
       {/* Connection Dialog */}

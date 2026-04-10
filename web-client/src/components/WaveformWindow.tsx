@@ -149,7 +149,7 @@ const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
   hierarchy: 60,
   name: 120,
   value: 80,
-  panel: 200,
+  panel: 300,
 };
 
 // 默认时间配置

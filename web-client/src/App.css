@@ -113,8 +113,23 @@ body {
   margin: 0 4px;
 }
 
-/* Main Content - Three Column Layout */
+/* Main Content - Layout with left side container and right panel */
 .main-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Left Side Container - Contains left panels and bottom panel */
+.left-side-container {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+/* Left Panels Container - Hierarchy + Signal */
+.left-panels {
   display: flex;
   flex: 1;
   overflow: hidden;
@@ -138,7 +153,7 @@ body {
   flex-shrink: 0;
 }
 
-/* Right Panel - Tab Panel */
+/* Right Panel - Tab Panel (extends to bottom) */
 .right-panel {
   flex: 1;
   display: flex;
@@ -558,11 +573,12 @@ body {
 
 /* Message Window - DVE Style */
 .bottom-panel {
-  height: 100px;
+  height: 200px;
   min-height: 60px;
   background: #fff;
   border-top: 1px solid #b0b0b0;
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .message-window {
