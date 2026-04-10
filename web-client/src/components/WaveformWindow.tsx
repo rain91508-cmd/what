@@ -1017,8 +1017,11 @@ export function WaveformWindow({
       lastParams.signalListHash !== signalListHash ||
       lastParams.timeConfigHash !== timeConfigHash;
 
+    console.log(`[WaveformWindow] Render params check: hasParamsChanged=${hasParamsChanged}, signalListHash=${signalListHash}, prevHash=${lastParams.signalListHash}, signalCount=${signalList.length}`);
+
     if (!hasParamsChanged) {
       // 参数没有变化，直接返回
+      console.log(`[WaveformWindow] Render skipped: params unchanged`);
       return;
     }
 
