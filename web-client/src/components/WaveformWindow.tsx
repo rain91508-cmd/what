@@ -929,10 +929,12 @@ export function WaveformWindow({
       const visibleStartRow = range.start;
       const visibleEndRow = range.end;
       
-      console.log(`[WaveformWindow] Building signalList: treeNodes=${treeNodes.length}, visibleRange=[${visibleStartRow}, ${visibleEndRow}]`);
-      console.log(`[WaveformWindow] treeNodes content:`, treeNodes.map(n => ({ type: n.type, name: n.type === 'signal' ? n.signal?.name : n.group?.name })));
+      // 使用 treeNodesRef 获取最新的 treeNodes
+      const currentTreeNodes = treeNodesRef.current;
+      console.log(`[WaveformWindow] Building signalList: treeNodes=${currentTreeNodes.length}, visibleRange=[${visibleStartRow}, ${visibleEndRow}]`);
+      console.log(`[WaveformWindow] treeNodes content:`, currentTreeNodes.map(n => ({ type: n.type, name: n.type === 'signal' ? n.signal?.name : n.group?.name })));
 
-      treeNodes.forEach((node) => {
+      currentTreeNodes.forEach((node) => {
       console.log(`[WaveformWindow] Processing node: type=${node.type}, currentRow=${currentRow}, visibleRange=[${visibleStartRow}, ${visibleEndRow}]`);
       if (node.type === 'group') {
         // Group row - no waveform, just increment row counter
@@ -2281,6 +2283,10 @@ export function WaveformWindow({
     ioFilters,
     nameFilter,
   ]);
+  
+  // 使用 ref 存储最新的 treeNodes，供 renderWaveform 使用
+  const treeNodesRef = useRef<TreeNode[]>([]);
+  treeNodesRef.current = treeNodes;
 
   // 当 treeNodes 变化时，重新计算可见范围并触发重绘
   useEffect(() => {
