@@ -701,7 +701,9 @@ export function WaveformWindow({
   // Collect all display signals from all groups for rendering
   // Use useMemo to avoid creating new array reference on every render
   const displaySignals = useMemo(() => {
-    return Object.values(groups).flatMap(g => g.signals);
+    const signals = Object.values(groups).flatMap(g => g.signals);
+    console.log(`[WaveformWindow] displaySignals updated, count=${signals.length}, groups count=${Object.keys(groups).length}`);
+    return signals;
   }, [groups]);
 
   // 处理待添加的信号队列 - 直接添加到选中的 group，然后通知父组件删除
@@ -2270,6 +2272,7 @@ export function WaveformWindow({
 
   // 当 treeNodes 变化时，重新计算可见范围并触发重绘
   useEffect(() => {
+    console.log(`[WaveformWindow] treeNodes changed, count=${treeNodes.length}, triggering render`);
     if (signalListRef.current) {
       const scrollTop = signalListRef.current.scrollTop;
       const clientHeight = signalListRef.current.clientHeight;
@@ -2282,9 +2285,22 @@ export function WaveformWindow({
       setVisibleRange({ start: Math.max(0, startRow), end: endRow });
 
       // 触发重绘
-      if (renderWaveformRef.current) {
-        renderWaveformRef.current().catch(console.error);
-      }
+      setTimeout(() => {
+        if (renderWaveformRef.current) {
+          console.log(`[WaveformWindow] Calling renderWaveform from treeNodes change`);
+          renderWaveformRef.current().catch(console.error);
+        } else {
+          console.warn(`[WaveformWindow] renderWaveformRef not ready in treeNodes effect`);
+        }
+      }, 50);
+    } else {
+      // 即使 signalListRef 不存在，也尝试触发重绘
+      setTimeout(() => {
+        if (renderWaveformRef.current) {
+          console.log(`[WaveformWindow] Calling renderWaveform from treeNodes change (no signalListRef)`);
+          renderWaveformRef.current().catch(console.error);
+        }
+      }, 50);
     }
   }, [treeNodes]);
 
