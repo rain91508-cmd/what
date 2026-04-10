@@ -1014,15 +1014,8 @@ export function WaveformWindow({
     const timeConfigHash = `${timeConfig.DisplayUnitPerLoD0Unit}`;
 
     // 检查参数是否真的有变化，如果没有变化则直接返回，避免重复渲染
-    const lastParams = lastRenderParamsRef.current;
-    const hasParamsChanged =
-      lastParams.signalPrefix !== _signalPrefix ||
-      lastParams.spaceBeforeBracket !== _spaceBeforeBracket ||
-      Math.abs(lastParams.viewportTimeStart - viewport.timeStart) > 0.1 ||
-      Math.abs(lastParams.viewportTimeEnd - viewport.timeEnd) > 0.1 ||
-      Math.abs(lastParams.canvasWidth - width) > 0.5 ||
-      Math.abs(lastParams.canvasHeight - height) > 0.5 ||
-      lastParams.timeConfigHash !== timeConfigHash;
+    // 暂时设为 true，强制每次都渲染
+    const hasParamsChanged = true;
 
     console.log(`[WaveformWindow] Render params check: hasParamsChanged=${hasParamsChanged}, signalCount=${signalList.length}`);
 
