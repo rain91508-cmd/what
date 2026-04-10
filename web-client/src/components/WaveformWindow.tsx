@@ -235,10 +235,15 @@ export function WaveformWindow({
     if (activeTabId) {
       console.log(`[WaveformWindow] Tab activated: ${activeTabId}, triggering force render`);
       setForceRender(prev => !prev);
-      // 立即触发一次渲染
-      if (renderWaveformRef.current) {
-        renderWaveformRef.current().catch(console.error);
-      }
+      // 延迟触发一次渲染，确保 renderWaveformRef 已经赋值
+      setTimeout(() => {
+        if (renderWaveformRef.current) {
+          console.log(`[WaveformWindow] Calling renderWaveform after tab switch`);
+          renderWaveformRef.current().catch(console.error);
+        } else {
+          console.warn(`[WaveformWindow] renderWaveformRef not ready yet`);
+        }
+      }, 100);
     }
   }, [activeTabId]);
   
@@ -864,14 +869,19 @@ export function WaveformWindow({
   const renderWaveformRef = useRef<() => Promise<void>>();
   
   const renderWaveform = async () => {
+    console.log(`[WaveformWindow] renderWaveform called, canvas=${!!canvasRef.current}, container=${!!containerRef.current}`);
     // 防止并发调用
     if (isRenderingRef.current) {
+      console.log(`[WaveformWindow] renderWaveform skipped, already rendering`);
       return;
     }
     isRenderingRef.current = true;
     
     try {
-      if (!canvasRef.current || !containerRef.current) return;
+      if (!canvasRef.current || !containerRef.current) {
+        console.log(`[WaveformWindow] renderWaveform aborted, missing canvas or container`);
+        return;
+      }
 
       // Update canvas dimensions from container
       const containerRect = containerRef.current.getBoundingClientRect();
