@@ -236,14 +236,24 @@ export function WaveformWindow({
       console.log(`[WaveformWindow] Tab activated: ${activeTabId}, triggering force render`);
       setForceRender(prev => !prev);
       // 延迟触发一次渲染，确保 renderWaveformRef 已经赋值
+      // 生产环境可能需要更长的延迟
       setTimeout(() => {
         if (renderWaveformRef.current) {
-          console.log(`[WaveformWindow] Calling renderWaveform after tab switch`);
+          console.log(`[WaveformWindow] Calling renderWaveform after tab switch (attempt 1)`);
           renderWaveformRef.current().catch(console.error);
         } else {
-          console.warn(`[WaveformWindow] renderWaveformRef not ready yet`);
+          console.warn(`[WaveformWindow] renderWaveformRef not ready yet, retrying...`);
+          // 如果还没准备好，再试一次
+          setTimeout(() => {
+            if (renderWaveformRef.current) {
+              console.log(`[WaveformWindow] Calling renderWaveform after tab switch (attempt 2)`);
+              renderWaveformRef.current().catch(console.error);
+            } else {
+              console.warn(`[WaveformWindow] renderWaveformRef still not ready after retry`);
+            }
+          }, 200);
         }
-      }, 100);
+      }, 150);
     }
   }, [activeTabId]);
   
@@ -269,9 +279,11 @@ export function WaveformWindow({
       console.log(`[WaveformWindow] Canvas already transferred, marking adapter as registered: ${canvasIdRef.current}`);
       wasmProviderRef.current.markCanvasRegistered();
       // 延迟触发一次渲染，确保 canvas 已准备好
+      // 生产环境可能需要更长的延迟
       setTimeout(() => {
+        console.log(`[WaveformWindow] Triggering render after canvas registered`);
         renderWaveform();
-      }, 50);
+      }, 100);
       return;
     }
 
@@ -298,9 +310,11 @@ export function WaveformWindow({
         console.log(`[WaveformWindow] Canvas registered: ${canvasIdRef.current}, dpr=1 (1:1 mapping)`);
         
         // Canvas 注册完成后延迟触发渲染
+        // 生产环境可能需要更长的延迟
         setTimeout(() => {
+          console.log(`[WaveformWindow] Triggering render after canvas registration complete`);
           renderWaveform();
-        }, 50);
+        }, 100);
       } catch (error) {
         console.error('[WaveformWindow] Failed to register canvas:', error);
         canvasTransferredRef.current = false;
@@ -1118,11 +1132,11 @@ export function WaveformWindow({
   }
   };
 
-  // 更新 ref
-  renderWaveformRef.current = renderWaveform;
-
   // 使用 ResizeObserver 监听容器尺寸变化，触发重绘并调整 viewport
   useEffect(() => {
+    // 确保 renderWaveformRef 在组件挂载后才赋值
+    renderWaveformRef.current = renderWaveform;
+    
     if (!containerRef.current) return;
 
     let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
