@@ -426,6 +426,11 @@ async function handleGetSignalValueAtTime(payload: any, id: number): Promise<voi
     wasmProvider.set_draw_list(wasmSignals);
   }
 
+  // 设置 viewport，使用 time 作为中心点（与 fetchAndGetSegments 保持一致）
+  // 这样 get_signal_value_at_time_internal 可以正确获取 start value
+  const timeWindow = 10;
+  wasmProvider.set_viewport(Math.max(0, time - timeWindow), time + timeWindow);
+
   // 直接使用传入的 displayFormat
   const signalDisplayFormat = displayFormat;
 
