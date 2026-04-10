@@ -4239,6 +4239,7 @@ function App() {
             ) : activeTabData ? (
               <WaveformWindow
                 key={activeTabData.id}
+                activeTabId={activeTab}
                 signals={activeTabData.signals || []}
                 groups={activeTabData.groups || createDefaultGroups()}
                 selectedGroup={activeTabData.selectedGroup || 'group_1'}

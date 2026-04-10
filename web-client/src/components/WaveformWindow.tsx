@@ -98,6 +98,7 @@ interface WaveformWindowProps {
   onGroupsUpdate: (groups: Record<string, SignalGroup>) => void;
   onSelectedGroupUpdate: (selectedGroup: string) => void;
   onSignalsProcessed: (processedIds: number[]) => void;  // 通知父组件已处理的信号 ID
+  activeTabId?: string;  // 当前激活的 tab ID，用于检测 tab 切换
   onColumnWidthsChange?: (widths: ColumnWidths) => void;  // 列宽变化回调
   viewport?: TimeRangeOnly;          // 外部控制的 viewport（可选）
   onViewportChange?: (viewport: TimeRangeOnly) => void;  // viewport 变化回调
@@ -192,6 +193,7 @@ export function WaveformWindow({
   wavemarks = [],
   onSignalSelect,
   onSignalDoubleClick,
+  activeTabId,
 }: WaveformWindowProps) {
   const { t } = useT();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -227,6 +229,18 @@ export function WaveformWindow({
     console.log(`[WaveformWindow] Component activated, triggering force render`);
     setForceRender(true);
   }, []);
+  
+  // 当 tab 切换到波形 tab 时，强制触发重绘
+  useEffect(() => {
+    if (activeTabId) {
+      console.log(`[WaveformWindow] Tab activated: ${activeTabId}, triggering force render`);
+      setForceRender(prev => !prev);
+      // 立即触发一次渲染
+      if (renderWaveformRef.current) {
+        renderWaveformRef.current().catch(console.error);
+      }
+    }
+  }, [activeTabId]);
   
   useEffect(() => {
     console.log(`[WaveformWindow] Provider init check: useMockData=${useMockData}, providerLoading=${providerLoading}, sharedProvider=${sharedProvider ? 'yes' : 'no'}`);
