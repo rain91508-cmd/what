@@ -152,6 +152,7 @@ const translations: Translations = {
       removeFromWaveform: 'Remove from Waveform',
       selectModule: 'Select a module to view signals',
     },
+    // Message Window
     message: {
       title: 'Messages',
       clear: 'Clear',
@@ -160,6 +161,11 @@ const translations: Translations = {
       warning: 'Warning',
       error: 'Error',
       success: 'Success',
+    },
+    // Splitter tooltip
+    splitter: {
+      hideLeftPanel: 'Double-click to hide left panel',
+      showLeftPanel: 'Double-click to show left panel',
     },
     tab: {
       source: 'Source',

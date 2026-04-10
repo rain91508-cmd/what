@@ -161,6 +161,10 @@ const translations: Translations = {
       error: '錯誤',
       success: '成功',
     },
+    splitter: {
+      hideLeftPanel: '雙擊隱藏左側面板',
+      showLeftPanel: '雙擊顯示左側面板',
+    },
     tab: {
       source: '原始碼',
       waveform: '波形',

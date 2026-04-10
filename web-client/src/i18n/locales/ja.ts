@@ -161,6 +161,10 @@ const translations: Translations = {
       error: 'エラー',
       success: '成功',
     },
+    splitter: {
+      hideLeftPanel: 'ダブルクリックで左パネルを非表示',
+      showLeftPanel: 'ダブルクリックで左パネルを表示',
+    },
     tab: {
       source: 'ソース',
       waveform: '波形',

@@ -152,6 +152,7 @@ const translations: Translations = {
       removeFromWaveform: '从波形移除',
       selectModule: '选择一个模块以查看信号',
     },
+    // Message Window
     message: {
       title: '消息',
       clear: '清除',
@@ -160,6 +161,11 @@ const translations: Translations = {
       warning: '警告',
       error: '错误',
       success: '成功',
+    },
+    // Splitter tooltip
+    splitter: {
+      hideLeftPanel: '双击隐藏左侧面板',
+      showLeftPanel: '双击显示左侧面板',
     },
     tab: {
       source: '源码',

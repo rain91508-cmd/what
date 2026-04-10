@@ -294,6 +294,10 @@ function App() {
   const [hierarchyWidth, setHierarchyWidth] = useState(300)
   const [signalWidth, setSignalWidth] = useState(250)
   const [messageHeight, setMessageHeight] = useState(180)
+  
+  // Left panel visibility state
+  const [isLeftPanelVisible, setIsLeftPanelVisible] = useState(true)
+  const savedLeftPanelWidthRef = useRef(550) // Save total width of left panels (hierarchy + signal + splitters)
 
   // Hierarchy Search state
   const [searchPattern, setSearchPattern] = useState('')
@@ -3873,6 +3877,21 @@ function App() {
     setMessageHeight(Math.max(60, messageStartHeightRef.current - delta))
   }
 
+  // Toggle left panel visibility
+  const handleToggleLeftPanel = useCallback(() => {
+    setIsLeftPanelVisible(prev => {
+      if (prev) {
+        // Currently visible, save current width and hide
+        const currentTotalWidth = hierarchyWidth + signalWidth + 8 // 8px for splitter
+        savedLeftPanelWidthRef.current = Math.max(200, currentTotalWidth)
+        return false
+      } else {
+        // Currently hidden, restore
+        return true
+      }
+    })
+  }, [hierarchyWidth, signalWidth])
+
   if (!initialized) {
     return (
       <div className="loading-screen">
@@ -4024,11 +4043,12 @@ function App() {
       {/* Main Content */}
       <div className="main-content">
         {/* Left Side Container - Hierarchy + Signal + Bottom Panel */}
+        {isLeftPanelVisible && (
         <div className="left-side-container">
           {/* Left Panels Container - Hierarchy + Signal */}
           <div className="left-panels">
             {/* Left Panel - Design Browser (Hierarchy) */}
-            <div 
+            <div
               className="left-panel hierarchy-panel"
               style={{ width: hierarchyWidth, minWidth: 100 }}
             >
@@ -4050,7 +4070,7 @@ function App() {
             <Splitter direction="horizontal" onDrag={handleHierarchyResize} onDragStart={handleHierarchyResizeStart} onDragEnd={handleHierarchyResizeEnd} />
 
             {/* Middle Panel - Signal Panel */}
-            <div 
+            <div
               className="signal-panel"
               style={{ width: signalWidth, minWidth: 100 }}
             >
@@ -4071,7 +4091,7 @@ function App() {
           <Splitter direction="vertical" onDrag={handleMessageResize} onDragStart={handleMessageResizeStart} onDragEnd={handleMessageResizeEnd} />
 
           {/* Bottom Panel - Messages (only under left panels) */}
-          <div 
+          <div
             className="bottom-panel"
             style={{ height: messageHeight, minHeight: 60 }}
           >
@@ -4095,9 +4115,17 @@ function App() {
             />
           </div>
         </div>
+        )}
 
         {/* Splitter between left side and right panel */}
-        <Splitter direction="horizontal" onDrag={handleSignalPanelResize} onDragStart={handleSignalPanelResizeStart} onDragEnd={handleSignalPanelResizeEnd} />
+        <Splitter
+          direction="horizontal"
+          onDrag={handleSignalPanelResize}
+          onDragStart={handleSignalPanelResizeStart}
+          onDragEnd={handleSignalPanelResizeEnd}
+          onDoubleClick={handleToggleLeftPanel}
+          tooltip={isLeftPanelVisible ? (t('panel.splitter.hideLeftPanel') as string) : (t('panel.splitter.showLeftPanel') as string)}
+        />
 
         {/* Right Panel - Tab Panel (Source/Waveform) - extends to bottom */}
         <div className="right-panel">

@@ -161,6 +161,10 @@ const translations: Translations = {
       error: 'Ошибка',
       success: 'Успех',
     },
+    splitter: {
+      hideLeftPanel: 'Двойной щелчок, чтобы скрыть левую панель',
+      showLeftPanel: 'Двойной щелчок, чтобы показать левую панель',
+    },
     tab: {
       source: 'Исходный код',
       waveform: 'Осциллограмма',

@@ -188,6 +188,11 @@ export interface Translations {
       error: string;
       success: string;
     };
+    // Splitter tooltip
+    splitter: {
+      hideLeftPanel: string;
+      showLeftPanel: string;
+    };
     // Tab Panel
     tab: {
       source: string;

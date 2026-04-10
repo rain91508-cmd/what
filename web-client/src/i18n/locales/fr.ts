@@ -161,6 +161,10 @@ const translations: Translations = {
       error: 'Erreur',
       success: 'Succès',
     },
+    splitter: {
+      hideLeftPanel: 'Double-cliquez pour masquer le panneau gauche',
+      showLeftPanel: 'Double-cliquez pour afficher le panneau gauche',
+    },
     tab: {
       source: 'Source',
       waveform: 'Forme d\'onde',

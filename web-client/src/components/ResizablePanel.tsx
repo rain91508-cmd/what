@@ -85,9 +85,11 @@ interface SplitterProps {
   onDrag: (delta: number) => void;
   onDragStart?: () => void;
   onDragEnd?: () => void;
+  onDoubleClick?: () => void;
+  tooltip?: string;
 }
 
-export function Splitter({ direction, onDrag, onDragStart, onDragEnd }: SplitterProps) {
+export function Splitter({ direction, onDrag, onDragStart, onDragEnd, onDoubleClick, tooltip }: SplitterProps) {
   const [isDragging, setIsDragging] = useState(false);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -111,7 +113,13 @@ export function Splitter({ direction, onDrag, onDragStart, onDragEnd }: Splitter
 
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
-  }, [direction, onDrag]);
+  }, [direction, onDrag, onDragStart, onDragEnd]);
+
+  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onDoubleClick?.();
+  }, [onDoubleClick]);
 
   return (
     <div
@@ -132,7 +140,8 @@ export function Splitter({ direction, onDrag, onDragStart, onDragEnd }: Splitter
         justifyContent: 'center',
       }}
       onMouseDown={handleMouseDown}
-      title={direction === 'horizontal' ? 'Drag to resize' : 'Drag to resize'}
+      onDoubleClick={handleDoubleClick}
+      title={tooltip || (direction === 'horizontal' ? 'Drag to resize, double-click to toggle left panel' : 'Drag to resize')}
     >
       <div
         style={{
