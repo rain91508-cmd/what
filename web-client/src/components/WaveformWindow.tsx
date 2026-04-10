@@ -236,24 +236,14 @@ export function WaveformWindow({
       console.log(`[WaveformWindow] Tab activated: ${activeTabId}, triggering force render`);
       setForceRender(prev => !prev);
       // 延迟触发一次渲染，确保 renderWaveformRef 已经赋值
-      // 生产环境可能需要更长的延迟
       setTimeout(() => {
         if (renderWaveformRef.current) {
-          console.log(`[WaveformWindow] Calling renderWaveform after tab switch (attempt 1)`);
+          console.log(`[WaveformWindow] Calling renderWaveform after tab switch`);
           renderWaveformRef.current().catch(console.error);
         } else {
-          console.warn(`[WaveformWindow] renderWaveformRef not ready yet, retrying...`);
-          // 如果还没准备好，再试一次
-          setTimeout(() => {
-            if (renderWaveformRef.current) {
-              console.log(`[WaveformWindow] Calling renderWaveform after tab switch (attempt 2)`);
-              renderWaveformRef.current().catch(console.error);
-            } else {
-              console.warn(`[WaveformWindow] renderWaveformRef still not ready after retry`);
-            }
-          }, 200);
+          console.warn(`[WaveformWindow] renderWaveformRef not ready yet`);
         }
-      }, 150);
+      }, 100);
     }
   }, [activeTabId]);
   
@@ -279,11 +269,9 @@ export function WaveformWindow({
       console.log(`[WaveformWindow] Canvas already transferred, marking adapter as registered: ${canvasIdRef.current}`);
       wasmProviderRef.current.markCanvasRegistered();
       // 延迟触发一次渲染，确保 canvas 已准备好
-      // 生产环境可能需要更长的延迟
       setTimeout(() => {
-        console.log(`[WaveformWindow] Triggering render after canvas registered`);
         renderWaveform();
-      }, 100);
+      }, 50);
       return;
     }
 
@@ -310,11 +298,9 @@ export function WaveformWindow({
         console.log(`[WaveformWindow] Canvas registered: ${canvasIdRef.current}, dpr=1 (1:1 mapping)`);
         
         // Canvas 注册完成后延迟触发渲染
-        // 生产环境可能需要更长的延迟
         setTimeout(() => {
-          console.log(`[WaveformWindow] Triggering render after canvas registration complete`);
           renderWaveform();
-        }, 100);
+        }, 50);
       } catch (error) {
         console.error('[WaveformWindow] Failed to register canvas:', error);
         canvasTransferredRef.current = false;
@@ -701,9 +687,7 @@ export function WaveformWindow({
   // Collect all display signals from all groups for rendering
   // Use useMemo to avoid creating new array reference on every render
   const displaySignals = useMemo(() => {
-    const signals = Object.values(groups).flatMap(g => g.signals);
-    console.log(`[WaveformWindow] displaySignals updated, count=${signals.length}, groups count=${Object.keys(groups).length}`);
-    return signals;
+    return Object.values(groups).flatMap(g => g.signals);
   }, [groups]);
 
   // 处理待添加的信号队列 - 直接添加到选中的 group，然后通知父组件删除
@@ -928,20 +912,12 @@ export function WaveformWindow({
       const range = visibleRangeRef.current;
       const visibleStartRow = range.start;
       const visibleEndRow = range.end;
-      
-      // 使用 treeNodesRef 获取最新的 treeNodes
-      const currentTreeNodes = treeNodesRef.current;
-      console.log(`[WaveformWindow] Building signalList: treeNodes=${currentTreeNodes.length}, visibleRange=[${visibleStartRow}, ${visibleEndRow}]`);
-      console.log(`[WaveformWindow] treeNodes content:`, currentTreeNodes.map(n => ({ type: n.type, name: n.type === 'signal' ? n.signal?.name : n.group?.name })));
 
-      currentTreeNodes.forEach((node) => {
-      console.log(`[WaveformWindow] Processing node: type=${node.type}, currentRow=${currentRow}, visibleRange=[${visibleStartRow}, ${visibleEndRow}]`);
+      treeNodes.forEach((node) => {
       if (node.type === 'group') {
         // Group row - no waveform, just increment row counter
-        console.log(`[WaveformWindow] Skipping group node`);
         currentRow++;
       } else if (node.type === 'signal' && node.signal) {
-        console.log(`[WaveformWindow] Processing signal node: ${node.signal.name}`);
         const signal = node.signal as Signal & { unique_id: number };
         const signalDisplayFormat = getSignalDisplayFormat(signal);
 
@@ -1007,8 +983,6 @@ export function WaveformWindow({
       }
     });
 
-    console.log(`[WaveformWindow] signalList built: count=${signalList.length}`);
-
     // 生成 signalList 的哈希值用于检测变化
     const signalListHash = signalList.map(s => `${s.name}-${s.row}-${s.width}-${s.displayFormat}`).join('|');
 
@@ -1016,16 +990,21 @@ export function WaveformWindow({
     const timeConfigHash = `${timeConfig.DisplayUnitPerLoD0Unit}`;
 
     // 检查参数是否真的有变化，如果没有变化则直接返回，避免重复渲染
-    // 暂时设为 true，强制每次都渲染
-    const hasParamsChanged = true;
+    const lastParams = lastRenderParamsRef.current;
+//    const hasParamsChanged =
+//      lastParams.signalPrefix !== _signalPrefix ||
+//      lastParams.spaceBeforeBracket !== _spaceBeforeBracket ||
+//      Math.abs(lastParams.viewportTimeStart - viewport.timeStart) > 0.1 ||
+//      Math.abs(lastParams.viewportTimeEnd - viewport.timeEnd) > 0.1 ||
+//      Math.abs(lastParams.canvasWidth - width) > 0.5 ||
+//      Math.abs(lastParams.canvasHeight - height) > 0.5 ||
+//      lastParams.signalListHash !== signalListHash ||
+//      lastParams.timeConfigHash !== timeConfigHash;
 
-    console.log(`[WaveformWindow] Render params check: hasParamsChanged=${hasParamsChanged}, signalCount=${signalList.length}`);
-
-    if (!hasParamsChanged) {
-      // 参数没有变化，直接返回
-      console.log(`[WaveformWindow] Render skipped: params unchanged`);
-      return;
-    }
+//    if (!hasParamsChanged) {
+//      // 参数没有变化，直接返回
+//      return;
+//    }
 
     // 更新上一次渲染的参数
     lastRenderParamsRef.current = {
@@ -1139,11 +1118,11 @@ export function WaveformWindow({
   }
   };
 
+  // 更新 ref
+  renderWaveformRef.current = renderWaveform;
+
   // 使用 ResizeObserver 监听容器尺寸变化，触发重绘并调整 viewport
   useEffect(() => {
-    // 确保 renderWaveformRef 在组件挂载后才赋值
-    renderWaveformRef.current = renderWaveform;
-    
     if (!containerRef.current) return;
 
     let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -2238,16 +2217,7 @@ export function WaveformWindow({
     
     if (shouldProcessChildren) {
       const childGroups = group.children.map(childId => groups[childId]).filter(Boolean);
-      console.log(`[buildTreeNodes] group=${groupId}, signals count=${group.signals.length}, ioFilters=${JSON.stringify(Array.from(ioFilters))}, nameFilter="${nameFilter}"`);
-      const filteredSignals = group.signals.filter(s => {
-        const matchesIO = matchesIOFilter(s);
-        const matchesName = matchesNameFilter(s);
-        if (!matchesIO || !matchesName) {
-          console.log(`[buildTreeNodes] signal ${s.name} filtered out: matchesIO=${matchesIO}, matchesName=${matchesName}`);
-        }
-        return matchesIO && matchesName;
-      });
-      console.log(`[buildTreeNodes] filteredSignals count=${filteredSignals.length}`);
+      const filteredSignals = group.signals.filter(s => matchesIOFilter(s) && matchesNameFilter(s));
       const allItems = [...childGroups, ...filteredSignals];
 
       allItems.forEach((item, index) => {
@@ -2283,45 +2253,25 @@ export function WaveformWindow({
     ioFilters,
     nameFilter,
   ]);
-  
-  // 使用 ref 存储最新的 treeNodes，供 renderWaveform 使用
-  const treeNodesRef = useRef<TreeNode[]>([]);
-  treeNodesRef.current = treeNodes;
 
   // 当 treeNodes 变化时，重新计算可见范围并触发重绘
   useEffect(() => {
-    console.log(`[WaveformWindow] treeNodes changed, count=${treeNodes.length}, triggering render`);
-    let startRow = 0;
-    let endRow = Math.min(50, treeNodes.length); // 默认显示前 50 个节点
-    
     if (signalListRef.current) {
       const scrollTop = signalListRef.current.scrollTop;
       const clientHeight = signalListRef.current.clientHeight;
       const SIGNAL_ROW_HEIGHT = 24;
 
-      startRow = Math.floor(scrollTop / SIGNAL_ROW_HEIGHT);
+      const startRow = Math.floor(scrollTop / SIGNAL_ROW_HEIGHT);
       const visibleRows = Math.ceil(clientHeight / SIGNAL_ROW_HEIGHT);
-      endRow = startRow + visibleRows + 1;
-    }
+      const endRow = startRow + visibleRows + 1;
 
-    const newRange = { start: Math.max(0, startRow), end: endRow };
-    console.log(`[WaveformWindow] Updating visibleRange to:`, newRange);
-    
-    // 直接更新 ref，确保 renderWaveform 能立即获取到最新值
-    visibleRangeRef.current = newRange;
-    
-    // 同时更新 state，触发 UI 更新
-    setVisibleRange(newRange);
+      setVisibleRange({ start: Math.max(0, startRow), end: endRow });
 
-    // 触发重绘
-    setTimeout(() => {
+      // 触发重绘
       if (renderWaveformRef.current) {
-        console.log(`[WaveformWindow] Calling renderWaveform from treeNodes change`);
         renderWaveformRef.current().catch(console.error);
-      } else {
-        console.warn(`[WaveformWindow] renderWaveformRef not ready in treeNodes effect`);
       }
-    }, 50);
+    }
   }, [treeNodes]);
 
   // 监听 scrollend 事件（scroll-snap 动画结束后触发）
