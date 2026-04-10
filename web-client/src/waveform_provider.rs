@@ -7,6 +7,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 use base64::{Engine as _, engine::general_purpose};
 
 use crate::opfs_cache::{
@@ -510,8 +511,8 @@ pub struct WaveformDataProvider {
     canvas_height: f64,
     row_height: f64,
     signal_data: HashMap<String, SignalWaveData>,
-    // OPFS cache
-    opfs_cache: OpfsCacheManager,
+    // OPFS cache - uses global shared instance via Arc
+    opfs_cache: Arc<OpfsCacheManager>,
     signals_with_id: Vec<SignalWithId>,  // Signals with draw_sig_id
     enable_opfs: bool,  // OPFS cache enabled flag
     current_lod: Option<u32>,  // Current LoD level for bucket size calculation
@@ -532,6 +533,16 @@ impl WaveformDataProvider {
     ) -> Self {
 
 
+        // Get or wait for global cache initialization
+        let opfs_cache = loop {
+            if let Some(cache) = crate::opfs_cache::get_global_cache() {
+                break Arc::new(cache.clone());
+            }
+            // If global cache not initialized yet, create a temporary one
+            // This should only happen during testing
+            break Arc::new(OpfsCacheManager::new());
+        };
+        
         Self {
             server_url: server_url.clone(),
             waveform_name: waveform_name.clone(),
@@ -546,7 +557,7 @@ impl WaveformDataProvider {
             canvas_height: 400.0,
             row_height: 24.0,  // Must match CSS .waveform-signal-signal-item height
             signal_data: HashMap::new(),
-            opfs_cache: OpfsCacheManager::new(),
+            opfs_cache,
             signals_with_id: Vec::new(),
             enable_opfs: false,  // Disabled by default
             current_lod: None,  // Will be set when fetching data
@@ -570,9 +581,20 @@ impl WaveformDataProvider {
         enable_opfs: bool,
     ) {
         self.enable_opfs = enable_opfs;
-        self.opfs_cache.init(opfs_read, opfs_write, opfs_exists, enable_opfs);
-        self.opfs_cache.set_waveform(self.waveform_name.clone());
-
+        
+        // Initialize global shared cache
+        crate::opfs_cache::init_global_cache(
+            opfs_read, 
+            opfs_write, 
+            opfs_exists, 
+            enable_opfs
+        );
+        
+        // Update our reference to use the global cache
+        if let Some(cache) = crate::opfs_cache::get_global_cache() {
+            self.opfs_cache = Arc::new(cache.clone());
+            self.opfs_cache.set_waveform(self.waveform_name.clone());
+        }
     }
 
     /// Set signals with draw_sig_id (new API)
@@ -606,7 +628,7 @@ impl WaveformDataProvider {
     /// draw_sig_ids: pre-computed draw_sig_ids for each signal (parallel array)
     async fn process_server_chunk_with_ids(&mut self, data: &[u8], signal_names: &[String], draw_sig_ids: &[u32]) -> Result<(), JsValue> {
         // Skip if both OPFS and memory cache are disabled
-        if !self.opfs_cache.enabled && !self.opfs_cache.memory_cache_enabled {
+        if !self.is_cache_enabled() {
             return Ok(());
         }
 
@@ -1061,20 +1083,27 @@ impl WaveformDataProvider {
     /// Get memory cache enabled status
     #[wasm_bindgen(getter)]
     pub fn memory_cache_enabled(&self) -> bool {
-        self.opfs_cache.memory_cache_enabled
+        self.opfs_cache.is_memory_cache_enabled()
     }
 
     /// Set OPFS cache enabled (dynamic toggle)
     #[wasm_bindgen]
     pub fn set_opfs_enabled(&mut self, enabled: bool) {
         // console_log!("[WASM] Setting OPFS cache enabled: {}", enabled);
-        self.opfs_cache.enabled = enabled;
+        // Note: This only affects the local reference, not the global cache
+        // For global changes, reinitialize with init_with_opfs
+        self.enable_opfs = enabled;
     }
 
     /// Get OPFS cache enabled status
     #[wasm_bindgen(getter)]
     pub fn opfs_enabled(&self) -> bool {
-        self.opfs_cache.enabled
+        self.opfs_cache.is_enabled()
+    }
+    
+    /// Check if any cache is enabled (helper method)
+    fn is_cache_enabled(&self) -> bool {
+        self.opfs_cache.is_enabled() || self.opfs_cache.is_memory_cache_enabled()
     }
 
     /// Parse @[...] format for bit extraction
@@ -1590,6 +1619,9 @@ if tile_missing_signals.is_empty() {
     pub async fn fetch_and_get_segments(&mut self, signal_names: Vec<String>) -> Result<JsValue, JsValue> {
         // console_log!("[WASM] 1. start fetch_and_get_segments, signals: {}", signal_names.len());
         
+        // Render and prefetch can now run in parallel
+        // OPFS operations are protected by global OPFS_LOCK in opfs_cache.rs
+        
         // Step 1: Fetch data using the existing internal function
         self.fetch_signals_data_batch(signal_names).await?;
         
@@ -1631,7 +1663,7 @@ if tile_missing_signals.is_empty() {
     #[wasm_bindgen]
     pub async fn prefetch_tiles(&mut self, signal_names: Vec<String>) -> Result<(), JsValue> {
         // Skip if both OPFS and memory cache are disabled
-        if !self.opfs_cache.enabled && !self.opfs_cache.memory_cache_enabled {
+        if !self.is_cache_enabled() {
             return Ok(());
         }
 
@@ -1704,7 +1736,140 @@ if tile_missing_signals.is_empty() {
         Ok(())
     }
 
-    /// Prefetch a specific tile range for given signals
+    /// Asynchronous prefetch that runs in a separate task without blocking render
+    /// 
+    /// This function spawns a local async task to perform prefetch, allowing
+    /// render operations to continue in parallel.
+    /// OPFS and Memory cache are shared between render and prefetch via Arc.
+    /// 
+    /// # Arguments
+    /// * `signal_names` - List of signal names to prefetch
+    #[wasm_bindgen]
+    pub fn prefetch_tiles_async(&self, signal_names: Vec<String>) {
+        console_log!("[WASM] Prefetch async started for {} signals", signal_names.len());
+        
+        // Clone necessary data for the async task
+        let viewport = self.viewport.clone();
+        let canvas_width = self.canvas_width;
+        let current_lod = self.current_lod;
+        let waveform_name = self.waveform_name.clone();
+        let server_url = self.server_url.clone();
+        let signal_prefix = self.signal_prefix.clone();
+        let server_prefix = self.server_prefix.clone();
+        let space_before_bracket = self.space_before_bracket;
+        let time_stamp = self.time_stamp;
+        let signals_with_id = self.signals_with_id.clone();
+        let enable_opfs = self.enable_opfs;
+        
+        // Clone the Arc to share the same cache instance
+        let opfs_cache = self.opfs_cache.clone();
+        
+        // Spawn the prefetch task
+        wasm_bindgen_futures::spawn_local(async move {
+            // Create a temporary provider for prefetch
+            // It shares the same opfs_cache (both memory and OPFS) via Arc
+            let mut prefetch_provider = WaveformDataProvider {
+                server_url,
+                waveform_name,
+                signal_prefix,
+                server_prefix,
+                space_before_bracket,
+                time_stamp,
+                display_format: "hex".to_string(),
+                signals: Vec::new(),
+                viewport,
+                canvas_width,
+                canvas_height: 400.0,
+                row_height: 24.0,
+                signal_data: HashMap::new(),  // Independent signal_data (not shared)
+                opfs_cache,  // Shared cache via Arc
+                signals_with_id,
+                enable_opfs,
+                current_lod,
+                display_unit_per_lod0_unit: 1.0,
+            };
+            
+            // Execute prefetch
+            let result = prefetch_provider.prefetch_tiles_internal(&signal_names).await;
+            
+            match result {
+                Ok(_) => console_log!("[WASM] Prefetch async completed"),
+                Err(e) => console_log!("[WASM] Prefetch async failed: {:?}", e),
+            }
+        });
+    }
+
+    /// Internal prefetch implementation (shared between sync and async)
+    async fn prefetch_tiles_internal(&mut self, signal_names: &[String]) -> Result<(), JsValue> {
+        // Skip if both OPFS and memory cache are disabled
+        if !self.is_cache_enabled() {
+            return Ok(());
+        }
+
+        // Skip if no signals
+        if signal_names.is_empty() {
+            return Ok(());
+        }
+
+        // Filter out bit extraction signals
+        let signals_to_prefetch: Vec<String> = signal_names.iter()
+            .filter(|name| !name.contains("@["))
+            .cloned()
+            .collect();
+
+        if signals_to_prefetch.is_empty() {
+            return Ok(());
+        }
+
+        // Get current LOD and calculate LOD range (current ± 2, within 0-32)
+        let current_lod = self.current_lod.unwrap_or_else(|| select_lod(&self.viewport, self.canvas_width));
+        let min_lod = current_lod.saturating_sub(2);
+        let max_lod = (current_lod + 2).min(32);
+
+        // Prefetch for each LOD in range
+        for lod in min_lod..=max_lod {
+            let tile_span = OpfsCacheManager::get_tile_span(lod);
+            
+            // Calculate tile range that covers current viewport for this LOD
+            let current_start_tile = self.viewport.time_start as u64 / tile_span;
+            let current_end_tile = self.viewport.time_end as u64 / tile_span;
+            let current_tile_count = current_end_tile - current_start_tile + 1;
+
+            // Calculate prefetch ranges: 4x for current LOD, 1x for other LODs
+            let prefetch_multiplier = if lod == current_lod { 4 } else { 1 };
+            let prefetch_range = prefetch_multiplier * current_tile_count;
+            
+            // Forward prefetch: [end_tile + 1, end_tile + prefetch_range]
+            let forward_start = current_end_tile + 1;
+            let forward_end = current_end_tile + prefetch_range;
+            
+            // Backward prefetch: [start_tile - prefetch_range, start_tile - 1]
+            let backward_start = if current_start_tile >= prefetch_range {
+                current_start_tile - prefetch_range
+            } else {
+                0
+            };
+            let backward_end = if current_start_tile > 0 {
+                current_start_tile - 1
+            } else {
+                0
+            };
+
+            // Prefetch forward tiles
+            if forward_start <= forward_end {
+                self.prefetch_tile_range_internal(forward_start, forward_end, lod, tile_span, &signals_to_prefetch).await;
+            }
+
+            // Prefetch backward tiles
+            if backward_start <= backward_end {
+                self.prefetch_tile_range_internal(backward_start, backward_end, lod, tile_span, &signals_to_prefetch).await;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Prefetch a specific tile range for given signals (original sync version)
     /// 
     /// This function:
     /// 1. Checks OPFS cache for each signal+tile combination
@@ -1712,6 +1877,18 @@ if tile_missing_signals.is_empty() {
     /// 3. Fetches missing data from server
     /// 4. Stores data in OPFS only (not in signal_data)
     async fn prefetch_tile_range(
+        &mut self,
+        start_tile: u64,
+        end_tile: u64,
+        lod: u32,
+        tile_span: u64,
+        signal_names: &[String],
+    ) {
+        self.prefetch_tile_range_internal(start_tile, end_tile, lod, tile_span, signal_names).await;
+    }
+
+    /// Internal implementation of prefetch_tile_range
+    async fn prefetch_tile_range_internal(
         &mut self,
         start_tile: u64,
         end_tile: u64,
@@ -1761,12 +1938,8 @@ if tile_missing_signals.is_empty() {
 
         console_log!("[WASM] Prefetch: {} tiles need fetch from server for LOD {}", tile_missing_signals.len(), lod);
 
-        // Fetch missing data from server (similar to fetch_signals_data_batch_internal)
-        let completed = self.fetch_missing_for_opfs_only(tile_missing_signals, lod, tile_span).await;
-        if !completed {
-            console_log!("[WASM] Prefetch: interrupted during LOD {}", lod);
-            return; // Early exit if interrupted
-        }
+        // Fetch missing data from server
+        self.fetch_missing_for_opfs_only(tile_missing_signals, lod, tile_span).await;
     }
 
     /// Fetch missing data from server and store only in OPFS (not in signal_data)
@@ -1774,13 +1947,12 @@ if tile_missing_signals.is_empty() {
     /// This is similar to fetch_signals_data_batch_internal but:
     /// 1. Only fetches specific missing tiles
     /// 2. Only stores to OPFS (not to signal_data memory cache)
-    /// Returns true if completed, false if interrupted by pending render requests
     async fn fetch_missing_for_opfs_only(
         &mut self,
         tile_missing_signals: std::collections::HashMap<u64, Vec<(String, u32)>>,
         lod: u32,
         tile_span: u64,
-    ) -> bool {
+    ) {
         const MAX_BATCH_SIZE: usize = 256;
         const MAX_TILES_PER_REQUEST: usize = 100;
 
@@ -1793,7 +1965,7 @@ if tile_missing_signals.is_empty() {
         }
 
         if missing_signals_map.is_empty() {
-            return true;
+            return;
         }
 
         let missing_signal_names: Vec<String> = missing_signals_map.keys().cloned().collect();
@@ -1852,12 +2024,6 @@ if tile_missing_signals.is_empty() {
                     encoded_batch,
                     self.time_stamp);
 
-                // Check if there are pending render requests before fetching
-                if self.has_pending_render_requests() {
-                    console_log!("[WASM] Prefetch: interrupted - pending render requests detected");
-                    return false; // Early exit, let render take priority
-                }
-
                 // Fetch data
                 console_log!("[WASM] Prefetch: fetching from server - LOD {} tile {} num_tiles {} signals {}", lod, start_tile, num_tiles, unique_local_names.len());
                 match fetch_data(&url).await {
@@ -1890,7 +2056,6 @@ if tile_missing_signals.is_empty() {
         }
 
         // console_log!("[WASM] Prefetch: fetch completed for OPFS only");
-        true
     }
 
     // ============================================================================

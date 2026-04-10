@@ -11,6 +11,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsValue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // Console logging
 #[wasm_bindgen]
@@ -21,6 +22,83 @@ extern "C" {
 
 macro_rules! console_log {
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
+}
+
+// =============================================================================
+// Global OPFS Lock for Critical Section Protection
+// =============================================================================
+
+/// Global lock for OPFS operations (read/write/exists)
+/// true = OPFS operation in progress, false = OPFS is free
+static OPFS_LOCK: AtomicBool = AtomicBool::new(false);
+
+/// Acquire OPFS lock (spinlock with yield)
+async fn acquire_opfs_lock() {
+    let mut spin_count = 0;
+    while OPFS_LOCK.swap(true, Ordering::Acquire) {
+        spin_count += 1;
+        if spin_count > 100 {
+            // After 100 spins, yield to event loop
+            wasm_bindgen_futures::JsFuture::from(js_sys::Promise::new(&mut |resolve, _| {
+                web_sys::window()
+                    .unwrap()
+                    .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 0)
+                    .unwrap();
+            })).await.ok();
+            spin_count = 0;
+        }
+    }
+}
+
+/// Release OPFS lock
+fn release_opfs_lock() {
+    OPFS_LOCK.store(false, Ordering::Release);
+}
+
+// =============================================================================
+// Global Shared Cache Instance
+// =============================================================================
+
+use std::sync::OnceLock;
+
+/// Global shared OpfsCacheManager instance
+/// 
+/// This is shared across all WASM instances (Render and Prefetch tasks).
+/// Both OPFS and Memory cache are shared.
+static GLOBAL_OPFS_CACHE: OnceLock<OpfsCacheManager> = OnceLock::new();
+
+/// Initialize the global shared cache
+/// 
+/// This should be called once during application initialization.
+/// After initialization, all Render and Prefetch tasks will share the same cache.
+pub fn init_global_cache(
+    opfs_read: js_sys::Function,
+    opfs_write: js_sys::Function,
+    opfs_exists: js_sys::Function,
+    enabled: bool,
+) {
+    let cache = OpfsCacheManager::new();
+    cache.init(opfs_read, opfs_write, opfs_exists, enabled);
+    
+    if GLOBAL_OPFS_CACHE.set(cache).is_err() {
+        console_log!("[GlobalCache] Warning: Global cache already initialized");
+    } else {
+        console_log!("[GlobalCache] Global shared cache initialized, OPFS enabled: {}", enabled);
+    }
+}
+
+/// Get the global shared cache instance
+/// 
+/// Returns a reference to the global cache. If not initialized, returns None.
+pub fn get_global_cache() -> Option<&'static OpfsCacheManager> {
+    GLOBAL_OPFS_CACHE.get()
+}
+
+/// Get or create the global cache (for internal use only)
+/// 
+/// Returns a reference to the global cache. Panics if not initialized.
+fn get_global_cache_unchecked() -> &'static OpfsCacheManager {
+    GLOBAL_OPFS_CACHE.get().expect("Global cache not initialized. Call init_global_cache() first.")
 }
 
 // =============================================================================
@@ -579,8 +657,11 @@ pub fn read_signal_from_group_v2(data: &[u8], draw_sig_id: u32, lod: u32) -> Res
 }
 
 // =============================================================================
-// Memory LRU Cache
+// Memory LRU Cache - Thread Safe Version
 // =============================================================================
+
+use std::sync::Arc;
+use std::sync::Mutex;
 
 /// LRU cache entry
 struct LruEntry {
@@ -589,140 +670,174 @@ struct LruEntry {
     last_access: u64,  // Timestamp
 }
 
-/// Simple LRU cache for memory
+/// Thread-safe LRU cache for memory using Arc<Mutex<>>
 pub struct MemoryLruCache {
-    cache: HashMap<String, LruEntry>,
+    cache: Arc<Mutex<HashMap<String, LruEntry>>>,
     max_size: usize,
-    current_size: usize,
-    access_counter: u64,
+    current_size: Arc<Mutex<usize>>,
+    access_counter: Arc<Mutex<u64>>,
 }
 
 impl MemoryLruCache {
     pub fn new(max_size: usize) -> Self {
         Self {
-            cache: HashMap::new(),
+            cache: Arc::new(Mutex::new(HashMap::new())),
             max_size,
-            current_size: 0,
-            access_counter: 0,
+            current_size: Arc::new(Mutex::new(0)),
+            access_counter: Arc::new(Mutex::new(0)),
         }
     }
 
     /// Get data from cache
-    pub fn get(&mut self, key: &str) -> Option<&Vec<u8>> {
-        self.access_counter += 1;
+    pub fn get(&self, key: &str) -> Option<Vec<u8>> {
+        let mut counter = self.access_counter.lock().unwrap();
+        *counter += 1;
+        let current_count = *counter;
+        drop(counter);
 
-        if let Some(entry) = self.cache.get_mut(key) {
-            entry.last_access = self.access_counter;
-            Some(&entry.data)
-        } else {
-            None
+        let mut cache = self.cache.lock().unwrap();
+        if let Some(entry) = cache.get_mut(key) {
+            entry.last_access = current_count;
+            return Some(entry.data.clone());
         }
+        None
     }
 
     /// Set data in cache
-    pub fn set(&mut self, key: String, data: Vec<u8>) {
-        self.access_counter += 1;
+    pub fn set(&self, key: String, data: Vec<u8>) {
+        let mut counter = self.access_counter.lock().unwrap();
+        *counter += 1;
+        drop(counter);
+        
         let size = data.len();
+        let mut cache = self.cache.lock().unwrap();
+        let mut current_size = self.current_size.lock().unwrap();
 
         // Remove old entry if exists
-        if let Some(old_entry) = self.cache.remove(&key) {
-            self.current_size -= old_entry.size;
+        if let Some(old_entry) = cache.remove(&key) {
+            *current_size -= old_entry.size;
         }
 
         // Evict if necessary
-        while self.current_size + size > self.max_size && !self.cache.is_empty() {
-            self.evict_lru();
+        while *current_size + size > self.max_size && !cache.is_empty() {
+            let lru_key = cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_access)
+                .map(|(k, _)| k.clone());
+
+            if let Some(k) = lru_key {
+                if let Some(entry) = cache.remove(&k) {
+                    *current_size -= entry.size;
+                    console_log!("[MemoryCache] Evicted: {}, size: {}", k, entry.size);
+                }
+            }
         }
 
         // Insert new entry
-        self.cache.insert(key, LruEntry {
+        let current_counter = *self.access_counter.lock().unwrap();
+        cache.insert(key, LruEntry {
             data,
             size,
-            last_access: self.access_counter,
+            last_access: current_counter,
         });
-        self.current_size += size;
-    }
-
-    /// Evict least recently used entry
-    fn evict_lru(&mut self) {
-        let lru_key = self.cache
-            .iter()
-            .min_by_key(|(_, entry)| entry.last_access)
-            .map(|(k, _)| k.clone());
-
-        if let Some(key) = lru_key {
-            if let Some(entry) = self.cache.remove(&key) {
-                self.current_size -= entry.size;
-                console_log!("[MemoryCache] Evicted: {}, size: {}", key, entry.size);
-            }
-        }
+        *current_size += size;
     }
 
     /// Clear all cache
-    pub fn clear(&mut self) {
-        self.cache.clear();
-        self.current_size = 0;
-        self.access_counter = 0;
+    pub fn clear(&self) {
+        let mut cache = self.cache.lock().unwrap();
+        let mut current_size = self.current_size.lock().unwrap();
+        let mut counter = self.access_counter.lock().unwrap();
+        cache.clear();
+        *current_size = 0;
+        *counter = 0;
     }
 
     /// Get cache stats
     pub fn stats(&self) -> (usize, usize) {
-        (self.cache.len(), self.current_size)
+        let cache = self.cache.lock().unwrap();
+        let current_size = self.current_size.lock().unwrap();
+        (cache.len(), *current_size)
+    }
+}
+
+impl Clone for MemoryLruCache {
+    fn clone(&self) -> Self {
+        Self {
+            cache: self.cache.clone(),
+            max_size: self.max_size,
+            current_size: self.current_size.clone(),
+            access_counter: self.access_counter.clone(),
+        }
     }
 }
 
 // =============================================================================
-// OPFS Cache Manager
+// OPFS Cache Manager - Thread Safe Version
 // =============================================================================
 
-/// OPFS cache manager (WASM side)
+use std::sync::RwLock;
+
+/// OPFS cache manager (WASM side) - Thread Safe
+/// 
+/// This manager is designed to be shared across multiple WASM instances
+/// (Render and Prefetch tasks). All mutable state is protected by locks.
 pub struct OpfsCacheManager {
     /// Whether OPFS cache is enabled
-    pub enabled: bool,
+    enabled: RwLock<bool>,
     /// Whether Memory LRU cache is enabled
-    pub memory_cache_enabled: bool,
-    /// Memory LRU cache
+    memory_cache_enabled: RwLock<bool>,
+    /// Memory LRU cache - thread safe
     memory_cache: MemoryLruCache,
     /// Current waveform name
-    waveform_name: String,
+    waveform_name: RwLock<String>,
     /// JS callbacks for OPFS access
-    opfs_read: Option<js_sys::Function>,
-    opfs_write: Option<js_sys::Function>,
-    opfs_exists: Option<js_sys::Function>,
+    opfs_read: RwLock<Option<js_sys::Function>>,
+    opfs_write: RwLock<Option<js_sys::Function>>,
+    opfs_exists: RwLock<Option<js_sys::Function>>,
 }
 
 impl OpfsCacheManager {
     pub fn new() -> Self {
         Self {
-            enabled: false,
-            memory_cache_enabled: true,  // Memory cache enabled by default
+            enabled: RwLock::new(false),
+            memory_cache_enabled: RwLock::new(true),  // Memory cache enabled by default
             memory_cache: MemoryLruCache::new(MEMORY_CACHE_MAX),
-            waveform_name: String::new(),
-            opfs_read: None,
-            opfs_write: None,
-            opfs_exists: None,
+            waveform_name: RwLock::new(String::new()),
+            opfs_read: RwLock::new(None),
+            opfs_write: RwLock::new(None),
+            opfs_exists: RwLock::new(None),
         }
     }
 
     /// Initialize with OPFS callbacks
+    /// 
+    /// Note: This should be called once during initialization before
+    /// any concurrent access happens.
     pub fn init(
-        &mut self,
+        &self,
         opfs_read: js_sys::Function,
         opfs_write: js_sys::Function,
         opfs_exists: js_sys::Function,
         enabled: bool,
     ) {
-        self.opfs_read = Some(opfs_read);
-        self.opfs_write = Some(opfs_write);
-        self.opfs_exists = Some(opfs_exists);
-        self.enabled = enabled;
+        *self.opfs_read.write().unwrap() = Some(opfs_read);
+        *self.opfs_write.write().unwrap() = Some(opfs_write);
+        *self.opfs_exists.write().unwrap() = Some(opfs_exists);
+        *self.enabled.write().unwrap() = enabled;
 
-        console_log!("[OpfsCache] Initialized, OPFS enabled: {}, Memory cache enabled: {}", enabled, self.memory_cache_enabled);
+        console_log!("[OpfsCache] Initialized, OPFS enabled: {}, Memory cache enabled: {}", 
+            enabled, *self.memory_cache_enabled.read().unwrap());
+    }
+    
+    /// Check if OPFS cache is enabled
+    pub fn is_enabled(&self) -> bool {
+        *self.enabled.read().unwrap()
     }
 
     /// Set memory cache enabled
-    pub fn set_memory_cache_enabled(&mut self, enabled: bool) {
-        self.memory_cache_enabled = enabled;
+    pub fn set_memory_cache_enabled(&self, enabled: bool) {
+        *self.memory_cache_enabled.write().unwrap() = enabled;
         console_log!("[OpfsCache] Memory cache enabled: {}", enabled);
         
         // If disabling, clear the memory cache
@@ -734,13 +849,18 @@ impl OpfsCacheManager {
 
     /// Get memory cache enabled status
     pub fn is_memory_cache_enabled(&self) -> bool {
-        self.memory_cache_enabled
+        *self.memory_cache_enabled.read().unwrap()
     }
 
     /// Set waveform name
-    pub fn set_waveform(&mut self, name: String) {
+    pub fn set_waveform(&self, name: String) {
         console_log!("[OpfsCache] Waveform: {}", name);
-        self.waveform_name = name;
+        *self.waveform_name.write().unwrap() = name;
+    }
+    
+    /// Get waveform name
+    fn get_waveform_name(&self) -> String {
+        self.waveform_name.read().unwrap().clone()
     }
 
     /// Calculate tile span for given LOD
@@ -763,30 +883,50 @@ impl OpfsCacheManager {
     }
 
     /// Read data from cache (Memory -> OPFS)
-    pub async fn read(&mut self, block: &DataBlock) -> Result<Option<Vec<u8>>, JsValue> {
-        let path = format!("{}/{}", self.waveform_name, block.to_path());
+    /// 
+    /// OPFS read operation is protected by global OPFS_LOCK to ensure
+    /// thread-safe concurrent access from multiple WASM instances.
+    /// 
+    /// This method is thread-safe and can be called concurrently from
+    /// multiple Render and Prefetch tasks.
+    pub async fn read(&self, block: &DataBlock) -> Result<Option<Vec<u8>>, JsValue> {
+        let path = format!("{}/{}", self.get_waveform_name(), block.to_path());
 
-        // 1. Check memory cache (if enabled)
-        if self.memory_cache_enabled {
+        // 1. Check memory cache (if enabled) - thread safe
+        if self.is_memory_cache_enabled() {
             if let Some(data) = self.memory_cache.get(&path) {
                 // console_log!("[OpfsCache] Memory hit: {}", path);
-                return Ok(Some(data.clone()));
+                return Ok(Some(data));
             }
         }
 
-        // 2. Check OPFS (if enabled)
-        if self.enabled {
-            if let Some(ref opfs_read) = self.opfs_read {
+        // 2. Check OPFS (if enabled) - protected by critical section
+        if self.is_enabled() {
+            let opfs_read = self.opfs_read.read().unwrap().clone();
+            if let Some(ref opfs_read_fn) = opfs_read {
                 // console_log!("[OpfsCache] OPFS read: {}", path);
+
+                // Acquire lock for OPFS operation
+                acquire_opfs_lock().await;
 
                 // Call JS callback: (path: string) -> Promise<Uint8Array | null>
                 let this = JsValue::NULL;
                 let path_js = JsValue::from_str(&path);
-                let result = opfs_read.call1(&this, &path_js)?;
+                let result = opfs_read_fn.call1(&this, &path_js);
+                
+                if let Err(e) = result {
+                    release_opfs_lock();
+                    return Err(e);
+                }
 
                 // Await the promise
-                let promise: js_sys::Promise = result.dyn_into()?;
-                let data_js = wasm_bindgen_futures::JsFuture::from(promise).await?;
+                let promise: js_sys::Promise = result.unwrap().dyn_into()?;
+                let data_js = wasm_bindgen_futures::JsFuture::from(promise).await;
+                
+                // Release lock after OPFS operation
+                release_opfs_lock();
+                
+                let data_js = data_js?;
 
                 // Check if null
                 if data_js.is_null() || data_js.is_undefined() {
@@ -799,7 +939,7 @@ impl OpfsCacheManager {
                 let mut data = vec![0u8; uint8_array.length() as usize];
                 uint8_array.copy_to(&mut data);
 
-                // Store in memory cache
+                // Store in memory cache - thread safe
                 self.memory_cache.set(path, data.clone());
 
                 // console_log!("[OpfsCache] OPFS hit: {}, size: {}", block.to_path(), data.len());
@@ -811,28 +951,48 @@ impl OpfsCacheManager {
     }
 
     /// Write data to cache (OPFS + Memory)
-    pub async fn write(&mut self, block: &DataBlock, data: Vec<u8>) -> Result<(), JsValue> {
-        let path = format!("{}/{}", self.waveform_name, block.to_path());
+    /// 
+    /// OPFS write operation is protected by global OPFS_LOCK to ensure
+    /// thread-safe concurrent access from multiple WASM instances.
+    /// 
+    /// This method is thread-safe and can be called concurrently from
+    /// multiple Render and Prefetch tasks.
+    pub async fn write(&self, block: &DataBlock, data: Vec<u8>) -> Result<(), JsValue> {
+        let path = format!("{}/{}", self.get_waveform_name(), block.to_path());
 
-        // Store in memory cache (if enabled)
-        if self.memory_cache_enabled {
+        // Store in memory cache (if enabled) - thread safe
+        if self.is_memory_cache_enabled() {
             self.memory_cache.set(path.clone(), data.clone());
         }
 
-        // Write to OPFS (if enabled)
-        if self.enabled {
-            if let Some(ref opfs_write) = self.opfs_write {
+        // Write to OPFS (if enabled) - protected by critical section
+        if self.is_enabled() {
+            let opfs_write = self.opfs_write.read().unwrap().clone();
+            if let Some(ref opfs_write_fn) = opfs_write {
                 // console_log!("[OpfsCache] OPFS write: {}, size: {}", path, data.len());
+
+                // Acquire lock for OPFS operation
+                acquire_opfs_lock().await;
 
                 // Call JS callback: (path: string, data: Uint8Array) -> Promise<()>
                 let this = JsValue::NULL;
                 let path_js = JsValue::from_str(&path);
                 let data_js = js_sys::Uint8Array::from(&data[..]);
-                let result = opfs_write.call2(&this, &path_js, &data_js)?;
+                let result = opfs_write_fn.call2(&this, &path_js, &data_js);
+                
+                if let Err(e) = result {
+                    release_opfs_lock();
+                    return Err(e);
+                }
 
                 // Await the promise
-                let promise: js_sys::Promise = result.dyn_into()?;
-                wasm_bindgen_futures::JsFuture::from(promise).await?;
+                let promise: js_sys::Promise = result.unwrap().dyn_into()?;
+                let write_result = wasm_bindgen_futures::JsFuture::from(promise).await;
+                
+                // Release lock after OPFS operation
+                release_opfs_lock();
+                
+                write_result?;
             }
         }
 
@@ -841,16 +1001,17 @@ impl OpfsCacheManager {
 
     /// Check if data exists in OPFS
     pub async fn exists(&self, block: &DataBlock) -> Result<bool, JsValue> {
-        if !self.enabled {
+        if !self.is_enabled() {
             return Ok(false);
         }
 
-        let path = format!("{}/{}", self.waveform_name, block.to_path());
+        let path = format!("{}/{}", self.get_waveform_name(), block.to_path());
 
-        if let Some(ref opfs_exists) = self.opfs_exists {
+        let opfs_exists = self.opfs_exists.read().unwrap().clone();
+        if let Some(ref opfs_exists_fn) = opfs_exists {
             let this = JsValue::NULL;
             let path_js = JsValue::from_str(&path);
-            let result = opfs_exists.call1(&this, &path_js)?;
+            let result = opfs_exists_fn.call1(&this, &path_js)?;
 
             let promise: js_sys::Promise = result.dyn_into()?;
             let exists_js = wasm_bindgen_futures::JsFuture::from(promise).await?;
@@ -862,7 +1023,7 @@ impl OpfsCacheManager {
     }
 
     /// Clear memory cache
-    pub fn clear_memory(&mut self) {
+    pub fn clear_memory(&self) {
         self.memory_cache.clear();
         console_log!("[OpfsCache] Memory cache cleared");
     }
@@ -870,6 +1031,20 @@ impl OpfsCacheManager {
     /// Get memory cache stats
     pub fn get_memory_stats(&self) -> (usize, usize) {
         self.memory_cache.stats()
+    }
+}
+
+impl Clone for OpfsCacheManager {
+    fn clone(&self) -> Self {
+        Self {
+            enabled: RwLock::new(*self.enabled.read().unwrap()),
+            memory_cache_enabled: RwLock::new(*self.memory_cache_enabled.read().unwrap()),
+            memory_cache: self.memory_cache.clone(),
+            waveform_name: RwLock::new(self.get_waveform_name()),
+            opfs_read: RwLock::new(self.opfs_read.read().unwrap().clone()),
+            opfs_write: RwLock::new(self.opfs_write.read().unwrap().clone()),
+            opfs_exists: RwLock::new(self.opfs_exists.read().unwrap().clone()),
+        }
     }
 }
 

@@ -788,7 +788,7 @@ function cancelPendingPrefetch(): void {
 
 /**
  * 调度预取任务
- * 延迟一段时间后执行，如果期间有新的渲染任务则会取消
+ * 使用异步 prefetch，不加入队列，不阻塞渲染
  */
 function schedulePrefetch(signalNames: string[]): void {
   // 取消之前的预取任务（如果有）
@@ -800,17 +800,15 @@ function schedulePrefetch(signalNames: string[]): void {
   // 设置延迟预取
   prefetchTimer = setTimeout(() => {
     if (wasmProvider && pendingPrefetchSignals) {
-      // 将预取任务加入队列，避免与渲染任务并发执行导致Rust重入错误
       const signalsToPrefetch = [...pendingPrefetchSignals];
-      enqueueRequest(async () => {
-        try {
-          // Debug: console.log('[WaveformWorker] Starting prefetch for', signalsToPrefetch.length, 'signals');
-          await wasmProvider!.prefetch_tiles(signalsToPrefetch);
-        } catch (err: any) {
-          // 预取失败不影响主流程，只记录日志
-          console.warn('[WaveformWorker] Prefetch failed:', err);
-        }
-      }, 'prefetch');
+      try {
+        // 使用异步 prefetch，不加入队列，不阻塞渲染
+        // WASM 内部使用 spawn_local 在独立任务中执行
+        wasmProvider.prefetch_tiles_async(signalsToPrefetch);
+      } catch (err: any) {
+        // 预取失败不影响主流程，只记录日志
+        console.warn('[WaveformWorker] Prefetch async failed:', err);
+      }
     }
     prefetchTimer = null;
     pendingPrefetchSignals = null;
