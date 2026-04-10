@@ -928,6 +928,8 @@ export function WaveformWindow({
       const range = visibleRangeRef.current;
       const visibleStartRow = range.start;
       const visibleEndRow = range.end;
+      
+      console.log(`[WaveformWindow] Building signalList: treeNodes=${treeNodes.length}, visibleRange=[${visibleStartRow}, ${visibleEndRow}]`);
 
       treeNodes.forEach((node) => {
       if (node.type === 'group') {
@@ -998,6 +1000,8 @@ export function WaveformWindow({
         }
       }
     });
+
+    console.log(`[WaveformWindow] signalList built: count=${signalList.length}`);
 
     // 生成 signalList 的哈希值用于检测变化
     const signalListHash = signalList.map(s => `${s.name}-${s.row}-${s.width}-${s.displayFormat}`).join('|');
@@ -2275,35 +2279,37 @@ export function WaveformWindow({
   // 当 treeNodes 变化时，重新计算可见范围并触发重绘
   useEffect(() => {
     console.log(`[WaveformWindow] treeNodes changed, count=${treeNodes.length}, triggering render`);
+    let startRow = 0;
+    let endRow = Math.min(50, treeNodes.length); // 默认显示前 50 个节点
+    
     if (signalListRef.current) {
       const scrollTop = signalListRef.current.scrollTop;
       const clientHeight = signalListRef.current.clientHeight;
       const SIGNAL_ROW_HEIGHT = 24;
 
-      const startRow = Math.floor(scrollTop / SIGNAL_ROW_HEIGHT);
+      startRow = Math.floor(scrollTop / SIGNAL_ROW_HEIGHT);
       const visibleRows = Math.ceil(clientHeight / SIGNAL_ROW_HEIGHT);
-      const endRow = startRow + visibleRows + 1;
-
-      setVisibleRange({ start: Math.max(0, startRow), end: endRow });
-
-      // 触发重绘
-      setTimeout(() => {
-        if (renderWaveformRef.current) {
-          console.log(`[WaveformWindow] Calling renderWaveform from treeNodes change`);
-          renderWaveformRef.current().catch(console.error);
-        } else {
-          console.warn(`[WaveformWindow] renderWaveformRef not ready in treeNodes effect`);
-        }
-      }, 50);
-    } else {
-      // 即使 signalListRef 不存在，也尝试触发重绘
-      setTimeout(() => {
-        if (renderWaveformRef.current) {
-          console.log(`[WaveformWindow] Calling renderWaveform from treeNodes change (no signalListRef)`);
-          renderWaveformRef.current().catch(console.error);
-        }
-      }, 50);
+      endRow = startRow + visibleRows + 1;
     }
+
+    const newRange = { start: Math.max(0, startRow), end: endRow };
+    console.log(`[WaveformWindow] Updating visibleRange to:`, newRange);
+    
+    // 直接更新 ref，确保 renderWaveform 能立即获取到最新值
+    visibleRangeRef.current = newRange;
+    
+    // 同时更新 state，触发 UI 更新
+    setVisibleRange(newRange);
+
+    // 触发重绘
+    setTimeout(() => {
+      if (renderWaveformRef.current) {
+        console.log(`[WaveformWindow] Calling renderWaveform from treeNodes change`);
+        renderWaveformRef.current().catch(console.error);
+      } else {
+        console.warn(`[WaveformWindow] renderWaveformRef not ready in treeNodes effect`);
+      }
+    }, 50);
   }, [treeNodes]);
 
   // 监听 scrollend 事件（scroll-snap 动画结束后触发）
