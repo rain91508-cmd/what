@@ -2243,7 +2243,16 @@ export function WaveformWindow({
     
     if (shouldProcessChildren) {
       const childGroups = group.children.map(childId => groups[childId]).filter(Boolean);
-      const filteredSignals = group.signals.filter(s => matchesIOFilter(s) && matchesNameFilter(s));
+      console.log(`[buildTreeNodes] group=${groupId}, signals count=${group.signals.length}, ioFilters=${JSON.stringify(Array.from(ioFilters))}, nameFilter="${nameFilter}"`);
+      const filteredSignals = group.signals.filter(s => {
+        const matchesIO = matchesIOFilter(s);
+        const matchesName = matchesNameFilter(s);
+        if (!matchesIO || !matchesName) {
+          console.log(`[buildTreeNodes] signal ${s.name} filtered out: matchesIO=${matchesIO}, matchesName=${matchesName}`);
+        }
+        return matchesIO && matchesName;
+      });
+      console.log(`[buildTreeNodes] filteredSignals count=${filteredSignals.length}`);
       const allItems = [...childGroups, ...filteredSignals];
 
       allItems.forEach((item, index) => {
