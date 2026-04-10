@@ -468,9 +468,9 @@ Das Quellcode-Fenster wird verwendet, um Verilog/SystemVerilog-Code anzuzeigen:
 - Code-Faltung (module, always, begin-end-Blöcke)
 - Zeilennummernanzeige
 
-**Driver/Load-Tracing:**
+**Driver-Tracing:**
 1. Auf Signalnamen im Code klicken
-2. "Find Drivers" oder "Find Loads" im Popup-Menü auswählen
+2. "Find Drivers" im Popup-Menü auswählen
 3. Tracing-Ergebnisse werden im Nachrichtenfenster unten angezeigt
 4. Auf Tracing-Ergebnisse doppelklicken, um zur entsprechenden Quellcode-Position zu springen
 
@@ -501,8 +501,9 @@ Das Wellenformfenster wird verwendet, um Simulationswellenformen anzuzeigen:
 - Rechtsklick auf Signale, um sie zu löschen oder zu verschieben
 
 **Ansichtsoperationen:**
-- **Zoom**: Mausrad oder Toolbar-Buttons +/-
-- **Pan**: Wellenformbereich ziehen
+- **Zoom**: Mit linker Maustaste nach oben ziehen zum Vergrößern, nach unten ziehen zum Verkleinern; oder Toolbar-Buttons +/- verwenden
+- **Pan**: Linealbereich ziehen
+- **Bereichszoom**: Mit linker Maustaste nach links/rechts ziehen, um Bereich auszuwählen
 - **Vollbild**: Auf Toolbar-Button "Fit" klicken
 - **Cursor-Operation**: Auf Wellenform klicken, um Cursor-Position festzulegen
 

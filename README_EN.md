@@ -468,9 +468,9 @@ The source code window is used to view Verilog/SystemVerilog code:
 - Code folding (module, always, begin-end blocks)
 - Line number display
 
-**Driver/Load Tracing:**
+**Driver Tracing:**
 1. Click signal name in the code
-2. Select "Find Drivers" or "Find Loads" in the popup menu
+2. Select "Find Drivers" in the popup menu
 3. Tracing results will be displayed in the message window at the bottom
 4. Double-click tracing results to jump to corresponding source code location
 
@@ -501,8 +501,9 @@ The waveform window is used to view simulation waveforms:
 - Right-click signals to delete or move
 
 **View Operations:**
-- **Zoom**: Mouse wheel or toolbar +/- buttons
-- **Pan**: Drag waveform area
+- **Zoom**: Click and drag upward with left mouse button to zoom in, downward to zoom out; or use toolbar +/- buttons
+- **Pan**: Drag ruler area
+- **Area Zoom**: Click and drag left/right with left mouse button to select area
 - **Full Screen**: Click toolbar "Fit" button
 - **Cursor Operation**: Click waveform to set cursor position
 

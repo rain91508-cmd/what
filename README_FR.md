@@ -468,9 +468,9 @@ La fenêtre de code source est utilisée pour visualiser le code Verilog/SystemV
 - Pliage de code (blocs module, always, begin-end)
 - Affichage des numéros de ligne
 
-**Traçage des Pilotes/Charges :**
+**Traçage des Pilotes :**
 1. Cliquer sur le nom du signal dans le code
-2. Sélectionner "Find Drivers" ou "Find Loads" dans le menu contextuel
+2. Sélectionner "Find Drivers" dans le menu contextuel
 3. Les résultats du traçage s'afficheront dans la fenêtre de messages en bas
 4. Double-cliquer sur les résultats du traçage pour sauter vers l'emplacement du code source correspondant
 
@@ -501,8 +501,9 @@ La fenêtre de formes d'onde est utilisée pour visualiser les formes d'onde de 
 - Clic droit sur les signaux pour les supprimer ou les déplacer
 
 **Opérations de Vue :**
-- **Zoom** : Molette souris ou boutons +/- de la barre d'outils
-- **Panoramique** : Glisser la zone de formes d'onde
+- **Zoom** : Cliquer et glisser vers le haut avec le bouton gauche pour zoomer, vers le bas pour dézoomer ; ou utiliser les boutons +/- de la barre d'outils
+- **Panoramique** : Glisser la zone de la règle
+- **Zoom de Zone** : Cliquer et glisser vers la gauche/droite avec le bouton gauche pour sélectionner une zone
 - **Plein Écran** : Cliquer sur le bouton "Fit" de la barre d'outils
 - **Opération de Curseur** : Cliquer sur la forme d'onde pour définir la position du curseur
 
