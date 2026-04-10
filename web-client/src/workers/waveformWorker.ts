@@ -393,7 +393,7 @@ function handleUnregisterCanvas(payload: any, id: number): void {
 async function handleGetSignalValueAtTime(payload: any, id: number): Promise<void> {
   if (!wasmProvider) throw new Error('Provider not initialized');
 
-  const { signalName, time, signals, displayFormat, signalPrefix, serverPrefix, spaceBeforeBracket } = payload;
+  const { signalName, time, signals, displayFormat, signalPrefix, serverPrefix, spaceBeforeBracket, viewRange } = payload;
 
   // Update WASM provider prefix settings if provided
   if (signalPrefix !== undefined) {
@@ -426,15 +426,29 @@ async function handleGetSignalValueAtTime(payload: any, id: number): Promise<voi
     wasmProvider.set_draw_list(wasmSignals);
   }
 
-  // 设置 viewport，使用 time 作为中心点（与 fetchAndGetSegments 保持一致）
-  // 这样 get_signal_value_at_time_internal 可以正确获取 start value
-  const timeWindow = 10;
-  wasmProvider.set_viewport(Math.max(0, time - timeWindow), time + timeWindow);
-
   // 直接使用传入的 displayFormat
   const signalDisplayFormat = displayFormat;
 
-  const value = wasmProvider.get_signal_value_at_time(signalName, time, signalDisplayFormat);
+  // 性能优化：使用 viewRange 作为初始 timeWindow，大概率命中 cache
+  // 如果获取的值 isMinMax=true，则减半 timeWindow 重试
+  // 直到 timeWindow < 1 或者找到非 minmax 值为止
+  // 如果 isMinMax=0，说明值是唯一的，和 LoD0 一致
+  let timeWindow = viewRange ? (viewRange.end - viewRange.start) / 2 : 10;
+  let value = null;
+
+  while (timeWindow >= 1) {
+    wasmProvider.set_viewport(Math.max(0, time - timeWindow), time + timeWindow);
+    value = wasmProvider.get_signal_value_at_time(signalName, time, signalDisplayFormat);
+
+    // 如果找到非 minmax 值，直接返回
+    if (value && !value.is_min_max) {
+      break;
+    }
+
+    // 减半 timeWindow 重试
+    timeWindow /= 2;
+  }
+
   sendSuccess(id, value);
 }
 

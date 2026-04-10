@@ -238,6 +238,7 @@ export interface WaveformProviderInterface {
    * @param signalPrefix Local prefix (removed from local signal name)
    * @param serverPrefix Server prefix (added to server signal name)
    * @param spaceBeforeBracket Whether to add space before bracket
+   * @param viewRange View range from waveform tab for performance optimization
    */
   getSignalValueAtTime(
     signalName: string,
@@ -246,7 +247,8 @@ export interface WaveformProviderInterface {
     displayFormat?: DisplayFormat,
     signalPrefix?: string,
     serverPrefix?: string,
-    spaceBeforeBracket?: boolean
+    spaceBeforeBracket?: boolean,
+    viewRange?: { start: number; end: number }
   ): Promise<ValueInfo | null>;
 
   /**

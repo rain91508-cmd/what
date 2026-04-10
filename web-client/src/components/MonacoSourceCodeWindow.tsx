@@ -56,6 +56,7 @@ interface MonacoSourceCodeWindowProps {
   // Signal value expansion props
   currentTime?: number;  // Current cursor time from waveform tab (LoD0Unit)
   signalRadixMap?: Map<string, DisplayFormat>;  // Signal radix map from waveform tab
+  viewRange?: { start: number; end: number };  // View range from waveform tab (LoD0Unit)
   // Prefix settings for signal name conversion (from WaveformProviderContext)
   signalPrefix?: string;      // Local prefix (removed from local signal name)
   serverPrefix?: string;      // Server prefix (added to server signal name)
@@ -78,6 +79,7 @@ function MonacoSourceCodeWindow({
   onWordClick,
   currentTime,
   signalRadixMap,
+  viewRange,
   signalPrefix = '',
   serverPrefix = '',
   spaceBeforeBracket = false
@@ -756,7 +758,8 @@ function MonacoSourceCodeWindow({
             radix,
             signalPrefix,
             serverPrefix,
-            lastSpaceBeforeBracket
+            lastSpaceBeforeBracket,
+            viewRange  // Pass view range from waveform tab
           );
 
           // If no value found, retry with delay (WASM may still be processing fetched data)
@@ -770,7 +773,8 @@ function MonacoSourceCodeWindow({
                 radix,
                 signalPrefix,
                 serverPrefix,
-                lastSpaceBeforeBracket
+                lastSpaceBeforeBracket,
+                viewRange  // Pass view range from waveform tab
               );
               if (valueInfo) {
                 break;

@@ -168,7 +168,8 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
     displayFormat?: DisplayFormat,
     signalPrefix?: string,
     serverPrefix?: string,
-    spaceBeforeBracket?: boolean
+    spaceBeforeBracket?: boolean,
+    viewRange?: { start: number; end: number }
   ): Promise<ValueInfo | null> {
     try {
       return await this.sendMessage('GET_SIGNAL_VALUE_AT_TIME', {
@@ -179,6 +180,7 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
         signalPrefix,
         serverPrefix,
         spaceBeforeBracket,
+        viewRange,
       });
     } catch (error) {
       console.warn('[WorkerWaveformProvider] getSignalValueAtTime failed:', error);

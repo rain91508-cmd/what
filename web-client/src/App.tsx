@@ -289,6 +289,34 @@ function App() {
 
     return radixMap
   }, [tabs, activeTab])
+
+  // Get view range from active waveform tab
+  const getWaveformViewRange = useCallback((): { start: number; end: number } | undefined => {
+    // Find active waveform tab
+    const activeWaveformTab = tabs.find(t =>
+      t.id === activeTab && t.type === 'waveform'
+    )
+
+    if (activeWaveformTab?.viewport) {
+      return {
+        start: activeWaveformTab.viewport.timeStart,
+        end: activeWaveformTab.viewport.timeEnd
+      }
+    }
+
+    // If no current waveform tab, find the most recent one with viewport
+    for (let i = tabs.length - 1; i >= 0; i--) {
+      const tab = tabs[i]
+      if (tab.type === 'waveform' && tab.viewport) {
+        return {
+          start: tab.viewport.timeStart,
+          end: tab.viewport.timeEnd
+        }
+      }
+    }
+
+    return undefined
+  }, [tabs, activeTab])
   
   // Panel sizes
   const [hierarchyWidth, setHierarchyWidth] = useState(300)
