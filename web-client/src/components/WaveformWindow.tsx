@@ -930,12 +930,16 @@ export function WaveformWindow({
       const visibleEndRow = range.end;
       
       console.log(`[WaveformWindow] Building signalList: treeNodes=${treeNodes.length}, visibleRange=[${visibleStartRow}, ${visibleEndRow}]`);
+      console.log(`[WaveformWindow] treeNodes content:`, treeNodes.map(n => ({ type: n.type, name: n.type === 'signal' ? n.signal?.name : n.group?.name })));
 
       treeNodes.forEach((node) => {
+      console.log(`[WaveformWindow] Processing node: type=${node.type}, currentRow=${currentRow}, visibleRange=[${visibleStartRow}, ${visibleEndRow}]`);
       if (node.type === 'group') {
         // Group row - no waveform, just increment row counter
+        console.log(`[WaveformWindow] Skipping group node`);
         currentRow++;
       } else if (node.type === 'signal' && node.signal) {
+        console.log(`[WaveformWindow] Processing signal node: ${node.signal.name}`);
         const signal = node.signal as Signal & { unique_id: number };
         const signalDisplayFormat = getSignalDisplayFormat(signal);
 
