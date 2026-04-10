@@ -224,14 +224,24 @@ export function WaveformWindow({
   // 添加一个 forceRender 状态，用于在 tab 切换时强制重新渲染
   const [forceRender, setForceRender] = useState(false);
   
+  // 当组件从非激活状态切换到激活状态时，强制触发一次渲染
+  useEffect(() => {
+    console.log(`[WaveformWindow] Component activated, triggering force render`);
+    setForceRender(true);
+  }, []);
+  
   // 当 tab 切换到波形 tab 时，强制触发重绘
   useEffect(() => {
     if (activeTabId) {
+      console.log(`[WaveformWindow] Tab activated: ${activeTabId}, triggering force render`);
       setForceRender(prev => !prev);
       // 延迟触发一次渲染，确保 renderWaveformRef 已经赋值
       setTimeout(() => {
         if (renderWaveformRef.current) {
+          console.log(`[WaveformWindow] Calling renderWaveform after tab switch`);
           renderWaveformRef.current().catch(console.error);
+        } else {
+          console.warn(`[WaveformWindow] renderWaveformRef not ready yet`);
         }
       }, 100);
     }
@@ -859,14 +869,19 @@ export function WaveformWindow({
   const renderWaveformRef = useRef<() => Promise<void>>();
   
   const renderWaveform = async () => {
+    console.log(`[WaveformWindow] renderWaveform called, canvas=${!!canvasRef.current}, container=${!!containerRef.current}`);
     // 防止并发调用
     if (isRenderingRef.current) {
+      console.log(`[WaveformWindow] renderWaveform skipped, already rendering`);
       return;
     }
     isRenderingRef.current = true;
     
     try {
-      if (!canvasRef.current || !containerRef.current) return;
+      if (!canvasRef.current || !containerRef.current) {
+        console.log(`[WaveformWindow] renderWaveform aborted, missing canvas or container`);
+        return;
+      }
 
       // Update canvas dimensions from container
       const containerRect = containerRef.current.getBoundingClientRect();
