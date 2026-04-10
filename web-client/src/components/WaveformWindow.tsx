@@ -1014,10 +1014,9 @@ export function WaveformWindow({
       Math.abs(lastParams.viewportTimeEnd - viewport.timeEnd) > 0.1 ||
       Math.abs(lastParams.canvasWidth - width) > 0.5 ||
       Math.abs(lastParams.canvasHeight - height) > 0.5 ||
-      lastParams.signalListHash !== signalListHash ||
       lastParams.timeConfigHash !== timeConfigHash;
 
-    console.log(`[WaveformWindow] Render params check: hasParamsChanged=${hasParamsChanged}, signalListHash=${signalListHash}, prevHash=${lastParams.signalListHash}, signalCount=${signalList.length}`);
+    console.log(`[WaveformWindow] Render params check: hasParamsChanged=${hasParamsChanged}, signalCount=${signalList.length}`);
 
     if (!hasParamsChanged) {
       // 参数没有变化，直接返回
