@@ -326,6 +326,9 @@ function App() {
   // Left panel visibility state
   const [isLeftPanelVisible, setIsLeftPanelVisible] = useState(true)
   const savedLeftPanelWidthRef = useRef(550) // Save total width of left panels (hierarchy + signal + splitters)
+  
+  // Ref for main content container to calculate available space
+  const mainContentRef = useRef<HTMLDivElement>(null)
 
   // Hierarchy Search state
   const [searchPattern, setSearchPattern] = useState('')
@@ -3897,8 +3900,30 @@ function App() {
   }
 
   const handleSignalPanelResize = (delta: number) => {
-    // 移除最大宽度限制，只保留最小宽度
-    setSignalWidth(Math.max(100, signalStartWidthRef.current + delta))
+    const newSignalWidth = signalStartWidthRef.current + delta
+    
+    // 计算左侧面板的总宽度（包括 splitter）
+    const leftPanelTotalWidth = isLeftPanelVisible 
+      ? hierarchyWidth + newSignalWidth + 16 // 16px for two splitters (8px each)
+      : 8 // only the splitter between left and right
+    
+    // 获取 main-content 的可用宽度
+    const mainContentWidth = mainContentRef.current?.clientWidth || window.innerWidth
+    
+    // 右侧面板的最小宽度（300px）
+    const rightPanelMinWidth = 300
+    
+    // 计算右侧面板的可用宽度
+    const rightPanelAvailableWidth = mainContentWidth - leftPanelTotalWidth
+    
+    // 如果右侧面板空间不足，限制 signalWidth 的增长
+    if (rightPanelAvailableWidth < rightPanelMinWidth && delta > 0) {
+      // 右侧面板已经达到最小宽度，不再缩小
+      return
+    }
+    
+    // 只保留最小宽度限制
+    setSignalWidth(Math.max(100, newSignalWidth))
   }
 
   const handleMessageResize = (delta: number) => {
@@ -4069,7 +4094,7 @@ function App() {
       />
 
       {/* Main Content */}
-      <div className="main-content">
+      <div className="main-content" ref={mainContentRef}>
         {/* Left Side Container - Hierarchy + Signal + Bottom Panel */}
         {isLeftPanelVisible && (
         <div className="left-side-container">
