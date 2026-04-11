@@ -573,7 +573,6 @@ body {
 
 /* Message Window - DVE Style */
 .bottom-panel {
-  height: 200px;
   min-height: 60px;
   background: #fff;
   border-top: 1px solid #b0b0b0;
