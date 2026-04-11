@@ -3895,8 +3895,23 @@ function App() {
   }
 
   const handleHierarchyResize = (delta: number) => {
-    // 移除最大宽度限制，只保留最小宽度
-    setHierarchyWidth(Math.max(100, hierarchyStartWidthRef.current + delta))
+    const newHierarchyWidth = hierarchyStartWidthRef.current + delta
+    
+    // 获取 main-content 的可用宽度
+    const mainContentWidth = mainContentRef.current?.clientWidth || window.innerWidth
+    
+    // Signal panel 和右侧面板的最小宽度
+    const signalPanelMinWidth = 100
+    const rightPanelMinWidth = 300
+    
+    // 计算 hierarchy panel 的最大可用宽度
+    // mainContentWidth - signalPanelMinWidth - rightPanelMinWidth - splitters (16px)
+    const maxHierarchyWidth = mainContentWidth - signalPanelMinWidth - rightPanelMinWidth - 16
+    
+    // 限制 hierarchyWidth 在 [100, maxHierarchyWidth] 范围内
+    const clampedHierarchyWidth = Math.max(100, Math.min(maxHierarchyWidth, newHierarchyWidth))
+    
+    setHierarchyWidth(clampedHierarchyWidth)
   }
 
   const handleSignalPanelResize = (delta: number) => {
