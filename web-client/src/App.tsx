@@ -3945,8 +3945,25 @@ function App() {
   }
 
   const handleSignalPanelResize = (delta: number) => {
-    // 使用 delta 计算新的 signal 宽度
+    // 计算新的 signal 宽度
     const newSignalWidth = signalStartWidthRef.current + delta
+    
+    // 计算左侧面板的总宽度（hierarchy + signal + 两个 splitters）
+    const leftSideTotalWidth = hierarchyWidth + newSignalWidth + 16 // 16px for two splitters
+    
+    // 获取 main-content 的可用宽度
+    const mainContentWidth = mainContentRef.current?.clientWidth || window.innerWidth
+    
+    // 右侧面板的最小宽度
+    const rightPanelMinWidth = 300
+    
+    // 计算右侧面板的可用宽度
+    const rightPanelAvailableWidth = mainContentWidth - leftSideTotalWidth
+    
+    // 如果右侧面板空间不足且正在向左拖动（缩小左侧面板），停止调整
+    if (rightPanelAvailableWidth < rightPanelMinWidth && delta < 0) {
+      return
+    }
     
     // 只保留最小宽度限制
     setSignalWidth(Math.max(100, newSignalWidth))
