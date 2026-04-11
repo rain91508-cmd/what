@@ -3889,42 +3889,58 @@ function App() {
     isSignalPanelDraggingRef.current = false
   }
 
-  const handleHierarchyResizeStart = () => {
-    isHierarchyDraggingRef.current = true
-    hierarchyStartWidthRef.current = hierarchyWidth
-  }
-
   const handleHierarchyResizeEnd = () => {
     isHierarchyDraggingRef.current = false
   }
 
+  // Ref to store the initial right splitter position when dragging hierarchy splitter
+  const rightSplitterInitialXRef = useRef<number>(0)
+
+  const handleHierarchyResizeStart = () => {
+    isHierarchyDraggingRef.current = true
+    hierarchyStartWidthRef.current = hierarchyWidth
+    
+    // Record the initial X position of the right splitter (signal splitter)
+    const signalSplitter = signalSplitterRef.current
+    if (signalSplitter) {
+      const rect = signalSplitter.getBoundingClientRect()
+      rightSplitterInitialXRef.current = rect.left
+    }
+  }
+
   const handleHierarchyResize = (delta: number) => {
-    // 计算新的 hierarchy 宽度
-    const newHierarchyWidth = hierarchyStartWidthRef.current + delta
+    // Calculate new hierarchy width
+    const newHierarchyWidth = Math.max(100, hierarchyStartWidthRef.current + delta)
     
-    // 同时调整 signal 宽度，保持第二个 splitter 位置不变
-    // signal 宽度变化方向与 hierarchy 相反
-    const newSignalWidth = signalStartWidthRef.current - delta
-    
-    // 限制最小宽度为 100px
-    const clampedHierarchyWidth = Math.max(100, newHierarchyWidth)
-    const clampedSignalWidth = Math.max(100, newSignalWidth)
-    
-    // 如果任何一个面板达到最小宽度，需要重新计算 delta
-    if (clampedHierarchyWidth === 100 && newHierarchyWidth < 100) {
-      // Hierarchy 达到最小宽度，计算实际 delta
-      const actualDelta = 100 - hierarchyStartWidthRef.current
-      setHierarchyWidth(100)
-      setSignalWidth(Math.max(100, signalStartWidthRef.current - actualDelta))
-    } else if (clampedSignalWidth === 100 && newSignalWidth < 100) {
-      // Signal 达到最小宽度，计算实际 delta
-      const actualDelta = signalStartWidthRef.current - 100
-      setHierarchyWidth(Math.max(100, hierarchyStartWidthRef.current + actualDelta))
-      setSignalWidth(100)
+    // Calculate signal width based on right splitter's fixed position
+    const signalSplitter = signalSplitterRef.current
+    if (signalSplitter && rightSplitterInitialXRef.current > 0) {
+      // Get the left side container's position
+      const mainContent = mainContentRef.current
+      if (mainContent) {
+        const mainRect = mainContent.getBoundingClientRect()
+        
+        // Calculate hierarchy's right edge position relative to main content
+        const hierarchyRightEdge = newHierarchyWidth + 8 // +8 for the splitter width
+        
+        // Signal width = right splitter position - hierarchy right edge
+        const rightSplitterX = rightSplitterInitialXRef.current - mainRect.left
+        const newSignalWidth = rightSplitterX - hierarchyRightEdge
+        
+        // Ensure minimum width
+        if (newSignalWidth >= 100) {
+          setHierarchyWidth(newHierarchyWidth)
+          setSignalWidth(newSignalWidth)
+        } else {
+          // Signal would be too small, limit hierarchy expansion
+          const maxHierarchyWidth = rightSplitterX - 8 - 100 // -8 for splitter, -100 for min signal
+          setHierarchyWidth(Math.max(100, maxHierarchyWidth))
+          setSignalWidth(100)
+        }
+      }
     } else {
-      // 正常情况，两个面板都调整
-      setHierarchyWidth(clampedHierarchyWidth)
-      setSignalWidth(clampedSignalWidth)
+      // Fallback: just update hierarchy width
+      setHierarchyWidth(newHierarchyWidth)
     }
   }
 
