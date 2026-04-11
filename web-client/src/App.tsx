@@ -3899,47 +3899,16 @@ function App() {
   }
 
   const handleHierarchyResize = (delta: number) => {
-    const newHierarchyWidth = hierarchyStartWidthRef.current + delta
-    
-    // 获取 main-content 的可用宽度
-    const mainContentWidth = mainContentRef.current?.clientWidth || window.innerWidth
-    
-    // Signal panel 和右侧面板的最小宽度
-    const signalPanelMinWidth = 100
-    const rightPanelMinWidth = 300
-    
-    // 计算 hierarchy panel 的最大可用宽度
-    // mainContentWidth - signalPanelMinWidth - rightPanelMinWidth - splitters (16px)
-    const maxHierarchyWidth = mainContentWidth - signalPanelMinWidth - rightPanelMinWidth - 16
-    
-    // 限制 hierarchyWidth 在 [100, maxHierarchyWidth] 范围内
-    const clampedHierarchyWidth = Math.max(100, Math.min(maxHierarchyWidth, newHierarchyWidth))
-    
-    setHierarchyWidth(clampedHierarchyWidth)
+    // 只保留最小宽度限制，让 flex 布局自动处理剩余空间分配
+    setHierarchyWidth(Math.max(100, hierarchyStartWidthRef.current + delta))
   }
 
   const handleSignalPanelResize = (delta: number) => {
-    // 根据两个 splitter 的实际位置差值计算 Signal Panel 宽度
-    const hierarchySplitter = hierarchySplitterRef.current
-    const signalSplitter = signalSplitterRef.current
+    // 使用 delta 计算新的 signal 宽度
+    const newSignalWidth = signalStartWidthRef.current + delta
     
-    if (hierarchySplitter && signalSplitter) {
-      const hierarchyRect = hierarchySplitter.getBoundingClientRect()
-      const signalRect = signalSplitter.getBoundingClientRect()
-      
-      // 计算两个 splitter 之间的实际距离（不包括 splitter 自身宽度）
-      const actualSignalWidth = signalRect.left - hierarchyRect.right
-      
-      console.log(`[handleSignalPanelResize] hierarchy right: ${hierarchyRect.right}, signal left: ${signalRect.left}, actual width: ${actualSignalWidth}`)
-      
-      // 限制最小宽度
-      const clampedSignalWidth = Math.max(100, actualSignalWidth)
-      setSignalWidth(clampedSignalWidth)
-    } else {
-      // Fallback: 使用 delta 计算
-      const newSignalWidth = signalStartWidthRef.current + delta
-      setSignalWidth(Math.max(100, newSignalWidth))
-    }
+    // 只保留最小宽度限制
+    setSignalWidth(Math.max(100, newSignalWidth))
   }
 
   const handleMessageResize = (delta: number) => {
