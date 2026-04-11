@@ -3893,53 +3893,38 @@ function App() {
     isHierarchyDraggingRef.current = false
   }
 
-  // Ref to store the initial right splitter position when dragging hierarchy splitter
-  const rightSplitterInitialXRef = useRef<number>(0)
-
   const handleHierarchyResizeStart = () => {
     isHierarchyDraggingRef.current = true
     hierarchyStartWidthRef.current = hierarchyWidth
-    
-    // Record the initial X position of the right splitter (signal splitter)
-    const signalSplitter = signalSplitterRef.current
-    if (signalSplitter) {
-      const rect = signalSplitter.getBoundingClientRect()
-      rightSplitterInitialXRef.current = rect.left
-    }
   }
 
   const handleHierarchyResize = (delta: number) => {
-    // Calculate new hierarchy width
-    const newHierarchyWidth = Math.max(100, hierarchyStartWidthRef.current + delta)
-    
-    // Calculate signal width based on right splitter's fixed position
+    // Get the actual positions of both splitters from DOM
+    const hierarchySplitter = hierarchySplitterRef.current
     const signalSplitter = signalSplitterRef.current
-    if (signalSplitter && rightSplitterInitialXRef.current > 0) {
-      // Get the left side container's position
-      const mainContent = mainContentRef.current
-      if (mainContent) {
-        const mainRect = mainContent.getBoundingClientRect()
-        
-        // Calculate hierarchy's right edge position relative to main content
-        const hierarchyRightEdge = newHierarchyWidth + 8 // +8 for the splitter width
-        
-        // Signal width = right splitter position - hierarchy right edge
-        const rightSplitterX = rightSplitterInitialXRef.current - mainRect.left
-        const newSignalWidth = rightSplitterX - hierarchyRightEdge
-        
-        // Ensure minimum width
-        if (newSignalWidth >= 100) {
-          setHierarchyWidth(newHierarchyWidth)
-          setSignalWidth(newSignalWidth)
-        } else {
-          // Signal would be too small, limit hierarchy expansion
-          const maxHierarchyWidth = rightSplitterX - 8 - 100 // -8 for splitter, -100 for min signal
-          setHierarchyWidth(Math.max(100, maxHierarchyWidth))
-          setSignalWidth(100)
-        }
-      }
+    const mainContent = mainContentRef.current
+    
+    if (hierarchySplitter && signalSplitter && mainContent) {
+      const mainRect = mainContent.getBoundingClientRect()
+      const hierarchyRect = hierarchySplitter.getBoundingClientRect()
+      const signalRect = signalSplitter.getBoundingClientRect()
+      
+      // Calculate actual splitter positions relative to main content
+      const hierarchySplitterX = hierarchyRect.left - mainRect.left
+      const signalSplitterX = signalRect.left - mainRect.left
+      
+      // Calculate actual widths based on current splitter positions
+      // Hierarchy width = hierarchy splitter position (since it starts at 0)
+      const actualHierarchyWidth = Math.max(100, hierarchySplitterX)
+      
+      // Signal width = distance between splitters - splitter width
+      const actualSignalWidth = Math.max(100, signalSplitterX - hierarchySplitterX - 8)
+      
+      setHierarchyWidth(actualHierarchyWidth)
+      setSignalWidth(actualSignalWidth)
     } else {
-      // Fallback: just update hierarchy width
+      // Fallback: use delta calculation
+      const newHierarchyWidth = Math.max(100, hierarchyStartWidthRef.current + delta)
       setHierarchyWidth(newHierarchyWidth)
     }
   }

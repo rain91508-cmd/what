@@ -92,40 +92,17 @@ interface SplitterProps {
 
 export function Splitter({ direction, onDrag, onDragStart, onDragEnd, onDoubleClick, tooltip, splitterRef }: SplitterProps) {
   const [isDragging, setIsDragging] = useState(false);
-  const internalRef = useRef<HTMLDivElement>(null);
-  const actualSplitterRef = splitterRef || internalRef;
-  const lastPosRef = useRef<number>(0);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setIsDragging(true);
     onDragStart?.();
-    
-    // Record the initial splitter position
-    const splitter = actualSplitterRef.current;
-    if (splitter) {
-      const rect = splitter.getBoundingClientRect();
-      lastPosRef.current = direction === 'horizontal' ? rect.left : rect.top;
-    }
+    const startPos = direction === 'horizontal' ? e.clientX : e.clientY;
 
     const handleMouseMove = (e: MouseEvent) => {
-      const splitter = actualSplitterRef.current;
-      if (splitter) {
-        // Get current splitter position
-        const rect = splitter.getBoundingClientRect();
-        const currentPos = direction === 'horizontal' ? rect.left : rect.top;
-        
-        // Calculate delta based on actual splitter movement
-        const delta = currentPos - lastPosRef.current;
-        
-        // Update last position for next calculation
-        lastPosRef.current = currentPos;
-        
-        // Only call onDrag if there was actual movement
-        if (delta !== 0) {
-          onDrag(delta);
-        }
-      }
+      const currentPos = direction === 'horizontal' ? e.clientX : e.clientY;
+      const delta = currentPos - startPos;
+      onDrag(delta);
     };
 
     const handleMouseUp = () => {
@@ -137,7 +114,7 @@ export function Splitter({ direction, onDrag, onDragStart, onDragEnd, onDoubleCl
 
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
-  }, [direction, onDrag, onDragStart, onDragEnd, actualSplitterRef]);
+  }, [direction, onDrag, onDragStart, onDragEnd]);
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
