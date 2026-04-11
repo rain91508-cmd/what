@@ -3899,8 +3899,33 @@ function App() {
   }
 
   const handleHierarchyResize = (delta: number) => {
-    // 只保留最小宽度限制，让 flex 布局自动处理剩余空间分配
-    setHierarchyWidth(Math.max(100, hierarchyStartWidthRef.current + delta))
+    // 计算新的 hierarchy 宽度
+    const newHierarchyWidth = hierarchyStartWidthRef.current + delta
+    
+    // 同时调整 signal 宽度，保持第二个 splitter 位置不变
+    // signal 宽度变化方向与 hierarchy 相反
+    const newSignalWidth = signalStartWidthRef.current - delta
+    
+    // 限制最小宽度为 100px
+    const clampedHierarchyWidth = Math.max(100, newHierarchyWidth)
+    const clampedSignalWidth = Math.max(100, newSignalWidth)
+    
+    // 如果任何一个面板达到最小宽度，需要重新计算 delta
+    if (clampedHierarchyWidth === 100 && newHierarchyWidth < 100) {
+      // Hierarchy 达到最小宽度，计算实际 delta
+      const actualDelta = 100 - hierarchyStartWidthRef.current
+      setHierarchyWidth(100)
+      setSignalWidth(Math.max(100, signalStartWidthRef.current - actualDelta))
+    } else if (clampedSignalWidth === 100 && newSignalWidth < 100) {
+      // Signal 达到最小宽度，计算实际 delta
+      const actualDelta = signalStartWidthRef.current - 100
+      setHierarchyWidth(Math.max(100, hierarchyStartWidthRef.current + actualDelta))
+      setSignalWidth(100)
+    } else {
+      // 正常情况，两个面板都调整
+      setHierarchyWidth(clampedHierarchyWidth)
+      setSignalWidth(clampedSignalWidth)
+    }
   }
 
   const handleSignalPanelResize = (delta: number) => {
