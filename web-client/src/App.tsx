@@ -329,6 +329,10 @@ function App() {
   
   // Ref for main content container to calculate available space
   const mainContentRef = useRef<HTMLDivElement>(null)
+  
+  // Refs for splitters to calculate signal panel width dynamically
+  const hierarchySplitterRef = useRef<HTMLDivElement>(null)
+  const signalSplitterRef = useRef<HTMLDivElement>(null)
 
   // Hierarchy Search state
   const [searchPattern, setSearchPattern] = useState('')
@@ -3915,27 +3919,27 @@ function App() {
   }
 
   const handleSignalPanelResize = (delta: number) => {
-    const newSignalWidth = signalStartWidthRef.current + delta
+    // 根据两个 splitter 的实际位置差值计算 Signal Panel 宽度
+    const hierarchySplitter = hierarchySplitterRef.current
+    const signalSplitter = signalSplitterRef.current
     
-    // 获取 main-content 的可用宽度
-    const mainContentWidth = mainContentRef.current?.clientWidth || window.innerWidth
-    
-    // 右侧面板的最小宽度（300px）
-    const rightPanelMinWidth = 300
-    
-    // 计算左侧面板的总宽度（包括 splitter）
-    const leftPanelTotalWidth = isLeftPanelVisible 
-      ? hierarchyWidth + 8 // hierarchy + splitter
-      : 0
-    
-    // 计算 signal panel 的最大可用宽度
-    // mainContentWidth - leftPanelTotalWidth - rightPanelMinWidth - splitterWidth
-    const maxSignalWidth = mainContentWidth - leftPanelTotalWidth - rightPanelMinWidth - 8
-    
-    // 限制 signalWidth 在 [100, maxSignalWidth] 范围内
-    const clampedSignalWidth = Math.max(100, Math.min(maxSignalWidth, newSignalWidth))
-    
-    setSignalWidth(clampedSignalWidth)
+    if (hierarchySplitter && signalSplitter) {
+      const hierarchyRect = hierarchySplitter.getBoundingClientRect()
+      const signalRect = signalSplitter.getBoundingClientRect()
+      
+      // 计算两个 splitter 之间的实际距离（不包括 splitter 自身宽度）
+      const actualSignalWidth = signalRect.left - hierarchyRect.right
+      
+      console.log(`[handleSignalPanelResize] hierarchy right: ${hierarchyRect.right}, signal left: ${signalRect.left}, actual width: ${actualSignalWidth}`)
+      
+      // 限制最小宽度
+      const clampedSignalWidth = Math.max(100, actualSignalWidth)
+      setSignalWidth(clampedSignalWidth)
+    } else {
+      // Fallback: 使用 delta 计算
+      const newSignalWidth = signalStartWidthRef.current + delta
+      setSignalWidth(Math.max(100, newSignalWidth))
+    }
   }
 
   const handleMessageResize = (delta: number) => {
@@ -4132,7 +4136,7 @@ function App() {
             </div>
 
             {/* Splitter between hierarchy and signal panel */}
-            <Splitter direction="horizontal" onDrag={handleHierarchyResize} onDragStart={handleHierarchyResizeStart} onDragEnd={handleHierarchyResizeEnd} />
+            <Splitter direction="horizontal" onDrag={handleHierarchyResize} onDragStart={handleHierarchyResizeStart} onDragEnd={handleHierarchyResizeEnd} splitterRef={hierarchySplitterRef} />
 
             {/* Middle Panel - Signal Panel */}
             <div
@@ -4190,6 +4194,7 @@ function App() {
           onDragEnd={handleSignalPanelResizeEnd}
           onDoubleClick={handleToggleLeftPanel}
           tooltip={isLeftPanelVisible ? (t('panel.splitter.hideLeftPanel') as string) : (t('panel.splitter.showLeftPanel') as string)}
+          splitterRef={signalSplitterRef}
         />
 
         {/* Right Panel - Tab Panel (Source/Waveform) - extends to bottom */}

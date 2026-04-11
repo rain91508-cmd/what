@@ -87,9 +87,10 @@ interface SplitterProps {
   onDragEnd?: () => void;
   onDoubleClick?: () => void;
   tooltip?: string;
+  splitterRef?: React.RefObject<HTMLDivElement>;
 }
 
-export function Splitter({ direction, onDrag, onDragStart, onDragEnd, onDoubleClick, tooltip }: SplitterProps) {
+export function Splitter({ direction, onDrag, onDragStart, onDragEnd, onDoubleClick, tooltip, splitterRef }: SplitterProps) {
   const [isDragging, setIsDragging] = useState(false);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -123,6 +124,7 @@ export function Splitter({ direction, onDrag, onDragStart, onDragEnd, onDoubleCl
 
   return (
     <div
+      ref={splitterRef}
       className="panel-splitter"
       style={{
         [direction === 'horizontal' ? 'width' : 'height']: 8,
