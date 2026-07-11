@@ -133,6 +133,7 @@ body {
   display: flex;
   flex: 1;
   overflow: hidden;
+  min-width: 0;
 }
 
 /* Left Panel - Hierarchy (Design Browser) */
@@ -578,6 +579,7 @@ body {
   border-top: 1px solid #b0b0b0;
   overflow: hidden;
   flex-shrink: 0;
+  min-width: 0;
 }
 
 .message-window {

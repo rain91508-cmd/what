@@ -135,7 +135,7 @@ export function FilterInput({
   };
 
   return (
-    <div ref={containerRef} style={{ position: 'relative', flex: 1 }}>
+    <div ref={containerRef} style={{ position: 'relative', flex: 1, minWidth: 0 }}>
       <input
         ref={inputRef}
         type="text"
@@ -152,6 +152,7 @@ export function FilterInput({
         }}
         style={{
           width: '100%',
+          minWidth: 0,
           padding: style?.padding ?? '2px 4px',
           fontSize: style?.fontSize ?? '10px',
           border: '1px solid #c0c0c0',

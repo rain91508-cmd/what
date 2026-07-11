@@ -4123,7 +4123,10 @@ function App() {
       <div className="main-content" ref={mainContentRef}>
         {/* Left Side Container - Hierarchy + Signal + Bottom Panel */}
         {isLeftPanelVisible && (
-        <div className="left-side-container">
+        <div
+          className="left-side-container"
+          style={{ width: hierarchyWidth + signalWidth + 8 }}
+        >
           {/* Left Panels Container - Hierarchy + Signal */}
           <div className="left-panels">
             {/* Left Panel - Design Browser (Hierarchy) */}

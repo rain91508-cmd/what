@@ -411,7 +411,7 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
   return (
     <div
       className="signal-panel"
-      style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
+      style={{ height: '100%', display: 'flex', flexDirection: 'column', minWidth: 0 }}
       onDragOver={(e) => {
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
@@ -826,6 +826,10 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
               >
                 <span style={{ 
                   flex: 1,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
                   color: '#333',
                   fontFamily: 'monospace',
                   pointerEvents: 'none',
