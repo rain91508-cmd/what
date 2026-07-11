@@ -21,7 +21,6 @@ out/
 *.lib
 
 # Generated files
-*.kdb
 compile_commands.json
 Untitled.png
 Untitled1.png
@@ -40,9 +39,6 @@ dist/
 Thumbs.db
 
 # Test files
-*.vcd
-*.fst
-*.evcd
 test_*/
 debug.txt
 
