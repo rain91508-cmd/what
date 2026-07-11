@@ -2443,7 +2443,7 @@ export function WaveformWindow({
         <div
           className="waveform-signal-panel"
           ref={signalPanelRef}
-          style={{ width: signalPanelWidth }}
+          style={{ width: signalPanelWidth, minWidth: 100 }}
           onClick={(e) => {
             // 点击空白处取消多选（如果不是点击在信号行上）
             const target = e.target as HTMLElement;
