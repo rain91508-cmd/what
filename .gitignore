@@ -48,7 +48,6 @@ debug.txt
 
 # Third-party build artifacts
 third_party/Surelog/build/
-third_party/Surelog/
 third_party/Surelog/third_party/**/build/
 third_party/**/CMakeCache.txt
 third_party/**/CMakeFiles/
@@ -64,7 +63,6 @@ build_new/
 third_party/Surelog/build/
 third_party/Surelog/third_party/**/build/
 third_party/vcpkg_new/
-third_party/fst-tools/
 third_party/build/
 
 # Rust build artifacts
