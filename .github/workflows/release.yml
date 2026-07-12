@@ -53,8 +53,8 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
-          targets: wasm32-unknown-unknown
-          deny-warnings: false
+          target: wasm32-unknown-unknown
+          rustflags: ""
 
       - name: Install wasm-bindgen CLI
         uses: jetli/wasm-bindgen-action@v0.2.0
@@ -178,7 +178,7 @@ jobs:
           toolchain: stable
           # fst-reader (a third_party submodule) has pre-existing warnings that
           # would otherwise be promoted to errors by the default -D warnings.
-          deny-warnings: false
+          rustflags: ""
 
       - name: Download web-dist artifact
         uses: actions/download-artifact@v4
@@ -241,7 +241,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
-          deny-warnings: false
+          rustflags: ""
 
       - name: Download web-dist artifact
         uses: actions/download-artifact@v4
