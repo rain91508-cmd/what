@@ -44,6 +44,11 @@ jobs:
             python3 python3-pip pkg-config \
             default-jre-headless ccache
 
+      # UHDM's build scripts (generate.py) require this Python package.
+      # Ubuntu 24.04 pip is externally-managed, so --break-system-packages is needed.
+      - name: Install Python dependencies (UHDM codegen)
+        run: pip3 install --break-system-packages orderedmultidict
+
       # Surelog generates its SystemVerilog parser at build time by running the
       # ANTLR jar. That jar is NOT tracked in git (gitignored in the submodule),
       # so we must fetch it explicitly or the build fails.
@@ -102,6 +107,9 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
+          # fst-reader (a third_party submodule) has pre-existing warnings that
+          # would otherwise be promoted to errors by the default -D warnings.
+          deny-warnings: false
 
       - name: Build server
         run: cargo build --release --manifest-path server/Cargo.toml
