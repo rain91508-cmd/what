@@ -11,58 +11,58 @@ use tower_http::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-/// 服务器主入口
+/// Server entry point
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // 解析命令行参数
+    // Parse command-line arguments
     let config = ServerConfig::parse();
 
-    // 验证配置
+    // Validate configuration
     config.validate()?;
 
-    // 初始化日志
+    // Initialize logging
     init_logging(&config);
 
-    // 创建服务器状态
+    // Create server state
     let state = ServerState::new(config.clone());
 
-    // 如果配置了启动时清除缓存，执行清除
+    // Clear caches on startup if requested
     if config.clear_cache_on_startup {
-        tracing::info!("启动时清除所有缓存...");
+        tracing::info!("Clearing all caches on startup...");
         state.clear_all_caches();
-        tracing::info!("所有缓存已清除");
+        tracing::info!("All caches cleared");
     }
 
-    // 记录启动信息（使用 println 确保在控制台可见）
+    // Print startup information (using println to ensure console visibility)
     println!("");
     println!("========================================");
-    println!("  硬件设计分析器数据服务器 (HWDA Server)");
+    println!("  Hardware Design Analyzer Data Server (HWDA Server)");
     println!("========================================");
     println!("");
-    println!("【服务器配置】");
-    println!("  绑定地址：{}", config.bind_address());
-    println!("  日志级别：{}", config.log_level);
-    println!("  详细调试：{}", if config.verbose { "启用" } else { "禁用" });
-    println!("  CORS 启用：{}", config.enable_cors);
-    println!("  FST 后端：{}", config.fst_backend);
-    
-    // 同时记录到 tracing
+    println!("[Server configuration]");
+    println!("  Bind address: {}", config.bind_address());
+    println!("  Log level: {}", config.log_level);
+    println!("  Verbose debug: {}", if config.verbose { "enabled" } else { "disabled" });
+    println!("  CORS enabled: {}", config.enable_cors);
+    println!("  FST backend: {}", config.fst_backend);
+
+    // Also record to tracing
     tracing::info!("========================================");
-    tracing::info!("  硬件设计分析器数据服务器 (HWDA Server)");
+    tracing::info!("  Hardware Design Analyzer Data Server (HWDA Server)");
     tracing::info!("========================================");
     tracing::info!("");
-    tracing::info!("【服务器配置】");
-    tracing::info!("  绑定地址：{}", config.bind_address());
-    tracing::info!("  日志级别：{}", config.log_level);
-    tracing::info!("  详细调试：{}", if config.verbose { "启用" } else { "禁用" });
-    tracing::info!("  CORS 启用：{}", config.enable_cors);
-    tracing::info!("  FST 后端：{}", config.fst_backend);
+    tracing::info!("[Server configuration]");
+    tracing::info!("  Bind address: {}", config.bind_address());
+    tracing::info!("  Log level: {}", config.log_level);
+    tracing::info!("  Verbose debug: {}", if config.verbose { "enabled" } else { "disabled" });
+    tracing::info!("  CORS enabled: {}", config.enable_cors);
+    tracing::info!("  FST backend: {}", config.fst_backend);
     println!("");
-    println!("【数据目录】");
-    println!("  知识库目录：{:?}", config.kdb_dir);
-    println!("  波形文件目录：{:?}", config.wave_dir);
-    
-    // 检查目录是否存在
+    println!("[Data directories]");
+    println!("  KDB directory: {:?}", config.kdb_dir);
+    println!("  Waveform directory: {:?}", config.wave_dir);
+
+    // Check whether the directories exist
     if config.kdb_dir.exists() {
         let kdb_count = std::fs::read_dir(&config.kdb_dir)
             .map(|entries| entries.filter(|e| {
@@ -71,11 +71,11 @@ async fn main() -> anyhow::Result<()> {
                 }).unwrap_or(false)
             }).count())
             .unwrap_or(0);
-        println!("    - 发现 {} 个 KDB 文件", kdb_count);
+        println!("    - Found {} KDB file(s)", kdb_count);
     } else {
-        println!("    - 知识库目录不存在！");
+        println!("    - KDB directory does not exist!");
     }
-    
+
     if config.wave_dir.exists() {
         let wave_count = std::fs::read_dir(&config.wave_dir)
             .map(|entries| entries.filter(|e| {
@@ -84,35 +84,37 @@ async fn main() -> anyhow::Result<()> {
                 }).unwrap_or(false)
             }).count())
             .unwrap_or(0);
-        println!("    - 发现 {} 个 FST 文件", wave_count);
+        println!("    - Found {} FST file(s)", wave_count);
     } else {
-        println!("    - 波形文件目录不存在！");
+        println!("    - Waveform directory does not exist!");
     }
-    
-    // 如果配置了 web 目录，记录信息
-    if let Some(ref web_dir) = config.web_dir {
-        println!("  Web 客户端目录：{:?}", web_dir);
-        if web_dir.exists() {
-            println!("    - 目录存在");
+
+    // If static web service is enabled, record the web directory info
+    if !config.disable_web {
+        println!("  Web client directory: {:?}", config.web_dir);
+        if config.web_dir.exists() {
+            println!("    - Directory exists (static web service enabled)");
         } else {
-            println!("    - 目录不存在！");
+            println!("    - Directory does not exist (static web service will be inactive)");
         }
+    } else {
+        println!("  Static web service: disabled");
     }
-    
+
     println!("");
-    println!("【缓存配置】");
-    println!("  缓存容量：{} MB", config.cache_capacity_mb);
-    println!("  数据块大小：{} KB", config.chunk_size_kb);
+    println!("[Cache configuration]");
+    println!("  Cache capacity: {} MB", config.cache_capacity_mb);
+    println!("  Data chunk size: {} KB", config.chunk_size_kb);
     println!("");
     println!("========================================");
-    println!("  服务器启动中...");
+    println!("  Starting server...");
     println!("========================================");
     println!("");
 
-    // 创建 CORS 层
+    // Create CORS layer
     let cors = if config.enable_cors {
         CorsLayer::new()
-            .allow_origin(Any) // 生产环境应该限制具体域名
+            .allow_origin(Any) // Production should restrict to specific domains
             .allow_methods(Any)
             .allow_headers(Any)
             .expose_headers([
@@ -121,18 +123,18 @@ async fn main() -> anyhow::Result<()> {
                 axum::http::header::ACCEPT_RANGES,
             ])
     } else {
-        CorsLayer::new() // 使用默认的 CORS 配置
+        CorsLayer::new() // Use default CORS configuration
     };
 
-    // 构建 API 路由
+    // Build the API router
     let api_router = create_router(state.clone());
-    
-    // 构建完整路由（包含静态文件服务）
-    let app = if let Some(ref web_dir) = config.web_dir {
-        // 如果配置了 web 目录，添加静态文件服务
-        // API 路由优先，未匹配的路径尝试从静态文件服务
+
+    // Build the full app (optionally including the static file service)
+    let app = if !config.disable_web {
+        // Static file service is enabled: API routes take priority, and any
+        // unmatched path is served from the static web directory.
         api_router
-            .fallback_service(ServeDir::new(web_dir))
+            .fallback_service(ServeDir::new(&config.web_dir))
             .layer(cors)
             .layer(TraceLayer::new_for_http())
             .layer(RequestBodyLimitLayer::new(
@@ -140,7 +142,7 @@ async fn main() -> anyhow::Result<()> {
             ))
             .with_state(state)
     } else {
-        // 没有配置 web 目录，只提供 API 服务
+        // Static web service disabled: API only
         api_router
             .layer(cors)
             .layer(TraceLayer::new_for_http())
@@ -150,68 +152,68 @@ async fn main() -> anyhow::Result<()> {
             .with_state(state)
     };
 
-    // 如果启用对比测试模式，不启动服务器，直接运行测试
+    // In comparison test mode, run the test and exit without starting the server
     if config.compare_test {
         println!("\n========================================");
-        println!("  对比测试模式：fst-reader vs fstapi");
+        println!("  Comparison test mode: fst-reader vs fstapi");
         println!("========================================\n");
-        
-        // 运行对比测试，完成后立即退出
+
+        // Run the comparison test, then exit immediately
         hwda_server::compare_test::run_compare_test(&config).await;
         println!("\n========================================");
-        println!("  对比测试完成，退出程序");
+        println!("  Comparison test finished, exiting");
         println!("========================================");
         return Ok(());
     }
 
-    // 如果启用 LoD 20 测试模式
+    // In LoD 20 test mode
     if config.lod20_test {
         println!("\n========================================");
-        println!("  LoD 20 专项测试模式");
+        println!("  LoD 20 dedicated test mode");
         println!("========================================\n");
-        
-        // 运行 LoD 20 测试，完成后立即退出
+
+        // Run the LoD 20 test, then exit immediately
         hwda_server::compare_test_lod20::run_lod20_test(&config).await;
         println!("\n========================================");
-        println!("  LoD 20 测试完成，退出程序");
+        println!("  LoD 20 test finished, exiting");
         println!("========================================");
         return Ok(());
     }
 
-    // 如果启用详细信号测试模式
+    // In detailed signal test mode
     if config.detailed_test {
         println!("\n========================================");
-        println!("  详细信号测试模式");
+        println!("  Detailed signal test mode");
         println!("========================================\n");
-        
-        // 运行详细信号测试，完成后立即退出
+
+        // Run the detailed signal test, then exit immediately
         hwda_server::compare_test::run_detailed_signal_test(&config).await;
         println!("\n========================================");
-        println!("  详细信号测试完成，退出程序");
+        println!("  Detailed signal test finished, exiting");
         println!("========================================");
         return Ok(());
     }
 
-    // 启动服务器
+    // Start the server
     let listener = tokio::net::TcpListener::bind(&config.bind_address()).await?;
-    tracing::info!("服务器监听：{}", config.bind_address());
+    tracing::info!("Server listening on {}", config.bind_address());
 
     axum::serve(listener, app).await?;
 
     Ok(())
 }
 
-/// 初始化日志系统
+/// Initialize the logging system
 fn init_logging(config: &ServerConfig) {
-    // 根据 log_level 和 verbose 选项设置日志过滤器
+    // Set the log filter based on log_level and verbose options
     let filter = if config.log_level == "debug" && config.verbose {
-        // verbose 模式：显示所有 debug 信息
+        // Verbose mode: show all debug information
         format!("{}=debug,tower_http=debug", env!("CARGO_PKG_NAME"))
     } else {
-        // 普通模式：只显示 info 及以上级别
+        // Normal mode: show info and above
         format!("{}=info,tower_http=info", env!("CARGO_PKG_NAME"))
     };
-    
+
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()

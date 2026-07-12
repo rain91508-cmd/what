@@ -1,148 +1,158 @@
 use clap::Parser;
 use std::path::PathBuf;
 
-/// 硬件设计分析器数据服务器配置
+/// Hardware Design Analyzer data server configuration
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 pub struct ServerConfig {
-    /// 知识库文件目录
+    /// Knowledge database (KDB) directory
     #[arg(long, default_value = "./kdb")]
     pub kdb_dir: PathBuf,
 
-    /// 波形文件目录
+    /// Waveform file directory
     #[arg(long, default_value = "./waves")]
     pub wave_dir: PathBuf,
 
-    /// 服务端口
+    /// Server port
     #[arg(long, default_value = "8080")]
     pub port: u16,
 
-    /// 绑定地址
+    /// Bind address
     #[arg(long, default_value = "0.0.0.0")]
     pub host: String,
 
-    /// 日志级别 (trace, debug, info, warn, error)
+    /// Log level (trace, debug, info, warn, error)
     #[arg(long, default_value = "info")]
     pub log_level: String,
 
-    /// 启用 CORS
+    /// Enable CORS
     #[arg(long, default_value = "true")]
     pub enable_cors: bool,
 
-    /// 允许 CORS 的来源 (使用 * 表示允许所有)
+    /// Allowed CORS origins (* for any)
     #[arg(long, default_value = "*")]
     pub cors_origin: String,
 
-    /// 最大并发连接数
+    /// Maximum number of concurrent connections
     #[arg(long, default_value = "1000")]
     pub max_connections: usize,
 
-    /// LRU 缓存容量 (MB)
+    /// LRU cache capacity (MB)
     #[arg(long, default_value = "512")]
     pub cache_capacity_mb: usize,
 
-    /// 波形数据块大小 (KB)
+    /// Waveform data chunk size (KB)
     #[arg(long, default_value = "64")]
     pub chunk_size_kb: usize,
 
-    /// 启用认证
+    /// Enable authentication
     #[arg(long, default_value = "false")]
     pub enable_auth: bool,
 
-    /// 认证令牌 (如果启用认证)
+    /// Authentication token (required if authentication is enabled)
     #[arg(long)]
     pub auth_token: Option<String>,
 
-    /// 速率限制 (每秒请求数)
+    /// Rate limit (requests per second)
     #[arg(long, default_value = "100")]
     pub rate_limit: u64,
 
-    /// FST 读取后端 (fstapi, fst-reader)
+    /// FST read backend (fstapi, fst-reader)
     #[arg(long, default_value = "fstapi")]
     pub fst_backend: String,
 
-    /// Web 客户端静态文件目录（如果提供，将启用静态文件服务）
-    #[arg(long)]
-    pub web_dir: Option<PathBuf>,
-    
-    /// 启动时自动清除所有缓存
+    /// Web client static file directory (default: ./web; enables the built-in static web service)
+    #[arg(long, default_value = "./web")]
+    pub web_dir: PathBuf,
+
+    /// Disable the built-in static web client service (served from --web-dir)
+    #[arg(long, default_value = "false")]
+    pub disable_web: bool,
+
+    /// Clear all caches on startup
     #[arg(long, default_value = "false")]
     pub clear_cache_on_startup: bool,
 
-    /// 启用详细调试输出（仅在 log_level=debug 时生效）
+    /// Enable verbose debug output (only effective when log_level=debug)
     #[arg(long, default_value = "false")]
     pub verbose: bool,
 
-    /// 启用 fst-reader 与 fstapi 对比测试模式
+    /// Enable fst-reader vs fstapi comparison test mode
     #[arg(long, default_value = "false")]
     pub compare_test: bool,
 
-    /// 启用 LoD 20 专项测试模式
+    /// Enable LoD 20 dedicated test mode
     #[arg(long, default_value = "false")]
     pub lod20_test: bool,
 
-    /// 启用详细信号测试模式（测试指定信号的详细对比）
+    /// Enable detailed signal test mode
     #[arg(long, default_value = "false")]
     pub detailed_test: bool,
 }
 
 impl ServerConfig {
-    /// 验证配置的有效性
+    /// Validate the configuration
     pub fn validate(&self) -> crate::error::Result<()> {
         use crate::error::{Result, ServerError};
 
-        // 验证 kdb_dir 是否存在
+        // Verify kdb_dir exists
         if !self.kdb_dir.exists() {
             return Err(ServerError::ConfigError(format!(
-                "知识库目录不存在：{:?}",
+                "KDB directory does not exist: {:?}",
                 self.kdb_dir
             )));
         }
 
-        // 验证 wave_dir 是否存在
+        // Verify wave_dir exists
         if !self.wave_dir.exists() {
             return Err(ServerError::ConfigError(format!(
-                "波形文件目录不存在：{:?}",
+                "Waveform directory does not exist: {:?}",
                 self.wave_dir
             )));
         }
 
-        // 验证端口
+        // Verify port
         if self.port == 0 {
-            return Err(ServerError::ConfigError("端口号不能为 0".to_string()));
+            return Err(ServerError::ConfigError(
+                "Port number cannot be 0".to_string(),
+            ));
         }
 
-        // 验证缓存容量
+        // Verify cache capacity
         if self.cache_capacity_mb == 0 {
-            return Err(ServerError::ConfigError("缓存容量不能为 0".to_string()));
+            return Err(ServerError::ConfigError(
+                "Cache capacity cannot be 0".to_string(),
+            ));
         }
 
-        // 验证块大小
+        // Verify chunk size
         if self.chunk_size_kb == 0 {
-            return Err(ServerError::ConfigError("块大小不能为 0".to_string()));
+            return Err(ServerError::ConfigError(
+                "Chunk size cannot be 0".to_string(),
+            ));
         }
 
-        // 如果启用认证，必须提供 token
+        // If authentication is enabled, a token must be provided
         if self.enable_auth && self.auth_token.is_none() {
             return Err(ServerError::ConfigError(
-                "启用认证时必须提供 auth-token".to_string(),
+                "Authentication token must be provided when auth is enabled".to_string(),
             ));
         }
 
         Ok(())
     }
 
-    /// 获取绑定地址
+    /// Get the bind address
     pub fn bind_address(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
 
-    /// 获取缓存容量 (字节)
+    /// Get the cache capacity in bytes
     pub fn cache_capacity_bytes(&self) -> u64 {
         self.cache_capacity_mb as u64 * 1024 * 1024
     }
 
-    /// 获取块大小 (字节)
+    /// Get the chunk size in bytes
     pub fn chunk_size_bytes(&self) -> u64 {
         self.chunk_size_kb as u64 * 1024
     }
@@ -165,7 +175,8 @@ impl Default for ServerConfig {
             auth_token: None,
             rate_limit: 100,
             fst_backend: "fstapi".to_string(),
-            web_dir: None,
+            web_dir: PathBuf::from("./web"),
+            disable_web: false,
             clear_cache_on_startup: false,
             verbose: false,
             compare_test: false,
