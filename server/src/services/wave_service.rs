@@ -622,8 +622,8 @@ impl WaveService {
         self.backend
     }
 
-    /// 获取所有可用的波形文件列表
-    /// 只返回有效的 FST 文件
+    /// Get the list of all available waveform files.
+    /// Only valid FST files are returned.
     pub async fn list_waves(&self) -> Result<Vec<WaveFileInfo>> {
         let mut waves = Vec::new();
 

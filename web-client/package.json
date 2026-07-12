@@ -4,7 +4,10 @@
   "description": "Web-based HDL Analysis Toolkit (WHAT) Web Client",
   "type": "module",
   "scripts": {
+    "copy-static": "mkdir -p public && cp node_modules/pace-js/pace.min.js public/ && mkdir -p public/monaco-editor/min && cp -r node_modules/monaco-editor/min/vs public/monaco-editor/min/ && mkdir -p public/wasm-pkg && cp -r wasm-pkg/. public/wasm-pkg/",
+    "predev": "npm run copy-static",
     "dev": "vite",
+    "prebuild": "npm run copy-static",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
