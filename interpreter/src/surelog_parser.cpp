@@ -87,6 +87,14 @@ ParseResult SurelogParser::parseFiles(const std::vector<std::string>& filePaths,
     clp_->setCompile(true);
     clp_->setElaborate(true);
     clp_->setElabUhdm(true);
+    // By default we don't need the on-disk .uhdm DB; we traverse the
+    // in-memory UHDM model directly. Keep it only when debugging (-uhdm).
+    clp_->setWriteUhdm(writeUhdmEnabled_);
+    // Low-memory optimization (default on): frees ANTLR/preprocessor caches
+    // as it goes. Pure in-memory, safe for KDB (we only walk the final UHDM).
+    clp_->setLowMem(lowMemEnabled_);
+    // Thread count (default single-threaded). Raising this increases peak RSS.
+    clp_->setNbMaxTreads(maxThreads_);
     
     bool success = clp_->parseCommandLine(argv.size(), argv.data());
     errorContainer_->printMessages(clp_->muteStdout());
@@ -120,6 +128,7 @@ bool SurelogParser::buildKnowledgeBase(KdbBuilder& builder) {
     try {
         // Create listener to traverse design
         KdbBuildListener listener(builder, filePathToId_);
+        listener.setDriverTracingEnabled(driverTracingEnabled_);
         listener.listenDesigns({static_cast<vpiHandle>(vpiDesign_)});
         
         // Post-processing: link instances and commit signal instances

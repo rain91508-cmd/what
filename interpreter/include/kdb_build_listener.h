@@ -26,6 +26,11 @@ public:
     KdbBuildListener(KdbBuilder& builder, std::unordered_map<std::string, uint64_t>& filePathToId);
     ~KdbBuildListener();
     
+    // Enable/disable signal driver tracing. Disabled by default because
+    // it can be very time-consuming for large designs.
+    void setDriverTracingEnabled(bool enabled) { driverTracingEnabled_ = enabled; }
+    bool isDriverTracingEnabled() const { return driverTracingEnabled_; }
+    
     void enterModule_inst(const UHDM::module_inst* object, vpiHandle handle) override;
     void leaveModule_inst(const UHDM::module_inst* object, vpiHandle handle) override;
     
@@ -47,6 +52,7 @@ private:
     
     KdbBuilder& builder_;
     std::unordered_map<std::string, uint64_t>& filePathToId_;
+    bool driverTracingEnabled_ = false;  // Disabled by default
     std::vector<uint64_t> currentModuleStack_;
     std::vector<bool> moduleStackMarkers_;
     size_t totalModules_;

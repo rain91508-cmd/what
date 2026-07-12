@@ -71,6 +71,22 @@ public:
                           bool debug = false,
                           bool parseOnly = false);
     
+    // 启用/禁用信号驱动追踪（默认禁用，因为大型设计中耗时较长）
+    void setDriverTracingEnabled(bool enabled) { driverTracingEnabled_ = enabled; }
+    bool isDriverTracingEnabled() const { return driverTracingEnabled_; }
+    
+    // 控制是否保留 Surelog 生成的中间 .uhdm 文件（默认不保留，仅用于调试）
+    void setWriteUhdmEnabled(bool enabled) { writeUhdmEnabled_ = enabled; }
+    bool isWriteUhdmEnabled() const { return writeUhdmEnabled_; }
+
+    // 控制 Surelog 低内存优化（默认开启）
+    void setLowMemEnabled(bool enabled) { lowMemEnabled_ = enabled; }
+    bool isLowMemEnabled() const { return lowMemEnabled_; }
+
+    // 控制 Surelog 最大线程数（0 = 单线程）
+    void setMaxThreads(int n) { maxThreads_ = n; }
+    int getMaxThreads() const { return maxThreads_; }
+    
 private:
     // UHDM遍历函数
     void processDesign(UHDM::design* design, KdbBuilder& builder);
@@ -108,6 +124,10 @@ private:
     bool verbose_;
     bool debug_;
     bool parseOnly_;
+    bool driverTracingEnabled_ = false;  // 默认禁用驱动追踪
+    bool writeUhdmEnabled_ = false;      // 默认不保留 .uhdm 文件
+    bool lowMemEnabled_ = true;          // 默认开启低内存优化
+    int maxThreads_ = 0;                 // 默认单线程
     
     // 文件ID映射
     std::unordered_map<std::string, uint64_t> filePathToId_;

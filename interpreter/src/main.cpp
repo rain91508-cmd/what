@@ -35,6 +35,13 @@ void printUsage(const char* progName) {
               << "  -z, --compress        Enable compression (default: enabled)\n"
               << "  -Z, --no-compress     Disable compression\n"
               << "  -l, --compress-level  Compression level 1-19 (default: 9)\n"
+              << "  -dr, --drivers        Enable signal driver tracing (default: disabled)\n"
+              << "  -uhdm, --keep-uhdm    Keep Surelog's intermediate .uhdm file for debugging (default: off)\n"
+              << "\nMemory Options:\n"
+              << "  --disable-low-mem     Disable Surelog low-memory optimization (default: ON).\n"
+              << "                        When set, you may individually control the options below:\n"
+              << "  -lowmem, --low-mem    Enable Surelog low-memory mode (only with --disable-low-mem)\n"
+              << "  -mt, --max-threads <N> Max Surelog threads (only with --disable-low-mem; default: 0)\n"
               << "\nOther Options:\n"
               << "  -v, --verbose         Verbose output\n"
               << "  --help                Show this help\n";
@@ -119,6 +126,11 @@ struct CommandLineOptions {
     bool compressionEnabled = true;
     int compressionLevel = 9;
     bool forceSystemVerilog = false;
+    bool driverTracingEnabled = false;
+    bool keepUhdmFile = false;  // Default: do not write Surelog's .uhdm file
+    bool disableLowMem = false; // Default: low-memory optimization is ON
+    bool lowMem = false;        // Individual control, only with --disable-low-mem
+    int maxThreads = 0;         // Individual control, only with --disable-low-mem
 };
 
 bool parseCommandLine(int argc, char* argv[], CommandLineOptions& opts) {
@@ -236,6 +248,36 @@ bool parseCommandLine(int argc, char* argv[], CommandLineOptions& opts) {
             opts.compressionEnabled = true;
             continue;
         }
+        if (arg == "-dr" || arg == "--drivers") {
+            opts.driverTracingEnabled = true;
+            continue;
+        }
+        if (arg == "-uhdm" || arg == "--keep-uhdm") {
+            opts.keepUhdmFile = true;
+            continue;
+        }
+        if (arg == "--disable-low-mem") {
+            opts.disableLowMem = true;
+            continue;
+        }
+        if (arg == "-lowmem" || arg == "--low-mem") {
+            if (!opts.disableLowMem) {
+                std::cerr << "Error: -lowmem/--low-mem requires --disable-low-mem\n";
+                return false;
+            }
+            opts.lowMem = true;
+            continue;
+        }
+        if (arg == "-mt" || arg == "--max-threads") {
+            if (!opts.disableLowMem) {
+                std::cerr << "Error: -mt/--max-threads requires --disable-low-mem\n";
+                return false;
+            }
+            if (i + 1 < args.size()) {
+                opts.maxThreads = std::stoi(args[++i]);
+            }
+            continue;
+        }
         if (arg == "-Z" || arg == "--no-compress") {
             opts.compressionEnabled = false;
             continue;
@@ -337,6 +379,9 @@ int main(int argc, char* argv[]) {
         if (!opts.topModule.empty()) {
             std::cout << "Top module: " << opts.topModule << "\n";
         }
+        std::cout << "Driver tracing: " << (opts.driverTracingEnabled ? "enabled" : "disabled") << "\n";
+        std::cout << "Keep .uhdm file: " << (opts.keepUhdmFile ? "enabled" : "disabled") << "\n";
+        std::cout << "Low-memory optimization: " << ((opts.disableLowMem ? opts.lowMem : true) ? "enabled" : "disabled") << "\n";
     }
     
     KdbBuilder builder;
@@ -346,6 +391,12 @@ int main(int argc, char* argv[]) {
     
     SurelogParser surelogParser;
     surelogParser.setCompileOptions(opts.verbose, false, false);
+    surelogParser.setDriverTracingEnabled(opts.driverTracingEnabled);
+    surelogParser.setWriteUhdmEnabled(opts.keepUhdmFile);
+    // Low-memory optimization is ON by default. With --disable-low-mem the
+    // user takes manual control of -lowmem / -mt (both default off there).
+    surelogParser.setLowMemEnabled(opts.disableLowMem ? opts.lowMem : true);
+    surelogParser.setMaxThreads(opts.disableLowMem ? opts.maxThreads : 0);
     if (!opts.topModule.empty()) {
         surelogParser.setTopModule(opts.topModule);
     }
@@ -389,6 +440,9 @@ int main(int argc, char* argv[]) {
 #else
     std::cout << "  Compression: not available (zstd not compiled in)\n";
 #endif
+    std::cout << "  Driver tracing: " << (opts.driverTracingEnabled ? "enabled" : "disabled") << "\n";
+    std::cout << "  Keep .uhdm file: " << (opts.keepUhdmFile ? "enabled" : "disabled") << "\n";
+    std::cout << "  Low-memory optimization: " << ((opts.disableLowMem ? opts.lowMem : true) ? "enabled" : "disabled") << "\n";
     
     return 0;
 }

@@ -217,9 +217,11 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
         }
     }
     
-    driverAnalyzer_->analyzeContinuousAssignments(object);
-    driverAnalyzer_->analyzeProceduralAssignments(object);
-    driverAnalyzer_->analyzePortConnections(object);
+    if (driverTracingEnabled_) {
+        driverAnalyzer_->analyzeContinuousAssignments(object);
+        driverAnalyzer_->analyzeProceduralAssignments(object);
+        driverAnalyzer_->analyzePortConnections(object);
+    }
 }
 
 void KdbBuildListener::leaveModule_inst(const UHDM::module_inst* object, vpiHandle handle) {
@@ -227,7 +229,9 @@ void KdbBuildListener::leaveModule_inst(const UHDM::module_inst* object, vpiHand
         bool shouldPop = moduleStackMarkers_.back();
         moduleStackMarkers_.pop_back();
         if (shouldPop && !currentModuleStack_.empty()) {
-            driverAnalyzer_->applyDriverRelationships();
+            if (driverTracingEnabled_) {
+                driverAnalyzer_->applyDriverRelationships();
+            }
             currentModuleStack_.pop_back();
         }
     }
@@ -403,8 +407,10 @@ void KdbBuildListener::linkInstancesToDefinitions() {
 void KdbBuildListener::finishBuild() {
     VERBOSE_LOG("DEBUG: Finishing build, committing signal instances...\n");
     
-    // 1. Apply any remaining driver relationships
-    driverAnalyzer_->applyDriverRelationships();
+    // 1. Apply any remaining driver relationships (only if tracing was enabled)
+    if (driverTracingEnabled_) {
+        driverAnalyzer_->applyDriverRelationships();
+    }
     
     // 2. Link instances to definitions (if not already done)
     linkInstancesToDefinitions();
