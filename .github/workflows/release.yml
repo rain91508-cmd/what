@@ -234,7 +234,7 @@ jobs:
         run: |
           git clone https://github.com/microsoft/vcpkg.git "$env:USERPROFILE\vcpkg"
           & "$env:USERPROFILE\vcpkg\bootstrap-vcpkg.bat"
-          & "$env:USERPROFILE\vcpkg\vcpkg.exe" install zlib pthreads mman --triplet x64-windows
+          & "$env:USERPROFILE\vcpkg\vcpkg.exe" install zlib pthreads mman --triplet x64-windows-static-md
           Add-Content -Path $env:GITHUB_ENV -Value "VCPKG_ROOT=$env:USERPROFILE\vcpkg"
 
       - name: Setup Rust toolchain
