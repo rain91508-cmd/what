@@ -5,55 +5,55 @@ use moka::future::Cache;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// 服务器共享状态
-/// 使用 Arc 在多个线程间共享，使用 RwLock 保证线程安全
+/// Shared server state
+/// Shared across threads via Arc; RwLock guarantees thread safety
 #[derive(Clone)]
 pub struct ServerState {
-    /// 服务器配置
+    /// Server configuration
     pub config: Arc<ServerConfig>,
 
-    /// 信号数据缓存 (LRU)
-    /// 缓存 key: (波形路径, 信号名)，value: 信号完整数据 (LoD 0)
-    /// 用于缓存从 FST 文件读取的原始信号数据，避免重复读取
+    /// Signal data cache (LRU)
+    /// Cache key: (waveform path, signal name), value: full signal data (LoD 0)
+    /// Caches raw signal data read from FST files to avoid repeated reads
     pub signal_data_cache: SignalDataCache,
 
-    /// FST Reader 缓存
-    /// 缓存 key: 文件路径，value: 缓存的 FST Reader
+    /// FST Reader cache
+    /// Cache key: file path, value: cached FST Reader
     pub fst_reader_cache: FstReaderCache,
 
-    /// 访问统计信息
+    /// Access statistics
     pub stats: Arc<ServerStats>,
 }
 
-/// 信号数据缓存类型
-/// Key: (波形路径, 信号名)，Value: 信号完整数据
+/// Signal data cache type
+/// Key: (waveform path, signal name), Value: full signal data
 pub type SignalDataCache = Cache<(String, String), Arc<SignalWaveData>>;
 
-/// 波形元数据结构
+/// Waveform metadata structure
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WaveMetadata {
-    /// 波形名称
+    /// Waveform name
     pub name: String,
-    /// 文件名
+    /// File name
     pub file: String,
-    /// 时间范围
+    /// Time range
     pub time_range: TimeRange,
-    /// 信号数量
+    /// Number of signals
     pub signal_count: u32,
-    /// 可用的 LoD 层级
+    /// Available LoD levels
     pub lod_levels: Vec<u32>,
-    /// 文件大小 (字节)
+    /// File size (bytes)
     pub file_size: u64,
 }
 
-/// 时间范围结构
+/// Time range structure
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TimeRange {
-    /// 起始时间 (皮秒)
+    /// Start time (picoseconds)
     pub start: i64,
-    /// 结束时间 (皮秒)
+    /// End time (picoseconds)
     pub end: i64,
-    /// 时间单位
+    /// Time unit
     pub unit: String,
 }
 
@@ -66,36 +66,36 @@ impl TimeRange {
         }
     }
 
-    /// 计算时间范围跨度 (皮秒)
+    /// Compute the time range span (picoseconds)
     pub fn span(&self) -> i64 {
         self.end - self.start
     }
 
-    /// 检查时间是否有效
+    /// Check whether the time range is valid
     pub fn is_valid(&self) -> bool {
         self.start >= 0 && self.end > self.start
     }
 }
 
-/// 服务器统计信息
+/// Server statistics
 #[derive(Debug, Default)]
 pub struct ServerStats {
-    /// 总请求数
+    /// Total request count
     pub total_requests: RwLock<u64>,
-    /// 知识库请求数
+    /// KDB request count
     pub kdb_requests: RwLock<u64>,
-    /// 波形请求数
+    /// Waveform request count
     pub wave_requests: RwLock<u64>,
-    /// 缓存命中数
+    /// Cache hit count
     pub cache_hits: RwLock<u64>,
-    /// 缓存未命中数
+    /// Cache miss count
     pub cache_misses: RwLock<u64>,
-    /// 错误数
+    /// Error count
     pub errors: RwLock<u64>,
 }
 
 impl ServerStats {
-    /// 记录请求
+    /// Record a request
     pub async fn record_request(&self, request_type: RequestType) {
         *self.total_requests.write().await += 1;
         match request_type {
@@ -104,22 +104,22 @@ impl ServerStats {
         }
     }
 
-    /// 记录缓存命中
+    /// Record a cache hit
     pub async fn record_cache_hit(&self) {
         *self.cache_hits.write().await += 1;
     }
 
-    /// 记录缓存未命中
+    /// Record a cache miss
     pub async fn record_cache_miss(&self) {
         *self.cache_misses.write().await += 1;
     }
 
-    /// 记录错误
+    /// Record an error
     pub async fn record_error(&self) {
         *self.errors.write().await += 1;
     }
 
-    /// 获取统计信息
+    /// Get statistics snapshot
     pub async fn get_stats(&self) -> StatsSnapshot {
         StatsSnapshot {
             total_requests: *self.total_requests.read().await,
@@ -132,14 +132,14 @@ impl ServerStats {
     }
 }
 
-/// 请求类型枚举
+/// Request type enum
 #[derive(Debug, Clone, Copy)]
 pub enum RequestType {
     Kdb,
     Wave,
 }
 
-/// 统计信息快照
+/// Statistics snapshot
 #[derive(Debug, serde::Serialize)]
 pub struct StatsSnapshot {
     pub total_requests: u64,
@@ -151,15 +151,15 @@ pub struct StatsSnapshot {
 }
 
 impl ServerState {
-    /// 创建新的服务器状态
+    /// Create a new server state
     pub fn new(config: ServerConfig) -> Self {
         let cache_capacity = config.cache_capacity_bytes();
 
-        // 信号数据缓存：存储从 FST 读取的原始信号数据 (LoD 0)
-        // 使用配置的缓存容量
+        // Signal data cache: stores raw signal data read from FST (LoD 0)
+        // Uses the configured cache capacity
         let signal_data_cache = Cache::new(cache_capacity);
 
-        // FST Reader 缓存：缓存打开的 FST 文件 reader
+        // FST Reader cache: caches opened FST file readers
         let fst_reader_cache = FstReaderCache::new(10);
 
         Self {
@@ -170,18 +170,18 @@ impl ServerState {
         }
     }
 
-    /// 清除所有缓存
+    /// Clear all caches
     pub fn clear_all_caches(&self) {
         self.signal_data_cache.invalidate_all();
-        // FST Reader 缓存不需要显式清除，它有 TTL
+        // FST Reader cache does not need explicit clearing; it has a TTL
     }
 
-    /// 清除信号数据缓存
+    /// Clear the signal data cache
     pub fn clear_signal_data_cache(&self) {
         self.signal_data_cache.invalidate_all();
     }
 
-    /// 生成信号数据缓存的键
+    /// Build the signal data cache key
     pub fn make_signal_data_key(wave_path: &str, signal_name: &str) -> (String, String) {
         (wave_path.to_string(), signal_name.to_string())
     }
