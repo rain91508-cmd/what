@@ -79,16 +79,9 @@ jobs:
         working-directory: web-client
         run: npm ci
 
-      - name: Copy static assets to public
-        working-directory: web-client
-        run: |
-          mkdir -p public/wasm-pkg public/monaco-editor/min
-          cp node_modules/pace-js/pace.min.js public/
-          cp -r wasm-pkg/* public/wasm-pkg/
-          cp -r node_modules/monaco-editor/min/vs public/monaco-editor/min/
-
       - name: Build Vite app
         working-directory: web-client
+        # prebuild script copies pace.min.js, monaco-editor/min/vs and wasm-pkg into public/
         run: npm run build
 
       - name: Upload web-dist artifact
