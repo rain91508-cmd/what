@@ -75,13 +75,14 @@ web-client/public/wasm/
 web-client/public/wasm-pkg/
 web-client/wasm-pkg/
 
-# Static files copied from node_modules (need to be managed)
-# web-client/public/pace.min.js - copied from pace-js
-# web-client/public/monaco-editor/ - copied from monaco-editor
+# Static files copied from node_modules by the `copy-static` prebuild script
+web-client/public/pace.min.js
+web-client/public/monaco-editor/
 
 server/waves/
 server/kdb/
 server/*.txt
+server/examples/web
 
 # Python cache
 __pycache__/
