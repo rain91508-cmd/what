@@ -247,7 +247,7 @@ jobs:
       # applies the Surelog MinGW patch, configures and builds the Windows
       # interpreter (what_interpreter.exe, kdb_viewer.exe) into build-win/.
       - name: Cross-build interpreter for Windows
-        run: ./cross-build-win.sh
+        run: bash ./cross-build-win.sh
 
       - name: Package
         run: |
