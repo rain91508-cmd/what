@@ -55,7 +55,7 @@ ParseResult SurelogParser::parseFiles(const std::vector<std::string>& filePaths,
     
     // Build command line arguments
     std::vector<const char*> argv;
-    argv.push_back("hwda_interpreter");
+    argv.push_back("what_interpreter");
     
     for (const auto& file : filePaths) {
         argv.push_back(file.c_str());

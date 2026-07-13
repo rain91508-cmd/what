@@ -1,16 +1,16 @@
 [package]
-name = "hwda-server"
+name = "what-server"
 version = "0.1.0"
 edition = "2021"
-description = "Hardware Design Analyzer Data Server"
-authors = ["HWDA Team"]
+description = "Web-based HDL Analysis Toolkit Data Server"
+authors = ["WHAT Team"]
 
 [[bin]]
-name = "hwda-server"
+name = "what-server"
 path = "src/main.rs"
 
 [lib]
-name = "hwda_server"
+name = "what_server"
 path = "src/lib.rs"
 
 [dependencies]

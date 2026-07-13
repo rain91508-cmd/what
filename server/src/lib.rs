@@ -22,7 +22,7 @@
 //! # 示例
 //!
 //! ```no_run
-//! use hwda_server::{ServerConfig, ServerState, create_router};
+//! use what_server::{ServerConfig, ServerState, create_router};
 //! use axum::serve;
 //! use tokio::net::TcpListener;
 //!
@@ -68,7 +68,7 @@ pub use handlers::{
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 服务器名称
-pub const SERVER_NAME: &str = "HWDA-Server";
+pub const SERVER_NAME: &str = "WHAT-Server";
 
 #[cfg(test)]
 mod tests {
@@ -81,6 +81,6 @@ mod tests {
 
     #[test]
     fn test_server_name() {
-        assert_eq!(SERVER_NAME, "HWDA-Server");
+        assert_eq!(SERVER_NAME, "WHAT-Server");
     }
 }
