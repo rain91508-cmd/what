@@ -206,6 +206,64 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
+  # Interpreter (cross-compile, MinGW-w64 -> Windows): what_interpreter.exe + kdb_viewer.exe
+  # Built on Linux via cross-build-win.sh (mirrors the local Windows cross build).
+  # ---------------------------------------------------------------------------
+  build-interpreter-windows:
+    name: Build interpreter (Windows x86_64, cross)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies (MinGW-w64 cross toolchain)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
+            binutils-mingw-w64-x86-64 mingw-w64-tools \
+            capnproto libcapnp-dev libz-mingw-w64-dev zip \
+            default-jre-headless build-essential cmake ninja-build \
+            pkg-config git python3 python3-pip curl
+
+      # UHDM's build scripts (generate.py) require this Python package.
+      # Ubuntu 24.04 pip is externally-managed, so --break-system-packages is needed.
+      - name: Install Python dependencies (UHDM codegen)
+        run: pip3 install --break-system-packages orderedmultidict
+
+      # cross-build-win.sh builds a pinned host Protobuf 3.21.12 from source;
+      # fetch that source into the location the script expects
+      # ($ROOT/../cross-tooling/src/protobuf-3.21.12).
+      - name: Fetch Protobuf 3.21.12 source
+        run: |
+          SRC_DIR="${GITHUB_WORKSPACE}/../cross-tooling/src"
+          mkdir -p "$SRC_DIR"
+          curl -fsSL https://github.com/protocolbuffers/protobuf/archive/refs/tags/v3.21.12.tar.gz \
+            | tar xz -C "$SRC_DIR"
+
+      # cross-build-win.sh builds the host+target capnp/protobuf toolchain,
+      # applies the Surelog MinGW patch, configures and builds the Windows
+      # interpreter (what_interpreter.exe, kdb_viewer.exe) into build-win/.
+      - name: Cross-build interpreter for Windows
+        run: ./cross-build-win.sh
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp build-win/interpreter/what_interpreter.exe dist/
+          cp build-win/interpreter/kdb_viewer.exe dist/
+          (cd dist && zip -r ../what-interpreter-windows-x86_64.zip what_interpreter.exe kdb_viewer.exe)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: what-interpreter-windows
+          path: what-interpreter-windows-x86_64.zip
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
   # Server (Rust): what-server (Linux) + bundled web client + example data
   # ---------------------------------------------------------------------------
   build-server:
@@ -329,7 +387,7 @@ jobs:
   # ---------------------------------------------------------------------------
   release:
     name: Publish GitHub Release
-    needs: [build-interpreter, build-server, build-server-windows]
+    needs: [build-interpreter, build-interpreter-windows, build-server, build-server-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -357,6 +415,7 @@ jobs:
           name: WHAT ${{ steps.version.outputs.version }}
           files: |
             artifacts/what-interpreter-linux/what-interpreter-linux-x86_64.tar.gz
+            artifacts/what-interpreter-windows/what-interpreter-windows-x86_64.zip
             artifacts/what-server-linux/what-server-linux-x86_64.tar.gz
             artifacts/what-server-windows/what-server-windows-x86_64.zip
           generate_release_notes: true
