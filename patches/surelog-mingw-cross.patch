@@ -1,0 +1,55 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 18f5b328a0..4e6f09e791 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -956,7 +956,10 @@ install(
+         ${PROJECT_SOURCE_DIR}/include/Surelog/Expression/Value.h
+   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/Surelog/Expression)
+ 
+-if (WIN32)
++# NOTE: Under MinGW-w64 cross-compile (WIN32 but not MSVC) PDB files are not
++# produced, so the $<TARGET_PDB_FILE:> generator expressions below are invalid
++# at generate time. Guard the whole block with MSVC.
++if (WIN32 AND MSVC)
+   if (SURELOG_WITH_PYTHON)
+     install(
+       FILES ${Python3_RUNTIME_LIBRARY_DIRS}/python${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}$<$<CONFIG:Debug>:_d>.dll
+diff --git a/src/Common/FileSystem.cpp b/src/Common/FileSystem.cpp
+index fb7722b8f5..3cecdee8c6 100644
+--- a/src/Common/FileSystem.cpp
++++ b/src/Common/FileSystem.cpp
+@@ -38,7 +38,7 @@
+ 
+ #if defined(_WIN32)
+ #define NOMINMAX
+-#include <Windows.h>
++#include <windows.h>
+ #elif defined(__APPLE__)
+ #include <mach-o/dyld.h>
+ #include <sys/param.h>
+diff --git a/src/main.cpp b/src/main.cpp
+index c82efa411b..1f9d149a41 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -44,7 +44,7 @@
+ #include <vector>
+ 
+ #if defined(_MSC_VER) && defined(_DEBUG)
+-#include <Windows.h>
++#include <windows.h>
+ #endif
+ 
+ #include "Surelog/API/PythonAPI.h"
+diff --git a/src/roundtrip.cpp b/src/roundtrip.cpp
+index cd624396f5..e138186362 100644
+--- a/src/roundtrip.cpp
++++ b/src/roundtrip.cpp
+@@ -60,7 +60,7 @@
+ #include "Surelog/SourceCompile/SymbolTable.h"
+ 
+ #if defined(_MSC_VER)
+-#include <Windows.h>
++#include <windows.h>
+ #undef interface
+ #endif
+ 

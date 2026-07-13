@@ -385,7 +385,7 @@ int main(int argc, char* argv[]) {
     }
     
     KdbBuilder builder;
-    builder.setProjectName("hwda_design");
+    builder.setProjectName("what_design");
     builder.setCompressionEnabled(opts.compressionEnabled);
     builder.setCompressionLevel(opts.compressionLevel);
     

@@ -92,7 +92,7 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # Interpreter (C++ / CMake): hwda_interpreter + kdb_viewer
+  # Interpreter (C++ / CMake): what_interpreter + kdb_viewer
   # ---------------------------------------------------------------------------
   build-interpreter:
     name: Build interpreter (Linux x86_64)
@@ -107,8 +107,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential cmake git \
-            protobuf-compiler libprotobuf-dev libzstd-dev \
+            build-essential cmake git ninja-build \
+            libzstd-dev \
             python3 python3-pip pkg-config \
             default-jre-headless ccache
 
@@ -131,29 +131,82 @@ jobs:
         with:
           key: interpreter-${{ runner.os }}
 
+      # -------------------------------------------------------------------------
+      # Pin Cap'n Proto + Protobuf to the ABI-matched versions Surelog/UHDM were
+      # developed against. The interpreter links the Cap'n Proto *runtime* and a
+      # Protobuf *runtime* that MUST match what Surelog/UHDM expect, otherwise
+      # you get subtle ABI mismatches (Ubuntu ships capnp 1.0.1, which is wrong).
+      # Surelog bundles Cap'n Proto 1.1-dev; we pin Protobuf to 3.21.12. Build a
+      # *native host* copy of each (codegen compiler + runtime) and point the
+      # interpreter CMake at it. Staged OUTSIDE the repo tree because CMake
+      # rejects imported-target include dirs that live inside the source/build
+      # dir. This mirrors the local `cross-build-win.sh` host toolchain layout.
+      # -------------------------------------------------------------------------
+      - name: Build host Cap'n Proto (1.1-dev, from bundled source)
+        run: |
+          HOST_TOOLING="${GITHUB_WORKSPACE}/../cross-tooling"
+          CAPNP_HOST="$HOST_TOOLING/capnp-host"
+          mkdir -p "$CAPNP_HOST"
+          cmake -S third_party/Surelog/third_party/UHDM/third_party/capnproto/c++ \
+            -B /tmp/capnp-host-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF \
+            -DWITH_OPENSSL=OFF -DWITH_ZLIB=OFF \
+            -DCMAKE_INSTALL_PREFIX="$CAPNP_HOST"
+          cmake --build /tmp/capnp-host-build -j"$(nproc)"
+          cmake --install /tmp/capnp-host-build
+
+      - name: Build host Protobuf (3.21.12)
+        run: |
+          HOST_TOOLING="${GITHUB_WORKSPACE}/../cross-tooling"
+          PROTO_HOST="$HOST_TOOLING/proto-host"
+          mkdir -p "$PROTO_HOST"
+          curl -fsSL https://github.com/protocolbuffers/protobuf/archive/refs/tags/v3.21.12.tar.gz \
+            | tar xz -C /tmp
+          cmake -S /tmp/protobuf-3.21.12 -B /tmp/proto-host-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -Dprotobuf_BUILD_TESTS=OFF \
+            -Dprotobuf_BUILD_SHARED_LIBS=OFF \
+            -Dprotobuf_WITH_ZLIB=OFF \
+            -Dprotobuf_BUILD_PROTOC_BINARIES=ON \
+            -DCMAKE_INSTALL_PREFIX="$PROTO_HOST"
+          cmake --build /tmp/proto-host-build -j"$(nproc)"
+          cmake --install /tmp/proto-host-build
+
       - name: Configure & Build
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+          HOST_TOOLING="${GITHUB_WORKSPACE}/../cross-tooling"
+          CAPNP_HOST="$HOST_TOOLING/capnp-host"
+          PROTO_HOST="$HOST_TOOLING/proto-host"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -G Ninja \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          cmake --build build --target hwda_interpreter kdb_viewer -j"$(nproc)"
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_PREFIX_PATH="$CAPNP_HOST;$PROTO_HOST" \
+            -DCapnProto_DIR="$CAPNP_HOST/lib/cmake/CapnProto" \
+            -DProtobuf_DIR="$PROTO_HOST/lib/cmake/protobuf" \
+            -DCAPNP_EXECUTABLE="$CAPNP_HOST/bin/capnp" \
+            -DCAPNPC_CXX_EXECUTABLE="$CAPNP_HOST/bin/capnpc-c++" \
+            -DProtobuf_PROTOC_EXECUTABLE="$PROTO_HOST/bin/protoc" \
+            -DBUILD_INTERPRETER=ON -DBUILD_TESTS=OFF -DBUILD_SURELOG=ON \
+            -DSURELOG_WITH_TCMALLOC=OFF -DSURELOG_USE_HOST_CAPNP=ON -DUHDM_USE_HOST_CAPNP=ON
+          cmake --build build --target what_interpreter kdb_viewer -j"$(nproc)"
 
       - name: Package
         run: |
           mkdir -p dist
-          cp build/interpreter/hwda_interpreter dist/
+          cp build/interpreter/what_interpreter dist/
           cp build/interpreter/kdb_viewer dist/
-          tar -czf hwda-interpreter-linux-x86_64.tar.gz -C dist hwda_interpreter kdb_viewer
+          tar -czf what-interpreter-linux-x86_64.tar.gz -C dist what_interpreter kdb_viewer
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: hwda-interpreter-linux
-          path: hwda-interpreter-linux-x86_64.tar.gz
+          name: what-interpreter-linux
+          path: what-interpreter-linux-x86_64.tar.gz
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # Server (Rust): hwda-server (Linux) + bundled web client + example data
+  # Server (Rust): what-server (Linux) + bundled web client + example data
   # ---------------------------------------------------------------------------
   build-server:
     name: Build server (Linux x86_64)
@@ -192,23 +245,23 @@ jobs:
       - name: Package (server + web client + example data)
         run: |
           mkdir -p pkg/web pkg/kdb pkg/waves
-          BIN=$(find . -type f -path '*/release/hwda-server' | head -1)
+          BIN=$(find . -type f -path '*/release/what-server' | head -1)
           echo "Found server binary: $BIN"
-          cp "$BIN" pkg/hwda-server
+          cp "$BIN" pkg/what-server
           cp -r web-dist/. pkg/web/
           cp server/examples/kdb/* pkg/kdb/
           cp server/examples/waves/* pkg/waves/
-          tar -czf hwda-server-linux-x86_64.tar.gz -C pkg .
+          tar -czf what-server-linux-x86_64.tar.gz -C pkg .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: hwda-server-linux
-          path: hwda-server-linux-x86_64.tar.gz
+          name: what-server-linux
+          path: what-server-linux-x86_64.tar.gz
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # Server (Rust): hwda-server (Windows) + bundled web client + example data
+  # Server (Rust): what-server (Windows) + bundled web client + example data
   # ---------------------------------------------------------------------------
   build-server-windows:
     name: Build server (Windows x86_64)
@@ -255,20 +308,20 @@ jobs:
       - name: Package (server + web client + example data)
         shell: pwsh
         run: |
-          $bin = (Get-ChildItem -Path server/target/release/hwda-server.exe -Recurse | Select-Object -First 1).FullName
+          $bin = (Get-ChildItem -Path server/target/release/what-server.exe -Recurse | Select-Object -First 1).FullName
           Write-Host "Found server binary: $bin"
           New-Item -ItemType Directory -Force -Path pkg/web, pkg/kdb, pkg/waves | Out-Null
-          Copy-Item $bin pkg/hwda-server.exe
+          Copy-Item $bin pkg/what-server.exe
           Copy-Item -Recurse -Force web-dist/* pkg/web/
           Copy-Item -Recurse -Force server/examples/kdb/* pkg/kdb/
           Copy-Item -Recurse -Force server/examples/waves/* pkg/waves/
-          Compress-Archive -Path pkg/* -DestinationPath hwda-server-windows-x86_64.zip
+          Compress-Archive -Path pkg/* -DestinationPath what-server-windows-x86_64.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: hwda-server-windows
-          path: hwda-server-windows-x86_64.zip
+          name: what-server-windows
+          path: what-server-windows-x86_64.zip
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
@@ -301,11 +354,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
-          name: HWDA ${{ steps.version.outputs.version }}
+          name: WHAT ${{ steps.version.outputs.version }}
           files: |
-            artifacts/hwda-interpreter-linux/hwda-interpreter-linux-x86_64.tar.gz
-            artifacts/hwda-server-linux/hwda-server-linux-x86_64.tar.gz
-            artifacts/hwda-server-windows/hwda-server-windows-x86_64.zip
+            artifacts/what-interpreter-linux/what-interpreter-linux-x86_64.tar.gz
+            artifacts/what-server-linux/what-server-linux-x86_64.tar.gz
+            artifacts/what-server-windows/what-server-windows-x86_64.zip
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

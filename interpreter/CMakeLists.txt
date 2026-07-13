@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(hwda_interpreter VERSION 1.0.0 LANGUAGES CXX C)
+project(what_interpreter VERSION 1.0.0 LANGUAGES CXX C)
 
 # Protocol Buffers support
 find_package(Protobuf QUIET)
@@ -55,12 +55,12 @@ set(INTERPRETER_HEADERS
     ${PROTO_HDRS}
 )
 
-add_library(hwda_interpreter_lib STATIC
+add_library(what_interpreter_lib STATIC
     ${INTERPRETER_SOURCES}
     ${INTERPRETER_HEADERS}
 )
 
-target_include_directories(hwda_interpreter_lib
+target_include_directories(what_interpreter_lib
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_BINARY_DIR}  # For generated proto headers
@@ -72,17 +72,17 @@ target_include_directories(hwda_interpreter_lib
 
 find_package(Zstd QUIET)
 if(Zstd_FOUND)
-    target_link_libraries(hwda_interpreter_lib PUBLIC zstd::zstd)
-    target_compile_definitions(hwda_interpreter_lib PUBLIC USE_ZSTD)
+    target_link_libraries(what_interpreter_lib PUBLIC zstd::zstd)
+    target_compile_definitions(what_interpreter_lib PUBLIC USE_ZSTD)
     message(STATUS "zstd found and enabled for compression")
 else()
     # Try to find zstd using pkg-config or direct library search
     find_library(ZSTD_LIBRARY NAMES zstd libzstd)
     find_path(ZSTD_INCLUDE_DIR NAMES zstd.h)
     if(ZSTD_LIBRARY AND ZSTD_INCLUDE_DIR)
-        target_link_libraries(hwda_interpreter_lib PUBLIC ${ZSTD_LIBRARY})
-        target_include_directories(hwda_interpreter_lib PUBLIC ${ZSTD_INCLUDE_DIR})
-        target_compile_definitions(hwda_interpreter_lib PUBLIC USE_ZSTD)
+        target_link_libraries(what_interpreter_lib PUBLIC ${ZSTD_LIBRARY})
+        target_include_directories(what_interpreter_lib PUBLIC ${ZSTD_INCLUDE_DIR})
+        target_compile_definitions(what_interpreter_lib PUBLIC USE_ZSTD)
         message(STATUS "zstd found via direct search: ${ZSTD_LIBRARY}")
     else()
         message(STATUS "zstd not found, compression disabled")
@@ -90,32 +90,32 @@ else()
 endif()
 
 if(Protobuf_FOUND)
-    target_link_libraries(hwda_interpreter_lib PUBLIC protobuf::libprotobuf)
-    target_compile_definitions(hwda_interpreter_lib PUBLIC USE_PROTOBUF)
+    target_link_libraries(what_interpreter_lib PUBLIC protobuf::libprotobuf)
+    target_compile_definitions(what_interpreter_lib PUBLIC USE_PROTOBUF)
 endif()
 
 if(TARGET surelog)
-    target_link_libraries(hwda_interpreter_lib PUBLIC surelog)
-    target_compile_definitions(hwda_interpreter_lib PUBLIC USE_SURELOG)
+    target_link_libraries(what_interpreter_lib PUBLIC surelog)
+    target_compile_definitions(what_interpreter_lib PUBLIC USE_SURELOG)
     message(STATUS "Surelog linked to interpreter")
 endif()
 
-add_executable(hwda_interpreter src/main.cpp)
-target_link_libraries(hwda_interpreter PRIVATE hwda_interpreter_lib)
+add_executable(what_interpreter src/main.cpp)
+target_link_libraries(what_interpreter PRIVATE what_interpreter_lib)
 
 # KDB Viewer tool
 add_executable(kdb_viewer src/kdb_viewer.cpp)
-target_link_libraries(kdb_viewer PRIVATE hwda_interpreter_lib)
+target_link_libraries(kdb_viewer PRIVATE what_interpreter_lib)
 
 # Test serialize tool (temporarily disabled - file not found)
 # add_executable(test_serialize ../test_serialize.cpp)
-# target_link_libraries(test_serialize PRIVATE hwda_interpreter_lib)
+# target_link_libraries(test_serialize PRIVATE what_interpreter_lib)
 
 # Check parent IDs tool (temporarily disabled - file not found)
 # add_executable(check_parent_ids ../check_parent_ids.cpp)
-# target_link_libraries(check_parent_ids PRIVATE hwda_interpreter_lib)
+# target_link_libraries(check_parent_ids PRIVATE what_interpreter_lib)
 
-install(TARGETS hwda_interpreter kdb_viewer
+install(TARGETS what_interpreter kdb_viewer
     RUNTIME DESTINATION bin
 )
 

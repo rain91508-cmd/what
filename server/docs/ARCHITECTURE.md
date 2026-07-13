@@ -400,7 +400,7 @@ export HWDA_KDB_DIR=/data/kdb
 export HWDA_WAVE_DIR=/data/waves
 
 # 启动服务
-./target/release/hwda-server \
+./target/release/what-server \
   --kdb-dir /data/kdb \
   --wave-dir /data/waves \
   --port 8080 \
@@ -419,8 +419,8 @@ COPY . .
 RUN cargo build --release
 
 FROM debian:bookworm-slim
-COPY --from=builder /app/target/release/hwda-server /usr/local/bin/
-CMD ["hwda-server"]
+COPY --from=builder /app/target/release/what-server /usr/local/bin/
+CMD ["what-server"]
 ```
 
 ## 监控和日志
@@ -436,8 +436,8 @@ CMD ["hwda-server"]
 ### 日志格式
 
 ```
-2024-01-01T12:00:00.000000Z  INFO hwda_server: 请求：GET /api/kdb
-2024-01-01T12:00:00.001000Z  INFO hwda_server: 响应：GET /api/kdb 200 OK - 1ms
+2024-01-01T12:00:00.000000Z  INFO what_server: 请求：GET /api/kdb
+2024-01-01T12:00:00.001000Z  INFO what_server: 响应：GET /api/kdb 200 OK - 1ms
 ```
 
 ## 未来规划

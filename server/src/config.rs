@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::path::PathBuf;
 
-/// Hardware Design Analyzer data server configuration
+/// Web-based HDL Analysis Toolkit data server configuration
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 pub struct ServerConfig {

@@ -5,7 +5,7 @@ fn main() {
     println!("Running transition-count comparison test...");
 
     // Run the server's compare test
-    let output = Command::new("./target/release/hwda-server.exe")
+    let output = Command::new("./target/release/what-server.exe")
         .args(&["--compare-test"])
         .current_dir(".")
         .output()

@@ -1,5 +1,5 @@
 use clap::Parser;
-use hwda_server::{
+use what_server::{
     create_router,
     ServerConfig, ServerState,
 };
@@ -36,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
     // Print startup information (using println to ensure console visibility)
     println!("");
     println!("========================================");
-    println!("  Hardware Design Analyzer Data Server (HWDA Server)");
+    println!("  Web-based HDL Analysis Toolkit Data Server (WHAT Server)");
     println!("========================================");
     println!("");
     println!("[Server configuration]");
@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Also record to tracing
     tracing::info!("========================================");
-    tracing::info!("  Hardware Design Analyzer Data Server (HWDA Server)");
+    tracing::info!("  Web-based HDL Analysis Toolkit Data Server (WHAT Server)");
     tracing::info!("========================================");
     tracing::info!("");
     tracing::info!("[Server configuration]");
@@ -159,7 +159,7 @@ async fn main() -> anyhow::Result<()> {
         println!("========================================\n");
 
         // Run the comparison test, then exit immediately
-        hwda_server::compare_test::run_compare_test(&config).await;
+        what_server::compare_test::run_compare_test(&config).await;
         println!("\n========================================");
         println!("  Comparison test finished, exiting");
         println!("========================================");
@@ -173,7 +173,7 @@ async fn main() -> anyhow::Result<()> {
         println!("========================================\n");
 
         // Run the LoD 20 test, then exit immediately
-        hwda_server::compare_test_lod20::run_lod20_test(&config).await;
+        what_server::compare_test_lod20::run_lod20_test(&config).await;
         println!("\n========================================");
         println!("  LoD 20 test finished, exiting");
         println!("========================================");
@@ -187,7 +187,7 @@ async fn main() -> anyhow::Result<()> {
         println!("========================================\n");
 
         // Run the detailed signal test, then exit immediately
-        hwda_server::compare_test::run_detailed_signal_test(&config).await;
+        what_server::compare_test::run_detailed_signal_test(&config).await;
         println!("\n========================================");
         println!("  Detailed signal test finished, exiting");
         println!("========================================");
