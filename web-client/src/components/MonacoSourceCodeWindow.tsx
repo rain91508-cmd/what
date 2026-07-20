@@ -95,6 +95,10 @@ function MonacoSourceCodeWindow({
   const [totalLines, setTotalLines] = useState<number>(0);
   const [, setIsLargeFile] = useState(false);
   const [windowStartLine, setWindowStartLine] = useState(1);
+  // Mirror of windowStartLine (and last highlight) kept in a ref so decorations
+  // can be translated synchronously when the large-file window changes.
+  const windowStartLineRef = useRef(1);
+  const highlightLineRef = useRef<number | null>(null);
   const internalEditorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const editorRef = externalEditorRef || internalEditorRef;
   const pendingHighlightRef = useRef<number | null>(null);
@@ -103,6 +107,16 @@ function MonacoSourceCodeWindow({
   const monacoInstance = useMonaco();
   const largeFileControllerRef = useRef<LargeFileController | null>(null);
   const isLargeFileModeRef = useRef(false);
+
+  // In windowed (large-file) mode the Monaco model only holds lines
+  // [windowStartLine, windowStartLine + N - 1], so absolute file line numbers
+  // must be shifted into model-relative (1-based) coordinates.
+  const absToModelLine = useCallback((absLine: number): number => {
+    if (isLargeFileModeRef.current && windowStartLineRef.current > 1) {
+      return absLine - windowStartLineRef.current + 1;
+    }
+    return absLine;
+  }, []);
 
   // Widths for header sections (module info and file path)
   const [moduleInfoWidth, setModuleInfoWidth] = useState(300);
@@ -119,14 +133,30 @@ function MonacoSourceCodeWindow({
   // Apply highlight to a specific line
   const applyHighlight = useCallback((editor: editor.IStandaloneCodeEditor, line: number, revealInCenter: boolean = true) => {
     if (!line) return;
-    
+
+    // Remember the absolute line so the highlight can be re-applied (translated)
+    // after a large-file window change.
+    highlightLineRef.current = line;
+
+    // In windowed large-file mode the model only contains a slice of the file,
+    // so shift the absolute line into model-relative (1-based) coordinates.
+    const modelLine = absToModelLine(line);
+
+    const modelForLog = editor.getModel();
+    console.log('[MonacoSourceCodeWindow] applyHighlight absLine=', line,
+      'isLargeFile=', isLargeFileModeRef.current,
+      'windowStartLineRef=', windowStartLineRef.current,
+      'modelLine=', modelLine,
+      'modelLineCount=', modelForLog ? modelForLog.getLineCount() : 0,
+      'revealInCenter=', revealInCenter);
+
     // Reveal the line in center of view only if requested
     if (revealInCenter) {
-      editor.revealLineInCenter(line);
+      editor.revealLineInCenter(modelLine);
     }
     
     // Use Monaco's built-in line highlighting via selection
-    editor.setSelection(new monaco.Range(line, 1, line, 1));
+    editor.setSelection(new monaco.Range(modelLine, 1, modelLine, 1));
     
     // Clear previous decorations
     if (decorationsRef.current.length > 0) {
@@ -137,7 +167,7 @@ function MonacoSourceCodeWindow({
     // Add decoration for persistent highlighting
     decorationsRef.current = editor.deltaDecorations([], [
       {
-        range: new monaco.Range(line, 1, line, 1),
+        range: new monaco.Range(modelLine, 1, modelLine, 1),
         options: {
           isWholeLine: true,
           className: 'my-highlighted-line',
@@ -145,11 +175,15 @@ function MonacoSourceCodeWindow({
         }
       }
     ]);
-  }, []);
+  }, [absToModelLine]);
 
   // Apply gray out decoration for lines outside module range
-  const applyGrayOutDecoration = useCallback((editor: editor.IStandaloneCodeEditor, startLine: number, endLine: number, totalLines: number) => {
-    if (!startLine || !endLine || totalLines <= 0) return;
+  const applyGrayOutDecoration = useCallback((editor: editor.IStandaloneCodeEditor, startLine: number, endLine: number, _totalLines: number) => {
+    if (!startLine || !endLine) return;
+
+    const model = editor.getModel();
+    const modelLineCount = model ? model.getLineCount() : 0;
+    if (modelLineCount <= 0) return;
 
     // Clear previous gray out decorations
     if (grayOutDecorationsRef.current.length > 0) {
@@ -159,10 +193,21 @@ function MonacoSourceCodeWindow({
 
     const decorations: monaco.editor.IModelDeltaDecoration[] = [];
 
-    // Gray out lines before module start - use className for whole line background
-    if (startLine > 1) {
+    // In windowed large-file mode the model only holds a slice of the file
+    // starting at windowStartLine. Only the part of the module range that falls
+    // inside the current window should be grayed out.
+    const ws = windowStartLineRef.current;
+    const windowAbsEnd = ws + modelLineCount - 1;
+
+    console.log('[MonacoSourceCodeWindow] applyGrayOut startLine=', startLine, 'endLine=', endLine,
+      'windowStartLineRef=', ws, 'windowAbsEnd=', windowAbsEnd, 'modelLineCount=', modelLineCount);
+
+    // Gray out the portion of the window that lies BEFORE the module start
+    const beforeAbsEnd = Math.min(startLine - 1, windowAbsEnd);
+    if (beforeAbsEnd >= ws) {
+      const modelEnd = beforeAbsEnd - ws + 1;
       decorations.push({
-        range: new monaco.Range(1, 1, startLine - 1, 1),
+        range: new monaco.Range(1, 1, modelEnd, 1),
         options: {
           isWholeLine: true,
           className: 'grayed-out-line',
@@ -174,10 +219,12 @@ function MonacoSourceCodeWindow({
       });
     }
 
-    // Gray out lines after module end - use className for whole line background
-    if (endLine < totalLines) {
+    // Gray out the portion of the window that lies AFTER the module end
+    const afterAbsStart = Math.max(endLine + 1, ws);
+    if (afterAbsStart <= windowAbsEnd) {
+      const modelStart = afterAbsStart - ws + 1;
       decorations.push({
-        range: new monaco.Range(endLine + 1, 1, totalLines, 1),
+        range: new monaco.Range(modelStart, 1, modelLineCount, 1),
         options: {
           isWholeLine: true,
           className: 'grayed-out-line',
@@ -1350,20 +1397,39 @@ function MonacoSourceCodeWindow({
   // Apply highlight when highlightLine changes and editor is ready
   // Clear cache after applying highlight to ensure subsequent double-clicks work
   useEffect(() => {
-    if (editorRef.current && highlightLine) {
-      const cacheKey = tabId;
-      const hasCachedState = editorStateCache.has(cacheKey);
-      
-      // Only reveal in center if no cached state (first time or after cache cleared)
-      const shouldRevealInCenter = !hasCachedState;
-      applyHighlight(editorRef.current, highlightLine, shouldRevealInCenter);
-      
-      // Don't clear cache here - it will be cleared by handleEditorDidMount after restoration
-      // This prevents race condition where cache is cleared before expanded lines are restored
-    } else if (highlightLine && !editorRef.current) {
+    if (!highlightLine) return;
+    const editor = editorRef.current;
+    if (!editor) {
       pendingHighlightRef.current = highlightLine;
+      return;
     }
-  }, [highlightLine, applyHighlight, tabId]);
+
+    const cacheKey = tabId;
+    const hasCachedState = editorStateCache.has(cacheKey);
+
+    // Only reveal in center if no cached state (first time or after cache cleared)
+    const shouldRevealInCenter = !hasCachedState;
+
+    // In large-file (windowed) mode the highlight may fall outside the currently
+    // loaded window (e.g. jumping between instances in the SAME file, where fileId
+    // does not change and loadSourceFile does not re-run). We must ensure the window
+    // covers the target line before translating it into model coordinates,
+    // otherwise the model-relative line is out of range and Monaco clamps it wrong.
+    if (isLargeFileModeRef.current && largeFileControllerRef.current) {
+      console.log('[MonacoSourceCodeWindow] highlightLine effect (large-file): ensureWindow around', highlightLine, 'current windowStartLineRef=', windowStartLineRef.current);
+      largeFileControllerRef.current
+        .ensureWindow(highlightLine - 50, highlightLine + 50)
+        .then(() => {
+          console.log('[MonacoSourceCodeWindow] highlightLine effect: window ensured, applying highlight', highlightLine, 'windowStartLineRef=', windowStartLineRef.current);
+          applyHighlight(editor, highlightLine, shouldRevealInCenter);
+          if (moduleStartLine && moduleEndLine) {
+            applyGrayOutDecoration(editor, moduleStartLine, moduleEndLine, 0);
+          }
+        });
+    } else {
+      applyHighlight(editor, highlightLine, shouldRevealInCenter);
+    }
+  }, [highlightLine, applyHighlight, applyGrayOutDecoration, moduleStartLine, moduleEndLine, tabId]);
 
   // Handle signalDeclarationLine change (when jumping to different signal in same file)
   // Always reveal in center when user explicitly jumps to a signal (double-click)
@@ -1412,9 +1478,19 @@ function MonacoSourceCodeWindow({
     let targetModuleStartLine: number | null = null;
     
     if (displayModuleIndex && displayModuleIndex > 0) {
-      // Use displayModuleIndex to get module info
+      // Use the SAME display-range logic as setSourceDisplay (getDisplayRange),
+      // so the loaded file matches the gray-out range. For an instance,
+      // getDisplayRange returns the DEF-module's file/range (i.e. the file where
+      // the displayed instance is actually declared), NOT the parent instance's
+      // own definition file. Using module.definition.fileId here would open the
+      // parent's file instead of the file that contains the instance declaration.
+      const range = kdbManager.getDisplayRange(displayModuleIndex);
       const module = kdbManager.getModuleById(displayModuleIndex);
-      if (module) {
+      if (range) {
+        targetFileId = range.fileId;
+        targetModuleName = module?.name || '';
+        targetModuleStartLine = range.startLine;
+      } else if (module) {
         targetFileId = module.definition?.fileId || null;
         targetModuleName = module.name;
         targetModuleStartLine = module.definition?.startLine || null;
@@ -1485,8 +1561,25 @@ function MonacoSourceCodeWindow({
         // Create new controller
         const controller = new LargeFileController({
           onContentChange: (content, startLine) => {
+            windowStartLineRef.current = startLine;
             setContent(content);
             setWindowStartLine(startLine);
+            console.log('[MonacoSourceCodeWindow] onContentChange startLine=', startLine,
+              'contentLineCount=', content ? content.split('\n').length : 0,
+              'highlightLineRef=', highlightLineRef.current,
+              'moduleStartLine=', moduleStartLine, 'moduleEndLine=', moduleEndLine);
+
+            // The window shifted: re-apply the current highlight and gray-out
+            // using model-relative coordinates so they track the new slice.
+            const editor = editorRef.current;
+            if (editor) {
+              if (highlightLineRef.current) {
+                applyHighlight(editor, highlightLineRef.current, false);
+              }
+              if (moduleStartLine && moduleEndLine) {
+                applyGrayOutDecoration(editor, moduleStartLine, moduleEndLine, 0);
+              }
+            }
           },
           onLoadingChange: (loading) => {
             setLoading(loading);
@@ -1517,6 +1610,10 @@ function MonacoSourceCodeWindow({
         const visibleStart = Math.max(1, targetLine - 50);
         const visibleEnd = Math.min(fileInfo.totalLines, targetLine + 50);
         await controller.ensureWindow(visibleStart, visibleEnd);
+        console.log('[MonacoSourceCodeWindow] loadSourceFile large: targetFileId=', targetFileId,
+          'targetLine=', targetLine, 'isLarge=', isLarge,
+          'windowAfterEnsure=', JSON.stringify(controller.getWindowState()),
+          'fileTotalLines=', fileInfo.totalLines);
         
         // Set highlight
         if (signalDeclarationLine) {
@@ -1532,6 +1629,7 @@ function MonacoSourceCodeWindow({
         
         if (fileContent !== null) {
           setContent(fileContent);
+          windowStartLineRef.current = 1;
           setWindowStartLine(1);
           
           // Priority: signalDeclarationLine > startFromLine1 > module.startLine
