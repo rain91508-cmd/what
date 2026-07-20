@@ -23,6 +23,7 @@ void printUsage(const char* progName) {
               << "  -C, --content <file>  Show content of a source file\n"
               << "  -R, --range <spec>    Show line range using index offset (format: fileId:startLine:endLine)\n"
               << "  -j, --json            Output in JSON format\n"
+              << "  -J, --dump-drivers    Stream compact driver dump (JSONL) for large designs\n"
               << "  -v, --verbose         Verbose output\n"
               << "  --help                Show this help\n";
 }
@@ -396,38 +397,96 @@ void searchSignals(const KdbBuilder& builder, const std::string& pattern) {
     std::cout << "Found " << count << " matching signals.\n";
 }
 
+// Lookup-time merge of an instance signal's drivers. The instance stores only
+// its own (port-connection) drivers; its INTERNAL (continuous / procedural)
+// drivers live on the module *type's* SOURCE module -- the defmodule, or the
+// first instance of a nested-only type (e.g. picorv32_core, which has no
+// defmodule). We copy those internal drivers onto the instance, keeping the
+// source's line but remapping the driver signal id to the instance-local
+// signal of the same name. Internal vs port-connection is distinguished
+// WITHOUT a proto flag: a source driver is internal iff its driver signal's
+// parent module is the source module itself (a port-connection driver points
+// at a sub-instance, a different module). The proto layout is unchanged.
+static std::vector<DriverLocation> getMergedDriverLocations(const KdbBuilder& builder,
+                                                            uint64_t signalGlobalId) {
+    std::vector<DriverLocation> merged;
+    const SignalInstInfo* inst = builder.getGlobalSignalInst(signalGlobalId);
+    if (!inst) return merged;
+    merged.insert(merged.end(), inst->driverLocations.begin(), inst->driverLocations.end());
+
+    const ModuleInfo* mod = builder.findModuleById(inst->parentModuleId);
+    if (mod && mod->isInstance && mod->defModuleId != 0) {
+        const ModuleInfo* srcMod = builder.findModuleById(mod->defModuleId);
+        if (srcMod && srcMod != mod) {
+            uint32_t localIdx = static_cast<uint32_t>(signalGlobalId - mod->signalInstsStartId);
+            uint64_t srcGid = static_cast<uint64_t>(srcMod->signalInstsStartId) + localIdx;
+            const SignalInstInfo* srcInst = builder.getGlobalSignalInst(srcGid);
+            if (srcInst) {
+                for (const auto& dl : srcInst->driverLocations) {
+                    uint64_t driverGlobalId = dl.driverSignalGlobalId;
+                    if (driverGlobalId == 0) {
+                        // Constant/unknown driver: include as-is (no remap).
+                        bool dup = false;
+                        for (const auto& m : merged)
+                            if (m.driverSignalGlobalId == 0 && m.line == dl.line) { dup = true; break; }
+                        if (!dup) merged.push_back(dl);
+                        continue;
+                    }
+                    const SignalInstInfo* drvInst = builder.getGlobalSignalInst(driverGlobalId);
+                    if (!drvInst) continue;
+                    // Only INTERNAL drivers: the driver signal lives in the source
+                    // module itself (port-connection drivers point at sub-instances).
+                    if (drvInst->parentModuleId != builder.getModuleId(srcMod)) continue;
+
+                    // Remap driver signal id to the instance-local signal by name.
+                    const SignalInfo* drvSig = builder.findSignalById(driverGlobalId);
+                    DriverLocation out;
+                    out.line = dl.line;  // keep the source (defmodule) line
+                    if (drvSig) {
+                        std::string instDriverName = builder.calculateSignalFullName(mod, drvSig->name);
+                        out.driverSignalGlobalId = builder.getSignalGlobalIdByName(instDriverName);
+                    } else {
+                        out.driverSignalGlobalId = 0;
+                    }
+                    bool dup = false;
+                    for (const auto& m : merged)
+                        if (m.driverSignalGlobalId == out.driverSignalGlobalId && m.line == out.line) { dup = true; break; }
+                    if (!dup) merged.push_back(out);
+                }
+            }
+        }
+    }
+    return merged;
+}
+
 void printSignalDriverTrace(const KdbBuilder& builder, const std::string& signalName) {
-    const auto* signal = builder.findSignalByName(signalName);
-    if (!signal) {
+    uint64_t globalId = builder.getSignalGlobalIdByName(signalName);
+    const auto* signal = builder.findSignalByName(signalName);  // for header (fullName, type)
+    if (!signal || globalId == 0) {
         std::cout << "Signal not found: " << signalName << "\n";
         return;
     }
-    
+
     std::cout << "\n=== Driver Trace for: " << signal->fullName << " ===\n";
     std::cout << "  Type: " << signalTypeToString(signal->type) << "\n";
-    
-    // Copy driver data to local variables to avoid modification
-    std::vector<uint64_t> driverIds = signal->driverSignalIds;
-    std::vector<KdbSourceLocation> driverLines = signal->driverLines;
-    
-    std::cout << "  Drivers (" << driverIds.size() << "):\n";
-    for (size_t i = 0; i < driverIds.size(); ++i) {
-        uint64_t driverId = driverIds[i];
+
+    // Merge instance port-connection drivers with the type's internal drivers
+    // (lookup-time remap; see getMergedDriverLocations).
+    std::vector<DriverLocation> merged = getMergedDriverLocations(builder, globalId);
+
+    std::cout << "  Drivers (" << merged.size() << "):\n";
+    for (size_t i = 0; i < merged.size(); ++i) {
+        uint64_t driverId = merged[i].driverSignalGlobalId;
         const auto* driver = builder.findSignalById(driverId);
         if (driver) {
-            std::cout << "    [" << i + 1 << "] ID=" << driverId 
-                      << " Name=" << driver->fullName 
+            std::cout << "    [" << i + 1 << "] ID=" << driverId
+                      << " Name=" << driver->fullName
                       << " [" << signalTypeToString(driver->type) << "]";
-            // Show driver line if available
-            if (i < driverLines.size()) {
-                std::cout << " at line " << driverLines[i].line;
-            }
+            std::cout << " at line " << merged[i].line;
             std::cout << "\n";
         } else {
             std::cout << "    [" << i + 1 << "] ID=" << driverId << " <unknown>";
-            if (i < driverLines.size()) {
-                std::cout << " at line " << driverLines[i].line;
-            }
+            std::cout << " at line " << merged[i].line;
             std::cout << "\n";
         }
     }
@@ -607,12 +666,114 @@ void printJson(const KdbBuilder& builder) {
     std::cout << "}\n";
 }
 
+static void jsonEscape(std::ostream& os, const std::string& s) {
+    os << '"';
+    for (char c : s) {
+        switch (c) {
+            case '"': os << "\\\""; break;
+            case '\\': os << "\\\\"; break;
+            case '\n': os << "\\n"; break;
+            case '\t': os << "\\t"; break;
+            default: os << c;
+        }
+    }
+    os << '"';
+}
+
+// Compact, streamable driver dump (JSONL). One object per signal that has
+// driver locations, plus a leading file-map object. Used for large designs
+// where a full -j dump would be enormous.
+//
+// Per edge we emit the driven signal's full name, whether it lives in an
+// instance module, the fileId of the source line (the signal's own module
+// file for definitions; the parent module file for instances, since a port
+// connection line lives at the instantiation site), the driver signal's full
+// name, and the recorded line number.
+void printDriverDump(const KdbBuilder& builder) {
+    std::cout << "{\"type\":\"files\",\"files\":[";
+    auto files = builder.getAllFiles();
+    for (size_t i = 0; i < files.size(); ++i) {
+        if (i) std::cout << ",";
+        std::cout << "{\"id\":" << (i + 1) << ",\"path\":";
+        jsonEscape(std::cout, files[i]->path);
+        std::cout << "}";
+    }
+    std::cout << "]}\n";
+
+    auto modules = builder.getAllModules();
+    for (const auto* module : modules) {
+        bool inst = module->isInstance;
+        uint32_t fid = module->definition.fileId;
+        if (inst && module->parentModuleId != 0) {
+            const auto* parent = builder.findModuleById(module->parentModuleId);
+            if (parent) {
+                const auto* pdef = builder.findModuleById(parent->defModuleId);
+                if (pdef) fid = pdef->definition.fileId;
+            }
+        }
+        // Instance's OWN definition module's file (user suggestion):
+        uint32_t dfid = module->definition.fileId;
+        if (inst && module->defModuleId != 0) {
+            const auto* def = builder.findModuleById(module->defModuleId);
+            if (def) dfid = def->definition.fileId;
+        }
+        uint32_t count = module->getSignalInstsCount();
+        for (uint32_t li = 0; li < count; ++li) {
+            const auto* instPtr = module->getSignalInst(li);
+            if (!instPtr) continue;
+            uint64_t globalId = static_cast<uint64_t>(module->signalInstsStartId) + li;
+            // Merge instance port-connection drivers with the type's internal
+            // drivers (lookup-time remap; see getMergedDriverLocations).
+            std::vector<DriverLocation> merged = getMergedDriverLocations(builder, globalId);
+            if (merged.empty()) continue;
+            std::cout << "{\"fn\":";
+            jsonEscape(std::cout, instPtr->fullName);
+            std::cout << ",\"inst\":" << (inst ? 1 : 0) << ",\"fid\":" << fid
+                      << ",\"dfid\":" << dfid
+                      << ",\"rfid\":" << module->definition.fileId
+                      << ",\"mid\":" << builder.getModuleId(module) << ",\"pid\":" << module->parentModuleId
+                      << ",\"did\":" << module->defModuleId << ",\"drv\":[";
+            bool first = true;
+            for (const auto& loc : merged) {
+                if (!first) std::cout << ",";
+                first = false;
+                std::cout << "[";
+                if (loc.driverSignalGlobalId != 0) {
+                    const auto* drv = builder.getGlobalSignalInst(loc.driverSignalGlobalId);
+                    jsonEscape(std::cout, drv ? drv->fullName : std::string());
+                } else {
+                    jsonEscape(std::cout, std::string());
+                }
+                // Per-edge file id where `line` actually lives. The analyzer
+                // guarantees `line` is in the DRIVER signal's defModule (its
+                // declaration) file, so we resolve that file from the driver's
+                // global id and emit it here. This is the correct file for
+                // every case (unlike `fid`/`dfid`, which are keyed off the
+                // driven module and disagree for Case B input-port edges).
+                uint32_t drvFid = 0;
+                if (loc.driverSignalGlobalId != 0) {
+                    const auto* drvSig = builder.findSignalById(loc.driverSignalGlobalId);
+                    if (drvSig) drvFid = drvSig->declaration.fileId;
+                } else {
+                    // Constant driver (driverSignalGlobalId == 0). The reviewer
+                    // resolves the source location against the driven signal's
+                    // parent defModule file, so emit that file id here.
+                    drvFid = dfid;
+                }
+                std::cout << "," << loc.line << "," << drvFid << "]";
+            }
+            std::cout << "]}\n";
+        }
+    }
+}
+
 int main(int argc, char* argv[]) {
     bool showModules = false;
     bool showSignals = false;
     bool showFiles = false;
     bool showHierarchy = false;
     bool showJson = false;
+    bool dumpDrivers = false;
     bool verbose = false;
     bool showSource = false;
     std::string moduleName;
@@ -634,6 +795,7 @@ int main(int argc, char* argv[]) {
         {"content", required_argument, nullptr, 'C'},
         {"range", required_argument, nullptr, 'R'},
         {"json", no_argument, nullptr, 'j'},
+        {"dump-drivers", no_argument, nullptr, 'J'},
         {"verbose", no_argument, nullptr, 'v'},
         {"help", no_argument, nullptr, 'H'},
         {nullptr, 0, nullptr, 0}
@@ -641,7 +803,7 @@ int main(int argc, char* argv[]) {
     
     int opt;
     std::string rangeSpec;
-    while ((opt = getopt_long(argc, argv, "msfhM:S:D:L:cC:R:jv", longOptions, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "msfhM:S:D:L:cC:R:jJv", longOptions, nullptr)) != -1) {
         switch (opt) {
             case 'm':
                 showModules = true;
@@ -679,6 +841,9 @@ int main(int argc, char* argv[]) {
             case 'j':
                 showJson = true;
                 break;
+            case 'J':
+                dumpDrivers = true;
+                break;
             case 'v':
                 verbose = true;
                 break;
@@ -707,19 +872,24 @@ int main(int argc, char* argv[]) {
     size_t fileSize = input.tellg();
     input.seekg(0, std::ios::beg);
     
-    std::cout << "Debug: File size = " << fileSize << " bytes\n";
+    std::cerr << "Debug: File size = " << fileSize << " bytes\n";
     
     uint32_t magic = 0;
     if (fileSize >= 4) {
         input.read(reinterpret_cast<char*>(&magic), sizeof(magic));
         input.seekg(0, std::ios::beg);
-        std::cout << "Debug: Magic number = 0x" << std::hex << magic << std::dec << "\n";
+        std::cerr << "Debug: Magic number = 0x" << std::hex << magic << std::dec << "\n";
     }
     
     KdbBuilder builder;
     if (!builder.deserializeFromFile(kdbFile)) {
         std::cerr << "Error: Failed to load KDB file: " << kdbFile << "\n";
         return 1;
+    }
+    
+    if (dumpDrivers) {
+        printDriverDump(builder);
+        return 0;
     }
     
     std::cout << "Loaded KDB: " << kdbFile << "\n";

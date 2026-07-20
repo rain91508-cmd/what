@@ -17,7 +17,13 @@ namespace interpreter {
 
 KdbBuildListener::KdbBuildListener(KdbBuilder& builder, std::unordered_map<std::string, uint64_t>& filePathToId)
     : builder_(builder), filePathToId_(filePathToId), totalModules_(0), totalSignals_(0), nextPortId_(1), 
-      driverAnalyzer_(new DriverAnalyzer(builder, filePathToId)) {}
+      driverAnalyzer_(new DriverAnalyzer(builder, filePathToId)) {
+    // Clear the analyzer once before the design walk. enterModule_inst runs per
+    // module and must NOT clear it, otherwise accumulated edges and the
+    // uhdmToTempId_ pointer map are discarded (only the last module survives
+    // resolveEdges()).
+    driverAnalyzer_->clear();
+}
 
 KdbBuildListener::~KdbBuildListener() {
     delete driverAnalyzer_;
@@ -37,7 +43,11 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
               << "', vpiType=" << objType << "\n");
     VERBOSE_LOG("DEBUG:   currentModuleStack_ size=" << currentModuleStack_.size() << "\n");
     
-    driverAnalyzer_->clear();
+    // NOTE: Do NOT clear the DriverAnalyzer here. enterModule_inst runs once
+    // per module_inst during the design walk; clearing per-module wipes the
+    // accumulated raw driver edges AND the uhdmToTempId_ pointer map, so only
+    // the last module's edges survive resolveEdges(). The analyzer is cleared
+    // exactly once in the constructor before the walk begins.
     currentModuleSignalMap_.clear();
     currentModuleInstances_.clear();
     
@@ -78,10 +88,12 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     
     // Collect port signals first
     std::vector<SignalInfo> portSignals;
+    std::vector<const UHDM::any*> portObjects;  // Aligned with signalInsts port entries
     auto ports = object->Ports();
     if (ports) {
         for (auto* port : *ports) {
             if (!port) continue;
+            portObjects.push_back(port);
             SignalInfo signalInfo;
             signalInfo.id = 0;  // Initialize id to 0 (will be assigned later)
             signalInfo.name = std::string(port->VpiName());
@@ -150,6 +162,11 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
         builder_.registerSignalFullName(inst.fullName, tempId);
         currentModuleSignalMap_[inst.fullName] = 0;  // Placeholder, not used
         driverAnalyzer_->getSignalMap()[inst.fullName] = 0;  // Placeholder, not used
+        // Register the UHDM port object pointer so driver edges can be resolved
+        // to a global signal ID in O(1) via Actual_group().
+        if (localIdx < portObjects.size()) {
+            driverAnalyzer_->registerSignalObject(portObjects[localIdx], tempId);
+        }
         localIdx++;
     }
 
@@ -177,8 +194,11 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
             bool isVector = false;
             extractBitWidthFromUhdmObject(net, signalInfo.msb, signalInfo.lsb, isVector);
             
-            builder_.addSignal(moduleId, signalInfo);
+            uint64_t localIdx = builder_.addSignal(moduleId, signalInfo);
             totalSignals_++;
+            
+            // Register the UHDM net object pointer for O(1) driver resolution.
+            driverAnalyzer_->registerSignalObject(net, (static_cast<uint64_t>(moduleId) << 32) | localIdx);
             
             // Note: Signal IDs are no longer used, store placeholder for compatibility
             currentModuleSignalMap_[signalInfo.fullName] = 0;
@@ -196,8 +216,11 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
             signalInfo.type = SignalType::PARAMETER;
             signalInfo.parentModuleId = moduleId;
             signalInfo.declaration = extractLocation(param);
-            builder_.addSignal(moduleId, signalInfo);
+            uint64_t localIdx = builder_.addSignal(moduleId, signalInfo);
             totalSignals_++;
+            
+            // Register the UHDM param object pointer for O(1) driver resolution.
+            driverAnalyzer_->registerSignalObject(param, (static_cast<uint64_t>(moduleId) << 32) | localIdx);
             
             // Note: Signal IDs are no longer used, store placeholder for compatibility
             currentModuleSignalMap_[signalInfo.fullName] = 0;
@@ -218,8 +241,29 @@ void KdbBuildListener::enterModule_inst(const UHDM::module_inst* object, vpiHand
     }
     
     if (driverTracingEnabled_) {
-        driverAnalyzer_->analyzeContinuousAssignments(object);
-        driverAnalyzer_->analyzeProceduralAssignments(object);
+        // Internal (continuous / procedural) analysis runs ONCE per module
+        // *type* to save interpreter runtime on heavily-instantiated modules:
+        //   * Definitions always run it.
+        //   * Instances run it only the FIRST time we see this defName (nested
+        //     modules like picorv32_core are never stored as a standalone
+        //     defmodule, so their first instance serves as the analysis source).
+        //     Subsequent instances skip it; the viewer / web-client inherit the
+        //     source's internal drivers at lookup time (see getMergedDriverLocations
+        //     in kdb_viewer.cpp), remapping the driver signal id to the
+        //     instance-local signal of the same name while keeping the source line.
+        // Port connections are ALWAYS analyzed (they are instance-specific).
+        bool runInternal = false;
+        if (!moduleInfo.isInstance) {
+            runInternal = true;
+        } else if (analyzedDefNames_.find(defName) == analyzedDefNames_.end()) {
+            runInternal = true;  // nested-only module: first instance, no defmodule
+        }
+        if (runInternal) {
+            driverAnalyzer_->analyzeContinuousAssignments(object);
+            driverAnalyzer_->analyzeProceduralAssignments(object);
+            analyzedDefNames_.insert(defName);
+            driverSourceModuleId_[defName] = moduleId;
+        }
         driverAnalyzer_->analyzePortConnections(object);
     }
 }
@@ -229,9 +273,9 @@ void KdbBuildListener::leaveModule_inst(const UHDM::module_inst* object, vpiHand
         bool shouldPop = moduleStackMarkers_.back();
         moduleStackMarkers_.pop_back();
         if (shouldPop && !currentModuleStack_.empty()) {
-            if (driverTracingEnabled_) {
-                driverAnalyzer_->applyDriverRelationships();
-            }
+            // Driver edges are collected per module above and resolved once,
+            // after commit, in finishBuild() (see resolveEdges). No per-module
+            // resolution needed here.
             currentModuleStack_.pop_back();
         }
     }
@@ -392,14 +436,38 @@ void KdbBuildListener::linkInstancesToDefinitions() {
             if (instanceModule) {
                 // Use getModuleId to get ID from pointer
                 instanceModule->defModuleId = builder_.getModuleId(defModule);
+                // Share the definition's signal defs so instance signals can be
+                // materialized (getSignalDefs()/buildSignalInfo). Without this,
+                // instance modules have empty signalDefs and lookups such as
+                // getDrivers()/getLoads() drop every instance signal.
+                instanceModule->externalSignalDefs = &defModule->signalDefs;
                 VERBOSE_LOG("DEBUG: Linked instance id=" << instanceId
                           << " -> definition id=" << builder_.getModuleId(defModule)
                           << " (" << defFullName << ")\n");
                 // Note: Signal ID sync is now done in addModule
             }
         } else {
-            VERBOSE_LOG("DEBUG: Definition module not found: " << defFullName
-                      << " for instance id=" << instanceId << "\n");
+            // No standalone defmodule exists (nested-only module such as
+            // picorv32_core). Point the instance's defModuleId at the module
+            // type's INTERNAL-driver SOURCE (the first instance analyzed), so the
+            // lookup-time merge (getMergedDriverLocations in kdb_viewer.cpp) can
+            // find the source's internal drivers and remap them onto this
+            // instance. Share that source's signal defs so this instance's
+            // signals materialize correctly.
+            auto srcIt = driverSourceModuleId_.find(defName);
+            if (srcIt != driverSourceModuleId_.end()) {
+                ModuleInfo* srcMod = const_cast<ModuleInfo*>(builder_.findModuleById(srcIt->second));
+                ModuleInfo* instanceModule = const_cast<ModuleInfo*>(builder_.findModuleById(instanceId));
+                if (srcMod && instanceModule) {
+                    instanceModule->defModuleId = srcIt->second;
+                    instanceModule->externalSignalDefs = &srcMod->signalDefs;
+                    VERBOSE_LOG("DEBUG: Linked (nested) instance id=" << instanceId
+                              << " -> source id=" << srcIt->second << " (" << defFullName << ")\n");
+                }
+            } else {
+                VERBOSE_LOG("DEBUG: Definition module not found: " << defFullName
+                          << " for instance id=" << instanceId << "\n");
+            }
         }
     }
 }
@@ -407,16 +475,18 @@ void KdbBuildListener::linkInstancesToDefinitions() {
 void KdbBuildListener::finishBuild() {
     VERBOSE_LOG("DEBUG: Finishing build, committing signal instances...\n");
     
-    // 1. Apply any remaining driver relationships (only if tracing was enabled)
-    if (driverTracingEnabled_) {
-        driverAnalyzer_->applyDriverRelationships();
-    }
-    
-    // 2. Link instances to definitions (if not already done)
+    // 1. Link instances to definitions (if not already done)
     linkInstancesToDefinitions();
     
-    // 3. Commit all signal instances to global array
+    // 2. Commit all signal instances to global array (assigns global IDs)
     builder_.commitSignalInsts();
+    
+    // 3. Resolve the driver edges collected during the walk to global signal
+    //    IDs and attach them. Done once, after commit, with O(1) pointer/name
+    //    lookups -- no per-signal search.
+    if (driverTracingEnabled_) {
+        driverAnalyzer_->resolveEdges();
+    }
     
     VERBOSE_LOG("DEBUG: Build finished, signal instances committed.\n");
 }

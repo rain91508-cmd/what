@@ -6,6 +6,11 @@
 #include <getopt.h>
 #include <filesystem>
 
+#include <Surelog/API/Surelog.h>
+#include <Surelog/CommandLine/CommandLineParser.h>
+#include <Surelog/ErrorReporting/ErrorContainer.h>
+#include <Surelog/SourceCompile/SymbolTable.h>
+
 using namespace hwda::interpreter;
 
 // Define global verbose flag
@@ -126,7 +131,7 @@ struct CommandLineOptions {
     bool compressionEnabled = true;
     int compressionLevel = 9;
     bool forceSystemVerilog = false;
-    bool driverTracingEnabled = false;
+    bool driverTracingEnabled = true;  // Enabled by default: build driver/load graph
     bool keepUhdmFile = false;  // Default: do not write Surelog's .uhdm file
     bool disableLowMem = false; // Default: low-memory optimization is ON
     bool lowMem = false;        // Individual control, only with --disable-low-mem
@@ -332,12 +337,93 @@ bool parseCommandLine(int argc, char* argv[], CommandLineOptions& opts) {
     return true;
 }
 
+// Surelog parallelizes preprocessing/parsing by re-spawning this very binary
+// with "-batch <file>". Each line of that batch file is a standalone Surelog
+// command (preprocess or parse) that we run through the public API. Without
+// handling -batch, the spawned child re-enters the full KDB build and forks
+// itself recursively (a fork bomb that exhausts memory). The batch lines
+// already carry "-mp 0", so no further forking happens inside a child.
+static int runBatchMode(int argc, char* argv[]) {
+    std::filesystem::path batchFile;
+    std::filesystem::path outputDir;
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "-batch" && i + 1 < argc) {
+            batchFile = argv[++i];
+        } else if (a == "-o" && i + 1 < argc) {
+            outputDir = argv[++i];
+        }
+    }
+    if (batchFile.empty()) {
+        std::cerr << "Error: -batch requires a file argument\n";
+        return 1;
+    }
+
+    std::ifstream stream(batchFile);
+    if (!stream.good()) {
+        std::cerr << "Error: cannot open batch file: " << batchFile << "\n";
+        return 1;
+    }
+
+    int returnCode = 0;
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (line.empty()) continue;
+        std::vector<std::string> args;
+        {
+            std::stringstream ss(line);
+            std::string tok;
+            while (ss >> tok) args.push_back(tok);
+        }
+        // Inject the output directory if the line does not already set one.
+        bool hasOutput = false;
+        for (const auto& t : args) {
+            if (t == "-o") {
+                hasOutput = true;
+                break;
+            }
+        }
+        if (!hasOutput && !outputDir.empty()) {
+            args.push_back("-o");
+            args.push_back(outputDir.string());
+        }
+
+        std::vector<const char*> cargv;
+        cargv.push_back(argv[0]);
+        for (const auto& t : args) cargv.push_back(t.c_str());
+        if (cargv.size() < 2) continue;
+
+        SURELOG::SymbolTable* st = new SURELOG::SymbolTable();
+        SURELOG::ErrorContainer* ec = new SURELOG::ErrorContainer(st);
+        SURELOG::CommandLineParser* clp =
+            new SURELOG::CommandLineParser(ec, st, false, false);
+        bool ok = clp->parseCommandLine((int)cargv.size(), cargv.data());
+        if (ok && !clp->help()) {
+            SURELOG::scompiler* compiler = SURELOG::start_compiler(clp);
+            if (!compiler) returnCode |= 1;
+            SURELOG::shutdown_compiler(compiler);
+        }
+        clp->cleanCache();
+        delete clp;
+        delete ec;
+        delete st;
+    }
+    return returnCode;
+}
+
 int main(int argc, char* argv[]) {
     CommandLineOptions opts;
     
     if (argc < 2) {
         printUsage(argv[0]);
         return 1;
+    }
+
+    // If Surelog spawned us as a multiprocess child, handle -batch and exit.
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "-batch") {
+            return runBatchMode(argc, argv);
+        }
     }
     
     for (int i = 1; i < argc; ++i) {
@@ -428,6 +514,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
+
     std::cout << "Generated KDB: " << opts.outputPath << "\n";
     std::cout << "  Modules: " << builder.getModuleCount() << "\n";
     std::cout << "  Signals: " << builder.getTotalSignalCount() << "\n";

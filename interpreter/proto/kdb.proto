@@ -76,20 +76,29 @@ message SignalDef {
 // Note: no id needed, stored as repeated field in SignalInst
 message DriverLocation {
   uint64 driver_signal_global_id = 1;  // Global ID in all_signal_insts array
-  uint32 line = 2;  // Source line number (file_id not needed)
+  uint32 line = 2;  // Source line; always lives in the driver's defModule (declaration) file
 }
 
 // Signal instance - specific to each module instance
 // Note: id removed, use module's signal_insts_start_id + array index as global id
 // Note: full_name removed - dynamically reconstructed from module hierarchy + signal_def.name
+//
+// Driver locations are no longer nested per-signal. They live in one flat global
+// array (KnowledgeBase.all_driver_locations) and each signal references its slice
+// via (driver_start, driver_count). This mirrors the on-device OPFS layout: two
+// flat binary arrays (signals.bin + drivers.bin) that can be streamed to storage
+// without per-record structuring, and read back by a single O(1) range lookup.
 message SignalInst {
   // uint64 id = 1;  // REMOVED: Use global signal insts array index
   // string full_name = 2;  // REMOVED: Dynamically reconstructed
   uint32 msb = 3;
   uint32 lsb = 4;
   uint32 parent_module_id = 5;  // Module instance ID that owns this signal
-  // Note: driver_signal_global_ids and driver_lines combined into DriverLocation
-  repeated DriverLocation driver_locations = 6;  // Driver signal IDs and their source locations
+  // Slice into KnowledgeBase.all_driver_locations for this signal's drivers.
+  uint32 driver_start = 6;  // Entry index of the first driver in all_driver_locations
+  // Number of drivers. Semantically a u16 (stored as 2 bytes in the OPFS
+  // signals.bin record); kept as uint32 here because proto3 has no u16.
+  uint32 driver_count = 7;
 }
 
 
@@ -127,4 +136,8 @@ message KnowledgeBase {
   repeated DesignHierarchy hierarchies = 5;
   // Global signal instances array for memory optimization
   repeated SignalInst all_signal_insts = 6;  // All signal instances from all modules
+  // Flat global driver-location array. Each SignalInst references its own slice
+  // via (driver_start, driver_count). Stored contiguously in signal order so the
+  // slices are laid out sequentially and map 1:1 onto the OPFS drivers.bin file.
+  repeated DriverLocation all_driver_locations = 7;
 }

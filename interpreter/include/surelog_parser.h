@@ -124,7 +124,7 @@ private:
     bool verbose_;
     bool debug_;
     bool parseOnly_;
-    bool driverTracingEnabled_ = false;  // 默认禁用驱动追踪
+    bool driverTracingEnabled_ = true;  // Driver/load tracing on by default
     bool writeUhdmEnabled_ = false;      // 默认不保留 .uhdm 文件
     bool lowMemEnabled_ = true;          // 默认开启低内存优化
     int maxThreads_ = 0;                 // 默认单线程

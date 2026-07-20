@@ -78,8 +78,7 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
     setSelectedSignalGlobalIds(new Set());
     setLastSelectedIndex(null);
     if (selectedModuleIndex) {
-      const count = kdbManager.getModuleSignalCount(selectedModuleIndex);
-      setTotalSignalCount(count);
+      kdbManager.getModuleSignalCount(selectedModuleIndex).then(count => setTotalSignalCount(count));
     } else {
       setTotalSignalCount(0);
     }
@@ -110,11 +109,12 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
         scrollToSignal(pendingSelectedSignal);
       } else {
         // Signal is not in current page, need to navigate to it
-        const signalIndex = kdbManager.getSignalIndexInModule(selectedModuleIndex, pendingSelectedSignal);
-        if (signalIndex >= 0) {
-          // Navigate to the page containing this signal
-          navigateToSignalIndex(signalIndex);
-        }
+        kdbManager.getSignalIndexInModule(selectedModuleIndex, pendingSelectedSignal).then(signalIndex => {
+          if (signalIndex >= 0) {
+            // Navigate to the page containing this signal
+            navigateToSignalIndex(signalIndex);
+          }
+        });
       }
     }
   }, [pendingSelectedSignal, selectedModuleIndex]);
@@ -125,11 +125,11 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
 
     // Check if signal is already in current range
     if (targetIndex >= currentRangeStart && targetIndex <= currentRangeEnd) {
-      // Signal should be in current signals, but might be filtered out
-      const signal = signals.find(s => {
-        const idx = kdbManager.getSignalIndexInModule(selectedModuleIndex, s.globalId);
-        return idx === targetIndex;
-      });
+      // Signal should be in current signals, but might be filtered out.
+      // Compute the local index directly from the skeleton's signalInstsStartId
+      // (no async signalDefs lookup needed for an already-loaded page).
+      const module = kdbManager.getModuleById(selectedModuleIndex);
+      const signal = module ? signals.find(s => s.globalId - module.signalInstsStartId === targetIndex) : undefined;
       if (signal) {
         setSelectedSignalGlobalId(signal.globalId);
         onSignalSelect?.(signal);
@@ -238,7 +238,7 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
       const filterFn = createFilterFn();
       
       // Get total count fresh to avoid stale state issues
-      const moduleSignalCount = kdbManager.getModuleSignalCount(selectedModuleIndex);
+      const moduleSignalCount = await kdbManager.getModuleSignalCount(selectedModuleIndex);
       
       const result = await kdbManager.findFilteredSignalsPaged(
         selectedModuleIndex,

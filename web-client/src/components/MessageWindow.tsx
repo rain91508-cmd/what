@@ -311,10 +311,12 @@ export function MessageWindow({ messages, onBookmarkClick, onDriverClick, wavema
             const signal = await kdbManager.buildSignal(driver.driverSignalGlobalId);
             if (signal) {
               driverManager.updateDriverFullName(group.id, i, signal.fullName);
-              // Get file id from parent module
-              const module = await kdbManager.getModuleById(signal.parentModuleId);
-              if (module?.definition?.fileId) {
-                driverManager.updateDriverFileId(group.id, i, module.definition.fileId);
+              // Use the driver signal's OWN declaration file. The interpreter
+              // guarantees DriverLocation.line lives in this file (driver's
+              // defModule), so file + line are always consistent without any
+              // hierarchy guessing.
+              if (signal.declaration?.fileId) {
+                driverManager.updateDriverFileId(group.id, i, signal.declaration.fileId);
               }
             }
           }

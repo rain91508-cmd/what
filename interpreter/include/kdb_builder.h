@@ -81,7 +81,14 @@ struct KdbSourceLocation {
 // Note: no id needed, stored as repeated field in SignalInst
 struct DriverLocation {
     uint64_t driverSignalGlobalId;  // Global ID in allSignalInsts array
-    uint32_t line;  // Source line number (file_id not needed)
+    // Source line number. Guaranteed to live in the DRIVER signal's defModule
+    // file (= its declaration file), so the viewer can resolve the file solely
+    // from driverSignalGlobalId -> declaration.fileId and pair it with `line`
+    // without any hierarchy guessing. For Case A (driver is a sub-instance
+    // signal) this holds the driver's declaration line; for Case B (driver in
+    // the parent scope) this holds the connection/assignment line, which lives
+    // in the same file. No fileId stored (keeps KDB small).
+    uint32_t line;
 };
 
 struct KdbModuleSourceLocation {
@@ -289,6 +296,10 @@ public:
     
     const SignalInfo* findSignalByName(const std::string& fullName) const;
     const SignalInfo* findSignalById(uint64_t id) const;  // Now requires commit phase
+    
+    // Get a signal's global ID by full name. Valid only AFTER commit
+    // (signalFullNameToId_ then maps names to global IDs). Returns 0 if not found.
+    uint64_t getSignalGlobalIdByName(const std::string& fullName) const;
     const SourceFileInfo* findFileByPath(const std::string& path) const;
     const SourceFileInfo* findFileById(uint32_t id) const;  // Changed parameter type
     const SourceFileContent* findFileContentById(uint32_t id) const;  // Get file content by ID
@@ -371,6 +382,15 @@ private:
     std::unordered_map<uint32_t, size_t> moduleIdToIndex_;  // Changed key type
     std::unordered_map<uint64_t, size_t> signalIdToIndex_;  // Maps global ID to index in allSignalInsts
     std::unordered_map<uint32_t, size_t> fileIdToIndex_;  // Changed key type
+    
+    // Reverse driver graph: signalGlobalId -> list of signalGlobalIds that
+    // this signal drives (its "loads"). Built lazily by getLoads().
+    mutable std::unordered_map<uint64_t, std::vector<uint64_t>> loadsCache_;
+    mutable bool loadsCacheBuilt_ = false;
+    // Persistent buffers backing the pointers returned by getDrivers/getLoads
+    // (avoids the thread-local aliasing bug of returning &resultById).
+    mutable std::vector<SignalInfo> driversResultBuf_;
+    mutable std::vector<SignalInfo> loadsResultBuf_;
     
     // Note: nextFileId_ removed - file ID is array index + 1
     uint32_t nextModuleId_ = 1;  // Changed from uint64_t to uint32_t

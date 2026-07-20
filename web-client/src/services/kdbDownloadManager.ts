@@ -125,6 +125,28 @@ class KDBDownloadManager {
   }
 
   /**
+   * (Re)arm the worker-stall watchdog.
+   *
+   * The heartbeat only proves the worker *process* is alive — it keeps firing
+   * even when the worker is blocked waiting on the network, so it is NOT a
+   * network-stall detector (the worker has its own STALL_TIMEOUT/retry logic).
+   * Its job is to catch a genuinely hung worker (e.g. a long synchronous WASM
+   * block during the multi-million-record store).
+   *
+   * During the 'storing' phase the worker is legitimately CPU-bound for
+   * minutes at a time, so a short window would produce spurious
+   * "Worker heartbeat timeout" warnings. Use a generous window there; keep a
+   * tighter one for the network phases.
+   */
+  private armHeartbeatTimeout(phase?: string): void {
+    if (this.heartbeatTimeout) clearTimeout(this.heartbeatTimeout);
+    const timeoutMs = phase === 'storing' ? 180000 : 30000;
+    this.heartbeatTimeout = setTimeout(() => {
+      console.warn('[KDBDownloadManager] Worker heartbeat timeout');
+    }, timeoutMs);
+  }
+
+  /**
    * Handle messages from worker
    */
   private handleWorkerMessage(data: unknown): void {
@@ -162,20 +184,15 @@ class KDBDownloadManager {
           };
           this.currentDownload.onProgress?.(progress);
         }
+        // Progress is also proof the worker is alive — keep the stall timer armed.
+        this.armHeartbeatTimeout(message.phase);
         break;
 
       case 'heartbeat':
         if (message.timestamp) {
-          // Clear existing timeout
-          if (this.heartbeatTimeout) {
-            clearTimeout(this.heartbeatTimeout);
-          }
-          
-          // Set new timeout to detect worker stall
-          this.heartbeatTimeout = setTimeout(() => {
-            console.warn('[KDBDownloadManager] Worker heartbeat timeout');
-          }, 15000); // 15 seconds without heartbeat = warning
-          
+          // Re-arm the stall timer on every heartbeat (proof the worker is alive).
+          this.armHeartbeatTimeout(message.phase);
+
           const heartbeat: KDBDownloadHeartbeat = {
             timestamp: message.timestamp,
             loaded: message.loaded || 0,

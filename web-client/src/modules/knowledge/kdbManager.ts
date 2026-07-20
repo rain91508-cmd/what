@@ -11,7 +11,7 @@
 
 import { apiService } from '../../services/api';
 import { indexedDBManager } from '../../core/storage/indexedDB';
-import { get_source_file_content } from '../../core/storage/kdbStorage';
+import { get_source_file_content, get_signals_buffer, get_drivers_by_range } from '../../core/storage/kdbStorage';
 import { kdbDownloadManager, type KDBDownloadProgress } from '../../services/kdbDownloadManager';
 import { wasmManager } from '../../wasm';
 import type { 
@@ -35,12 +35,27 @@ export interface TreeNode {
   parentId?: number;
 }
 
+// signals.bin record layout (see kdbStorage.ts / lib.rs):
+//   msb:u32, lsb:u32, parentModuleId:u32, driverStart:u32, driverCount:u16
+const SIGNAL_RECORD_SIZE = 18;
+
 class KdbManager {
   private currentKdbId: string | null = null;
   private downloading = false;
-  // Cache for modules and signal instances (loaded on demand)
+  // Cache for modules (navigation skeletons, loaded at startup)
   private modules: Module[] = [];
-  private allSignalInsts: SignalInst[] = [];
+  // Lazy cache of signalDefs keyed by module id (definition modules only).
+  // Populated on demand by getSignalDefs() so the renderer never holds all
+  // ~2M SignalDef objects in memory at once — previously this OOM'd / SIGILL'd
+  // the renderer on large KDBs (e.g. n900: 125k modules / 2M signals). Only the
+  // module currently being viewed pulls its defs into memory.
+  private signalDefsCache: Map<number, SignalDef[]> = new Map();
+  // Signal instances are stored as one flat binary buffer (signals.bin) kept
+  // resident here (~18 bytes/signal, tens of MB) and indexed with a DataView for
+  // O(1) synchronous field access — no per-signal JS objects. Drivers are NOT
+  // resident; they are range-read from OPFS drivers.bin only when traced.
+  private signalsView: DataView | null = null;
+  private signalCount = 0;
 
   /**
    * Check if KDB is available on server
@@ -120,13 +135,45 @@ class KdbManager {
   private async loadKdbData(): Promise<void> {
     if (!this.currentKdbId) return;
     
-    // Load all modules
-    this.modules = await indexedDBManager.getAllModules(this.currentKdbId);
-    
-    // Load all signal instances
-    this.allSignalInsts = await indexedDBManager.getAllSignalInsts(this.currentKdbId);
-    
-    console.log(`[KdbManager] Loaded ${this.modules.length} modules and ${this.allSignalInsts.length} signal instances`);
+    // Load only module *skeletons* (no signalDefs) — the heavy signal
+    // definitions stay in IndexedDB and are fetched lazily, per module, when a
+    // module's signals are actually viewed. This keeps memory bounded at load
+    // (the navigation tree only needs name/parent/children/etc.), avoiding the
+    // OOM that previously crashed the renderer on large designs
+    // (e.g. n900: 125k modules / 2M signals).
+    this.modules = await indexedDBManager.getModuleSkeletons(this.currentKdbId);
+
+    // Load the flat signals.bin buffer once and keep it resident as a DataView.
+    // This replaces the millions of per-signal JS objects that previously lived
+    // in memory (the ~10 GB footprint that crashed the renderer). Drivers stay
+    // on disk (drivers.bin) and are range-read on demand via getDriverBySignalId.
+    const buf = await get_signals_buffer(this.currentKdbId);
+    if (buf) {
+      this.signalsView = new DataView(buf);
+      this.signalCount = Math.floor(buf.byteLength / SIGNAL_RECORD_SIZE);
+    } else {
+      this.signalsView = null;
+      this.signalCount = 0;
+      console.warn('[KdbManager] signals.bin not found; no signal instances loaded');
+    }
+
+    console.log(`[KdbManager] Loaded ${this.modules.length} modules and ${this.signalCount} signal instances`);
+  }
+
+  /**
+   * Read a raw signal record from the resident signals.bin buffer (synchronous).
+   * Returns null if out of range or the buffer isn't loaded.
+   */
+  private readSignalRecord(globalId: number): { msb: number; lsb: number; parentModuleId: number; driverStart: number; driverCount: number } | null {
+    if (!this.signalsView || globalId < 0 || globalId >= this.signalCount) return null;
+    const off = globalId * SIGNAL_RECORD_SIZE;
+    return {
+      msb: this.signalsView.getUint32(off, true),
+      lsb: this.signalsView.getUint32(off + 4, true),
+      parentModuleId: this.signalsView.getUint32(off + 8, true),
+      driverStart: this.signalsView.getUint32(off + 12, true),
+      driverCount: this.signalsView.getUint16(off + 16, true),
+    };
   }
 
   // ==================== Dynamic Calculation Helpers ====================
@@ -201,44 +248,57 @@ class KdbManager {
   }
 
   /**
-   * Get signal instance by global ID (0-based index in allSignalInsts)
+   * Get signal instance by global ID (0-based index into signals.bin).
+   * driverLocations is intentionally empty here (drivers are fetched on demand
+   * via getDriverBySignalId); buildSignal() only needs msb/lsb/parentModuleId.
    */
   getSignalInstByGlobalId(globalId: number): SignalInst | null {
-    if (globalId < 0 || globalId >= this.allSignalInsts.length) return null;
-    return this.allSignalInsts[globalId];
+    const rec = this.readSignalRecord(globalId);
+    if (!rec) return null;
+    return {
+      msb: rec.msb,
+      lsb: rec.lsb,
+      parentModuleId: rec.parentModuleId,
+      driverLocations: [],
+    } as SignalInst;
   }
 
   /**
-   * Get signal definition for a module
-   * For instances, gets from definition module
+   * Get signal definition for a module (lazy, cached).
+   * For instances, returns the definition module's signal defs.
+   * The heavy defs are NOT resident for all modules; they are fetched from
+   * IndexedDB on first use for a given module and cached here.
    */
-  getSignalDefs(moduleId: number): SignalDef[] {
+  async getSignalDefs(moduleId: number): Promise<SignalDef[]> {
     const module = this.getModuleById(moduleId);
     if (!module) return [];
-    
-    if (module.isInstance && module.defModuleId > 0) {
-      // Instance: get signal defs from definition module
-      const defModule = this.getModuleById(module.defModuleId);
-      return defModule?.signalDefs || [];
-    }
-    
-    // Definition: use own signal defs
-    return module.signalDefs || [];
+
+    // Instances inherit their defs from the definition module.
+    const targetId = (module.isInstance && module.defModuleId > 0)
+      ? module.defModuleId
+      : moduleId;
+
+    const cached = this.signalDefsCache.get(targetId);
+    if (cached) return cached;
+
+    const defs = await indexedDBManager.getModuleSignalDefs(targetId);
+    this.signalDefsCache.set(targetId, defs);
+    return defs;
   }
 
   /**
    * Build complete Signal object from SignalDef + SignalInst
    * Computed on demand for UI display
    */
-  buildSignal(globalId: number): Signal | null {
+  async buildSignal(globalId: number): Promise<Signal | null> {
     const inst = this.getSignalInstByGlobalId(globalId);
     if (!inst) return null;
     
     const module = this.getModuleById(inst.parentModuleId);
     if (!module) return null;
     
-    // Get signal defs
-    const signalDefs = this.getSignalDefs(inst.parentModuleId);
+    // Get signal defs (lazy)
+    const signalDefs = await this.getSignalDefs(inst.parentModuleId);
     
     // Calculate local index within module
     const localIndex = globalId - module.signalInstsStartId;
@@ -269,14 +329,81 @@ class KdbManager {
 
   /**
    * Get driver information by signal global ID
-   * Returns array of DriverLocation containing driver signal global ID and source line
-   * @param signalGlobalId - Global ID of the signal in allSignalInsts array
-   * @returns Array of DriverLocation or empty array if signal not found or has no drivers
+   * Returns array of DriverLocation containing driver signal global ID and source line.
+   *
+   * The signal's (driverStart, driverCount) slice is read synchronously from the
+   * resident signals.bin buffer, then only that signal's driver bytes are
+   * range-read from OPFS drivers.bin. Nothing else enters memory — this is the
+   * lazy "trace driver" path.
+   * @param signalGlobalId - Global ID of the signal
+   * @returns Promise of DriverLocation[] (empty if not found / no drivers)
    */
-  getDriverBySignalId(signalGlobalId: number): import('../../types/kdb').DriverLocation[] {
-    const inst = this.getSignalInstByGlobalId(signalGlobalId);
-    if (!inst) return [];
-    return inst.driverLocations || [];
+  async getDriverBySignalId(signalGlobalId: number): Promise<import('../../types/kdb').DriverLocation[]> {
+    if (!this.currentKdbId) return [];
+    const rec = this.readSignalRecord(signalGlobalId);
+    if (!rec) return [];
+    // Even if this (instance) signal stores no own drivers, its INTERNAL drivers
+    // live on the module type's SOURCE module and must be merged at lookup time
+    // below. So do NOT early-return on driverCount === 0.
+    const own = rec.driverCount === 0
+      ? []
+      : await get_drivers_by_range(this.currentKdbId, rec.driverStart, rec.driverCount);
+
+    // Instances store only their own (port-connection) drivers; their INTERNAL
+    // (continuous / procedural) drivers live on the module *type's* SOURCE module
+    // -- the defmodule, or the first instance of a nested-only type (which has
+    // no defmodule). Merge those at lookup time: keep the source's line but
+    // remap the driver signal id to the instance-local signal of the same name.
+    // Internal vs port-connection is distinguished WITHOUT a proto flag: a
+    // source driver is internal iff its driver signal's parent module is the
+    // source module itself (port-connection drivers point at sub-instances, a
+    // different module). The proto layout is unchanged.
+    const module = this.getModuleById(rec.parentModuleId);
+    if (!module || !module.isInstance || module.defModuleId <= 0) {
+      return own;
+    }
+    const srcModule = this.getModuleById(module.defModuleId);
+    if (!srcModule || srcModule.signalInstsStartId === module.signalInstsStartId) {
+      return own;
+    }
+    const localIndex = signalGlobalId - module.signalInstsStartId;
+    const srcGlobalId = srcModule.signalInstsStartId + localIndex;
+    const srcRec = this.readSignalRecord(srcGlobalId);
+    if (!srcRec || srcRec.driverCount === 0) {
+      return own;
+    }
+    const srcDrivers = await get_drivers_by_range(this.currentKdbId, srcRec.driverStart, srcRec.driverCount);
+
+    const merged: import('../../types/kdb').DriverLocation[] = [...own];
+    for (const dl of srcDrivers) {
+      if (dl.driverSignalGlobalId === 0) {
+        // Constant/unknown driver: include as-is (no remap) if not duplicate.
+        if (!merged.some(m => m.driverSignalGlobalId === 0 && m.line === dl.line)) {
+          merged.push(dl);
+        }
+        continue;
+      }
+      // Only INTERNAL drivers: the driver signal lives in the source module
+      // itself (port-connection drivers point at sub-instances).
+      const drvRec = this.readSignalRecord(dl.driverSignalGlobalId);
+      if (!drvRec) continue;
+      if (drvRec.parentModuleId !== module.defModuleId) continue;
+
+      // Remap driver signal id to the instance-local signal by name.
+      const drvParent = this.getModuleById(drvRec.parentModuleId);
+      const drvDefs = await this.getSignalDefs(drvRec.parentModuleId);
+      const drvLocalIdx = dl.driverSignalGlobalId - (drvParent ? drvParent.signalInstsStartId : 0);
+      const drvName = drvDefs[drvLocalIdx]?.name;
+      let instDriverId = 0;
+      if (drvName) {
+        instDriverId = (await this.findSignalByName(rec.parentModuleId, drvName)) ?? 0;
+      }
+      const out = { driverSignalGlobalId: instDriverId, line: dl.line } as import('../../types/kdb').DriverLocation;
+      if (!merged.some(m => m.driverSignalGlobalId === out.driverSignalGlobalId && m.line === out.line)) {
+        merged.push(out);
+      }
+    }
+    return merged;
   }
 
   // ==================== On-Demand Loading API ====================
@@ -344,12 +471,12 @@ class KdbManager {
     const module = this.getModuleById(moduleId);
     if (!module) return [];
     
-    const signalDefs = this.getSignalDefs(moduleId);
+    const signalDefs = await this.getSignalDefs(moduleId);
     const signals: Signal[] = [];
     
     for (let i = 0; i < signalDefs.length; i++) {
       const globalId = module.signalInstsStartId + i;
-      const signal = this.buildSignal(globalId);
+      const signal = await this.buildSignal(globalId);
       if (signal) {
         signals.push(signal);
       }
@@ -362,8 +489,8 @@ class KdbManager {
   /**
    * Get signal count for a module
    */
-  getModuleSignalCount(moduleId: number): number {
-    const signalDefs = this.getSignalDefs(moduleId);
+  async getModuleSignalCount(moduleId: number): Promise<number> {
+    const signalDefs = await this.getSignalDefs(moduleId);
     return signalDefs.length;
   }
 
@@ -379,14 +506,14 @@ class KdbManager {
     const module = this.getModuleById(moduleId);
     if (!module) return [];
     
-    const signalDefs = this.getSignalDefs(moduleId);
+    const signalDefs = await this.getSignalDefs(moduleId);
     const signals: Signal[] = [];
     
     const endIndex = Math.min(offset + limit, signalDefs.length);
     
     for (let i = offset; i < endIndex; i++) {
       const globalId = module.signalInstsStartId + i;
-      const signal = this.buildSignal(globalId);
+      const signal = await this.buildSignal(globalId);
       if (signal) {
         signals.push(signal);
       }
@@ -419,7 +546,7 @@ class KdbManager {
       return { signals: [], actualStartIndex: -1, actualEndIndex: -1, hasMore: false };
     }
     
-    const signalDefs = this.getSignalDefs(moduleId);
+    const signalDefs = await this.getSignalDefs(moduleId);
     const signals: Signal[] = [];
     
     if (direction === 'forward') {
@@ -430,7 +557,7 @@ class KdbManager {
       
       while (currentIndex < signalDefs.length && signals.length < limit) {
         const globalId = module.signalInstsStartId + currentIndex;
-        const signal = this.buildSignal(globalId);
+        const signal = await this.buildSignal(globalId);
         
         if (signal && filterFn(signal)) {
           if (firstMatchIndex === -1) {
@@ -457,7 +584,7 @@ class KdbManager {
       
       while (currentIndex >= 0 && signals.length < limit) {
         const globalId = module.signalInstsStartId + currentIndex;
-        const signal = this.buildSignal(globalId);
+        const signal = await this.buildSignal(globalId);
         
         if (signal && filterFn(signal)) {
           if (firstMatchIndex === -1) {
@@ -672,7 +799,7 @@ class KdbManager {
     const module = this.getModuleById(moduleId);
     if (!module) return null;
 
-    const signalDefs = this.getSignalDefs(moduleId);
+    const signalDefs = await this.getSignalDefs(moduleId);
     const BATCH_SIZE = 100;
 
     for (let i = 0; i < signalDefs.length; i += BATCH_SIZE) {
@@ -702,11 +829,11 @@ class KdbManager {
    * @param globalId Signal global ID
    * @returns Signal index within module (0-based), or -1 if not found
    */
-  getSignalIndexInModule(moduleId: number, globalId: number): number {
+  async getSignalIndexInModule(moduleId: number, globalId: number): Promise<number> {
     const module = this.getModuleById(moduleId);
     if (!module) return -1;
 
-    const signalDefs = this.getSignalDefs(moduleId);
+    const signalDefs = await this.getSignalDefs(moduleId);
     const localIndex = globalId - module.signalInstsStartId;
 
     if (localIndex >= 0 && localIndex < signalDefs.length) {
@@ -750,7 +877,9 @@ class KdbManager {
   async clear(): Promise<void> {
     this.currentKdbId = null;
     this.modules = [];
-    this.allSignalInsts = [];
+    this.signalDefsCache.clear();
+    this.signalsView = null;
+    this.signalCount = 0;
     await indexedDBManager.clearAll();
     console.log('[KdbManager] Cleared all data');
   }
