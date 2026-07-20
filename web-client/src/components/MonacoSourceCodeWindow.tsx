@@ -142,13 +142,6 @@ function MonacoSourceCodeWindow({
     // so shift the absolute line into model-relative (1-based) coordinates.
     const modelLine = absToModelLine(line);
 
-    const modelForLog = editor.getModel();
-    console.log('[MonacoSourceCodeWindow] applyHighlight absLine=', line,
-      'isLargeFile=', isLargeFileModeRef.current,
-      'windowStartLineRef=', windowStartLineRef.current,
-      'modelLine=', modelLine,
-      'modelLineCount=', modelForLog ? modelForLog.getLineCount() : 0,
-      'revealInCenter=', revealInCenter);
 
     // Reveal the line in center of view only if requested
     if (revealInCenter) {
@@ -199,8 +192,6 @@ function MonacoSourceCodeWindow({
     const ws = windowStartLineRef.current;
     const windowAbsEnd = ws + modelLineCount - 1;
 
-    console.log('[MonacoSourceCodeWindow] applyGrayOut startLine=', startLine, 'endLine=', endLine,
-      'windowStartLineRef=', ws, 'windowAbsEnd=', windowAbsEnd, 'modelLineCount=', modelLineCount);
 
     // Gray out the portion of the window that lies BEFORE the module start
     const beforeAbsEnd = Math.min(startLine - 1, windowAbsEnd);
@@ -1415,12 +1406,10 @@ function MonacoSourceCodeWindow({
     // does not change and loadSourceFile does not re-run). We must ensure the window
     // covers the target line before translating it into model coordinates,
     // otherwise the model-relative line is out of range and Monaco clamps it wrong.
-    if (isLargeFileModeRef.current && largeFileControllerRef.current) {
-      console.log('[MonacoSourceCodeWindow] highlightLine effect (large-file): ensureWindow around', highlightLine, 'current windowStartLineRef=', windowStartLineRef.current);
+      if (isLargeFileModeRef.current && largeFileControllerRef.current) {
       largeFileControllerRef.current
         .ensureWindow(highlightLine - 50, highlightLine + 50)
         .then(() => {
-          console.log('[MonacoSourceCodeWindow] highlightLine effect: window ensured, applying highlight', highlightLine, 'windowStartLineRef=', windowStartLineRef.current);
           applyHighlight(editor, highlightLine, shouldRevealInCenter);
           if (moduleStartLine && moduleEndLine) {
             applyGrayOutDecoration(editor, moduleStartLine, moduleEndLine, 0);
@@ -1564,10 +1553,6 @@ function MonacoSourceCodeWindow({
             windowStartLineRef.current = startLine;
             setContent(content);
             setWindowStartLine(startLine);
-            console.log('[MonacoSourceCodeWindow] onContentChange startLine=', startLine,
-              'contentLineCount=', content ? content.split('\n').length : 0,
-              'highlightLineRef=', highlightLineRef.current,
-              'moduleStartLine=', moduleStartLine, 'moduleEndLine=', moduleEndLine);
 
             // The window shifted: re-apply the current highlight and gray-out
             // using model-relative coordinates so they track the new slice.
@@ -1610,10 +1595,6 @@ function MonacoSourceCodeWindow({
         const visibleStart = Math.max(1, targetLine - 50);
         const visibleEnd = Math.min(fileInfo.totalLines, targetLine + 50);
         await controller.ensureWindow(visibleStart, visibleEnd);
-        console.log('[MonacoSourceCodeWindow] loadSourceFile large: targetFileId=', targetFileId,
-          'targetLine=', targetLine, 'isLarge=', isLarge,
-          'windowAfterEnsure=', JSON.stringify(controller.getWindowState()),
-          'fileTotalLines=', fileInfo.totalLines);
         
         // Set highlight
         if (signalDeclarationLine) {
