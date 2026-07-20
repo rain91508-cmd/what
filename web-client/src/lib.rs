@@ -383,7 +383,17 @@ async fn store_kdb_to_indexeddb(mut kdb_data: KnowledgeBase, kdb_id: &str) -> Re
         }
     }
     store_log!("[WASM] Stored {} source files", file_count);
-    
+    // Report the final source-file count so the UI's step-4 line reaches the
+    // true total. The per-file sub-progress above only lands on multiples of
+    // `report_every`, so without this the line would freeze at e.g. "236/239"
+    // and never show the completed count. Emitting it here lets step 4 finish
+    // on its own (the next step appends its own line without overwriting this).
+    report_kdb_progress(
+        4,
+        KDB_STORE_TOTAL_STEPS,
+        &format!("Storing source files... {}/{}", file_count, file_count),
+    );
+
     // 3. Store module skeletons + signal definitions as two flat binary files in
     //    OPFS, mirroring the signals/drivers path. The module hierarchy is the
     //    data read at KDB load time; serializing every module into one contiguous
