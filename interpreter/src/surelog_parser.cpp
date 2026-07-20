@@ -53,49 +53,87 @@ ParseResult SurelogParser::parseFiles(const std::vector<std::string>& filePaths,
     result.moduleCount = 0;
     result.signalCount = 0;
     
-    // Build command line arguments
-    std::vector<const char*> argv;
-    argv.push_back("what_interpreter");
-    
+    // Build the command line and let Surelog's CommandLineParser derive all
+    // option state from the flags. Driving the individual setters *before*
+    // parseCommandLine left the compile step without its library work files
+    // (slpp_all/lib/work/...), so elaboration failed with
+    // "Cannot open file .../lib/work/<file>.v". Passing the same flags a
+    // working `surelog` CLI invocation uses avoids that.
+    std::vector<std::string> argStrs;
+    argStrs.push_back("what_interpreter");
     for (const auto& file : filePaths) {
-        argv.push_back(file.c_str());
+        argStrs.push_back(file);
     }
-    
     if (parseOnly_) {
-        argv.push_back("-parse");
+        argStrs.push_back("-parse");
     } else {
-        argv.push_back("-parse");
-        argv.push_back("-elabuhdm");
+        argStrs.push_back("-parse");
+        argStrs.push_back("-elabuhdm");
     }
-    
+    // Never run Surelog's embedded Python listener.
+    argStrs.push_back("-nopython");
+
+    if (writeUhdmEnabled_) {
+        // Keep the on-disk .uhdm DB for debugging (-uhdm / --keep-uhdm).
+        // Surelog writes the .uhdm by default, so we must not disable it.
+        // Strip debug / unnecessary elaboration overhead (equivalents of the
+        // Surelog CLI flags the user requested):
+        //   -nocache  : don't *read* the .sdb cache and triggers cleanCache()
+        //               at shutdown, so no heavy compilation cache is left on
+        //               disk. (Disabling the *write* with -nowritecache would
+        //               also skip writing lib/work and break the design, so we
+        //               deliberately keep the write on and just clean it up.)
+        //   -nostdout : mute Surelog stdout (trims cached log structures)
+        //   -nowarning: filter warning objects cached alongside the sources
+        argStrs.push_back("-nocache");
+        argStrs.push_back("-nostdout");
+        argStrs.push_back("-nowarning");
+    } else {
+        // Default flow: we traverse the in-memory UHDM model directly and do
+        // not need the on-disk .uhdm DB; we only walk the final in-memory UHDM.
+        argStrs.push_back("-nouhdm");
+    }
+
+    // Multiprocessing is REQUIRED for BOTH flows on this Surelog build.
+    // Single-process parsing crashes inside ParseCache::save -> cacheVObjects
+    // (confirmed by segfaulting: the original setter-based code, a fresh
+    // single-process run, and with/without TCMALLOC). The only safe path is to
+    // let Surelog fork THIS binary with -batch to do preprocess/parse in a
+    // child; what_interpreter handles -batch (see main.cpp) so the child runs
+    // its phase and exits instead of forking recursively (no fork bomb).
+    // -lowmem turns multiprocessing on (mp = 1); fall back to -mp 1 otherwise.
+    // (We cannot honour the "single-process when UHDM is not needed" wish
+    // because in-process parsing is broken on this build.)
+    if (lowMemEnabled_) {
+        argStrs.push_back("-lowmem");
+    } else if (maxThreads_ > 0) {
+        argStrs.push_back("-mt");
+        argStrs.push_back(std::to_string(maxThreads_));
+        argStrs.push_back("-mp");
+        argStrs.push_back("1");
+    } else {
+        argStrs.push_back("-mp");
+        argStrs.push_back("1");
+    }
+
     if (verbose_) {
-        argv.push_back("-verbose");
+        argStrs.push_back("-verbose");
     }
-    
     if (debug_) {
-        argv.push_back("-debug");
+        argStrs.push_back("-debug");
     }
-    
+
+    std::vector<const char*> argv;
+    for (const auto& a : argStrs) {
+        argv.push_back(a.c_str());
+    }
+
     // Create Surelog objects
     symbolTable_ = std::make_unique<SURELOG::SymbolTable>();
     errorContainer_ = std::make_unique<SURELOG::ErrorContainer>(symbolTable_.get());
     clp_ = std::make_unique<SURELOG::CommandLineParser>(
         errorContainer_.get(), symbolTable_.get(), false, false);
-    
-    clp_->noPython();
-    clp_->setParse(true);
-    clp_->setCompile(true);
-    clp_->setElaborate(true);
-    clp_->setElabUhdm(true);
-    // By default we don't need the on-disk .uhdm DB; we traverse the
-    // in-memory UHDM model directly. Keep it only when debugging (-uhdm).
-    clp_->setWriteUhdm(writeUhdmEnabled_);
-    // Low-memory optimization (default on): frees ANTLR/preprocessor caches
-    // as it goes. Pure in-memory, safe for KDB (we only walk the final UHDM).
-    clp_->setLowMem(lowMemEnabled_);
-    // Thread count (default single-threaded). Raising this increases peak RSS.
-    clp_->setNbMaxTreads(maxThreads_);
-    
+
     bool success = clp_->parseCommandLine(argv.size(), argv.data());
     errorContainer_->printMessages(clp_->muteStdout());
     

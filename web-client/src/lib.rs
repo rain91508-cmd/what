@@ -19,6 +19,15 @@ mod opfs_cache;
 // CWDK magic number: "CWDK" in little-endian
 const CWDK_MAGIC: u32 = 0x4B445743;
 
+// Number of records aggregated into a single batched store call.
+// The original code called store_signal_inst / store_module once PER record
+// (2,005,030 times for n900) and awaited a JS Promise each time. That turned
+// into 2M wasm suspensions + wasm->JS FFI object builds, which completely
+// saturated the worker event loop (starving the heartbeat timer) and was the
+// actual bottleneck. Batching collapses this to ~ (records / STORE_BATCH_SIZE)
+// calls, one IndexedDB transaction each.
+const STORE_BATCH_SIZE: usize = 20000;
+
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = console)]
@@ -34,9 +43,25 @@ extern "C" {
     
     #[wasm_bindgen(js_namespace = window)]
     fn store_module(id: u32, data: &JsValue, kdb_id: &str) -> js_sys::Promise;
-    
+
+    // Flat binary signal/driver store: the dominant path. WASM serializes the
+    // signals and drivers into two contiguous byte buffers (matching the proto's
+    // flat layout) and streams each to a single OPFS file. This avoids building
+    // millions of JS objects / IndexedDB records entirely.
+    //
+    //   signals.bin : 18 bytes/record, indexed by signal global id
+    //                 msb:u32, lsb:u32, parent_module_id:u32,
+    //                 driver_start:u32, driver_count:u16   (all little-endian)
+    //   drivers.bin : 12 bytes/record, indexed by signals.bin's driver_start
+    //                 driver_signal_global_id:u64, line:u32 (little-endian)
     #[wasm_bindgen(js_namespace = window)]
-    fn store_signal_inst(global_index: u32, data: &JsValue, kdb_id: &str) -> js_sys::Promise;
+    fn store_signals_opfs(bytes: &[u8], kdb_id: &str) -> js_sys::Promise;
+
+    #[wasm_bindgen(js_namespace = window)]
+    fn store_drivers_opfs(bytes: &[u8], kdb_id: &str) -> js_sys::Promise;
+
+    #[wasm_bindgen(js_namespace = window)]
+    fn store_modules_batch(modules: &JsValue, kdb_id: &str) -> js_sys::Promise;
     
     // Store file info (metadata) to IndexedDB
     #[wasm_bindgen(js_namespace = window)]
@@ -56,6 +81,26 @@ extern "C" {
 
 macro_rules! console_log {
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
+}
+
+/// Current local time as HH:MM:SS.mmm, for timestamping store-step logs.
+fn now_ts() -> String {
+    let d = js_sys::Date::new_0();
+    format!(
+        "{:02}:{:02}:{:02}.{:03}",
+        d.get_hours(),
+        d.get_minutes(),
+        d.get_seconds(),
+        d.get_milliseconds()
+    )
+}
+
+/// Like console_log! but prefixes a timestamp; used for the discrete
+/// "storing step" boundary prints so each step can be timed.
+macro_rules! store_log {
+    ($($arg:tt)*) => {{
+        log(&format!("[{}] {}", now_ts(), format!($($arg)*)));
+    }};
 }
 
 /// Parse KDB file and store directly to IndexedDB
@@ -109,17 +154,24 @@ pub async fn parse_and_store_kdb(kdb_id: &str, data: &[u8]) -> Result<String, Js
         }
     };
     
+    // The decompressed protobuf buffer is no longer needed once decoded; drop it
+    // now to free ~80 MB of WASM linear memory before the (long) store phase.
+    drop(decompressed);
+    
+    // Capture the project name before moving kdb_data into the store function.
+    let project_name = kdb_data.header.as_ref().map(|h| h.project_name.clone()).unwrap_or_else(|| kdb_id.to_string());
+    
     // Clear existing data for this KDB
     console_log!("[WASM] Clearing existing data for KDB: {}", kdb_id);
     let clear_promise = clear_kdb_data(kdb_id);
     wasm_bindgen_futures::JsFuture::from(clear_promise).await?;
     
     // Store to IndexedDB
-    console_log!("[WASM] Storing KDB data to IndexedDB...");
-    store_kdb_to_indexeddb(&kdb_data, kdb_id).await?;
+    store_log!("[WASM] Storing KDB data to IndexedDB...");
+    store_kdb_to_indexeddb(kdb_data, kdb_id).await?;
     
-    console_log!("[WASM] KDB parsed and stored successfully: {}", kdb_data.header.as_ref().map(|h| h.project_name.clone()).unwrap_or_else(|| kdb_id.to_string()));
-    Ok(kdb_data.header.as_ref().map(|h| h.project_name.clone()).unwrap_or_else(|| kdb_id.to_string()))
+    store_log!("[WASM] KDB parsed and stored successfully: {}", project_name);
+    Ok(project_name)
 }
 
 /// Decompress zstd data using pure Rust ruzstd
@@ -216,8 +268,8 @@ fn parse_kdb_protobuf(data: &[u8]) -> Result<KnowledgeBase, String> {
 
 /// Store KDB data to IndexedDB - new architecture
 /// Stores data separately to different stores matching the new schema
-async fn store_kdb_to_indexeddb(kdb_data: &KnowledgeBase, kdb_id: &str) -> Result<(), JsValue> {
-    console_log!("[WASM] Storing KDB to IndexedDB: {}", kdb_id);
+async fn store_kdb_to_indexeddb(mut kdb_data: KnowledgeBase, kdb_id: &str) -> Result<(), JsValue> {
+    store_log!("[WASM] Storing KDB to IndexedDB: {}", kdb_id);
     
     // Extract top module IDs from hierarchies
     let top_module_ids: Vec<u32> = kdb_data.hierarchies.iter()
@@ -249,24 +301,65 @@ async fn store_kdb_to_indexeddb(kdb_data: &KnowledgeBase, kdb_id: &str) -> Resul
     Reflect::set(&kb_obj, &"hierarchies".into(), &hierarchies_arr)?;
     Reflect::set(&kb_obj, &"timestamp".into(), &(js_sys::Date::now() as u64).into())?;
     
-    console_log!("[WASM] Storing knowledge base...");
+    store_log!("[WASM] Storing knowledge base...");
     let kb_promise = store_knowledge_base(kdb_id, &kb_obj);
     match wasm_bindgen_futures::JsFuture::from(kb_promise).await {
-        Ok(_) => console_log!("[WASM] Stored knowledge base successfully"),
+        Ok(_) => store_log!("[WASM] Stored knowledge base successfully"),
         Err(e) => {
-            console_log!("[WASM] Failed to store knowledge base: {:?}", e);
+            store_log!("[WASM] Failed to store knowledge base: {:?}", e);
             return Err(e);
         }
     }
     
-    // 2. Store modules (key is 1-based index)
-    console_log!("[WASM] Storing {} modules...", kdb_data.modules.len());
-    for (index, module) in kdb_data.modules.iter().enumerate() {
+    // 2. Store source files FIRST and free their (potentially huge) bytes as we
+    //    go. Storing files last previously kept the entire file_contents Vec
+    //    alive for the whole module+signal store; doing it first and draining
+    //    the Vecs drops that memory before the large signal-instance phase.
+    let file_count = kdb_data.file_infos.len();
+    store_log!("[WASM] Storing {} source files...", file_count);
+    {
+        let mut file_infos = std::mem::take(&mut kdb_data.file_infos).into_iter();
+        let mut file_contents = std::mem::take(&mut kdb_data.file_contents).into_iter();
+        let mut file_id: u32 = 0;
+        while let (Some(file_info), Some(file_content)) = (file_infos.next(), file_contents.next()) {
+            file_id += 1; // 1-based ID
+            // Extract file name from path
+            let name = file_info.path.split('/').last().unwrap_or(&file_info.path);
+            // Store file info (metadata) to IndexedDB
+            let info_promise = store_source_file_info(
+                file_id,
+                &file_info.path,
+                name,
+                &file_info.path,  // full_name same as path for now
+                file_info.total_lines,
+                &file_info.line_index_offset.iter().map(|&x| x as i32).collect::<Vec<i32>>(),
+                kdb_id,
+            );
+            if let Err(e) = wasm_bindgen_futures::JsFuture::from(info_promise).await {
+                store_log!("[WASM] Failed to store file info {}: {:?}", file_id, e);
+            }
+            // Store file content (large data) to OPFS via JS
+            let content_promise = store_source_file_content_opfs(file_id, &file_content.content, kdb_id);
+            if let Err(e) = wasm_bindgen_futures::JsFuture::from(content_promise).await {
+                store_log!("[WASM] Failed to store file content {}: {:?}", file_id, e);
+            }
+            // file_info and file_content are dropped at the end of this iteration.
+        }
+    }
+    store_log!("[WASM] Stored {} source files", file_count);
+    
+    // 3. Store modules (1-based id) - batched. Consume the Vec via into_iter so
+    //    each module's memory is freed as soon as its batch is submitted.
+    let module_count = kdb_data.modules.len();
+    store_log!("[WASM] Storing {} modules...", module_count);
+    let mut module_batch = Array::new();
+    for (index, module) in kdb_data.modules.into_iter().enumerate() {
         let module_id = (index + 1) as u32;  // 1-based ID
         
         // Create module object using js_sys
         let module_obj = Object::new();
-        Reflect::set(&module_obj, &"name".into(), &module.name.clone().into())?;
+        Reflect::set(&module_obj, &"id".into(), &module_id.into())?;
+        Reflect::set(&module_obj, &"name".into(), &module.name.into())?;
         Reflect::set(&module_obj, &"parentModuleId".into(), &module.parent_module_id.into())?;
         
         // Definition object
@@ -304,79 +397,82 @@ async fn store_kdb_to_indexeddb(kdb_data: &KnowledgeBase, kdb_id: &str) -> Resul
         Reflect::set(&module_obj, &"defModuleId".into(), &module.def_module_id.into())?;
         Reflect::set(&module_obj, &"signalInstsStartId".into(), &module.signal_insts_start_id.into())?;
         
-        let module_promise = store_module(module_id, &module_obj, kdb_id);
+        module_batch.push(&module_obj);
+        if module_batch.length() as usize >= STORE_BATCH_SIZE {
+            let module_promise = store_modules_batch(&module_batch, kdb_id);
+            if let Err(e) = wasm_bindgen_futures::JsFuture::from(module_promise).await {
+                store_log!("[WASM] Failed to store module batch: {:?}", e);
+            }
+            module_batch = Array::new();
+        }
+    }
+    if module_batch.length() > 0 {
+        let module_promise = store_modules_batch(&module_batch, kdb_id);
         if let Err(e) = wasm_bindgen_futures::JsFuture::from(module_promise).await {
-            console_log!("[WASM] Failed to store module {}: {:?}", module_id, e);
+            store_log!("[WASM] Failed to store module batch: {:?}", e);
         }
     }
-    console_log!("[WASM] Stored {} modules", kdb_data.modules.len());
+    store_log!("[WASM] Stored {} modules", module_count);
     
-    // 3. Store signal instances (key is global index 0-based)
-    console_log!("[WASM] Storing {} signal instances...", kdb_data.all_signal_insts.len());
-    
-    for (global_index, signal_inst) in kdb_data.all_signal_insts.iter().enumerate() {
-        // Create JavaScript object directly using js_sys
-        let inst_obj = Object::new();
-        Reflect::set(&inst_obj, &"msb".into(), &signal_inst.msb.into())?;
-        Reflect::set(&inst_obj, &"lsb".into(), &signal_inst.lsb.into())?;
-        Reflect::set(&inst_obj, &"parentModuleId".into(), &signal_inst.parent_module_id.into())?;
-        
-        // Create driverLocations array
-        let driver_locations_arr = Array::new();
-        for driver in &signal_inst.driver_locations {
-            let driver_obj = Object::new();
-            Reflect::set(&driver_obj, &"driverSignalGlobalId".into(), &driver.driver_signal_global_id.into())?;
-            Reflect::set(&driver_obj, &"line".into(), &driver.line.into())?;
-            driver_locations_arr.push(&driver_obj);
-        }
-        Reflect::set(&inst_obj, &"driverLocations".into(), &driver_locations_arr)?;
-        
-        let inst_promise = store_signal_inst(global_index as u32, &inst_obj, kdb_id);
-        if let Err(e) = wasm_bindgen_futures::JsFuture::from(inst_promise).await {
-            console_log!("[WASM] Failed to store signal instance {}: {:?}", global_index, e);
+    // 4. Store signal instances + drivers as two flat binary arrays in OPFS.
+    //    The proto already stores drivers flat (all_driver_locations) with each
+    //    signal holding a (driver_start, driver_count) slice, so we just copy the
+    //    fields into contiguous little-endian byte buffers and stream each to a
+    //    single OPFS file — no per-record JS objects, no IndexedDB transactions.
+    let signal_count = kdb_data.all_signal_insts.len();
+    let driver_count = kdb_data.all_driver_locations.len();
+    store_log!(
+        "[WASM] Storing {} signal instances + {} drivers (OPFS binary arrays)...",
+        signal_count, driver_count
+    );
+
+    let signal_insts = std::mem::take(&mut kdb_data.all_signal_insts);
+    let driver_locs = std::mem::take(&mut kdb_data.all_driver_locations);
+
+    // signals.bin : 18 bytes/record (msb u32, lsb u32, parent u32, driver_start u32, driver_count u16)
+    const SIGNAL_RECORD_SIZE: usize = 18;
+    let mut signals_buf: Vec<u8> = Vec::with_capacity(signal_insts.len() * SIGNAL_RECORD_SIZE);
+    for s in &signal_insts {
+        signals_buf.extend_from_slice(&s.msb.to_le_bytes());
+        signals_buf.extend_from_slice(&s.lsb.to_le_bytes());
+        signals_buf.extend_from_slice(&s.parent_module_id.to_le_bytes());
+        signals_buf.extend_from_slice(&s.driver_start.to_le_bytes());
+        // driver_count is semantically u16; clamp defensively (a net with >65535
+        // drivers is not representable in this compact layout).
+        let dc: u16 = if s.driver_count > u16::MAX as u32 { u16::MAX } else { s.driver_count as u16 };
+        signals_buf.extend_from_slice(&dc.to_le_bytes());
+    }
+    drop(signal_insts);
+
+    let sig_promise = store_signals_opfs(&signals_buf, kdb_id);
+    match wasm_bindgen_futures::JsFuture::from(sig_promise).await {
+        Ok(_) => store_log!("[WASM] Stored {} signal instances ({} bytes)", signal_count, signals_buf.len()),
+        Err(e) => {
+            store_log!("[WASM] Failed to store signals.bin: {:?}", e);
+            return Err(e);
         }
     }
-    console_log!("[WASM] Stored {} signal instances", kdb_data.all_signal_insts.len());
-    
-    // 4. Store source files - separate info and content
-    // Note: file_infos and file_contents have same length and order
-    let file_count = kdb_data.file_infos.len();
-    console_log!("[WASM] Storing {} source files...", file_count);
-    
-    for i in 0..file_count {
-        let file_info = &kdb_data.file_infos[i];
-        let file_content = &kdb_data.file_contents[i];
-        let file_id = (i + 1) as u32;  // 1-based ID
-        
-        // Extract file name from path
-        let name = file_info.path.split('/').last().unwrap_or(&file_info.path);
-        
-        // Store file info (metadata) to IndexedDB
-        let info_promise = store_source_file_info(
-            file_id, 
-            &file_info.path, 
-            name, 
-            &file_info.path,  // full_name same as path for now
-            file_info.total_lines,
-            &file_info.line_index_offset.iter().map(|&x| x as i32).collect::<Vec<i32>>(),
-            kdb_id
-        );
-        if let Err(e) = wasm_bindgen_futures::JsFuture::from(info_promise).await {
-            console_log!("[WASM] Failed to store file info {}: {:?}", file_id, e);
-        }
-        
-        // Store file content (large data) to OPFS via JS
-        let content_promise = store_source_file_content_opfs(
-            file_id, 
-            &file_content.content,  // bytes
-            kdb_id
-        );
-        if let Err(e) = wasm_bindgen_futures::JsFuture::from(content_promise).await {
-            console_log!("[WASM] Failed to store file content {}: {:?}", file_id, e);
+    drop(signals_buf);
+
+    // drivers.bin : 12 bytes/record (driver_signal_global_id u64, line u32)
+    const DRIVER_RECORD_SIZE: usize = 12;
+    let mut drivers_buf: Vec<u8> = Vec::with_capacity(driver_locs.len() * DRIVER_RECORD_SIZE);
+    for d in &driver_locs {
+        drivers_buf.extend_from_slice(&d.driver_signal_global_id.to_le_bytes());
+        drivers_buf.extend_from_slice(&d.line.to_le_bytes());
+    }
+    drop(driver_locs);
+
+    let drv_promise = store_drivers_opfs(&drivers_buf, kdb_id);
+    match wasm_bindgen_futures::JsFuture::from(drv_promise).await {
+        Ok(_) => store_log!("[WASM] Stored {} drivers ({} bytes)", driver_count, drivers_buf.len()),
+        Err(e) => {
+            store_log!("[WASM] Failed to store drivers.bin: {:?}", e);
+            return Err(e);
         }
     }
-    console_log!("[WASM] Stored {} source files", file_count);
-    
+    drop(drivers_buf);
+
     Ok(())
 }
 
@@ -469,8 +565,10 @@ fn create_mock_kdb_data(kdb_id: &str) -> KnowledgeBase {
                 msb: 0,
                 lsb: 0,
                 parent_module_id: 2,
-                driver_locations: vec![],
+                driver_start: 0,
+                driver_count: 0,
             },
         ],
+        all_driver_locations: vec![],
     }
 }

@@ -126,8 +126,12 @@ pub struct SignalInst {
     pub lsb: u32,
     #[prost(uint32, tag = "5")]
     pub parent_module_id: u32,
-    #[prost(message, repeated, tag = "6")]
-    pub driver_locations: Vec<DriverLocation>,
+    // Slice into KnowledgeBase.all_driver_locations for this signal's drivers.
+    #[prost(uint32, tag = "6")]
+    pub driver_start: u32,
+    // Number of drivers (semantically u16; stored as 2 bytes in signals.bin).
+    #[prost(uint32, tag = "7")]
+    pub driver_count: u32,
 }
 
 /// Module - can be a module definition or an instance
@@ -183,4 +187,7 @@ pub struct KnowledgeBase {
     // Global signal instances array for memory optimization
     #[prost(message, repeated, tag = "6")]
     pub all_signal_insts: Vec<SignalInst>,
+    // Flat global driver-location array, indexed by SignalInst.driver_start.
+    #[prost(message, repeated, tag = "7")]
+    pub all_driver_locations: Vec<DriverLocation>,
 }

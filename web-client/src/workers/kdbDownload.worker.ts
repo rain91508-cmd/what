@@ -22,7 +22,9 @@ import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import {
   store_knowledge_base,
   store_module,
-  store_signal_inst,
+  store_modules_batch,
+  store_signals_opfs,
+  store_drivers_opfs,
   store_source_file_info,
   get_source_file_content_by_range,
   clear_kdb_data,
@@ -32,6 +34,13 @@ import {
 // This is needed because wasm-bindgen generates code that uses window.*
 (self as any).window = self;
 
+// Format current time as HH:MM:SS.mmm for timestamping store-step logs.
+function ts(): string {
+  const d = new Date();
+  const pad = (n: number, w = 2) => String(n).padStart(w, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+}
+
 // Storage functions will be set up after OPFSWriter initialization
 // This allows us to use OPFSWriter for file storage when OPFS is not available
 
@@ -39,7 +48,9 @@ import {
 // WASM will access these via window.* (which we alias to self)
 (self as any).store_knowledge_base = store_knowledge_base;
 (self as any).store_module = store_module;
-(self as any).store_signal_inst = store_signal_inst;
+(self as any).store_modules_batch = store_modules_batch;
+(self as any).store_signals_opfs = store_signals_opfs;
+(self as any).store_drivers_opfs = store_drivers_opfs;
 (self as any).store_source_file_info = store_source_file_info;
 // store_source_file_content_opfs will be set after OPFSWriter init
 (self as any).get_source_file_content_by_range = get_source_file_content_by_range;
@@ -53,8 +64,7 @@ function setupStorageFunctions(writer: OPFSWriter) {
   // Override store_source_file_content_opfs to use OPFSWriter
   // This ensures files are properly queued for postMessage fallback if needed
   (self as any).store_source_file_content_opfs = async (id: number, content: Uint8Array, _kdbId: string) => {
-    console.log('[KDBWorker] store_source_file_content_opfs called:', id, 'length:', content?.length || 0);
-    
+    // (Log removed: this path is fast and the per-file line was just noise.)
     // Always use OPFSWriter to handle file storage
     // OPFSWriter will handle the fallback logic internally
     await writer.writeFile(id, content);
@@ -138,21 +148,6 @@ interface KDBWorkerSchema extends DBSchema {
     };
     indexes: { 'by-kdb': string };
   };
-  'signal-insts': {
-    key: number;
-    value: {
-      index: number;
-      msb: number;
-      lsb: number;
-      parentModuleId: number;
-      driverLocations: {
-        driverSignalGlobalId: number;
-        line: number;
-      }[];
-      kdbId: string;
-    };
-    indexes: { 'by-kdb': string };
-  };
   'source-file-info': {
     key: number;
     value: {
@@ -173,7 +168,7 @@ interface KDBWorkerSchema extends DBSchema {
 // ============================================
 
 const DB_NAME = 'hwda-database';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 const BATCH_SIZE = 100; // Batch size for metadata writes
 const WRITE_CONCURRENCY = 4; // Max concurrent OPFS writes
 const CWDK_MAGIC = 0x4B445743; // "CWDK" in little-endian
@@ -233,7 +228,6 @@ async function initWasm(): Promise<void> {
 class MetadataBatcher {
   private db: IDBPDatabase<KDBWorkerSchema> | null = null;
   private moduleBatch: KDBWorkerSchema['modules']['value'][] = [];
-  private signalBatch: KDBWorkerSchema['signal-insts']['value'][] = [];
   private fileInfoBatch: KDBWorkerSchema['source-file-info']['value'][] = [];
 
   async init(): Promise<void> {
@@ -245,13 +239,6 @@ class MetadataBatcher {
     this.moduleBatch.push(module);
     if (this.moduleBatch.length >= BATCH_SIZE) {
       this.flushModules();
-    }
-  }
-
-  queueSignal(signal: KDBWorkerSchema['signal-insts']['value']): void {
-    this.signalBatch.push(signal);
-    if (this.signalBatch.length >= BATCH_SIZE) {
-      this.flushSignals();
     }
   }
 
@@ -273,23 +260,8 @@ class MetadataBatcher {
     }
     
     await tx.done;
-    console.log(`[KDBWorker] Flushed ${this.moduleBatch.length} modules`);
+    console.log(`[${ts()}] [KDBWorker] Flushed ${this.moduleBatch.length} modules`);
     this.moduleBatch = [];
-  }
-
-  async flushSignals(): Promise<void> {
-    if (!this.db || this.signalBatch.length === 0) return;
-    
-    const tx = this.db.transaction('signal-insts', 'readwrite');
-    const store = tx.objectStore('signal-insts');
-    
-    for (const signal of this.signalBatch) {
-      await store.put(signal);
-    }
-    
-    await tx.done;
-    console.log(`[KDBWorker] Flushed ${this.signalBatch.length} signals`);
-    this.signalBatch = [];
   }
 
   async flushFileInfos(): Promise<void> {
@@ -303,13 +275,12 @@ class MetadataBatcher {
     }
     
     await tx.done;
-    console.log(`[KDBWorker] Flushed ${this.fileInfoBatch.length} file infos`);
+    console.log(`[${ts()}] [KDBWorker] Flushed ${this.fileInfoBatch.length} file infos`);
     this.fileInfoBatch = [];
   }
 
   async flushAll(): Promise<void> {
     await this.flushModules();
-    await this.flushSignals();
     await this.flushFileInfos();
   }
 
@@ -700,7 +671,6 @@ async function downloadAndStoreKDB(
   baseUrl: string,
   kdbId: string
 ): Promise<void> {
-  const batcher = new MetadataBatcher();
   const opfsWriter = new OPFSWriter();
   
   // Initialize download state
@@ -723,7 +693,6 @@ async function downloadAndStoreKDB(
   
   try {
     // Initialize storage
-    await batcher.init();
     await opfsWriter.init(kdbId);
     
     // Setup storage functions with OPFSWriter integration
@@ -772,6 +741,13 @@ async function downloadAndStoreKDB(
       throw new Error('Failed to parse KDB');
     }
     
+    // Flush any buffered IndexedDB records (the per-record store_* calls
+    // batch writes; the final partial batch must be flushed before we
+    // report completion).
+    if ((self as any).__flushKdbBatches) {
+      await (self as any).__flushKdbBatches();
+    }
+    
     stopHeartbeat();
     
     // Check if we need to send files to main thread (OPFS fallback)
@@ -780,7 +756,7 @@ async function downloadAndStoreKDB(
       : undefined;
     
     if (pendingFiles && pendingFiles.length > 0) {
-      console.log(`[KDBWorker] Sending ${pendingFiles.length} files to main thread for storage`);
+      console.log(`[${ts()}] [KDBWorker] Sending ${pendingFiles.length} files to main thread for storage`);
       
       // Use Transferable Objects to avoid copying large data
       // Extract Uint8Arrays for transfer

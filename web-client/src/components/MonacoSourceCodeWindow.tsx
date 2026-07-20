@@ -278,7 +278,7 @@ function MonacoSourceCodeWindow({
       try {
         const globalId = await kdbManager.findSignalByName(lookupModuleIndex, id);
         if (globalId !== null) {
-          const signal = kdbManager.buildSignal(globalId);
+          const signal = await kdbManager.buildSignal(globalId);
           if (signal) {
             const width = signal.msb !== signal.lsb
               ? signal.msb - signal.lsb + 1

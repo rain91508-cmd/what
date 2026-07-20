@@ -65,6 +65,15 @@ private:
     // Store instance info for post-processing (defName -> instance module ID)
     std::vector<std::pair<std::string, uint32_t>> instanceDefNames_;
     
+    // Per-module-type bookkeeping for internal-driver analysis:
+    //   analyzedDefNames_ : defNames already analyzed internally (so other
+    //                        instances of the same type can skip the analysis).
+    //   driverSourceModuleId_ : defName -> module that holds the (already
+    //                        analyzed) internal drivers, used as the remap
+    //                        source for every other instance of that type.
+    std::unordered_set<std::string> analyzedDefNames_;
+    std::unordered_map<std::string, uint32_t> driverSourceModuleId_;
+    
     DriverAnalyzer* driverAnalyzer_;
 };
 

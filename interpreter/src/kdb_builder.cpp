@@ -618,6 +618,16 @@ const SignalInfo* KdbBuilder::findSignalByName(const std::string& fullName) cons
     return nullptr;
 }
 
+uint64_t KdbBuilder::getSignalGlobalIdByName(const std::string& fullName) const {
+    if (!signalInstsCommitted_) return 0;
+    auto it = signalFullNameToId_.find(fullName);
+    if (it != signalFullNameToId_.end()) {
+        uint64_t id = it->second;
+        if (id < allSignalInsts_.size()) return id;
+    }
+    return 0;
+}
+
 const SignalInfo* KdbBuilder::findSignalById(uint64_t id) const {
     if (!signalInstsCommitted_) {
         throw std::runtime_error("Cannot find signal by global ID before commit phase");
@@ -738,22 +748,55 @@ std::vector<const SourceFileInfo*> KdbBuilder::getAllFiles() const {
 
 std::vector<const SignalInfo*> KdbBuilder::getDrivers(uint64_t signalId) const {
     std::vector<const SignalInfo*> result;
-    const SignalInfo* signal = findSignalById(signalId);
-    if (signal) {
-        for (uint64_t driverId : signal->driverSignalIds) {
-            const SignalInfo* driver = findSignalById(driverId);
-            if (driver) {
-                result.push_back(driver);
-            }
-        }
+    driversResultBuf_.clear();
+    const SignalInstInfo* inst = getGlobalSignalInst(signalId);
+    if (!inst) return result;
+    // NOTE: we do NOT need the driven signal's own defs to enumerate its
+    // drivers -- driverLocations already lives on the global signalInst. Only
+    // each driver's module/defs are needed (resolved per-driver below).
+    for (const DriverLocation& loc : inst->driverLocations) {
+        const SignalInstInfo* driverInst = getGlobalSignalInst(loc.driverSignalGlobalId);
+        if (!driverInst) continue;
+        const ModuleInfo* driverMod = findModuleById(driverInst->parentModuleId);
+        if (!driverMod) continue;
+        uint32_t driverLocalIdx = static_cast<uint32_t>(loc.driverSignalGlobalId - driverMod->signalInstsStartId);
+        const auto& driverDefs = driverMod->getSignalDefs();
+        if (driverLocalIdx >= driverDefs.size()) continue;
+        driversResultBuf_.push_back(buildSignalInfo(*driverInst, driverDefs[driverLocalIdx]));
+        result.push_back(&driversResultBuf_.back());
     }
     return result;
 }
 
 std::vector<const SignalInfo*> KdbBuilder::getLoads(uint64_t signalId) const {
     std::vector<const SignalInfo*> result;
-    // TODO: Implement load calculation
-    (void)signalId;
+    loadsResultBuf_.clear();
+    if (!loadsCacheBuilt_) {
+        // Build the reverse driver graph once: for every signal, for each of
+        // its drivers, record that the signal is a load of that driver.
+        for (uint64_t id = 0; id < allSignalInsts_.size(); ++id) {
+            const SignalInstInfo& inst = allSignalInsts_[id];
+            for (const DriverLocation& loc : inst.driverLocations) {
+                if (loc.driverSignalGlobalId != 0) {
+                    loadsCache_[loc.driverSignalGlobalId].push_back(id);
+                }
+            }
+        }
+        loadsCacheBuilt_ = true;
+    }
+    auto it = loadsCache_.find(signalId);
+    if (it == loadsCache_.end()) return result;
+    for (uint64_t loadId : it->second) {
+        const SignalInstInfo* loadInst = getGlobalSignalInst(loadId);
+        if (!loadInst) continue;
+        const ModuleInfo* loadMod = findModuleById(loadInst->parentModuleId);
+        if (!loadMod) continue;
+        uint32_t loadLocalIdx = static_cast<uint32_t>(loadId - loadMod->signalInstsStartId);
+        const auto& loadDefs = loadMod->getSignalDefs();
+        if (loadLocalIdx >= loadDefs.size()) continue;
+        loadsResultBuf_.push_back(buildSignalInfo(*loadInst, loadDefs[loadLocalIdx]));
+        result.push_back(&loadsResultBuf_.back());
+    }
     return result;
 }
 
@@ -1140,20 +1183,28 @@ void KdbBuilder::toProtobuf(hwda::kdb::KnowledgeBase* kdb) const {
         // Note: signal_insts_count removed - derived from signal_defs.size()
     }
     
-    // Serialize global signal instances
-    // Note: fullName is not serialized - will be reconstructed during deserialization
+    // Serialize global signal instances + flat driver-location array.
+    // Note: fullName is not serialized - will be reconstructed during deserialization.
+    // Drivers are no longer nested per-signal; they are appended to a single flat
+    // array (all_driver_locations) in signal order, and each signal records the
+    // (driver_start, driver_count) slice that addresses its own drivers. This is
+    // the exact shape the web client streams into the OPFS signals.bin/drivers.bin
+    // files, so no client-side re-flattening is needed.
+    uint32_t driverCursor = 0;
     for (const auto& inst : allSignalInsts_) {
         auto* protoInst = kdb->add_all_signal_insts();
         // protoInst->set_full_name(inst.fullName);  // REMOVED: fullName reconstructed dynamically
         protoInst->set_msb(inst.msb);
         protoInst->set_lsb(inst.lsb);
         protoInst->set_parent_module_id(inst.parentModuleId);
+        protoInst->set_driver_start(driverCursor);
+        protoInst->set_driver_count(static_cast<uint32_t>(inst.driverLocations.size()));
 
-        // Serialize driver locations (combined driver_signal_global_ids and driver_lines)
         for (const auto& driverLoc : inst.driverLocations) {
-            auto* protoDriverLoc = protoInst->add_driver_locations();
+            auto* protoDriverLoc = kdb->add_all_driver_locations();
             protoDriverLoc->set_driver_signal_global_id(driverLoc.driverSignalGlobalId);
             protoDriverLoc->set_line(driverLoc.line);
+            ++driverCursor;
         }
     }
     
@@ -1251,16 +1302,23 @@ void KdbBuilder::fromProtobuf(const hwda::kdb::KnowledgeBase& kdb) {
         modules_.push_back(std::move(mod));
     }
     
-    // Load global signal instances
-    // Note: fullName is not loaded from proto - will be reconstructed after all modules are loaded
+    // Load global signal instances. Drivers now live in the flat
+    // all_driver_locations array; reconstruct each signal's in-memory
+    // driverLocations vector from its (driver_start, driver_count) slice so the
+    // rest of the interpreter (viewer, analyzer) sees the same structure as before.
+    const uint32_t totalDrivers = static_cast<uint32_t>(kdb.all_driver_locations_size());
     for (const auto& protoInst : kdb.all_signal_insts()) {
         SignalInstInfo inst;
         // inst.fullName = protoInst.full_name();  // REMOVED: fullName reconstructed dynamically
         inst.msb = protoInst.msb();
         inst.lsb = protoInst.lsb();
         inst.parentModuleId = protoInst.parent_module_id();
-        // Load driver locations (combined driver_signal_global_ids and driver_lines)
-        for (const auto& protoDriverLoc : protoInst.driver_locations()) {
+
+        const uint32_t start = protoInst.driver_start();
+        const uint32_t count = protoInst.driver_count();
+        inst.driverLocations.reserve(count);
+        for (uint32_t k = 0; k < count && (start + k) < totalDrivers; ++k) {
+            const auto& protoDriverLoc = kdb.all_driver_locations(static_cast<int>(start + k));
             DriverLocation driverLoc;
             driverLoc.driverSignalGlobalId = protoDriverLoc.driver_signal_global_id();
             driverLoc.line = protoDriverLoc.line();

@@ -183,7 +183,6 @@
             const db = event.target.result;
             const stores = [
               { name: 'modules', keyPath: 'index' },
-              { name: 'signal-insts', keyPath: 'index' },
               { name: 'signal-defs', keyPath: 'index' },
               { name: 'source-file-info', keyPath: 'id' },
               { name: 'knowledge-base', keyPath: 'id' }
@@ -274,7 +273,7 @@
     async function getAllData() {
       if (!globalDB || !currentKdbId) return null;
 
-      const tx = globalDB.transaction(['knowledge-base', 'modules', 'signal-insts', 'source-file-info'], 'readonly');
+      const tx = globalDB.transaction(['knowledge-base', 'modules', 'source-file-info'], 'readonly');
 
       const kbData = await new Promise((resolve) => {
         const req = tx.objectStore('knowledge-base').get(currentKdbId);
@@ -288,19 +287,13 @@
         req.onerror = () => resolve([]);
       });
 
-      const signalInsts = await new Promise((resolve) => {
-        const req = tx.objectStore('signal-insts').index('by-kdb').getAll(currentKdbId);
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => resolve([]);
-      });
-
       const sourceFiles = await new Promise((resolve) => {
         const req = tx.objectStore('source-file-info').index('by-kdb').getAll(currentKdbId);
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => resolve([]);
       });
 
-      return { kbData, modules, signalInsts, sourceFiles };
+      return { kbData, modules, sourceFiles };
     }
 
     // Show KB Info
@@ -370,76 +363,88 @@
       log(`Displayed ${data.modules.length} modules`, 'success');
     };
 
-    // Show Signals
+    // Show Signals (parsed from signals.bin: 18 bytes/record)
     window.showSignals = async function() {
-      const data = await getAllData();
-      if (!data) return;
+      const buf = await window.get_signals_buffer(currentKdbId);
+      if (!buf) { log('No signals.bin available', 'error'); return; }
+      const count = Math.floor(buf.byteLength / 18);
+      const dv = new DataView(buf);
 
-      let html = `<div class="section"><h2>Signal Instances (${data.signalInsts.length})</h2>`;
+      let html = `<div class="section"><h2>Signal Instances (${count})</h2>`;
       html += `<table><tr><th>ID</th><th>Parent Module</th><th>Range</th><th>Drivers</th></tr>`;
 
-      data.signalInsts.forEach(inst => {
-        const driverCount = inst.driverLocations ? inst.driverLocations.length : 0;
-        html += `<tr>`;
-        html += `<td>${inst.index}</td>`;
-        html += `<td>${inst.parentModuleId}</td>`;
-        html += `<td>[${inst.msb}:${inst.lsb}]</td>`;
-        html += `<td>${driverCount > 0 ? `<span class="badge badge-green">${driverCount}</span>` : '0'}</td>`;
-        html += `</tr>`;
-      });
+      for (let i = 0; i < count; i++) {
+        const off = i * 18;
+        const msb = dv.getUint32(off, true);
+        const lsb = dv.getUint32(off + 4, true);
+        const parent = dv.getUint32(off + 8, true);
+        const driverCount = dv.getUint16(off + 16, true);
+        html += `<tr><td>${i}</td><td>${parent}</td><td>[${msb}:${lsb}]</td>`;
+        html += `<td>${driverCount > 0 ? `<span class="badge badge-green">${driverCount}</span>` : '0'}</td></tr>`;
+      }
 
       html += `</table></div>`;
       displayContent(html);
-      log(`Displayed ${data.signalInsts.length} signals`, 'success');
+      log(`Displayed ${count} signals`, 'success');
     };
 
-    // Show Drivers
+    // Show Drivers (parsed from signals.bin + drivers.bin; capped to 200 signals with drivers)
     window.showDrivers = async function() {
-      const data = await getAllData();
-      if (!data) return;
+      const buf = await window.get_signals_buffer(currentKdbId);
+      if (!buf) { log('No signals.bin available', 'error'); return; }
+      const dv = new DataView(buf);
+      const count = Math.floor(buf.byteLength / 18);
 
-      const signalsWithDrivers = data.signalInsts.filter(s => s.driverLocations && s.driverLocations.length > 0);
+      const withDrivers = [];
+      for (let i = 0; i < count && withDrivers.length < 200; i++) {
+        if (dv.getUint16(i * 18 + 16, true) > 0) withDrivers.push(i);
+      }
 
-      let html = `<div class="section"><h2>Signals with Drivers (${signalsWithDrivers.length})</h2>`;
+      let html = `<div class="section"><h2>Signals with Drivers (${withDrivers.length}${withDrivers.length >= 200 ? '+ (capped)' : ''})</h2>`;
 
-      if (signalsWithDrivers.length === 0) {
-        html += `<div class="item">No signals with drivers found</div>`;
-      } else {
-        signalsWithDrivers.forEach(inst => {
-          html += `<div class="item">`;
-          html += `<strong><span class="badge badge-orange">ID: ${inst.index}</span> Signal_${inst.index}</strong>`;
-          html += `<div class="nested">`;
-          html += `<div>Parent Module ID: ${inst.parentModuleId}</div>`;
-          html += `<div>Range: [${inst.msb}:${inst.lsb}]</div>`;
-          html += `<div><strong>Drivers (${inst.driverLocations.length}):</strong></div>`;
-          html += `<table><tr><th>#</th><th>Driver Signal ID</th><th>Line</th></tr>`;
+      for (const i of withDrivers) {
+        const off = i * 18;
+        const msb = dv.getUint32(off, true);
+        const lsb = dv.getUint32(off + 4, true);
+        const parent = dv.getUint32(off + 8, true);
+        const start = dv.getUint32(off + 12, true);
+        const dc = dv.getUint16(off + 16, true);
+        const drivers = await window.get_drivers_by_range(currentKdbId, start, dc);
 
-          inst.driverLocations.forEach((d, i) => {
-            const driverId = Number(d.driverSignalGlobalId);
-            html += `<tr><td>${i + 1}</td><td>${driverId}</td><td>${d.line || 0}</td></tr>`;
-          });
-
-          html += `</table></div></div>`;
+        html += `<div class="item"><strong><span class="badge badge-orange">ID: ${i}</span> Signal_${i}</strong><div class="nested">`;
+        html += `<div>Parent Module ID: ${parent}</div><div>Range: [${msb}:${lsb}]</div>`;
+        html += `<div><strong>Drivers (${dc}):</strong></div><table><tr><th>#</th><th>Driver Signal ID</th><th>Line</th></tr>`;
+        drivers.forEach((d, k) => {
+          html += `<tr><td>${k + 1}</td><td>${Number(d.driverSignalGlobalId)}</td><td>${d.line || 0}</td></tr>`;
         });
+        html += `</table></div></div>`;
       }
 
       html += '</div>';
       displayContent(html);
-      log(`Displayed ${signalsWithDrivers.length} signals with drivers`, 'success');
+      log(`Displayed ${withDrivers.length} signals with drivers`, 'success');
     };
 
-    // Show Statistics
+    // Show Statistics (signals/drivers parsed from signals.bin/drivers.bin)
     window.showStats = async function() {
       const data = await getAllData();
       if (!data) return;
 
-      const signalsWithDrivers = data.signalInsts.filter(s => s.driverLocations && s.driverLocations.length > 0);
-      const totalDrivers = data.signalInsts.reduce((sum, s) => sum + (s.driverLocations?.length || 0), 0);
+      const buf = await window.get_signals_buffer(currentKdbId);
+      const count = buf ? Math.floor(buf.byteLength / 18) : 0;
+      let signalsWithDrivers = 0, totalDrivers = 0;
+      if (buf) {
+        const dv = new DataView(buf);
+        for (let i = 0; i < count; i++) {
+          const dc = dv.getUint16(i * 18 + 16, true);
+          if (dc > 0) { signalsWithDrivers++; totalDrivers += dc; }
+        }
+      }
 
       let html = '<div class="section"><h2>Statistics</h2>';
       html += `<div class="item"><span class="badge badge-purple">Total Modules:</span> ${data.modules.length}</div>`;
-      html += `<div class="item"><span class="badge badge-purple">Total Signals:</span> ${data.signalInsts.length}</div>`;
-      html += `<div class="item"><span class="badge badge-purple">Signals with Drivers:</span> ${signalsWithDrivers.length}</div>`;
+      html += `<div class="item"><span class="badge badge-purple">Total Signals:</span> ${count}</div>`;
+      html += `<div class="item"><span class="badge badge-purple">Signals with Drivers:</span> ${signalsWithDrivers}</div>`;
       html += `<div class="item"><span class="badge badge-purple">Total Driver Entries:</span> ${totalDrivers}</div>`;
       html += `<div class="item"><span class="badge badge-purple">Source Files:</span> ${data.sourceFiles.length}</div>`;
       html += '</div>';
@@ -460,7 +465,7 @@
     window.clear_kdb_data = async function(kdbId) {
       if (!globalDB) return Promise.resolve();
       return new Promise((resolve) => {
-        const stores = ['signal-insts', 'modules', 'signal-defs', 'source-file-info', 'knowledge-base'];
+        const stores = ['modules', 'signal-defs', 'source-file-info', 'knowledge-base'];
         let completed = 0;
         stores.forEach(storeName => {
           if (!globalDB.objectStoreNames.contains(storeName)) {
@@ -507,14 +512,34 @@
       });
     };
 
-    window.store_signal_inst = async function(globalIndex, data, kdbId) {
-      return new Promise((resolve, reject) => {
-        const tx = globalDB.transaction('signal-insts', 'readwrite');
-        const store = tx.objectStore('signal-insts');
-        store.put({ index: globalIndex, ...data, kdbId });
-        tx.oncomplete = resolve;
-        tx.onerror = () => reject(tx.error);
-      });
+    // In-memory OPFS fallback (test harness cannot rely on real OPFS here).
+    const opfsMemory = new Map();
+
+    // Flat binary signal/driver store — mirrors the production kdbStorage path.
+    window.store_signals_opfs = async function(bytes, kdbId) {
+      opfsMemory.set(kdbId + '_signals.bin', new Uint8Array(bytes));
+      return Promise.resolve();
+    };
+    window.store_drivers_opfs = async function(bytes, kdbId) {
+      opfsMemory.set(kdbId + '_drivers.bin', new Uint8Array(bytes));
+      return Promise.resolve();
+    };
+    window.get_signals_buffer = async function(kdbId) {
+      const b = opfsMemory.get(kdbId + '_signals.bin');
+      return b ? b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) : null;
+    };
+    window.get_drivers_by_range = async function(kdbId, start, count) {
+      const b = opfsMemory.get(kdbId + '_drivers.bin');
+      if (!b || !count) return [];
+      const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+      const out = [];
+      for (let i = 0; i < count; i++) {
+        const off = (start + i) * 12;
+        const low = dv.getUint32(off, true);
+        const high = dv.getUint32(off + 4, true);
+        out.push({ driverSignalGlobalId: high * 4294967296 + low, line: dv.getUint32(off + 8, true) });
+      }
+      return out;
     };
 
     window.store_source_file_info = async function(fileId, path, name, fullName, totalLines, lineIndexOffset, kdbId) {

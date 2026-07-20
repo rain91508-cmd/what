@@ -1116,7 +1116,7 @@ function App() {
       // - displayModuleId = parent module (correct)
       // - selectedModuleId = parent module (correct)
       // - startFromLine & fileId = from signal.declaration (same as driver)
-      const signal = kdbManager.buildSignal(result.globalId);
+      const signal = await kdbManager.buildSignal(result.globalId);
       if (!signal) {
         addMessage(`Signal not found: ${result.fullName}`);
         return;
@@ -1182,7 +1182,7 @@ function App() {
   // Handle driver click - jump to driver signal location
   const handleDriverClick = useCallback(async (driver: { signalGlobalId: number; line: number; fileId?: number }) => {
     // Build the driver signal to get its information
-    const signal = kdbManager.buildSignal(driver.signalGlobalId);
+    const signal = await kdbManager.buildSignal(driver.signalGlobalId);
     if (!signal) {
       addMessage(`Driver signal not found: ${driver.signalGlobalId}`);
       return;
@@ -1815,11 +1815,11 @@ function App() {
 
   // Handle double-click on signal in waveform window
   // Uses globalId to build full signal info and jump to declaration
-  const handleWaveformSignalDoubleClick = (signal: Signal & { unique_id: number }) => {
+  const handleWaveformSignalDoubleClick = async (signal: Signal & { unique_id: number }) => {
     console.log('[App] handleWaveformSignalDoubleClick called, signal:', signal.name, 'globalId:', signal.globalId);
 
     // Use kdbManager to build full signal info from globalId
-    const fullSignal = kdbManager.buildSignal(signal.globalId);
+    const fullSignal = await kdbManager.buildSignal(signal.globalId);
     if (!fullSignal) {
       addMessage(`Cannot find signal info for ${signal.name}`);
       return;
@@ -2241,7 +2241,7 @@ function App() {
     const signalGlobalId = await kdbManager.findSignalByName(lookupModuleIndex, word);
     console.log('[App] signalGlobalId:', signalGlobalId);
     if (signalGlobalId) {
-      const signal = kdbManager.buildSignal(signalGlobalId);
+      const signal = await kdbManager.buildSignal(signalGlobalId);
       console.log('[App] built signal:', signal?.name, 'isDoubleClick:', isDoubleClick);
       if (signal) {
         setMenuBarInfoText(signal.fullName);
@@ -2282,14 +2282,14 @@ function App() {
             const { driverManager } = await import('./modules/knowledge/driverManager');
             
             // Get driver declaration lines for each driver
-            const driversWithDeclaration = driverLocations.map(d => {
-              const driverSignal = kdbManager.buildSignal(d.driverSignalGlobalId);
+            const driversWithDeclaration = await Promise.all(driverLocations.map(async (d) => {
+              const driverSignal = await kdbManager.buildSignal(d.driverSignalGlobalId);
               return {
                 driverSignalGlobalId: d.driverSignalGlobalId,
                 line: d.line,
                 driverDeclarationLine: driverSignal?.declaration?.line,
               };
-            });
+            }));
             
             // Add driver group
             driverManager.addDriverGroup({
@@ -3694,7 +3694,7 @@ function App() {
         for (const [groupId, group] of Object.entries(waveTab.groups)) {
           const restoredSignals: Array<Signal & { unique_id: number }> = []
           for (const sig of group.signals) {
-            const signal = kdbManager.buildSignal(sig.globalId)
+            const signal = await kdbManager.buildSignal(sig.globalId)
             if (signal) {
               restoredSignals.push({
                 ...signal,
