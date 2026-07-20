@@ -21,8 +21,8 @@ import { openDB, DBSchema, IDBPDatabase } from 'idb';
 // These are exposed to window (which is aliased to self in this Worker)
 import {
   store_knowledge_base,
-  store_module,
-  store_modules_batch,
+  store_modules_opfs,
+  store_signal_defs_opfs,
   store_signals_opfs,
   store_drivers_opfs,
   store_source_file_info,
@@ -47,8 +47,8 @@ function ts(): string {
 // Expose storage functions to Worker global scope (self)
 // WASM will access these via window.* (which we alias to self)
 (self as any).store_knowledge_base = store_knowledge_base;
-(self as any).store_module = store_module;
-(self as any).store_modules_batch = store_modules_batch;
+(self as any).store_modules_opfs = store_modules_opfs;
+(self as any).store_signal_defs_opfs = store_signal_defs_opfs;
 (self as any).store_signals_opfs = store_signals_opfs;
 (self as any).store_drivers_opfs = store_drivers_opfs;
 (self as any).store_source_file_info = store_source_file_info;
@@ -149,21 +149,6 @@ interface KDBWorkerSchema extends DBSchema {
       hierarchy: unknown;
     };
   };
-  'modules': {
-    key: number;
-    value: {
-      id: number;
-      name: string;
-      parentModuleId: number;
-      definition: unknown;
-      signalDefs: unknown[];
-      childModuleIds: number[];
-      defModuleId: number;
-      signalInstsStartId: number;
-      kdbId: string;
-    };
-    indexes: { 'by-kdb': string };
-  };
   'source-file-info': {
     key: number;
     value: {
@@ -243,75 +228,6 @@ async function initWasm(): Promise<void> {
   } catch (error) {
     console.error('[KDBWorker] Failed to initialize WASM:', error);
     throw error;
-  }
-}
-
-// ============================================
-// IndexedDB Operations (Batch Write)
-// ============================================
-
-class MetadataBatcher {
-  private db: IDBPDatabase<KDBWorkerSchema> | null = null;
-  private moduleBatch: KDBWorkerSchema['modules']['value'][] = [];
-  private fileInfoBatch: KDBWorkerSchema['source-file-info']['value'][] = [];
-
-  async init(): Promise<void> {
-    this.db = await openDB<KDBWorkerSchema>(DB_NAME, DB_VERSION);
-    console.log('[KDBWorker] IndexedDB initialized');
-  }
-
-  queueModule(module: KDBWorkerSchema['modules']['value']): void {
-    this.moduleBatch.push(module);
-    if (this.moduleBatch.length >= BATCH_SIZE) {
-      this.flushModules();
-    }
-  }
-
-  queueFileInfo(fileInfo: KDBWorkerSchema['source-file-info']['value']): void {
-    this.fileInfoBatch.push(fileInfo);
-    if (this.fileInfoBatch.length >= BATCH_SIZE) {
-      this.flushFileInfos();
-    }
-  }
-
-  async flushModules(): Promise<void> {
-    if (!this.db || this.moduleBatch.length === 0) return;
-    
-    const tx = this.db.transaction('modules', 'readwrite');
-    const store = tx.objectStore('modules');
-    
-    for (const module of this.moduleBatch) {
-      await store.put(module);
-    }
-    
-    await tx.done;
-    console.log(`[${ts()}] [KDBWorker] Flushed ${this.moduleBatch.length} modules`);
-    this.moduleBatch = [];
-  }
-
-  async flushFileInfos(): Promise<void> {
-    if (!this.db || this.fileInfoBatch.length === 0) return;
-    
-    const tx = this.db.transaction('source-file-info', 'readwrite');
-    const store = tx.objectStore('source-file-info');
-    
-    for (const fileInfo of this.fileInfoBatch) {
-      await store.put(fileInfo);
-    }
-    
-    await tx.done;
-    console.log(`[${ts()}] [KDBWorker] Flushed ${this.fileInfoBatch.length} file infos`);
-    this.fileInfoBatch = [];
-  }
-
-  async flushAll(): Promise<void> {
-    await this.flushModules();
-    await this.flushFileInfos();
-  }
-
-  async storeKnowledgeBase(data: KDBWorkerSchema['knowledge-base']['value']): Promise<void> {
-    if (!this.db) return;
-    await this.db.put('knowledge-base', data);
   }
 }
 

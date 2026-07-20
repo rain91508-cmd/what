@@ -11,7 +11,7 @@
 
 import { apiService } from '../../services/api';
 import { indexedDBManager } from '../../core/storage/indexedDB';
-import { get_source_file_content, get_signals_buffer, get_drivers_by_range } from '../../core/storage/kdbStorage';
+import { get_source_file_content, get_signals_buffer, get_drivers_by_range, get_module_skeletons, get_module_signal_defs } from '../../core/storage/kdbStorage';
 import { kdbDownloadManager, type KDBDownloadProgress } from '../../services/kdbDownloadManager';
 import { wasmManager } from '../../wasm';
 import type { 
@@ -147,7 +147,7 @@ class KdbManager {
     // (the navigation tree only needs name/parent/children/etc.), avoiding the
     // OOM that previously crashed the renderer on large designs
     // (e.g. n900: 125k modules / 2M signals).
-    this.modules = await indexedDBManager.getModuleSkeletons(this.currentKdbId);
+    this.modules = await get_module_skeletons(this.currentKdbId);
 
     // Load design hierarchies so the tree can root at the intended top
     // module(s) (e.g. the one passed via `-top` at build time) instead of
@@ -278,9 +278,10 @@ class KdbManager {
    * Get signal definition for a module (lazy, cached).
    * For instances, returns the definition module's signal defs.
    * The heavy defs are NOT resident for all modules; they are fetched from
-   * IndexedDB on first use for a given module and cached here.
+   * OPFS (module_signal_defs.bin) on first use for a given module and cached here.
    */
   async getSignalDefs(moduleId: number): Promise<SignalDef[]> {
+    if (!this.currentKdbId) return [];
     const module = this.getModuleById(moduleId);
     if (!module) return [];
 
@@ -292,7 +293,7 @@ class KdbManager {
     const cached = this.signalDefsCache.get(targetId);
     if (cached) return cached;
 
-    const defs = await indexedDBManager.getModuleSignalDefs(targetId);
+    const defs = await get_module_signal_defs(targetId, this.currentKdbId);
     this.signalDefsCache.set(targetId, defs);
     return defs;
   }

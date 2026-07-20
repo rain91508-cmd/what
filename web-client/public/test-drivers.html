@@ -273,18 +273,12 @@
     async function getAllData() {
       if (!globalDB || !currentKdbId) return null;
 
-      const tx = globalDB.transaction(['knowledge-base', 'modules', 'source-file-info'], 'readonly');
+      const tx = globalDB.transaction(['knowledge-base', 'source-file-info'], 'readonly');
 
       const kbData = await new Promise((resolve) => {
         const req = tx.objectStore('knowledge-base').get(currentKdbId);
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => resolve(null);
-      });
-
-      const modules = await new Promise((resolve) => {
-        const req = tx.objectStore('modules').index('by-kdb').getAll(currentKdbId);
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => resolve([]);
       });
 
       const sourceFiles = await new Promise((resolve) => {
@@ -293,7 +287,9 @@
         req.onerror = () => resolve([]);
       });
 
-      return { kbData, modules, sourceFiles };
+      // Modules no longer live in IndexedDB — they are parsed directly from
+      // modules.bin (see showModules below).
+      return { kbData, modules: [], sourceFiles };
     }
 
     // Show KB Info
@@ -326,13 +322,86 @@
     };
 
     // Show Modules
+    // Parse the flat modules.bin buffer (skeleton table + child-id pool + name
+    // pool) exactly as kdbStorage.get_module_skeletons does in production.
+    function parseModulesBin(kdbId) {
+      const b = opfsMemory.get(kdbId + '_modules.bin');
+      if (!b) return [];
+      const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+      const count = dv.getUint32(0, true);
+      const namePoolOffset = dv.getUint32(4, true);
+      const childPoolOffset = dv.getUint32(8, true);
+      const decoder = new TextDecoder();
+      const out = [];
+      for (let i = 0; i < count; i++) {
+        const base = 16 + i * 42;
+        const nameOff = dv.getUint32(base, true);
+        const nameLen = dv.getUint32(base + 4, true);
+        const parentModuleId = dv.getUint32(base + 8, true);
+        const hasDef = dv.getUint8(base + 12) !== 0;
+        const defFileId = dv.getUint32(base + 13, true);
+        const defStartLine = dv.getUint32(base + 17, true);
+        const defEndLine = dv.getUint32(base + 21, true);
+        const isInstance = dv.getUint8(base + 25) !== 0;
+        const defModuleId = dv.getUint32(base + 26, true);
+        const signalInstsStartId = dv.getUint32(base + 30, true);
+        const childCount = dv.getUint32(base + 34, true);
+        const childOff = dv.getUint32(base + 38, true);
+        const name = decoder.decode(new Uint8Array(b.buffer, b.byteOffset + namePoolOffset + nameOff, nameLen));
+        const childModuleIds = [];
+        for (let j = 0; j < childCount; j++) {
+          childModuleIds.push(dv.getUint32(childPoolOffset + (childOff + j) * 4, true));
+        }
+        const definition = hasDef ? { fileId: defFileId, startLine: defStartLine, endLine: defEndLine } : null;
+        out.push({ index: i + 1, name, parentModuleId, isInstance, defModuleId, signalInstsStartId, childModuleIds, definition });
+      }
+      return out;
+    }
+
+    // Read one module's signal definitions from module_signal_defs.bin (mirrors
+    // kdbStorage.get_module_signal_defs). Range-readable by module id.
+    function getModuleDefs(kdbId, moduleId) {
+      const b = opfsMemory.get(kdbId + '_module_signal_defs.bin');
+      if (!b || moduleId <= 0) return [];
+      const hdv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+      const count = hdv.getUint32(0, true);
+      // The header's second u32 is the start of the *regions* area (named
+      // `table_offset` in lib.rs), NOT the table base. The lookup table sits
+      // immediately after the 8-byte header at byte offset 8.
+      if (moduleId > count) return [];
+      const idx = moduleId - 1;
+      const regionStart = hdv.getUint32(8 + idx * 8 + 4, true);
+      const regionEnd = hdv.getUint32(8 + (idx + 1) * 8 + 4, true);
+      const region = new Uint8Array(b.buffer, b.byteOffset + regionStart, regionEnd - regionStart);
+      const rdv = new DataView(region.buffer, region.byteOffset, region.byteLength);
+      const defCount = rdv.getUint32(0, true);
+      const namePoolLen = rdv.getUint32(4, true);
+      const decoder = new TextDecoder();
+      const out = [];
+      let recBase = 8 + namePoolLen;
+      for (let i = 0; i < defCount; i++) {
+        const nameOff = rdv.getUint32(recBase, true);
+        const nameLen = rdv.getUint32(recBase + 4, true);
+        const type = rdv.getInt32(recBase + 8, true);
+        const hasDecl = rdv.getUint8(recBase + 12) !== 0;
+        const declFileId = rdv.getUint32(recBase + 13, true);
+        const declLine = rdv.getUint32(recBase + 17, true);
+        const direction = rdv.getInt32(recBase + 21, true);
+        const name = decoder.decode(new Uint8Array(region.buffer, region.byteOffset + 8 + nameOff, nameLen));
+        out.push({ name, type, declaration: hasDecl ? { fileId: declFileId, line: declLine } : undefined, direction });
+        recBase += 25;
+      }
+      return out;
+    }
+
     window.showModules = async function() {
-      const data = await getAllData();
-      if (!data) return;
+      const modules = parseModulesBin(currentKdbId);
+      if (!modules.length) { log('No modules.bin available', 'error'); return; }
 
-      let html = `<div class="section"><h2>Modules (${data.modules.length})</h2>`;
+      let html = `<div class="section"><h2>Modules (${modules.length})</h2>`;
 
-      data.modules.forEach(m => {
+      modules.forEach(m => {
+        const defs = getModuleDefs(currentKdbId, m.index);
         html += `<div class="item">`;
         html += `<strong><span class="badge badge-blue">ID: ${m.index}</span> ${m.name || 'Unnamed'}</strong>`;
         html += `<div class="nested">`;
@@ -346,10 +415,10 @@
           html += `<div>Definition: File ${m.definition.fileId}, Lines ${m.definition.startLine}-${m.definition.endLine}</div>`;
         }
 
-        if (m.signalDefs && m.signalDefs.length > 0) {
-          html += `<div><strong>Signal Definitions (${m.signalDefs.length}):</strong></div>`;
+        if (defs.length > 0) {
+          html += `<div><strong>Signal Definitions (${defs.length}):</strong></div>`;
           html += `<table><tr><th>Name</th><th>Type</th><th>Direction</th></tr>`;
-          m.signalDefs.forEach(s => {
+          defs.forEach(s => {
             html += `<tr><td>${s.name || 'N/A'}</td><td>${s.type || 'N/A'}</td><td>${s.direction !== undefined ? s.direction : 'N/A'}</td></tr>`;
           });
           html += `</table>`;
@@ -360,7 +429,7 @@
 
       html += '</div>';
       displayContent(html);
-      log(`Displayed ${data.modules.length} modules`, 'success');
+      log(`Displayed ${modules.length} modules`, 'success');
     };
 
     // Show Signals (parsed from signals.bin: 18 bytes/record)
@@ -502,14 +571,17 @@
       });
     };
 
-    window.store_module = async function(moduleId, data, kdbId) {
-      return new Promise((resolve, reject) => {
-        const tx = globalDB.transaction('modules', 'readwrite');
-        const store = tx.objectStore('modules');
-        store.put({ index: moduleId, ...data, kdbId });
-        tx.oncomplete = resolve;
-        tx.onerror = () => reject(tx.error);
-      });
+    // Flat binary module stores — mirror the production kdbStorage path. Modules
+    // + signal definitions now live in OPFS as modules.bin / module_signal_defs.bin
+    // (no more IndexedDB 'modules' store). These just buffer the bytes in memory
+    // for the test harness (which cannot rely on real OPFS here).
+    window.store_modules_opfs = async function(bytes, kdbId) {
+      opfsMemory.set(kdbId + '_modules.bin', new Uint8Array(bytes));
+      return Promise.resolve();
+    };
+    window.store_signal_defs_opfs = async function(bytes, kdbId) {
+      opfsMemory.set(kdbId + '_module_signal_defs.bin', new Uint8Array(bytes));
+      return Promise.resolve();
     };
 
     // In-memory OPFS fallback (test harness cannot rely on real OPFS here).

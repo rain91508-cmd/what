@@ -16,7 +16,6 @@ export { kdbDownloadManager, type KDBDownloadProgress, type KDBDownloadResult } 
 // Export storage functions
 export {
   store_knowledge_base,
-  store_module,
   store_signals_opfs,
   store_drivers_opfs,
   store_source_file_info,

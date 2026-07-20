@@ -10,8 +10,6 @@
 
 import { openDB, deleteDB, DBSchema, IDBPDatabase } from 'idb';
 import type { 
-  Module, 
-  SignalDef,
   SourceFileInfo,
   DesignHierarchy 
 } from '../../types/kdb';
@@ -32,36 +30,10 @@ interface HWDBSchema extends DBSchema {
     };
     indexes: { 'by-timestamp': number };
   };
-  'modules': {
-    key: number;  // module id (1-based, matching proto array index + 1)
-    value: {
-      id: number;  // 1-based ID
-      name: string;
-      parentModuleId: number;
-      definition: {
-        fileId: number;
-        startLine: number;
-        endLine: number;
-      };
-      signalDefs: {
-        name: string;
-        type: number;
-        declaration?: {
-          fileId: number;
-          line: number;
-        };
-        direction: number;
-      }[];
-      isInstance: boolean;
-      childModuleIds: number[];
-      defModuleId: number;
-      signalInstsStartId: number;
-      kdbId: string;
-    };
-    indexes: { 
-      'by-kdb': string;
-    };
-  };
+  // Note: 'modules' store removed — module skeletons + signal definitions now
+  // live in OPFS as flat binary files (modules.bin / module_signal_defs.bin).
+  // See kdbStorage.ts. They are read via kdbStorage.get_module_skeletons /
+  // get_module_signal_defs, not IndexedDB.
   // Note: 'signal-insts' store removed — signals + drivers now live in OPFS as
   // flat binary arrays (signals.bin / drivers.bin). See kdbStorage.ts.
   'source-file-info': {
@@ -100,7 +72,7 @@ interface HWDBSchema extends DBSchema {
 }
 
 const DB_NAME = 'hwda-database';
-const DB_VERSION = 6;  // v6: lineIndexOffset moved to its own `source-file-line-index` store
+const DB_VERSION = 7;  // v7: modules store dropped — module data moved to OPFS (modules.bin / module_signal_defs.bin)
 
 class IndexedDBManager {
   private db: IDBPDatabase<HWDBSchema> | null = null;
@@ -146,16 +118,24 @@ class IndexedDBManager {
           }
         }
 
+        // v7: drop the modules store — modules + signal definitions moved to OPFS
+        // (modules.bin / module_signal_defs.bin). See kdbStorage.ts.
+        if (oldVersion < 7) {
+          const rawDb = db as unknown as IDBDatabase;
+          if (rawDb.objectStoreNames.contains('modules')) {
+            try {
+              console.log('[IndexedDB] Deleting store: modules (moved to OPFS)');
+              rawDb.deleteObjectStore('modules');
+            } catch (e) {
+              // Ignore errors for non-existent store
+            }
+          }
+        }
+
         // Knowledge Base store - stores header and hierarchies
         if (!db.objectStoreNames.contains('knowledge-base')) {
           const kdbStore = db.createObjectStore('knowledge-base', { keyPath: 'id' });
           kdbStore.createIndex('by-timestamp', 'timestamp');
-        }
-
-        // Modules store - key is 1-based ID
-        if (!db.objectStoreNames.contains('modules')) {
-          const moduleStore = db.createObjectStore('modules', { keyPath: 'id' });
-          moduleStore.createIndex('by-kdb', 'kdbId');
         }
 
         // Note: signal-insts store intentionally NOT created — signals + drivers
@@ -230,115 +210,12 @@ class IndexedDBManager {
   }
 
   // ============================================
-  // Module Operations
+  // Module Operations — REMOVED (now in OPFS)
   // ============================================
-  
-  async storeModule(module: Module, kdbId: string): Promise<void> {
-    const db = this.getDB();
-    const id = this.getModuleId(module, kdbId);
-    await db.put('modules', {
-      id,
-      name: module.name,
-      parentModuleId: module.parentModuleId,
-      definition: module.definition,
-      signalDefs: module.signalDefs.map(def => ({
-        name: def.name,
-        type: def.type,
-        declaration: def.declaration,
-        direction: def.direction,
-      })),
-      isInstance: module.isInstance,
-      childModuleIds: module.childModuleIds,
-      defModuleId: module.defModuleId,
-      signalInstsStartId: module.signalInstsStartId,
-      kdbId,
-    });
-  }
-
-  async getModule(id: number): Promise<Module | null> {
-    const db = this.getDB();
-    const result = await db.get('modules', id);
-    if (!result) return null;
-    const { kdbId, ...module } = result;
-    return {
-      ...module,
-      signalDefs: module.signalDefs.map(def => ({
-        name: def.name,
-        type: def.type,
-        declaration: def.declaration,
-        direction: def.direction,
-      })),
-    } as Module;
-  }
-
-  async getAllModules(kdbId: string): Promise<Module[]> {
-    const db = this.getDB();
-    const results = await db.getAllFromIndex('modules', 'by-kdb', kdbId);
-    return results
-      .sort((a, b) => a.id - b.id)
-      .map(r => {
-        const { kdbId, ...module } = r;
-        return {
-          ...module,
-          signalDefs: module.signalDefs.map(def => ({
-            name: def.name,
-            type: def.type,
-            declaration: def.declaration,
-            direction: def.direction,
-          })),
-        } as Module;
-      });
-  }
-
-  /**
-   * Load module *skeletons* (navigation metadata only) for a KDB, WITHOUT the
-   * heavy signalDefs arrays. This keeps the renderer's memory bounded at load
-   * time — the navigation tree only needs name/parent/children/etc. Fetching all
-   * modules via getAllFromIndex would instead structure-clone every SignalDef
-   * (~2M objects for large designs) into JS memory at once and OOM the renderer.
-   * Skipping getAllFromIndex is essential; we walk a cursor over the by-kdb index
-   * and keep only the lightweight fields. For a single kdbId the index entries
-   * share the same index key, so the cursor yields them in primary-key (id)
-   * ascending order — i.e. out[id-1] has module id === id.
-   */
-  async getModuleSkeletons(kdbId: string): Promise<Module[]> {
-    const db = this.getDB();
-    const out: Module[] = [];
-    const index = db.transaction('modules').store.index('by-kdb');
-    let cursor = await index.openCursor(kdbId);
-    while (cursor) {
-      const r = cursor.value;
-      out.push({
-        name: r.name,
-        parentModuleId: r.parentModuleId,
-        definition: r.definition,
-        signalDefs: [],
-        isInstance: r.isInstance,
-        childModuleIds: r.childModuleIds,
-        defModuleId: r.defModuleId,
-        signalInstsStartId: r.signalInstsStartId,
-      } as Module);
-      cursor = await cursor.continue();
-    }
-    return out;
-  }
-
-  /**
-   * Fetch only the signalDefs for a single module, on demand. The heavy signal
-   * definitions are NOT held in memory for all modules; they are pulled lazily
-   * (and cached by the caller) when a module's signals are actually viewed.
-   */
-  async getModuleSignalDefs(moduleId: number): Promise<SignalDef[]> {
-    const db = this.getDB();
-    const result = await db.get('modules', moduleId);
-    if (!result) return [];
-    return result.signalDefs.map(def => ({
-      name: def.name,
-      type: def.type,
-      declaration: def.declaration,
-      direction: def.direction,
-    }));
-  }
+  // Modules + signal definitions now live in OPFS as flat binary files
+  // (modules.bin / module_signal_defs.bin). They are read via
+  // kdbStorage.get_module_skeletons / get_module_signal_defs, invoked directly
+  // by kdbManager (not through this IndexedDB manager).
 
   // ============================================
   // Signal Instance Operations
@@ -476,7 +353,6 @@ class IndexedDBManager {
     // for millions of signal instances). This app loads one KDB at a time, so
     // truncating the whole store is equivalent here.
     await db.clear('knowledge-base');
-    await db.clear('modules');
     await db.clear('source-file-info');
     await db.clear('source-file-line-index');
     // Note: signals/drivers live in OPFS (cleared separately); source-file-content also in OPFS
@@ -491,7 +367,6 @@ class IndexedDBManager {
     const db = this.getDB();
     
     await db.clear('knowledge-base');
-    await db.clear('modules');
     await db.clear('source-file-info');
     await db.clear('source-file-line-index');
     // Note: signals/drivers live in OPFS (signals.bin/drivers.bin) — cleared by
@@ -586,17 +461,6 @@ class IndexedDBManager {
   // ============================================
   // Private Helpers
   // ============================================
-  
-  private moduleIdMap = new Map<string, number>();
-  private nextModuleId = 1;
-
-  private getModuleId(module: Module, kdbId: string): number {
-    const key = `${kdbId}:${module.name}:${module.parentModuleId}`;
-    if (!this.moduleIdMap.has(key)) {
-      this.moduleIdMap.set(key, this.nextModuleId++);
-    }
-    return this.moduleIdMap.get(key)!;
-  }
 }
 
 export const indexedDBManager = new IndexedDBManager();

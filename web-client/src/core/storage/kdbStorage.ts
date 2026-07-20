@@ -47,7 +47,6 @@ function postWorkerHeartbeat(): void {
   });
 }
 
-interface ModuleRecord { id: number; name: any; parentModuleId: number; definition: any; signalDefs: any[]; isInstance: boolean; childModuleIds: any[]; defModuleId: number; signalInstsStartId: number; kdbId: string; }
 // Lightweight metadata only — the heavy per-256-line byte offsets are written
 // to the separate `source-file-line-index` store so the Files tab never loads them.
 interface FileInfoRecord { id: number; path: string; name: string; fullName: string; totalLines: number; kdbId: string; }
@@ -62,6 +61,8 @@ const SIGNAL_RECORD_SIZE = 18;
 const DRIVER_RECORD_SIZE = 12;
 const SIGNALS_BIN = 'signals.bin';
 const DRIVERS_BIN = 'drivers.bin';
+const MODULES_BIN = 'modules.bin';
+const MODULE_SIGNAL_DEFS_BIN = 'module_signal_defs.bin';
 
 let _dbPromise: Promise<any> | null = null;
 let _flushTimer: ReturnType<typeof setInterval> | null = null;
@@ -71,7 +72,6 @@ function getDb(): Promise<any> {
   return _dbPromise;
 }
 
-const _moduleBatch: ModuleRecord[] = [];
 const _fileInfoBatch: FileInfoRecord[] = [];
 const _fileLineIndexBatch: FileLineIndexRecord[] = [];
 
@@ -111,7 +111,6 @@ async function flushBatch<T>(storeName: string, batch: T[]): Promise<void> {
 
 async function flushAllBatches(): Promise<void> {
   await Promise.all([
-    flushBatch('modules', _moduleBatch as any),
     flushBatch('source-file-info', _fileInfoBatch as any),
     flushBatch('source-file-line-index', _fileLineIndexBatch as any),
   ]);
@@ -139,6 +138,7 @@ ensureFlushTimer();
 
 import { indexedDBManager } from './indexedDB';
 import { isOpfsAvailable, globalMemoryStorage } from '../../utils/opfsUtils';
+import type { Module, SignalDef } from '../../types/kdb';
 
 /**
  * Store knowledge base metadata
@@ -194,41 +194,6 @@ function convertToPlainObject(value: any): any {
  */
 function maybePlain(value: any): any {
   return value instanceof Map ? convertToPlainObject(value) : value;
-}
-
-/**
- * Store module
- * WASM stores: { name, parentModuleId, definition, signalDefs, isInstance, childModuleIds, defModuleId, signalInstsStartId }
- */
-async function store_module(id: number, data: any, kdbId: string): Promise<void> {
-  // Handle both Map (from serde_wasm_bindgen) and plain object
-  const getValue = (key: string) => {
-    if (data instanceof Map) {
-      return data.get(key);
-    }
-    return data[key];
-  };
-  
-  // Convert signalDefs from Map to plain objects
-  const signalDefs = getValue('signalDefs') || [];
-  const plainSignalDefs = signalDefs.map(convertToPlainObject);
-  
-  _moduleBatch.push({
-    id,
-    name: getValue('name'),
-    parentModuleId: getValue('parentModuleId') || 0,
-    definition: convertToPlainObject(getValue('definition')),
-    signalDefs: plainSignalDefs,
-    isInstance: getValue('isInstance') || false,
-    childModuleIds: getValue('childModuleIds') || [],
-    defModuleId: getValue('defModuleId') || 0,
-    signalInstsStartId: getValue('signalInstsStartId') || 0,
-    kdbId,
-  });
-  
-  if (_moduleBatch.length >= STORE_BATCH_SIZE) {
-    await flushBatch('modules', _moduleBatch as any);
-  }
 }
 
 // ------------------------------------------------------------------
@@ -364,31 +329,131 @@ async function get_drivers_by_range(
 
 
 /**
- * Store a batch of modules in a single IndexedDB transaction.
- * Called by WASM (parse_and_store_kdb) with an Array of module objects.
+ * Store the flat modules.bin buffer to OPFS. Called once by WASM. Mirrors
+ * store_signals_opfs: WASM hands over the fully-serialized little-endian buffer
+ * (see lib.rs) and we just write it to a single file. The module hierarchy that
+ * used to live as ~125k IndexedDB records is now one OPFS file read at load time.
+ * WASM calls: store_modules_opfs(bytes, kdbId)
  */
-async function store_modules_batch(modules: any[], kdbId: string): Promise<void> {
-  for (const m of modules) {
-    const signalDefs = m.signalDefs || [];
-    const plainSignalDefs = signalDefs.map(maybePlain);
+async function store_modules_opfs(bytes: Uint8Array, kdbId: string): Promise<void> {
+  await writeOpfsBinary(kdbId, MODULES_BIN, bytes);
+  postWorkerHeartbeat();
+}
 
-    _moduleBatch.push({
-      id: Number(m.id || 0),
-      name: m.name,
-      parentModuleId: m.parentModuleId || 0,
-      definition: maybePlain(m.definition),
-      signalDefs: plainSignalDefs,
-      isInstance: m.isInstance || false,
-      childModuleIds: m.childModuleIds || [],
-      defModuleId: m.defModuleId || 0,
-      signalInstsStartId: m.signalInstsStartId || 0,
-      kdbId,
-    });
-  }
+/**
+ * Store the flat module_signal_defs.bin buffer to OPFS. Called once by WASM.
+ * Heavy per-module signal definitions, range-readable by module id (see lib.rs).
+ * WASM calls: store_signal_defs_opfs(bytes, kdbId)
+ */
+async function store_signal_defs_opfs(bytes: Uint8Array, kdbId: string): Promise<void> {
+  await writeOpfsBinary(kdbId, MODULE_SIGNAL_DEFS_BIN, bytes);
+  postWorkerHeartbeat();
+}
 
-  if (_moduleBatch.length >= STORE_BATCH_SIZE) {
-    await flushBatch('modules', _moduleBatch as any);
+/**
+ * Parse modules.bin (skeleton table + child-id pool + name pool) into the
+ * in-memory Module[] used by the navigation tree. One OPFS file read + a linear
+ * parse replaces the previous ~125k IndexedDB record reads. signalDefs are left
+ * empty here; they are fetched lazily per module via get_module_signal_defs.
+ */
+async function get_module_skeletons(kdbId: string): Promise<Module[]> {
+  const buf = await readOpfsWhole(kdbId, MODULES_BIN);
+  if (!buf) return [];
+  const dv = new DataView(buf);
+  const count = dv.getUint32(0, true);
+  const namePoolOffset = dv.getUint32(4, true);
+  const childPoolOffset = dv.getUint32(8, true);
+  const decoder = new TextDecoder();
+  const out: Module[] = new Array(count);
+  for (let i = 0; i < count; i++) {
+    const base = 16 + i * 42;
+    const nameOff = dv.getUint32(base, true);
+    const nameLen = dv.getUint32(base + 4, true);
+    const parentModuleId = dv.getUint32(base + 8, true);
+    const hasDef = dv.getUint8(base + 12) !== 0;
+    const defFileId = dv.getUint32(base + 13, true);
+    const defStartLine = dv.getUint32(base + 17, true);
+    const defEndLine = dv.getUint32(base + 21, true);
+    const isInstance = dv.getUint8(base + 25) !== 0;
+    const defModuleId = dv.getUint32(base + 26, true);
+    const signalInstsStartId = dv.getUint32(base + 30, true);
+    const childCount = dv.getUint32(base + 34, true);
+    const childOff = dv.getUint32(base + 38, true);
+    const name = decoder.decode(new Uint8Array(buf, namePoolOffset + nameOff, nameLen));
+    const childModuleIds: number[] = new Array(childCount);
+    for (let j = 0; j < childCount; j++) {
+      childModuleIds[j] = dv.getUint32(childPoolOffset + (childOff + j) * 4, true);
+    }
+    const definition = hasDef
+      ? { fileId: defFileId, startLine: defStartLine, endLine: defEndLine }
+      : { fileId: 0, startLine: 0, endLine: 0 };
+    out[i] = {
+      name,
+      parentModuleId,
+      definition,
+      signalDefs: [],
+      isInstance,
+      childModuleIds,
+      defModuleId,
+      signalInstsStartId,
+    };
   }
+  return out;
+}
+
+/**
+ * Read one module's signal definitions lazily from module_signal_defs.bin.
+ * Reads just the two relevant table entries + that module's region (a small
+ * byte range), so the renderer never holds all ~2M SignalDef objects at once.
+ */
+async function get_module_signal_defs(moduleId: number, kdbId: string): Promise<SignalDef[]> {
+  if (moduleId <= 0) return [];
+  const header = await readOpfsRange(kdbId, MODULE_SIGNAL_DEFS_BIN, 0, 8);
+  if (!header || header.byteLength < 8) return [];
+  const hdv = new DataView(header.buffer, header.byteOffset, header.byteLength);
+  const count = hdv.getUint32(0, true);
+  // IMPORTANT: the header's second u32 is the start of the *regions* area (it is
+  // named `table_offset` in lib.rs, but that is the regions base, NOT the table
+  // base). The lookup table itself sits immediately after the 8-byte header, at
+  // byte offset 8, and holds (count + 1) entries of (def_count:u32,
+  // region_offset:u32). The region_offset values stored in the table are ABSOLUTE
+  // file offsets, so they are used directly below.
+  const regionsBase = hdv.getUint32(4, true);
+  if (moduleId > count) return [];
+  const idx = moduleId - 1;
+  // Read two consecutive table entries (entry[idx] and entry[idx+1]) -> 16 bytes.
+  const tbl = await readOpfsRange(
+    kdbId,
+    MODULE_SIGNAL_DEFS_BIN,
+    8 + idx * 8,
+    8 + (idx + 2) * 8,
+  );
+  if (!tbl || tbl.byteLength < 16) return [];
+  const tdv = new DataView(tbl.buffer, tbl.byteOffset, tbl.byteLength);
+  const regionStart = tdv.getUint32(4, true);
+  const regionEnd = tdv.getUint32(12, true);
+  const region = await readOpfsRange(kdbId, MODULE_SIGNAL_DEFS_BIN, regionStart, regionEnd);
+  if (!region || region.byteLength < 8) return [];
+  const rdv = new DataView(region.buffer, region.byteOffset, region.byteLength);
+  const defCount = rdv.getUint32(0, true);
+  const namePoolLen = rdv.getUint32(4, true);
+  const decoder = new TextDecoder();
+  const out: SignalDef[] = new Array(defCount);
+  let recBase = 8 + namePoolLen;
+  for (let i = 0; i < defCount; i++) {
+    const nameOff = rdv.getUint32(recBase, true);
+    const nameLen = rdv.getUint32(recBase + 4, true);
+    const type = rdv.getInt32(recBase + 8, true);
+    const hasDecl = rdv.getUint8(recBase + 12) !== 0;
+    const declFileId = rdv.getUint32(recBase + 13, true);
+    const declLine = rdv.getUint32(recBase + 17, true);
+    const direction = rdv.getInt32(recBase + 21, true);
+    const name = decoder.decode(new Uint8Array(region.buffer, region.byteOffset + 8 + nameOff, nameLen));
+    const declaration = hasDecl ? { fileId: declFileId, line: declLine } : undefined;
+    out[i] = { name, type, declaration, direction };
+    recBase += 25;
+  }
+  return out;
 }
 
 /**
@@ -685,9 +750,10 @@ async function clear_kdb_data(kdbId: string): Promise<void> {
   // removes all records at the native layer in one shot, so it is effectively
   // instant. This app loads one KDB at a time and wipes the previous one
   // before loading, so truncating the whole store is equivalent here.
-  // Note: signals/drivers now live in OPFS (signals.bin/drivers.bin), removed
-  // together with the source-file contents by the OPFS directory removal below.
-  const stores = ['knowledge-base', 'modules', 'source-file-info', 'source-file-line-index'];
+  // Note: signals/drivers and modules now live in OPFS (signals.bin/drivers.bin,
+  // modules.bin/module_signal_defs.bin), removed together with the source-file
+  // contents by the OPFS directory removal below.
+  const stores = ['knowledge-base', 'source-file-info', 'source-file-line-index'];
   for (const storeName of stores) {
     try {
       await db.clear(storeName);
@@ -713,11 +779,10 @@ async function clear_kdb_data(kdbId: string): Promise<void> {
 // Expose functions to global scope for WASM
 if (typeof window !== 'undefined') {
   (window as any).store_knowledge_base = store_knowledge_base;
-  (window as any).store_module = store_module;
   (window as any).store_signals_opfs = store_signals_opfs;
   (window as any).store_drivers_opfs = store_drivers_opfs;
-  (window as any).store_module = store_module;
-  (window as any).store_modules_batch = store_modules_batch;
+  (window as any).store_modules_opfs = store_modules_opfs;
+  (window as any).store_signal_defs_opfs = store_signal_defs_opfs;
   (window as any).store_source_file_info = store_source_file_info;
   (window as any).store_source_file_content_opfs = store_source_file_content_opfs;
   (window as any).get_source_file_content = get_source_file_content;
@@ -739,12 +804,14 @@ if (typeof window !== 'undefined') {
 // Export for use in other modules
 export {
   store_knowledge_base,
-  store_module,
-  store_modules_batch,
   store_signals_opfs,
   store_drivers_opfs,
+  store_modules_opfs,
+  store_signal_defs_opfs,
   get_signals_buffer,
   get_drivers_by_range,
+  get_module_skeletons,
+  get_module_signal_defs,
   store_source_file_info,
   store_source_file_content_opfs,
   get_source_file_content,
