@@ -1475,6 +1475,11 @@ function App() {
                 updated[updated.length - 1] = `[${new Date().toLocaleTimeString()}] ${label}`
                 return updated
               }
+              // Different step -> append a new line. Never rewrite the previous
+              // step's line, so each "Unpacking KDB" step keeps its own message
+              // and the steps don't overwrite each other. (Step 4's final "X/X"
+              // count is emitted by the WASM at the end of its loop, so it
+              // completes on its own without the next step touching it.)
               const next = [...prev, `[${new Date().toLocaleTimeString()}] ${label}`]
               return next.length > 100 ? next.slice(-100) : next
             })
@@ -2336,8 +2341,18 @@ function App() {
               },
               drivers: driversWithDeclaration,
             });
-            
+
             addMessage(`Added ${driverLocations.length} driver(s) for signal: ${signal.name}`);
+
+            // Also jump the source tab to the driver location with highlight.
+            // For a single driver this is unambiguous; for multiple drivers we
+            // jump to the first one and the user can pick the others via
+            // double-click in the Drivers tab (which calls handleDriverClick too).
+            const firstDriver = driverLocations[0];
+            await handleDriverClick({
+              signalGlobalId: firstDriver.driverSignalGlobalId,
+              line: firstDriver.line,
+            });
           } else {
             addMessage(`No drivers found for signal: ${signal.name}`);
           }

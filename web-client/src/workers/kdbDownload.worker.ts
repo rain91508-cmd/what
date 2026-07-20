@@ -80,10 +80,19 @@ function setupStorageFunctions(writer: OPFSWriter) {
   // Override store_source_file_content_opfs to use OPFSWriter
   // This ensures files are properly queued for postMessage fallback if needed
   (self as any).store_source_file_content_opfs = async (id: number, content: Uint8Array, _kdbId: string) => {
-    // (Log removed: this path is fast and the per-file line was just noise.)
-    // Always use OPFSWriter to handle file storage
-    // OPFSWriter will handle the fallback logic internally
-    await writer.writeFile(id, content);
+    // Fire-and-forget with a copy: WASM owns the bytes we are handed (a view
+    // into its linear memory) and frees them as soon as this call returns, so
+    // we MUST copy before letting the write run in the background.
+    // OPFSWriter's internal queue then runs up to WRITE_CONCURRENCY (4) writes
+    // in parallel instead of serializing all source files (each does
+    // createWritable -> write -> close). Awaiting here previously stalled
+    // "Step 4: Storing source files" for minutes on large designs. The worker
+    // calls opfsWriter.waitForAll() after parse_and_store_kdb to guarantee every
+    // file is physically written before completion is reported.
+    writer.writeFile(id, new Uint8Array(content)).catch((e) => {
+      console.error(`[KDBWorker] Source file content write failed for id ${id}:`, e);
+    });
+    return;
   };
   
   console.log('[KDBWorker] Storage functions setup complete');
@@ -681,7 +690,13 @@ async function downloadAndStoreKDB(
     if (!designName) {
       throw new Error('Failed to parse KDB');
     }
-    
+
+    // Source-file content writes are fire-and-forget (enqueued into OPFSWriter's
+    // parallel queue) so they overlap with parsing instead of blocking it. Wait
+    // for them to finish here so we never report completion before the files
+    // are physically on disk.
+    await opfsWriter.waitForAll();
+
     // Flush any buffered IndexedDB records (the per-record store_* calls
     // batch writes; the final partial batch must be flushed before we
     // report completion).
