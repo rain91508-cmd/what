@@ -1713,6 +1713,21 @@ function App() {
     // - highlightLine = selected module's own startLine (instance declaration line)
     const displayModuleId = module?.isInstance ? (module?.parentModuleId || moduleIndex) : moduleIndex;
     const highlightLine = module?.definition?.startLine || 1;
+
+    // --- DEBUG: compare instance's stored definition vs parent/def module locations ---
+    const defModule = module?.isInstance && module.defModuleId ? kdbManager.getModuleById(module.defModuleId) : undefined;
+    const parentModule = module?.parentModuleId ? kdbManager.getModuleById(module.parentModuleId) : undefined;
+    console.log('[App][DEBUG] double-click moduleIndex=', moduleIndex,
+      'name=', module?.name,
+      'isInstance=', module?.isInstance,
+      'parentModuleId=', module?.parentModuleId,
+      'defModuleId=', module?.defModuleId);
+    console.log('[App][DEBUG]   clicked.definition =', JSON.stringify(module?.definition),
+      '-> highlightLine=', highlightLine, 'displayModuleId=', displayModuleId);
+    console.log('[App][DEBUG]   displayModule.definition =', JSON.stringify(kdbManager.getModuleById(displayModuleId)?.definition));
+    console.log('[App][DEBUG]   parentModule.definition =', JSON.stringify(parentModule?.definition));
+    console.log('[App][DEBUG]   defModule.definition =', JSON.stringify(defModule?.definition));
+    // ---
     
     console.log('[App] highlightLine:', highlightLine, 'displayModuleId:', displayModuleId, 'isInstance:', module?.isInstance);
     
