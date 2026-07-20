@@ -56,6 +56,22 @@ function ts(): string {
 (self as any).get_source_file_content_by_range = get_source_file_content_by_range;
 (self as any).clear_kdb_data = clear_kdb_data;
 
+// WASM (parse_and_store_kdb) calls this at each discrete "unpacking to local
+// storage" step so the UI can show granular progress (e.g. "Step 4/6: Storing
+// 1234 source files"). We forward it as a normal 'storing' progress message.
+// This bypasses updateProgress()'s 5s throttle on purpose: step boundaries are
+// infrequent and each one should be shown immediately. loaded/total carry the
+// step index / step count so the UI can render "Step X/N".
+(self as any).report_kdb_progress = (step: number, total: number, message: string) => {
+  postMessage({
+    type: 'progress',
+    phase: 'storing',
+    loaded: step,
+    total,
+    message: `Step ${step}/${total}: ${message}`,
+  } as KDBProgressMessage);
+};
+
 /**
  * Setup storage functions with OPFSWriter integration
  * This is called after OPFSWriter is initialized
@@ -156,6 +172,15 @@ interface KDBWorkerSchema extends DBSchema {
       name: string;
       fullName: string;
       totalLines: number;
+      kdbId: string;
+    };
+    indexes: { 'by-kdb': string };
+  };
+  // Heavy per-256-line byte offsets, stored separately so the Files tab never loads them.
+  'source-file-line-index': {
+    key: number;
+    value: {
+      id: number;
       lineIndexOffset: number[];
       kdbId: string;
     };
@@ -168,7 +193,7 @@ interface KDBWorkerSchema extends DBSchema {
 // ============================================
 
 const DB_NAME = 'hwda-database';
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 const BATCH_SIZE = 100; // Batch size for metadata writes
 const WRITE_CONCURRENCY = 4; // Max concurrent OPFS writes
 const CWDK_MAGIC = 0x4B445743; // "CWDK" in little-endian

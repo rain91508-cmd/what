@@ -76,6 +76,18 @@ interface HWDBSchema extends DBSchema {
     };
     indexes: { 'by-kdb': string };
   };
+  // Heavy per-256-line byte offsets used only for on-demand line seeking when a
+  // file is opened. Kept separate from `source-file-info` so the Files tab (which
+  // reads `source-file-info`) NEVER materialises these large arrays into memory.
+  'source-file-line-index': {
+    key: number;  // file id (1-based)
+    value: {
+      id: number;
+      lineIndexOffset: number[];
+      kdbId: string;
+    };
+    indexes: { 'by-kdb': string };
+  };
   // Note: source-file-content store removed - content now stored in OPFS
   'metadata': {
     key: string;
@@ -88,7 +100,7 @@ interface HWDBSchema extends DBSchema {
 }
 
 const DB_NAME = 'hwda-database';
-const DB_VERSION = 5;  // v5: signal-insts store removed (signals/drivers now in OPFS)
+const DB_VERSION = 6;  // v6: lineIndexOffset moved to its own `source-file-line-index` store
 
 class IndexedDBManager {
   private db: IDBPDatabase<HWDBSchema> | null = null;
@@ -155,6 +167,14 @@ class IndexedDBManager {
           sourceInfoStore.createIndex('by-kdb', 'kdbId');
         }
 
+        // Source file line-offset index: the heavy per-256-line byte offsets used
+        // only for on-demand line seeking when a file is opened. Kept in its own
+        // store so the lightweight `source-file-info` (Files tab) never loads them.
+        if (!db.objectStoreNames.contains('source-file-line-index')) {
+          const lineIdxStore = db.createObjectStore('source-file-line-index', { keyPath: 'id' });
+          lineIdxStore.createIndex('by-kdb', 'kdbId');
+        }
+
         // Note: source-file-content store removed - content now stored in OPFS
 
         // Metadata store
@@ -165,7 +185,7 @@ class IndexedDBManager {
     });
 
     this.initialized = true;
-    console.log('[IndexedDB] Initialized successfully (v5 - signals/drivers in OPFS)');
+    console.log('[IndexedDB] Initialized successfully (v6 - line-index split into its own store)');
   }
 
   isInitialized(): boolean {
@@ -345,6 +365,105 @@ class IndexedDBManager {
     return await db.getAllFromIndex('source-file-info', 'by-kdb', kdbId);
   }
 
+  async storeSourceFileLineIndex(id: number, lineIndexOffset: number[], kdbId: string): Promise<void> {
+    const db = this.getDB();
+    await db.put('source-file-line-index', { id, lineIndexOffset, kdbId });
+  }
+
+  /**
+   * Fetch the heavy per-256-line byte-offset index for a single file. Used only
+   * when a source file is actually opened (line seeking). Stored separately from
+   * `source-file-info` so the Files tab never loads it.
+   */
+  async getSourceFileLineIndex(id: number): Promise<number[]> {
+    const db = this.getDB();
+    const rec = await db.get('source-file-line-index', id);
+    return (rec && (rec as any).lineIndexOffset) || [];
+  }
+
+  /**
+   * Load source-file *skeletons* (id/path/name/fullName/totalLines only) for a
+   * KDB. The Files tab only needs the file name/path to render the list and must
+   * NEVER load the heavy `lineIndexOffset` arrays (now stored separately in
+   * `source-file-line-index` and only read when a file is actually opened).
+   *
+   * This method is strictly cursor-based: it never calls `getAll`, which would
+   * structure-clone every file's `lineIndexOffset` (tens of thousands of u32s per
+   * file × thousands of files) into JS memory at once and OOM the renderer
+   * (~1.6 GB on large designs). Walking a cursor and keeping only the lightweight
+   * fields keeps the peak footprint at one record's worth of data.
+   */
+  async getSourceFileInfoSkeletons(kdbId: string): Promise<SourceFileInfo[]> {
+    const db = this.getDB();
+    const out: SourceFileInfo[] = [];
+    const seen = new Set<number>();
+    const collect = (r: any): void => {
+      if (!r || seen.has(r.id)) return;
+      seen.add(r.id);
+      out.push({
+        id: r.id,
+        path: r.path,
+        name: r.name,
+        fullName: r.fullName,
+        totalLines: r.totalLines,
+        kdbId: r.kdbId,
+      });
+    };
+
+    // Primary (fast + memory-friendly): walk a cursor over the by-kdb index.
+    // `source-file-info` no longer carries `lineIndexOffset`, so each value is
+    // tiny; the cursor keeps at most one record in memory at a time.
+    try {
+      const index = db.transaction('source-file-info').store.index('by-kdb');
+      let cursor = await index.openCursor(kdbId);
+      while (cursor) {
+        collect(cursor.value as any);
+        cursor = await cursor.continue();
+      }
+      if (out.length > 0) return out;
+    } catch (e) {
+      console.warn('[IndexedDB] source-file-info index cursor failed, falling back to full-store scan:', e);
+    }
+
+    // Fallback 1: scan the whole store one record at a time, filtering by kdbId
+    // in JS. Does not depend on the `by-kdb` index, so it works against a
+    // pre-existing DB whose store predates the index. Memory-safe: we keep only
+    // the lightweight fields, dropping any `lineIndexOffset` per record.
+    try {
+      const store = db.transaction('source-file-info').store;
+      let cursor = await store.openCursor();
+      while (cursor) {
+        const r = cursor.value as any;
+        if (r && r.kdbId === kdbId) collect(r);
+        cursor = await cursor.continue();
+      }
+      if (out.length > 0) return out;
+    } catch (e) {
+      console.warn('[IndexedDB] source-file-info full-store scan failed:', e);
+    }
+
+    // Last resort: cursor-scan the entire store without a kdbId filter. Still
+    // memory-safe (per-record drop) and only reached when the kdbId-filtered
+    // scans matched nothing (e.g. a kdbId/index edge case). Returns the lightweight
+    // skeletons only, so memory stays bounded — never the heavy offset arrays.
+    try {
+      const store = db.transaction('source-file-info').store;
+      let cursor = await store.openCursor();
+      while (cursor) {
+        collect(cursor.value as any);
+        cursor = await cursor.continue();
+      }
+      if (out.length > 0) {
+        console.warn(
+          `[IndexedDB] source-file-info: kdbId-filtered scans matched 0; returning all ${out.length} skeletons (possible kdbId/index mismatch)`
+        );
+      }
+    } catch (e) {
+      console.warn('[IndexedDB] source-file-info last-resort scan failed:', e);
+    }
+    return out;
+  }
+
   // ============================================
   // Cleanup Operations
   // ============================================
@@ -359,6 +478,7 @@ class IndexedDBManager {
     await db.clear('knowledge-base');
     await db.clear('modules');
     await db.clear('source-file-info');
+    await db.clear('source-file-line-index');
     // Note: signals/drivers live in OPFS (cleared separately); source-file-content also in OPFS
 
     console.log(`[IndexedDB] Cleared data for KDB: ${kdbId}`);
@@ -373,6 +493,7 @@ class IndexedDBManager {
     await db.clear('knowledge-base');
     await db.clear('modules');
     await db.clear('source-file-info');
+    await db.clear('source-file-line-index');
     // Note: signals/drivers live in OPFS (signals.bin/drivers.bin) — cleared by
     // kdbStorage.clear_kdb_data via removeEntry on the KDB's OPFS directory.
     // Note: source-file-content store removed - content is in OPFS
@@ -387,22 +508,33 @@ class IndexedDBManager {
    */
   private async checkIfNeedsReset(): Promise<boolean> {
     try {
-      // Try to open the database without upgrading to check current state
-      const existingDb = await openDB(DB_NAME, DB_VERSION);
-      
+      // Open at the CURRENT version (no version arg) purely to inspect the schema.
+      // IMPORTANT: never pass DB_VERSION here — opening an older DB at a higher
+      // version with no upgrade callback silently bumps the version WITHOUT
+      // creating the new stores, after which the real initialize() open sees a
+      // matching version, skips the upgrade, and the stores are missing forever.
+      const existingDb = await openDB(DB_NAME);
+
       // Check if we have the old 'source-files' store (indicates old schema)
       const hasOldStore = existingDb.objectStoreNames.contains('source-files');
       // Check if we have the deprecated 'source-file-content' store (content now in OPFS)
       const hasDeprecatedContentStore = existingDb.objectStoreNames.contains('source-file-content');
       const hasNewInfoStore = existingDb.objectStoreNames.contains('source-file-info');
-      
+      // The line-offset index store must exist too (added alongside the split).
+      const hasLineIndexStore = existingDb.objectStoreNames.contains('source-file-line-index');
+
       existingDb.close();
-      
-      if (hasOldStore || hasDeprecatedContentStore || !hasNewInfoStore) {
-        console.log('[IndexedDB] Detected old schema, needs reset:', { hasOldStore, hasDeprecatedContentStore, hasNewInfoStore });
+
+      if (hasOldStore || hasDeprecatedContentStore || !hasNewInfoStore || !hasLineIndexStore) {
+        console.log('[IndexedDB] Detected outdated/incomplete schema, needs reset:', {
+          hasOldStore,
+          hasDeprecatedContentStore,
+          hasNewInfoStore,
+          hasLineIndexStore,
+        });
         return true;
       }
-      
+
       return false;
     } catch (e) {
       // Database doesn't exist or other error, no need to reset

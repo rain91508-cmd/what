@@ -44,6 +44,12 @@ class KdbManager {
   private downloading = false;
   // Cache for modules (navigation skeletons, loaded at startup)
   private modules: Module[] = [];
+  // Design hierarchies (top_module_id + module_ids) loaded at startup. When the
+  // KDB was built with a `-top <module>` command-line option, the interpreter
+  // records exactly one hierarchy rooted at that module; otherwise it records
+  // one hierarchy per parent-less definition. The navigation tree uses these
+  // top_module_ids as its roots so only the intended top module is displayed.
+  private hierarchies: DesignHierarchy[] = [];
   // Lazy cache of signalDefs keyed by module id (definition modules only).
   // Populated on demand by getSignalDefs() so the renderer never holds all
   // ~2M SignalDef objects in memory at once — previously this OOM'd / SIGILL'd
@@ -88,7 +94,7 @@ class KdbManager {
    */
   async downloadAndLoadKdb(
     kdbName: string,
-    onProgress?: (downloaded: number, total: number) => void
+    onProgress?: (downloaded: number, total: number, phase?: string, message?: string) => void
   ): Promise<boolean> {
     if (this.downloading) {
       console.warn('[KdbManager] Download already in progress');
@@ -106,7 +112,7 @@ class KdbManager {
         kdbName, // Use kdbName as kdbId
         (progress: KDBDownloadProgress) => {
           console.log(`[KdbManager] ${progress.phase}: ${progress.loaded}/${progress.total}`);
-          onProgress?.(progress.loaded, progress.total);
+          onProgress?.(progress.loaded, progress.total, progress.phase, progress.message);
         }
       );
 
@@ -142,6 +148,11 @@ class KdbManager {
     // OOM that previously crashed the renderer on large designs
     // (e.g. n900: 125k modules / 2M signals).
     this.modules = await indexedDBManager.getModuleSkeletons(this.currentKdbId);
+
+    // Load design hierarchies so the tree can root at the intended top
+    // module(s) (e.g. the one passed via `-top` at build time) instead of
+    // every parent-less definition.
+    this.hierarchies = (await indexedDBManager.getKnowledgeBaseHierarchies(this.currentKdbId)) || [];
 
     // Load the flat signals.bin buffer once and keep it resident as a DataView.
     // This replaces the millions of per-signal JS objects that previously lived
@@ -414,14 +425,65 @@ class KdbManager {
   async getTopLevelModules(): Promise<TreeNode[]> {
     console.log('[KdbManager] getTopLevelModules called');
     if (!this.currentKdbId || this.modules.length === 0) return [];
-    
-    // Find top-level modules (parentModuleId === 0)
-    const topModules = this.modules
+
+    // The design has exactly ONE top module. The KDB records "hierarchies":
+    //  - built WITH `-top <module>`: a single hierarchy rooted at that module.
+    //  - built WITHOUT `-top`: one hierarchy per parent-less *definition*
+    //    (the real design top PLUS every library/cell definition). Picking any
+    //    of those as a root would explode the tree into thousands of roots.
+    //
+    // The real design top is the hierarchy that spans the most modules (the
+    // actual instantiated design), as opposed to library/cell definitions which
+    // span only themselves. Pick exactly that one as the sole root.
+    if (this.hierarchies.length > 0) {
+      let bestId = -1;
+      let bestSize = -1;
+      for (const h of this.hierarchies) {
+        const size = h.moduleIds ? h.moduleIds.length : 0;
+        if (size > bestSize) {
+          bestSize = size;
+          bestId = h.topModuleId;
+        }
+      }
+      if (bestId >= 1 && bestId <= this.modules.length) {
+        const m = this.getModuleById(bestId);
+        if (m) {
+          console.log('[KdbManager] top module (largest hierarchy):', bestId, 'moduleIds:', bestSize);
+          return [this.moduleToTreeNode(m, bestId)];
+        }
+      }
+    }
+
+    // Fallback (no hierarchies recorded): the single instance with no parent.
+    const topInstances = this.modules
+      .map((m, index) => ({ module: m, id: index + 1 }))
+      .filter(({ module }) => module.parentModuleId === 0 && module.isInstance);
+    if (topInstances.length > 0) {
+      // Prefer the instance with the most children (the design top).
+      let best = topInstances[0];
+      let bestChildren = -1;
+      for (const { module, id } of topInstances) {
+        const n = module.childModuleIds ? module.childModuleIds.length : 0;
+        if (n > bestChildren) {
+          bestChildren = n;
+          best = { module, id };
+        }
+      }
+      console.log('[KdbManager] top module (instance root fallback):', best.id);
+      return [this.moduleToTreeNode(best.module, best.id)];
+    }
+
+    // Last resort (no instances at all): first parent-less module.
+    const parentless = this.modules
       .map((m, index) => ({ module: m, id: index + 1 }))
       .filter(({ module }) => module.parentModuleId === 0);
-    
-    console.log('[KdbManager] top modules:', topModules.length);
-    return topModules.map(({ module, id }) => this.moduleToTreeNode(module, id));
+    if (parentless.length > 0) {
+      const first = parentless[0];
+      console.log('[KdbManager] top module (parentless fallback):', first.id);
+      return [this.moduleToTreeNode(first.module, first.id)];
+    }
+
+    return [];
   }
 
   /**
@@ -635,7 +697,12 @@ class KdbManager {
    */
   async getAllSourceFileInfo(): Promise<SourceFileInfo[]> {
     if (!this.currentKdbId) return [];
-    return indexedDBManager.getSourceFileInfoByKdb(this.currentKdbId);
+    // Load only lightweight file-name/path metadata (no per-file
+    // lineIndexOffset arrays). The Files tab and name-based lookups never need
+    // the byte-offset index, and loading it for every file at once OOMs the
+    // renderer on large designs. The offsets are still available per-file via
+    // getSourceFileInfo(id) when a file is actually opened.
+    return indexedDBManager.getSourceFileInfoSkeletons(this.currentKdbId);
   }
 
   /**
@@ -877,6 +944,7 @@ class KdbManager {
   async clear(): Promise<void> {
     this.currentKdbId = null;
     this.modules = [];
+    this.hierarchies = [];
     this.signalDefsCache.clear();
     this.signalsView = null;
     this.signalCount = 0;

@@ -1449,11 +1449,43 @@ function App() {
     addMessage(`Starting KDB download...`)
     
     // Download KDB with progress
+    let lastStorePercent = -1
+    let lastStoreStep = -1
     const success = await kdbManager.downloadAndLoadKdb(
       kdbName,
-      (downloaded, total) => {
+      (downloaded, total, phase, message) => {
+        // During the "storing"/unpacking phase, loaded/total are the discrete
+        // step index / step count (e.g. 4 / 6) and message already reads
+        // "Step X/N: ...". Surface each step so the user can see which stage of
+        // unpacking to local storage is running.
+        if (phase === 'storing') {
+          // WASM step messages read "Step X/N: ..." and carry the step index in
+          // `downloaded`. Ignore the worker's generic "Decompressing and
+          // storing..." filler so we don't log duplicate lines.
+          if (message && message.startsWith('Step') && total > 0) {
+            const label = `Unpacking KDB: ${message}`
+            const step = downloaded
+            setMessages(prev => {
+              const last = prev.length > 0 ? prev[prev.length - 1] : ''
+              const isUnpack = last.includes('Unpacking KDB:')
+              // Same step -> this is live sub-progress: replace the last line
+              // in place so the user sees it advance without scrolling spam.
+              if (isUnpack && step === lastStoreStep) {
+                const updated = prev.slice()
+                updated[updated.length - 1] = `[${new Date().toLocaleTimeString()}] ${label}`
+                return updated
+              }
+              const next = [...prev, `[${new Date().toLocaleTimeString()}] ${label}`]
+              return next.length > 100 ? next.slice(-100) : next
+            })
+            lastStoreStep = step
+          }
+          return
+        }
+        // Download phase: report by percent (throttled to every 10%).
         const percent = Math.round((downloaded / total) * 100)
-        if (percent % 10 === 0) {
+        if (percent !== lastStorePercent && percent % 10 === 0) {
+          lastStorePercent = percent
           addMessage(`Downloading KDB: ${percent}%`)
         }
       }

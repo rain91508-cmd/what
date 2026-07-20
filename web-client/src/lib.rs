@@ -77,6 +77,23 @@ extern "C" {
     
     #[wasm_bindgen(js_namespace = window)]
     fn clear_kdb_data(kdb_id: &str) -> js_sys::Promise;
+
+    // Report a coarse-grained "unpacking to local storage" step to the host so
+    // the UI can show discrete progress (e.g. "Step 4/6: Storing 1234 source
+    // files"). This is best-effort UI feedback only; the host defines a no-op if
+    // it does not care. `step`/`total` are 1-based step indices, `message`
+    // describes the current step.
+    #[wasm_bindgen(js_namespace = window, js_name = report_kdb_progress)]
+    fn report_kdb_progress(step: u32, total: u32, message: &str);
+}
+
+/// Total number of discrete "unpacking to local storage" steps reported to the
+/// UI (decompress, parse, metadata, source files, modules, signals+drivers).
+const KDB_STORE_TOTAL_STEPS: u32 = 6;
+
+/// Best-effort progress report to the host UI. Never fails the store.
+fn report_step(step: u32, message: &str) {
+    report_kdb_progress(step, KDB_STORE_TOTAL_STEPS, message);
 }
 
 macro_rules! console_log {
@@ -132,6 +149,7 @@ pub async fn parse_and_store_kdb(kdb_id: &str, data: &[u8]) -> Result<String, Js
     let compressed_data = &data[8..];
     console_log!("[WASM] Compressed size: {} bytes", compressed_data.len());
     
+    report_step(1, "Decompressing KDB...");
     let decompressed = match decompress_zstd(compressed_data, original_size) {
         Ok(data) => data,
         Err(e) => return Err(JsValue::from_str(&format!("Decompression failed: {}", e))),
@@ -140,6 +158,7 @@ pub async fn parse_and_store_kdb(kdb_id: &str, data: &[u8]) -> Result<String, Js
     console_log!("[WASM] Decompressed {} bytes", decompressed.len());
     
     // Parse protobuf data
+    report_step(2, "Parsing KDB structure...");
     let kdb_data = match parse_kdb_protobuf(&decompressed) {
         Ok(data) => {
             let module_count = data.modules.len();
@@ -302,6 +321,7 @@ async fn store_kdb_to_indexeddb(mut kdb_data: KnowledgeBase, kdb_id: &str) -> Re
     Reflect::set(&kb_obj, &"timestamp".into(), &(js_sys::Date::now() as u64).into())?;
     
     store_log!("[WASM] Storing knowledge base...");
+    report_step(3, "Storing design metadata...");
     let kb_promise = store_knowledge_base(kdb_id, &kb_obj);
     match wasm_bindgen_futures::JsFuture::from(kb_promise).await {
         Ok(_) => store_log!("[WASM] Stored knowledge base successfully"),
@@ -317,12 +337,23 @@ async fn store_kdb_to_indexeddb(mut kdb_data: KnowledgeBase, kdb_id: &str) -> Re
     //    the Vecs drops that memory before the large signal-instance phase.
     let file_count = kdb_data.file_infos.len();
     store_log!("[WASM] Storing {} source files...", file_count);
+    report_step(4, &format!("Storing {} source files...", file_count));
     {
-        let mut file_infos = std::mem::take(&mut kdb_data.file_infos).into_iter();
-        let mut file_contents = std::mem::take(&mut kdb_data.file_contents).into_iter();
-        let mut file_id: u32 = 0;
-        while let (Some(file_info), Some(file_content)) = (file_infos.next(), file_contents.next()) {
-            file_id += 1; // 1-based ID
+      let mut file_infos = std::mem::take(&mut kdb_data.file_infos).into_iter();
+      let mut file_contents = std::mem::take(&mut kdb_data.file_contents).into_iter();
+      let mut file_id: u32 = 0;
+      // Report live sub-progress (a handful of times) so the UI shows the
+      // source-file storing step advancing, instead of a single instant step.
+      let report_every: u32 = ((file_count / 50) as u32).max(1);
+      while let (Some(file_info), Some(file_content)) = (file_infos.next(), file_contents.next()) {
+        file_id += 1; // 1-based ID
+        if file_count > 0 && file_id % report_every == 0 {
+          report_kdb_progress(
+            4,
+            KDB_STORE_TOTAL_STEPS,
+            &format!("Storing source files... {}/{}", file_id, file_count),
+          );
+        }
             // Extract file name from path
             let name = file_info.path.split('/').last().unwrap_or(&file_info.path);
             // Store file info (metadata) to IndexedDB
@@ -352,6 +383,7 @@ async fn store_kdb_to_indexeddb(mut kdb_data: KnowledgeBase, kdb_id: &str) -> Re
     //    each module's memory is freed as soon as its batch is submitted.
     let module_count = kdb_data.modules.len();
     store_log!("[WASM] Storing {} modules...", module_count);
+    report_step(5, &format!("Storing {} modules...", module_count));
     let mut module_batch = Array::new();
     for (index, module) in kdb_data.modules.into_iter().enumerate() {
         let module_id = (index + 1) as u32;  // 1-based ID
@@ -424,6 +456,10 @@ async fn store_kdb_to_indexeddb(mut kdb_data: KnowledgeBase, kdb_id: &str) -> Re
     store_log!(
         "[WASM] Storing {} signal instances + {} drivers (OPFS binary arrays)...",
         signal_count, driver_count
+    );
+    report_step(
+        6,
+        &format!("Storing {} signals + {} drivers...", signal_count, driver_count),
     );
 
     let signal_insts = std::mem::take(&mut kdb_data.all_signal_insts);

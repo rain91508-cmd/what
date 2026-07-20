@@ -48,7 +48,10 @@ function postWorkerHeartbeat(): void {
 }
 
 interface ModuleRecord { id: number; name: any; parentModuleId: number; definition: any; signalDefs: any[]; isInstance: boolean; childModuleIds: any[]; defModuleId: number; signalInstsStartId: number; kdbId: string; }
-interface FileInfoRecord { id: number; path: string; name: string; fullName: string; totalLines: number; lineIndexOffset: any[]; kdbId: string; }
+// Lightweight metadata only — the heavy per-256-line byte offsets are written
+// to the separate `source-file-line-index` store so the Files tab never loads them.
+interface FileInfoRecord { id: number; path: string; name: string; fullName: string; totalLines: number; kdbId: string; }
+interface FileLineIndexRecord { id: number; lineIndexOffset: number[]; kdbId: string; }
 
 // Flat OPFS binary layout for signals + drivers (see lib.rs store path).
 //   signals.bin : SIGNAL_RECORD_SIZE bytes/record, indexed by signal global id
@@ -70,6 +73,7 @@ function getDb(): Promise<any> {
 
 const _moduleBatch: ModuleRecord[] = [];
 const _fileInfoBatch: FileInfoRecord[] = [];
+const _fileLineIndexBatch: FileLineIndexRecord[] = [];
 
 // Per-store "flush in flight" guard. The periodic timer in ensureFlushTimer()
 // and the in-line flushes from the store loop can race: both may try to flush
@@ -109,6 +113,7 @@ async function flushAllBatches(): Promise<void> {
   await Promise.all([
     flushBatch('modules', _moduleBatch as any),
     flushBatch('source-file-info', _fileInfoBatch as any),
+    flushBatch('source-file-line-index', _fileLineIndexBatch as any),
   ]);
 }
 
@@ -389,6 +394,13 @@ async function store_modules_batch(modules: any[], kdbId: string): Promise<void>
 /**
  * Store source file info (metadata only)
  * WASM calls: store_source_file_info(id, path, name, fullName, totalLines, lineIndexOffset, kdbId)
+ *
+ * The lightweight metadata (what the Files tab needs) goes to `source-file-info`.
+ * The heavy per-256-line `lineIndexOffset` array goes to the separate
+ * `source-file-line-index` store, read back only when a file is actually opened
+ * for line seeking. This keeps the Files tab's memory footprint tiny regardless
+ * of design size (previously loading every file's offsets at once OOM'd the
+ * renderer at ~1.6 GB on large designs).
  */
 async function store_source_file_info(
   id: number, 
@@ -402,18 +414,29 @@ async function store_source_file_info(
   // Keep the main-thread heartbeat alive through the (per-file) source storing phase.
   postWorkerHeartbeat();
   
+  // Metadata (light) — what the Files tab and name lookups need.
   _fileInfoBatch.push({
     id,
     path,
     name,
     fullName,
     totalLines,
-    lineIndexOffset: lineIndexOffset || [],  // Store index offset for fast seeking
     kdbId,
   });
-  
+
+  // Heavy per-256-line byte offsets — stored separately so the Files tab never
+  // loads them. Only read back when a file is actually opened (line seeking).
+  _fileLineIndexBatch.push({
+    id,
+    lineIndexOffset: lineIndexOffset || [],
+    kdbId,
+  });
+
   if (_fileInfoBatch.length >= STORE_BATCH_SIZE) {
     await flushBatch('source-file-info', _fileInfoBatch as any);
+  }
+  if (_fileLineIndexBatch.length >= STORE_BATCH_SIZE) {
+    await flushBatch('source-file-line-index', _fileLineIndexBatch as any);
   }
 }
 
@@ -579,7 +602,9 @@ async function get_source_file_lines_by_range(
     throw new Error(`File info not found: ${fileId}`);
   }
   
-  const lineIndexOffset: number[] = fileInfo.lineIndexOffset || [];
+  // Line offset index lives in its own store (`source-file-line-index`), read
+  // lazily only when a file is opened for line seeking.
+  const lineIndexOffset: number[] = await indexedDBManager.getSourceFileLineIndex(fileId);
   const totalLines: number = fileInfo.totalLines || 0;
   
   // Validate line range
@@ -662,7 +687,7 @@ async function clear_kdb_data(kdbId: string): Promise<void> {
   // before loading, so truncating the whole store is equivalent here.
   // Note: signals/drivers now live in OPFS (signals.bin/drivers.bin), removed
   // together with the source-file contents by the OPFS directory removal below.
-  const stores = ['knowledge-base', 'modules', 'source-file-info'];
+  const stores = ['knowledge-base', 'modules', 'source-file-info', 'source-file-line-index'];
   for (const storeName of stores) {
     try {
       await db.clear(storeName);
@@ -699,6 +724,15 @@ if (typeof window !== 'undefined') {
   (window as any).get_source_file_content_by_range = get_source_file_content_by_range;
   (window as any).get_source_file_lines_by_range = get_source_file_lines_by_range;
   (window as any).clear_kdb_data = clear_kdb_data;
+  // No-op fallback for the WASM progress callback on the main thread. The Web
+  // Worker overrides this with a version that relays step progress to the UI;
+  // on the main thread we just log so WASM's `window.report_kdb_progress` call
+  // never throws when the KDB is parsed outside the worker.
+  if (typeof (window as any).report_kdb_progress !== 'function') {
+    (window as any).report_kdb_progress = (step: number, total: number, message: string) => {
+      console.log(`[${ts()}] [KdbStorage] Unpack step ${step}/${total}: ${message}`);
+    };
+  }
   console.log('[KdbStorage] Functions exposed to global scope');
 }
 
