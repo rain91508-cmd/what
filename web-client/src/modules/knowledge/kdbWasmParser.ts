@@ -5,7 +5,6 @@
 // Re-export storage functions for use in other modules
 export {
   store_knowledge_base,
-  store_module,
   store_signals_opfs,
   store_drivers_opfs,
   store_source_file_info,

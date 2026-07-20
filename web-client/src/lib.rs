@@ -41,9 +41,6 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window)]
     fn store_knowledge_base(id: &str, data: &JsValue) -> js_sys::Promise;
     
-    #[wasm_bindgen(js_namespace = window)]
-    fn store_module(id: u32, data: &JsValue, kdb_id: &str) -> js_sys::Promise;
-
     // Flat binary signal/driver store: the dominant path. WASM serializes the
     // signals and drivers into two contiguous byte buffers (matching the proto's
     // flat layout) and streams each to a single OPFS file. This avoids building
@@ -60,9 +57,17 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window)]
     fn store_drivers_opfs(bytes: &[u8], kdb_id: &str) -> js_sys::Promise;
 
+    // Flat binary module store: mirrors the signals/drivers path. WASM
+    // serializes the whole module hierarchy into one contiguous little-endian
+    // buffer (modules.bin) and the (heavy, lazily-read) signal definitions into a
+    // second range-readable file (module_signal_defs.bin); each is written as a
+    // single OPFS file, replacing 125k individual IndexedDB record reads.
     #[wasm_bindgen(js_namespace = window)]
-    fn store_modules_batch(modules: &JsValue, kdb_id: &str) -> js_sys::Promise;
-    
+    fn store_modules_opfs(bytes: &[u8], kdb_id: &str) -> js_sys::Promise;
+
+    #[wasm_bindgen(js_namespace = window)]
+    fn store_signal_defs_opfs(bytes: &[u8], kdb_id: &str) -> js_sys::Promise;
+
     // Store file info (metadata) to IndexedDB
     #[wasm_bindgen(js_namespace = window)]
     fn store_source_file_info(id: u32, path: &str, name: &str, full_name: &str, total_lines: u32, line_index_offset: &[i32], kdb_id: &str) -> js_sys::Promise;
@@ -379,71 +384,153 @@ async fn store_kdb_to_indexeddb(mut kdb_data: KnowledgeBase, kdb_id: &str) -> Re
     }
     store_log!("[WASM] Stored {} source files", file_count);
     
-    // 3. Store modules (1-based id) - batched. Consume the Vec via into_iter so
-    //    each module's memory is freed as soon as its batch is submitted.
+    // 3. Store module skeletons + signal definitions as two flat binary files in
+    //    OPFS, mirroring the signals/drivers path. The module hierarchy is the
+    //    data read at KDB load time; serializing every module into one contiguous
+    //    little-endian buffer and writing it as a single OPFS file replaces the
+    //    ~125k individual IndexedDB record reads (one cursor walk) with a single
+    //    file read + a linear parse — much faster to load. Signal definitions are
+    //    heavy and read lazily per module, so they go in a second file that is
+    //    range-readable by module id (no per-record objects, no IDB transactions).
     let module_count = kdb_data.modules.len();
-    store_log!("[WASM] Storing {} modules...", module_count);
+    store_log!("[WASM] Storing {} modules (OPFS binary)...", module_count);
     report_step(5, &format!("Storing {} modules...", module_count));
-    let mut module_batch = Array::new();
-    for (index, module) in kdb_data.modules.into_iter().enumerate() {
-        let module_id = (index + 1) as u32;  // 1-based ID
-        
-        // Create module object using js_sys
-        let module_obj = Object::new();
-        Reflect::set(&module_obj, &"id".into(), &module_id.into())?;
-        Reflect::set(&module_obj, &"name".into(), &module.name.into())?;
-        Reflect::set(&module_obj, &"parentModuleId".into(), &module.parent_module_id.into())?;
-        
-        // Definition object
-        if let Some(def) = &module.definition {
-            let def_obj = Object::new();
-            Reflect::set(&def_obj, &"fileId".into(), &def.file_id.into())?;
-            Reflect::set(&def_obj, &"startLine".into(), &def.start_line.into())?;
-            Reflect::set(&def_obj, &"endLine".into(), &def.end_line.into())?;
-            Reflect::set(&module_obj, &"definition".into(), &def_obj)?;
+
+    // --- modules.bin: skeleton table + child-id pool + name pool ---
+    // Record layout (all little-endian, 42 bytes/record):
+    //   name_off:u32, name_len:u32, parent_module_id:u32,
+    //   has_def:u8, def_file_id:u32, def_start_line:u32, def_end_line:u32,
+    //   is_instance:u8, def_module_id:u32, signal_insts_start_id:u32,
+    //   child_count:u32, child_off:u32
+    const MODULE_RECORD_SIZE: usize = 42;
+    let mut name_pool: Vec<u8> = Vec::new();
+    let mut child_pool: Vec<u8> = Vec::new();
+    let mut skeleton_records: Vec<u8> = Vec::with_capacity(module_count * MODULE_RECORD_SIZE);
+    for module in &kdb_data.modules {
+        let name_bytes = module.name.as_bytes();
+        let name_off = name_pool.len() as u32;
+        name_pool.extend_from_slice(name_bytes);
+        let name_len = name_bytes.len() as u32;
+
+        let (def_file_id, def_start_line, def_end_line) = match &module.definition {
+            Some(d) => (d.file_id, d.start_line, d.end_line),
+            None => (0u32, 0u32, 0u32),
+        };
+        let has_def = module.definition.is_some() as u8;
+
+        let child_off = (child_pool.len() / 4) as u32;
+        let child_count = module.child_module_ids.len() as u32;
+        for &cid in &module.child_module_ids {
+            child_pool.extend_from_slice(&cid.to_le_bytes());
         }
-        
-        // Signal definitions array
-        let signal_defs_arr = Array::new();
-        for s in &module.signal_defs {
-            let s_obj = Object::new();
-            Reflect::set(&s_obj, &"name".into(), &s.name.clone().into())?;
-            Reflect::set(&s_obj, &"type".into(), &s.r#type.into())?;
-            if let Some(decl) = &s.declaration {
-                let decl_obj = Object::new();
-                Reflect::set(&decl_obj, &"fileId".into(), &decl.file_id.into())?;
-                Reflect::set(&decl_obj, &"line".into(), &decl.line.into())?;
-                Reflect::set(&s_obj, &"declaration".into(), &decl_obj)?;
-            }
-            Reflect::set(&s_obj, &"direction".into(), &s.direction.into())?;
-            signal_defs_arr.push(&s_obj);
-        }
-        Reflect::set(&module_obj, &"signalDefs".into(), &signal_defs_arr)?;
-        
-        Reflect::set(&module_obj, &"isInstance".into(), &module.is_instance.into())?;
-        
-        // Child module IDs array
-        let child_ids_arr = module.child_module_ids.iter().map(|&id| JsValue::from(id)).collect::<Array>();
-        Reflect::set(&module_obj, &"childModuleIds".into(), &child_ids_arr)?;
-        
-        Reflect::set(&module_obj, &"defModuleId".into(), &module.def_module_id.into())?;
-        Reflect::set(&module_obj, &"signalInstsStartId".into(), &module.signal_insts_start_id.into())?;
-        
-        module_batch.push(&module_obj);
-        if module_batch.length() as usize >= STORE_BATCH_SIZE {
-            let module_promise = store_modules_batch(&module_batch, kdb_id);
-            if let Err(e) = wasm_bindgen_futures::JsFuture::from(module_promise).await {
-                store_log!("[WASM] Failed to store module batch: {:?}", e);
-            }
-            module_batch = Array::new();
+
+        skeleton_records.extend_from_slice(&name_off.to_le_bytes());
+        skeleton_records.extend_from_slice(&name_len.to_le_bytes());
+        skeleton_records.extend_from_slice(&module.parent_module_id.to_le_bytes());
+        skeleton_records.extend_from_slice(&has_def.to_le_bytes());
+        skeleton_records.extend_from_slice(&def_file_id.to_le_bytes());
+        skeleton_records.extend_from_slice(&def_start_line.to_le_bytes());
+        skeleton_records.extend_from_slice(&def_end_line.to_le_bytes());
+        skeleton_records.extend_from_slice(&(module.is_instance as u8).to_le_bytes());
+        skeleton_records.extend_from_slice(&module.def_module_id.to_le_bytes());
+        skeleton_records.extend_from_slice(&module.signal_insts_start_id.to_le_bytes());
+        skeleton_records.extend_from_slice(&child_count.to_le_bytes());
+        skeleton_records.extend_from_slice(&child_off.to_le_bytes());
+    }
+    let name_pool_offset = (16usize + skeleton_records.len()) as u32;
+    let child_pool_offset = (name_pool_offset as usize + name_pool.len()) as u32;
+    let total_modules_size = (child_pool_offset as usize + child_pool.len()) as u32;
+    let mut modules_buf: Vec<u8> = Vec::with_capacity(total_modules_size as usize);
+    modules_buf.extend_from_slice(&(module_count as u32).to_le_bytes());
+    modules_buf.extend_from_slice(&name_pool_offset.to_le_bytes());
+    modules_buf.extend_from_slice(&child_pool_offset.to_le_bytes());
+    modules_buf.extend_from_slice(&total_modules_size.to_le_bytes());
+    modules_buf.extend_from_slice(&skeleton_records);
+    modules_buf.extend_from_slice(&name_pool);
+    modules_buf.extend_from_slice(&child_pool);
+
+    let mod_promise = store_modules_opfs(&modules_buf, kdb_id);
+    match wasm_bindgen_futures::JsFuture::from(mod_promise).await {
+        Ok(_) => store_log!("[WASM] Stored {} modules ({} bytes)", module_count, modules_buf.len()),
+        Err(e) => {
+            store_log!("[WASM] Failed to store modules.bin: {:?}", e);
+            return Err(e);
         }
     }
-    if module_batch.length() > 0 {
-        let module_promise = store_modules_batch(&module_batch, kdb_id);
-        if let Err(e) = wasm_bindgen_futures::JsFuture::from(module_promise).await {
-            store_log!("[WASM] Failed to store module batch: {:?}", e);
+    drop(modules_buf);
+
+    // --- module_signal_defs.bin: per-module region, range-readable by id ---
+    // Header: module_count:u32, table_offset:u32
+    // Table:  (module_count + 1) entries of (def_count:u32, region_offset:u32).
+    //         entry[i] covers module id (i+1); the final sentinel entry marks the
+    //         end of the last region so one module's region = [entry[i], entry[i+1]).
+    // Per-module region: def_count:u32, name_pool_len:u32, name_pool bytes,
+    //                    def_count * 25-byte records:
+    //   name_off:u32, name_len:u32, type:i32, has_decl:u8,
+    //   decl_file_id:u32, decl_line:u32, direction:i32
+    let mut regions: Vec<Vec<u8>> = Vec::with_capacity(module_count);
+    let mut def_counts: Vec<u32> = Vec::with_capacity(module_count);
+    for module in &kdb_data.modules {
+        let mut region: Vec<u8> = Vec::new();
+        let defs = &module.signal_defs;
+        def_counts.push(defs.len() as u32);
+        region.extend_from_slice(&(defs.len() as u32).to_le_bytes());
+        let mut region_name_pool: Vec<u8> = Vec::new();
+        let mut def_records: Vec<u8> = Vec::with_capacity(defs.len() * 25);
+        for s in defs {
+            let nb = s.name.as_bytes();
+            let noff = region_name_pool.len() as u32;
+            region_name_pool.extend_from_slice(nb);
+            let nlen = nb.len() as u32;
+            let (decl_file_id, decl_line) = match &s.declaration {
+                Some(d) => (d.file_id, d.line),
+                None => (0u32, 0u32),
+            };
+            let has_decl = s.declaration.is_some() as u8;
+            def_records.extend_from_slice(&noff.to_le_bytes());
+            def_records.extend_from_slice(&nlen.to_le_bytes());
+            def_records.extend_from_slice(&s.r#type.to_le_bytes());
+            def_records.extend_from_slice(&has_decl.to_le_bytes());
+            def_records.extend_from_slice(&decl_file_id.to_le_bytes());
+            def_records.extend_from_slice(&decl_line.to_le_bytes());
+            def_records.extend_from_slice(&s.direction.to_le_bytes());
+        }
+        region.extend_from_slice(&(region_name_pool.len() as u32).to_le_bytes());
+        region.extend_from_slice(&region_name_pool);
+        region.extend_from_slice(&def_records);
+        regions.push(region);
+    }
+    let table_offset = (8usize + (module_count + 1) * 8) as u32;
+    let mut cur: u32 = table_offset;
+    let mut offsets: Vec<u32> = Vec::with_capacity(module_count + 1);
+    for r in &regions {
+        offsets.push(cur);
+        cur += r.len() as u32;
+    }
+    offsets.push(cur); // sentinel = end of file
+    let mut sigdefs_buf: Vec<u8> = Vec::with_capacity(cur as usize);
+    sigdefs_buf.extend_from_slice(&(module_count as u32).to_le_bytes());
+    sigdefs_buf.extend_from_slice(&table_offset.to_le_bytes());
+    for i in 0..module_count {
+        sigdefs_buf.extend_from_slice(&def_counts[i].to_le_bytes());
+        sigdefs_buf.extend_from_slice(&offsets[i].to_le_bytes());
+    }
+    sigdefs_buf.extend_from_slice(&0u32.to_le_bytes());
+    sigdefs_buf.extend_from_slice(&offsets[module_count].to_le_bytes());
+    for r in &regions {
+        sigdefs_buf.extend_from_slice(r);
+    }
+
+    let sd_promise = store_signal_defs_opfs(&sigdefs_buf, kdb_id);
+    match wasm_bindgen_futures::JsFuture::from(sd_promise).await {
+        Ok(_) => store_log!("[WASM] Stored signal defs ({} bytes)", sigdefs_buf.len()),
+        Err(e) => {
+            store_log!("[WASM] Failed to store signal defs: {:?}", e);
+            return Err(e);
         }
     }
+    drop(sigdefs_buf);
+    drop(kdb_data.modules);
     store_log!("[WASM] Stored {} modules", module_count);
     
     // 4. Store signal instances + drivers as two flat binary arrays in OPFS.
