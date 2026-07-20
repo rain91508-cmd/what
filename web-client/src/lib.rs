@@ -337,7 +337,7 @@ async fn store_kdb_to_indexeddb(mut kdb_data: KnowledgeBase, kdb_id: &str) -> Re
     //    the Vecs drops that memory before the large signal-instance phase.
     let file_count = kdb_data.file_infos.len();
     store_log!("[WASM] Storing {} source files...", file_count);
-    report_step(4, &format!("Storing {} source files...", file_count));
+    report_step(4, "Storing source files...");
     {
       let mut file_infos = std::mem::take(&mut kdb_data.file_infos).into_iter();
       let mut file_contents = std::mem::take(&mut kdb_data.file_contents).into_iter();
