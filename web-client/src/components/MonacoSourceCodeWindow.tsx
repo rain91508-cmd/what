@@ -1369,6 +1369,9 @@ function MonacoSourceCodeWindow({
   // Always reveal in center when user explicitly jumps to a signal (double-click)
   useEffect(() => {
     if (editorRef.current && signalDeclarationLine && content) {
+      // For an instance, signalDeclarationLine is its VpiLineNo = the instance-name
+      // line (e.g. `) u_inst (`). That is the exact line the user wants highlighted,
+      // and it is identical regardless of hierarchy depth.
       setHighlightLine(signalDeclarationLine);
       // Always reveal in center for explicit jumps (double-click from hierarchy/signal panel)
       applyHighlight(editorRef.current, signalDeclarationLine, true);
@@ -1591,22 +1594,13 @@ function MonacoSourceCodeWindow({
 
   getModel();
 
-  if (loading) {
-    return (
-      <div style={{ 
-        height: '100%', 
-        display: 'flex', 
-        alignItems: 'center', 
-        justifyContent: 'center',
-        color: '#999',
-        fontSize: '12px',
-      }}>
-        Loading source file...
-      </div>
-    );
-  }
-
-  if (!content) {
+  // IMPORTANT: We must NOT unmount the editor while loading. Toggling `loading`
+  // used to swap the render to a `<div>Loading</div>`, which unmounted Monaco and
+  // remounted it on completion. Each remount fires `onDidScrollChange` →
+  // `ensureWindow` → `onLoadingChange(true)` → unmount → ... an infinite reload
+  // loop on large files. So the editor stays mounted and `loading` is shown as
+  // an overlay instead.
+  if (!filePath) {
     return (
       <div style={{ 
         height: '100%', 
@@ -1688,7 +1682,7 @@ function MonacoSourceCodeWindow({
           {formatLongText(removeTrailingSlash(filePath), 60) || moduleName || 'Source Code'}
         </div>
       </div>
-      <div style={{ flex: 1, overflow: 'hidden' }}>
+      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <Editor
           height="100%"
           defaultLanguage="verilog"
@@ -1711,6 +1705,22 @@ function MonacoSourceCodeWindow({
             selectOnLineNumbers: false,
           }}
         />
+        {loading && (
+          <div style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#999',
+            fontSize: '12px',
+            background: 'rgba(255, 255, 255, 0.6)',
+            zIndex: 5,
+            pointerEvents: 'none',
+          }}>
+            Loading source file...
+          </div>
+        )}
       </div>
       <style>{`
         .monaco-editor .my-highlighted-line {
