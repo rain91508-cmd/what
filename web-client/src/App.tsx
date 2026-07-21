@@ -54,6 +54,7 @@ import { TableViewWindow } from './components/TableViewWindow'
 import { MessageWindow } from './components/MessageWindow'
 import { ConnectionDialog } from './components/ConnectionDialog'
 import { KdbSelectionDialog } from './components/KdbSelectionDialog'
+import { CachedKdbDialog } from './components/CachedKdbDialog'
 import { WaveSelectionDialog } from './components/WaveSelectionDialog'
 import { FileChangeDialog } from './components/FileChangeDialog'
 import { MockDataDialog } from './components/MockDataDialog'
@@ -106,6 +107,7 @@ function App() {
   const [connected, setConnected] = useState(false)
   const [showConnectionDialog, setShowConnectionDialog] = useState(false)
   const [showKdbSelectionDialog, setShowKdbSelectionDialog] = useState(false)
+  const [showCachedKdbDialog, setShowCachedKdbDialog] = useState(false)
   const [showWaveSelectionDialog, setShowWaveSelectionDialog] = useState(false)
   const [messages, setMessages] = useState<string[]>([])
   const [kdbLoaded, setKdbLoaded] = useState(false)
@@ -1605,6 +1607,66 @@ function App() {
     } else {
       addMessage('✗ Failed to load KDB')
       addMessage('  Please check browser console for detailed error information')
+    }
+  }
+
+  // Open a KDB that is already cached in local IDB/OPFS (no server download)
+  const handleOpenCachedKdb = async (kdbId: string) => {
+    setShowCachedKdbDialog(false)
+
+    // Close any previously loaded KDB first (mirrors handleKdbSelect).
+    if (kdbLoaded || currentKdbName) {
+      addMessage(`Closing previous KDB: ${currentKdbName || 'unknown'}...`)
+      await kdbManager.clear()
+      setKdbLoaded(false)
+      setCurrentKdbName(null)
+      setCurrentKdbChecksum(null)
+      setSelectedModuleIndex(null)
+      setTabs(prev => {
+        const remainingTabs = prev.filter(tab => tab.type !== 'source' && tab.type !== 'waveform')
+        if (remainingTabs.length > 0 && !remainingTabs.find(t => t.id === activeTab)) {
+          setActiveTab(remainingTabs[0].id)
+        } else if (remainingTabs.length === 0) {
+          setActiveTab('')
+        }
+        return remainingTabs
+      })
+      waveManager.clear()
+      setCurrentWaveform(null)
+      setCurrentWaveName(null)
+      setCurrentWaveChecksum(null)
+      setWaveforms([])
+      addMessage('Previous KDB closed')
+    }
+
+    addMessage(`Opening cached KDB: ${kdbId}`)
+
+    const success = await kdbManager.openCachedKdb(kdbId)
+
+    if (success) {
+      setKdbLoaded(true)
+      const designName = await kdbManager.getDesignName()
+      const header = await kdbManager.getHeader()
+      // Show the design name (project title) as the KDB name, falling back to
+      // the id when no project name was recorded.
+      setCurrentKdbName(designName && designName !== kdbId ? designName : kdbId)
+      setCurrentKdbChecksum(null)
+      localStorage.setItem('currentKdbId', kdbId)
+
+      addMessage(`✓ Cached KDB opened successfully`)
+      addMessage(`  Design Name: ${designName}`)
+      if (header) {
+        addMessage(`  Version: ${header.version}`)
+        addMessage(`  Created: ${header.createdAt}`)
+      }
+
+      setSelectedModuleIndex(null)
+
+      // Waveforms are server-side; offer the wave selection dialog on open.
+      setShowWaveSelectionDialog(true)
+    } else {
+      addMessage('✗ Failed to open cached KDB')
+      addMessage('  The KDB may not be stored locally — open it from the server instead')
     }
   }
 
@@ -4154,6 +4216,7 @@ function App() {
         onConnect={() => setShowConnectionDialog(true)}
         onDisconnect={handleDisconnect}
         onOpenKdbList={() => setShowKdbSelectionDialog(true)}
+        onOpenCachedKdb={() => setShowCachedKdbDialog(true)}
         onOpenWaveList={() => setShowWaveSelectionDialog(true)}
         onCloseKdb={handleCloseKdb}
         onCloseWave={handleCloseWave}
@@ -4227,6 +4290,7 @@ function App() {
         maxWaveformTimeLod0={currentWaveEndTime}
         onConnect={() => setShowConnectionDialog(true)}
         onOpenKdb={() => setShowKdbSelectionDialog(true)}
+        onOpenCachedKdb={() => setShowCachedKdbDialog(true)}
         onOpenWaveform={() => setShowWaveSelectionDialog(true)}
         connected={connected}
         onRefreshCheck={handleManualRefreshCheck}
@@ -4537,6 +4601,14 @@ function App() {
         <KdbSelectionDialog
           onSelect={handleKdbSelect}
           onCancel={() => setShowKdbSelectionDialog(false)}
+        />
+      )}
+
+      {/* Cached (local IDB/OPFS) KDB Selection Dialog */}
+      {showCachedKdbDialog && (
+        <CachedKdbDialog
+          onSelect={handleOpenCachedKdb}
+          onCancel={() => setShowCachedKdbDialog(false)}
         />
       )}
 

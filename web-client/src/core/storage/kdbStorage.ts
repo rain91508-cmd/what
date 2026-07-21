@@ -226,10 +226,34 @@ async function store_knowledge_base(id: string, data: any): Promise<void> {
     id,
     header: getValue('header') || {},
     hierarchies: getValue('hierarchies') || [],
+    timestamp: Date.now(),
   };
   console.log(`[${ts()}] [KdbStorage] Storing record:`, record);
   await db.put('knowledge-base', record);
   console.log(`[${ts()}] [KdbStorage] Stored successfully`);
+
+  // Persist the header to OPFS as header.json alongside the binary data. This
+  // is what lets the "Open Cached KDB" dialog show a real design title and list
+  // the KDB even after clear_kdb_data has removed its IndexedDB record (the OPFS
+  // directory — and thus this file — is only removed when that specific KDB is
+  // explicitly cleared).
+  try {
+    if (isOpfsAvailable()) {
+      const payload = JSON.stringify({
+        id,
+        header: record.header,
+        timestamp: record.timestamp || Date.now(),
+      });
+      const root = await navigator.storage.getDirectory();
+      const kdbDir = await getKdbDir(root, id, true);
+      const fh = await kdbDir.getFileHandle('header.json', { create: true });
+      const writable = await fh.createWritable();
+      await writable.write(payload);
+      await writable.close();
+    }
+  } catch (e) {
+    console.warn(`[KdbStorage] Failed to persist header.json to OPFS for ${id}:`, e);
+  }
 }
 
 /**

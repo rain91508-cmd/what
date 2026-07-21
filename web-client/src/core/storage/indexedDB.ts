@@ -9,7 +9,8 @@
 //
 
 import { openDB, deleteDB, DBSchema, IDBPDatabase } from 'idb';
-import type { 
+import { isOpfsAvailable } from '../../utils/opfsUtils';
+import type {
   SourceFileInfo,
   DesignHierarchy 
 } from '../../types/kdb';
@@ -272,15 +273,135 @@ class IndexedDBManager {
   }
 
   async getKnowledgeBaseHeader(id: string): Promise<{ version: string; projectName: string; createdAt: string } | null> {
+    // Prefer the OPFS header.json (persisted by kdbStorage.store_knowledge_base),
+    // which survives clear_kdb_data (that only removes the specific KDB's IDB
+    // record). Falls back to the IndexedDB `knowledge-base` store.
+    if (isOpfsAvailable()) {
+      const opfsHeader = await this.readOpfsHeader(id);
+      if (opfsHeader) return opfsHeader;
+    }
     const db = this.getDB();
     const result = await db.get('knowledge-base', id);
     return result?.header || null;
+  }
+
+  /**
+   * Read a cached KDB's header.json from OPFS. Returns null when OPFS is
+   * unavailable or the file does not exist (e.g. a legacy cache).
+   */
+  private async readOpfsHeader(id: string): Promise<{ version: string; projectName: string; createdAt: string } | null> {
+    try {
+      const root = await navigator.storage.getDirectory();
+      const kdbParent = await root.getDirectoryHandle('kdb', { create: false });
+      const kdbDir = await kdbParent.getDirectoryHandle(id, { create: false });
+      const fh = await kdbDir.getFileHandle('header.json', { create: false });
+      const file = await fh.getFile();
+      const parsed = JSON.parse(await file.text());
+      return parsed?.header || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Enumerate every cached KDB directory under OPFS `kdb/`. This is the
+   * authoritative list of locally cached KDBs because the OPFS directory
+   * persists independently of the per-KDB IndexedDB clears. Legacy caches that
+   * predate header.json are still listed (provided their real data exists), so
+   * they are not lost; only directories without a `modules.bin` are skipped.
+   */
+  private async listOpfsKdbHeaders(): Promise<Array<{ id: string; header: { version: string; projectName: string; createdAt: string }; timestamp: number }>> {
+    if (!isOpfsAvailable()) return [];
+    try {
+      const root = await navigator.storage.getDirectory();
+      const kdbParent = await root.getDirectoryHandle('kdb', { create: false });
+      const out: Array<{ id: string; header: { version: string; projectName: string; createdAt: string }; timestamp: number }> = [];
+      const entries = (kdbParent as any).entries ? (kdbParent as any).entries() : null;
+      if (!entries) return [];
+      for await (const [name, handle] of entries) {
+        if (!handle || (handle as any).kind !== 'directory') continue;
+        let header: { version: string; projectName: string; createdAt: string } | null = null;
+        let timestamp = 0;
+        try {
+          const fh = await (handle as any).getFileHandle('header.json', { create: false });
+          const file = await fh.getFile();
+          const parsed = JSON.parse(await file.text());
+          header = parsed?.header || null;
+          timestamp = parsed?.timestamp || file.lastModified || 0;
+        } catch {
+          // Legacy cache without header.json: keep it only if real KDB data is
+          // present, so an empty/stale directory never shows up in the list.
+          try {
+            await (handle as any).getFileHandle('modules.bin', { create: false });
+          } catch {
+            continue;
+          }
+        }
+        out.push({
+          id: name,
+          header: header || { version: '', projectName: '', createdAt: '' },
+          timestamp,
+        });
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Whether a KDB is actually cached locally. Checks OPFS first (the real data
+   * lives there), then falls back to the IndexedDB `knowledge-base` store.
+   */
+  async knowledgeBaseExists(kdbId: string): Promise<boolean> {
+    if (isOpfsAvailable()) {
+      try {
+        const root = await navigator.storage.getDirectory();
+        const kdbParent = await root.getDirectoryHandle('kdb', { create: false });
+        const kdbDir = await kdbParent.getDirectoryHandle(kdbId, { create: false });
+        await kdbDir.getFileHandle('modules.bin', { create: false });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    const db = this.getDB();
+    const r = await db.get('knowledge-base', kdbId);
+    return !!r;
   }
 
   async getKnowledgeBaseHierarchies(id: string): Promise<DesignHierarchy[] | null> {
     const db = this.getDB();
     const result = await db.get('knowledge-base', id);
     return result?.hierarchies || null;
+  }
+
+  /**
+   * List every cached KDB recorded in the `knowledge-base` store (the local
+   * IDB/OPFS cache). Returns lightweight summaries (id + header + timestamp) so
+   * the "Open Cached KDB" dialog can present a selection list without loading
+   * any heavy data. Sorted most-recently-stored first.
+   */
+  async listKnowledgeBases(): Promise<Array<{ id: string; header: { version: string; projectName: string; createdAt: string }; timestamp: number }>> {
+    // The OPFS `kdb/` directory is the authoritative source of cached KDBs: it
+    // persists independently of the per-KDB IndexedDB clears, so it reflects all
+    // KDBs the user has ever cached (not just the most recently loaded one).
+    const opfsList = await this.listOpfsKdbHeaders();
+    const merged = new Map<string, { id: string; header: { version: string; projectName: string; createdAt: string }; timestamp: number }>();
+    for (const o of opfsList) merged.set(o.id, o);
+
+    // Merge any IndexedDB-only records (e.g. when OPFS is unavailable).
+    try {
+      const db = this.getDB();
+      const all = await db.getAll('knowledge-base');
+      for (const r of (all || [])) {
+        if (!merged.has(r.id)) {
+          merged.set(r.id, { id: r.id, header: r.header, timestamp: r.timestamp || 0 });
+        }
+      }
+    } catch { /* ignore */ }
+
+    return Array.from(merged.values()).sort((a, b) => b.timestamp - a.timestamp);
   }
 
   // ============================================
@@ -391,12 +512,20 @@ class IndexedDBManager {
   async clearKdbData(kdbId: string): Promise<void> {
     const db = this.getDB();
 
-    // Fast path: truncate each object store with a single native operation
-    // instead of a cursor-collect + per-record delete (which is extremely slow
-    // for millions of signal instances). This app loads one KDB at a time, so
-    // truncating the whole store is equivalent here.
-    await db.clear('knowledge-base');
-    await db.clear('source-file-info');
+    // Delete ONLY this KDB's records (the stores are keyed per KDB: `knowledge-
+    // base` and `source-file-info` use the kdbId as the primary key, and
+    // `source-file-line-index` is keyed by kdbId too). This keeps other cached
+    // KDBs available in the "Open Cached KDB" dialog — matching the OPFS
+    // behaviour, where only the specific `kdb/<id>` directory is removed.
+    // (Older code used db.clear() which wiped every cached KDB at once.)
+    await db.delete('knowledge-base', kdbId);
+    // `source-file-info` records are keyed by the kdbId string at runtime, though
+    // its TS schema declares a numeric key. Cast to bypass the schema mismatch
+    // and delete only this KDB's metadata (the active read paths filter by kdbId).
+    await (db as any).delete('source-file-info', kdbId);
+    // `source-file-line-index` is legacy (its data moved to OPFS) and its store
+    // key is numeric, so a per-kdbId delete would not type-check / match. Clear
+    // it wholesale — it is not used by the active (OPFS-backed) read paths.
     await db.clear('source-file-line-index');
     // Drop cached source-file bundles for this KDB so the next load re-reads.
     this._infoListCache.delete(kdbId);
