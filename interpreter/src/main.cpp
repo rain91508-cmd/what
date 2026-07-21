@@ -4,6 +4,7 @@
 #include <fstream>
 #include <sstream>
 #include <getopt.h>
+#include <cctype>
 #include <filesystem>
 
 #include <Surelog/API/Surelog.h>
@@ -86,34 +87,45 @@ std::vector<std::string> parseFileList(const std::string& filepath) {
         std::cerr << "Error: Cannot open file list: " << filepath << "\n";
         return args;
     }
-    
-    std::string line;
-    while (std::getline(file, line)) {
-        size_t commentPos = line.find("//");
-        if (commentPos != std::string::npos) {
-            line = line.substr(0, commentPos);
+
+    // Read the whole file and strip comments (//, # line comments and
+    // /* ... */ block comments that may span multiple lines) before tokenizing.
+    std::stringstream whole;
+    whole << file.rdbuf();
+    std::string content = whole.str();
+
+    bool inBlock = false;
+    std::string cleaned;
+    for (size_t i = 0; i < content.size(); ++i) {
+        if (inBlock) {
+            if (content[i] == '*' && i + 1 < content.size() && content[i + 1] == '/') {
+                inBlock = false;
+                ++i;  // consume the '/'
+            }
+            continue;
         }
-        commentPos = line.find("#");
-        if (commentPos != std::string::npos) {
-            line = line.substr(0, commentPos);
+        if (content[i] == '/' && i + 1 < content.size() && content[i + 1] == '*') {
+            inBlock = true;
+            ++i;  // consume the '*'
+            continue;
         }
-        
-        while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) {
-            line.erase(0, 1);
+        if (content[i] == '/' && i + 1 < content.size() && content[i + 1] == '/') {
+            while (i < content.size() && content[i] != '\n') ++i;
+            continue;
         }
-        while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) {
-            line.pop_back();
+        if (content[i] == '#') {
+            while (i < content.size() && content[i] != '\n') ++i;
+            continue;
         }
-        
-        if (line.empty()) continue;
-        
-        std::stringstream ss(line);
-        std::string token;
-        while (ss >> token) {
-            args.push_back(token);
-        }
+        cleaned += content[i];
     }
-    
+
+    std::stringstream ss(cleaned);
+    std::string token;
+    while (ss >> token) {
+        args.push_back(token);
+    }
+
     return args;
 }
 
@@ -138,10 +150,125 @@ struct CommandLineOptions {
     int maxThreads = 0;         // Individual control, only with --disable-low-mem
 };
 
+// Expand ${VAR}-style environment variables in a token.
+static std::string expandEnvVars(const std::string& in) {
+    std::string out;
+    out.reserve(in.size());
+    for (size_t i = 0; i < in.size(); ++i) {
+        if (in[i] == '$' && i + 1 < in.size() && in[i + 1] == '{') {
+            size_t end = in.find('}', i + 2);
+            if (end != std::string::npos) {
+                std::string name = in.substr(i + 2, end - (i + 2));
+                const char* v = std::getenv(name.c_str());
+                if (v) out += v;
+                i = end;
+                continue;
+            }
+        }
+        out += in[i];
+    }
+    return out;
+}
+
+static bool hasSourceExtension(const std::string& s) {
+    std::string e = std::filesystem::path(s).extension().string();
+    if (e.empty()) return false;
+    for (auto& c : e) c = (char)std::tolower((unsigned char)c);
+    static const char* exts[] = {".v", ".sv", ".vh", ".svh", ".vhd", ".svi", nullptr};
+    for (int i = 0; exts[i]; ++i)
+        if (e == exts[i]) return true;
+    return false;
+}
+
+// Recursively expand `-f <file>` references. Path-bearing tokens (input
+// files, -y, -v, -I, +incdir+) are resolved relative to the current working
+// directory, matching Surelog's own `-f` semantics (cd starts at cwd).
+// ${VAR} env vars are expanded. The result is a flat token list with no
+// remaining -f entries.
+static void expandArgsRecursive(const std::vector<std::string>& rawArgs,
+                                std::vector<std::string>& out) {
+    std::filesystem::path cwd = std::filesystem::current_path();
+    for (size_t k = 0; k < rawArgs.size(); ++k) {
+        std::string tok = expandEnvVars(rawArgs[k]);
+
+        if (tok == "-f") {
+            if (k + 1 < rawArgs.size()) {
+                std::filesystem::path ref(expandEnvVars(rawArgs[++k]));
+                if (ref.is_relative()) ref = cwd / ref;
+                auto norm = ref.lexically_normal();
+                auto nested = parseFileList(norm.string());
+                expandArgsRecursive(nested, out);
+            }
+            continue;
+        }
+
+        if (tok.find("+incdir+") == 0) {
+            auto dirs = parsePlusArg(tok, "+incdir+");
+            std::string rebuilt = "+incdir+";
+            for (auto& d : dirs) {
+                std::filesystem::path p(expandEnvVars(d));
+                if (p.is_relative()) p = cwd / p;
+                rebuilt += p.lexically_normal().string() + "+";
+            }
+            out.push_back(rebuilt);
+            continue;
+        }
+
+        if (tok.find("+libext+") == 0 || tok.find("+define+") == 0) {
+            out.push_back(tok);
+            continue;
+        }
+
+        if (tok == "-y" || tok == "-v" || tok == "-I") {
+            if (k + 1 < rawArgs.size()) {
+                std::string val = expandEnvVars(rawArgs[++k]);
+                std::filesystem::path p(val);
+                if (p.is_relative()) p = cwd / p;
+                out.push_back(tok);
+                out.push_back(p.lexically_normal().string());
+            }
+            continue;
+        }
+
+        if (tok.size() > 2 && tok[0] == '-' &&
+            (tok[1] == 'I' || tok[1] == 'y' || tok[1] == 'v')) {
+            char t = tok[1];
+            std::string val = tok.substr(2);
+            std::filesystem::path p(val);
+            if (p.is_relative()) p = cwd / p;
+            out.push_back("-" + std::string(1, t) + p.lexically_normal().string());
+            continue;
+        }
+
+        if (!tok.empty() && tok[0] != '-') {
+            bool pathLike = (tok.find('/') != std::string::npos) || hasSourceExtension(tok);
+            if (pathLike) {
+                std::filesystem::path p(tok);
+                if (p.is_relative()) p = cwd / p;
+                out.push_back(p.lexically_normal().string());
+            } else {
+                out.push_back(tok);
+            }
+            continue;
+        }
+
+        out.push_back(tok);
+    }
+}
+
 bool parseCommandLine(int argc, char* argv[], CommandLineOptions& opts) {
-    std::vector<std::string> args;
+    std::vector<std::string> rawArgs;
     for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
+        rawArgs.push_back(argv[i]);
+    }
+
+    // Recursively expand -f file lists, resolving referenced paths relative
+    // to the current working directory (matches Surelog's -f semantics).
+    std::vector<std::string> args;
+    expandArgsRecursive(rawArgs, args);
+
+    for (size_t i = 0; i < args.size(); ++i) {
+        const std::string& arg = args[i];
         
         if (arg.find("+incdir+") == 0) {
             auto dirs = parsePlusArg(arg, "+incdir+");
@@ -167,12 +294,12 @@ bool parseCommandLine(int argc, char* argv[], CommandLineOptions& opts) {
             continue;
         }
         
-        args.push_back(arg);
-    }
-    
-    for (size_t i = 0; i < args.size(); ++i) {
-        const std::string& arg = args[i];
-        
+        if (arg == "-f") {
+            // Already expanded by expandArgsRecursive; skip any leftover.
+            if (i + 1 < args.size()) ++i;
+            continue;
+        }
+
         if (arg == "-o" || arg == "--output") {
             if (i + 1 < args.size()) {
                 opts.outputPath = args[++i];
@@ -188,29 +315,6 @@ bool parseCommandLine(int argc, char* argv[], CommandLineOptions& opts) {
         if (arg == "-D") {
             if (i + 1 < args.size()) {
                 opts.defines.push_back(args[++i]);
-            }
-            continue;
-        }
-        if (arg == "-f") {
-            if (i + 1 < args.size()) {
-                auto fileArgs = parseFileList(args[++i]);
-                for (const auto& fa : fileArgs) {
-                    if (fa.find("+incdir+") == 0) {
-                        auto dirs = parsePlusArg(fa, "+incdir+");
-                        for (const auto& dir : dirs) {
-                            opts.includeDirs.push_back(dir);
-                        }
-                    } else if (fa.find("+define+") == 0) {
-                        auto defs = parsePlusArg(fa, "+define+");
-                        for (const auto& def : defs) {
-                            opts.defines.push_back(def);
-                        }
-                    } else if (fa[0] == '-') {
-                        args.insert(args.begin() + i + 1, fa);
-                    } else {
-                        opts.inputFiles.push_back(fa);
-                    }
-                }
             }
             continue;
         }
@@ -483,6 +587,12 @@ int main(int argc, char* argv[]) {
     // user takes manual control of -lowmem / -mt (both default off there).
     surelogParser.setLowMemEnabled(opts.disableLowMem ? opts.lowMem : true);
     surelogParser.setMaxThreads(opts.disableLowMem ? opts.maxThreads : 0);
+    // Forward library options (-y / -v / +libext+) that the CLI collected but
+    // that parseFiles() cannot take as parameters. +incdir+ / +define+ are
+    // forwarded via parseFiles()'s includePaths/defines arguments.
+    surelogParser.setLibraryDirs(opts.libraryDirs);
+    surelogParser.setLibraryFiles(opts.libraryFiles);
+    surelogParser.setLibraryExtensions(opts.libraryExtensions);
     if (!opts.topModule.empty()) {
         surelogParser.setTopModule(opts.topModule);
     }

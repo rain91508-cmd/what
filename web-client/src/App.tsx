@@ -1614,6 +1614,8 @@ function App() {
       waveEndTime,
       displayUnitPerLoD0Unit
     })
+
+    addMessage(`Waveform "${waveName}" loaded. Open a waveform tab to add signals and review the waveform.`)
   }
 
   const handleDisconnect = async () => {
@@ -2386,6 +2388,7 @@ function App() {
     serverPrefix?: string;    // The server prefix extracted from matches
     spaceBeforeBracket?: boolean;
     multipleServerPrefixes?: boolean;  // True if multiple different server prefixes found
+    serverPrefixes?: string[];  // All distinct server prefixes found (for multi-select)
   }> => {
     // Remove local prefix if provided
     let sharedName = localPrefix && fullName.startsWith(localPrefix)
@@ -2450,9 +2453,10 @@ function App() {
             matchedNames: matchedNamesWithSpace,
             localPrefix,
             serverPrefix: serverPrefixesWithSpace.size === 1 ? Array.from(serverPrefixesWithSpace)[0] : undefined,
-            spaceBeforeBracket: true,
-            multipleServerPrefixes: serverPrefixesWithSpace.size > 1
-          }
+          spaceBeforeBracket: true,
+          multipleServerPrefixes: serverPrefixesWithSpace.size > 1,
+          serverPrefixes: Array.from(serverPrefixesWithSpace)
+        }
         }
       }
 
@@ -2463,7 +2467,8 @@ function App() {
         localPrefix,
         serverPrefix: serverPrefixes.size === 1 ? Array.from(serverPrefixes)[0] : undefined,
         spaceBeforeBracket: false,
-        multipleServerPrefixes: serverPrefixes.size > 1
+        multipleServerPrefixes: serverPrefixes.size > 1,
+        serverPrefixes: Array.from(serverPrefixes)
       }
     }
 
@@ -2528,7 +2533,8 @@ function App() {
           localPrefix,
           serverPrefix: serverPrefixes.size === 1 ? Array.from(serverPrefixes)[0] : undefined,
           spaceBeforeBracket: true,
-          multipleServerPrefixes: serverPrefixes.size > 1
+          multipleServerPrefixes: serverPrefixes.size > 1,
+          serverPrefixes: Array.from(serverPrefixes)
         }
       }
 
@@ -2540,7 +2546,8 @@ function App() {
           localPrefix,
           serverPrefix: serverPrefixesWithoutBitWidth.size === 1 ? Array.from(serverPrefixesWithoutBitWidth)[0] : undefined,
           spaceBeforeBracket: false,
-          multipleServerPrefixes: serverPrefixesWithoutBitWidth.size > 1
+          multipleServerPrefixes: serverPrefixesWithoutBitWidth.size > 1,
+          serverPrefixes: Array.from(serverPrefixesWithoutBitWidth)
         }
       }
     }
@@ -2585,9 +2592,29 @@ function App() {
       const fullLocalPrefix = removedHierarchicalPrefix
 
       const result = await searchSignalOnServer(waveName, signalName, fullLocalPrefix)
-      if (result.found) {
+      if (result.found && result.matchedNames) {
+        // Compute the shared (tail) name so we can re-group matches by server prefix
+        const sharedName = fullLocalPrefix && signalName.startsWith(fullLocalPrefix)
+          ? signalName.substring(fullLocalPrefix.length)
+          : signalName
 
-        if (result.serverPrefix !== undefined && result.matchedNames) {
+        if (result.multipleServerPrefixes && result.serverPrefixes && result.serverPrefixes.length > 0) {
+          // Multiple distinct server prefixes: record one entry per prefix so the
+          // user can choose which hierarchy the local signal maps to.
+          for (const sp of result.serverPrefixes) {
+            const namesForPrefix = result.matchedNames.filter(n => n === sp + sharedName)
+            if (namesForPrefix.length > 0) {
+              allMatches.push({
+                serverPrefix: sp,
+                matchedNames: namesForPrefix,
+                localPrefix: fullLocalPrefix,
+                spaceBeforeBracket: result.spaceBeforeBracket ?? false
+              })
+            }
+          }
+          // Do NOT return immediately; let the loop continue and the end-of-loop
+          // grouping surface the multi-prefix selection dialog.
+        } else if (result.serverPrefix !== undefined) {
           // Single server prefix - add to matches
           allMatches.push({
             serverPrefix: result.serverPrefix,
@@ -2606,7 +2633,6 @@ function App() {
               spaceBeforeBracket: result.spaceBeforeBracket
             }
           }
-          // If multiple server prefixes, continue searching to collect all options
         }
       }
 
@@ -4506,9 +4532,6 @@ function App() {
                               />
                               <div style={{ flex: 1 }}>
                                 <div style={{ fontWeight: 500 }}>{match.matchedNames[0]}</div>
-                                <div style={{ fontSize: '11px', color: '#666', marginTop: '2px' }}>
-                                  Server Prefix: "{match.serverPrefix}" | Local Prefix: "{match.localPrefix}"
-                                </div>
                               </div>
                             </div>
                           ))}

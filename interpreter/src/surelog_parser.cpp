@@ -73,6 +73,36 @@ ParseResult SurelogParser::parseFiles(const std::vector<std::string>& filePaths,
     // Never run Surelog's embedded Python listener.
     argStrs.push_back("-nopython");
 
+    // Forward the standard Verilog library/include/define options to Surelog.
+    // These were collected by the interpreter CLI but must be translated into
+    // Surelog's own flags; otherwise they are silently ignored. Surelog's
+    // CommandLineParser accepts +incdir+, +libext+, +define+, -y and -v.
+    for (const auto& dir : includePaths) {
+        argStrs.push_back("+incdir+" + dir);
+    }
+    if (!defines.empty()) {
+        std::string defArg = "+define+";
+        for (const auto& def : defines) {
+            defArg += def + "+";
+        }
+        argStrs.push_back(defArg);
+    }
+    for (const auto& dir : libraryDirs_) {
+        argStrs.push_back("-y");
+        argStrs.push_back(dir);
+    }
+    for (const auto& file : libraryFiles_) {
+        argStrs.push_back("-v");
+        argStrs.push_back(file);
+    }
+    if (!libraryExtensions_.empty()) {
+        std::string extArg = "+libext+";
+        for (const auto& ext : libraryExtensions_) {
+            extArg += ext + "+";
+        }
+        argStrs.push_back(extArg);
+    }
+
     if (writeUhdmEnabled_) {
         // Keep the on-disk .uhdm DB for debugging (-uhdm / --keep-uhdm).
         // Surelog writes the .uhdm by default, so we must not disable it.
