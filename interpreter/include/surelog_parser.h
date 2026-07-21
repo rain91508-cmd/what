@@ -86,6 +86,13 @@ public:
     // 控制 Surelog 最大线程数（0 = 单线程）
     void setMaxThreads(int n) { maxThreads_ = n; }
     int getMaxThreads() const { return maxThreads_; }
+
+    // 标准 Verilog 库选项（-y / -v / +libext+），会原样转发给 Surelog。
+    // 注意：必须在 parseFiles() 之前设置，否则会被静默丢弃。
+    // （+incdir+ / +define+ 通过 parseFiles() 的参数传入。）
+    void setLibraryDirs(const std::vector<std::string>& dirs) { libraryDirs_ = dirs; }
+    void setLibraryFiles(const std::vector<std::string>& files) { libraryFiles_ = files; }
+    void setLibraryExtensions(const std::vector<std::string>& exts) { libraryExtensions_ = exts; }
     
 private:
     // UHDM遍历函数
@@ -128,6 +135,11 @@ private:
     bool writeUhdmEnabled_ = false;      // 默认不保留 .uhdm 文件
     bool lowMemEnabled_ = true;          // 默认开启低内存优化
     int maxThreads_ = 0;                 // 默认单线程
+
+    // 转发给 Surelog 的库选项（-y / -v / +libext+）
+    std::vector<std::string> libraryDirs_;
+    std::vector<std::string> libraryFiles_;
+    std::vector<std::string> libraryExtensions_;
     
     // 文件ID映射
     std::unordered_map<std::string, uint64_t> filePathToId_;
