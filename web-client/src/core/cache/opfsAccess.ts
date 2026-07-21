@@ -8,6 +8,16 @@
 // OPFS root directory handle (cached)
 let opfsRoot: FileSystemDirectoryHandle | null = null;
 
+/// Waveform tile cache lives under this directory inside the OPFS root.
+/// All WASM tile-cache paths (e.g. "<waveform>/lod0/tile_0000/group_0.bin") are
+/// resolved relative to this folder so waveform data does not clutter the OPFS root.
+const WAVE_CACHE_DIR = 'wave_cache';
+
+/// Resolve a waveform tile-cache path to its location under WAVE_CACHE_DIR.
+function toWaveCachePath(path: string): string {
+  return `${WAVE_CACHE_DIR}/${path}`;
+}
+
 /**
  * Initialize OPFS root
  */
@@ -27,7 +37,7 @@ async function getOpfsRoot(): Promise<FileSystemDirectoryHandle> {
 export async function opfsRead(path: string): Promise<Uint8Array | null> {
   try {
     const root = await getOpfsRoot();
-    const parts = path.split('/');
+    const parts = toWaveCachePath(path).split('/');
     
     // Navigate to file
     let currentDir = root;
@@ -55,7 +65,7 @@ export async function opfsRead(path: string): Promise<Uint8Array | null> {
  */
 export async function opfsWrite(path: string, data: Uint8Array): Promise<void> {
   const root = await getOpfsRoot();
-  const parts = path.split('/');
+  const parts = toWaveCachePath(path).split('/');
   
   // Navigate/create directories
   let currentDir = root;
@@ -82,7 +92,7 @@ export async function opfsWrite(path: string, data: Uint8Array): Promise<void> {
 export async function opfsExists(path: string): Promise<boolean> {
   try {
     const root = await getOpfsRoot();
-    const parts = path.split('/');
+    const parts = toWaveCachePath(path).split('/');
     
     // Navigate to file
     let currentDir = root;
@@ -106,7 +116,7 @@ export async function opfsExists(path: string): Promise<boolean> {
 export async function opfsDelete(path: string): Promise<void> {
   try {
     const root = await getOpfsRoot();
-    const parts = path.split('/');
+    const parts = toWaveCachePath(path).split('/');
     
     // Navigate to parent directory
     let currentDir = root;
@@ -132,7 +142,7 @@ export async function opfsDelete(path: string): Promise<void> {
 export async function opfsList(path: string): Promise<string[]> {
   try {
     const root = await getOpfsRoot();
-    const parts = path.split('/').filter(p => p);
+    const parts = toWaveCachePath(path).split('/').filter(p => p);
     
     // Navigate to directory
     let currentDir = root;
@@ -179,11 +189,22 @@ export function isOpfsSupported(): boolean {
 export async function clearWaveformCache(waveformName: string): Promise<void> {
   try {
     const root = await getOpfsRoot();
-    const cacheDir = await root.getDirectoryHandle('wave_cache', { create: false });
-    
+    // New location: waveform tiles live under wave_cache/
     try {
-      await cacheDir.removeEntry(waveformName, { recursive: true });
-      console.log(`[OPFS] Cleared cache for: ${waveformName}`);
+      const cacheDir = await root.getDirectoryHandle('wave_cache', { create: false });
+      try {
+        await cacheDir.removeEntry(waveformName, { recursive: true });
+        console.log(`[OPFS] Cleared cache for: ${waveformName}`);
+      } catch (e) {
+        // Directory doesn't exist
+      }
+    } catch (e) {
+      // wave_cache doesn't exist
+    }
+    // Migration: also clear the old root-level location used before the
+    // wave_cache prefix was introduced (no-op if it doesn't exist).
+    try {
+      await root.removeEntry(waveformName, { recursive: true });
     } catch (e) {
       // Directory doesn't exist
     }

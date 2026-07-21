@@ -175,6 +175,8 @@ export interface ProviderConfig {
   timeStamp: number;
   enableOpfs?: boolean;
   enableMemoryCache?: boolean;
+  // Whether to prefetch neighbouring waveform tiles in the background (optional, defaults to true)
+  enablePrefetch?: boolean;
 }
 
 /**
@@ -333,6 +335,11 @@ export interface WaveformProviderInterface {
    * 设置内存缓存启用状态
    */
   setMemoryCacheEnabled(enabled: boolean): void;
+
+  /**
+   * 设置波形数据预取启用状态（渲染后后台预取相邻 tile）
+   */
+  setPrefetchEnabled(enabled: boolean): void;
 
   /**
    * 设置信号前缀（local prefix）

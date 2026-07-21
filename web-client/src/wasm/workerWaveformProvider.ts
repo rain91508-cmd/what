@@ -52,6 +52,7 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
   private pendingMessages = new Map<number, PendingMessage>();
   private _isOpfsEnabled = false;
   private _isMemoryCacheEnabled = true;
+  private _isPrefetchEnabled = true;
   private _isDisposed = false;
   private instanceId: number;
   private minMessageId: number = 0;
@@ -87,6 +88,7 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
 
       this._isOpfsEnabled = config.enableOpfs ?? false;
       this._isMemoryCacheEnabled = config.enableMemoryCache ?? true;
+      this._isPrefetchEnabled = config.enablePrefetch ?? true;
 
       // Debug: console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Initialized: OPFS=${this._isOpfsEnabled}, MemoryCache=${this._isMemoryCacheEnabled}`);
     } catch (error) {
@@ -368,6 +370,20 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
 
     this.worker?.postMessage({
       type: 'SET_MEMORY_CACHE_ENABLED',
+      payload: { enabled },
+      id: ++globalMessageId,
+    });
+  }
+
+  /**
+   * 设置波形数据预取启用状态（渲染后后台预取相邻 tile）
+   */
+  setPrefetchEnabled(enabled: boolean): void {
+    this._isPrefetchEnabled = enabled;
+    console.log(`[WorkerProvider] setPrefetchEnabled posting enabled=${enabled}`);
+
+    this.worker?.postMessage({
+      type: 'SET_PREFETCH_ENABLED',
       payload: { enabled },
       id: ++globalMessageId,
     });

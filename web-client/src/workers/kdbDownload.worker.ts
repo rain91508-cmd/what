@@ -226,6 +226,7 @@ interface DownloadState {
   isCancelled: boolean;
   phase: 'downloading' | 'decompressing' | 'storing' | 'retrying';
   speedHistory: number[]; // For calculating average speed
+  lastProgressPercent: number; // Percent of the last SENT progress message
 }
 
 let currentDownload: DownloadState | null = null;
@@ -254,6 +255,17 @@ async function initWasm(): Promise<void> {
 // ============================================
 // OPFS Operations (Streaming Write with Concurrency Control)
 // ============================================
+
+// KDB unpacked data lives under a `kdb/` subfolder in OPFS so it is clearly
+// separated from the `wave_cache` directory used for waveform data.
+async function getKdbDir(
+  root: FileSystemDirectoryHandle,
+  kdbId: string,
+  create: boolean,
+): Promise<FileSystemDirectoryHandle> {
+  const kdbParent = await root.getDirectoryHandle('kdb', { create });
+  return await kdbParent.getDirectoryHandle(kdbId, { create });
+}
 
 class OPFSWriter {
   private kdbId: string = '';
@@ -331,7 +343,7 @@ class OPFSWriter {
 
     const t0 = performance.now();
     const root = await navigator.storage.getDirectory();
-    const kdbDir: any = await root.getDirectoryHandle(this.kdbId, { create: true });
+    const kdbDir: any = await getKdbDir(root, this.kdbId, true);
     const fh: any = await kdbDir.getFileHandle('source_content.bin', { create: true });
     const handle: any = await fh.createSyncAccessHandle();
     const tOpen = performance.now();
@@ -409,8 +421,12 @@ function stopHeartbeat(): void {
   }
 }
 
-// Minimum time between progress updates (ms)
+// Minimum time between progress updates (ms). Kept for stable speed/ETA
+// sampling — but progress is ALSO sent whenever it advances by at least
+// MIN_PROGRESS_PERCENT, so a fast download still shows a smooth count-up
+// instead of jumping (e.g. 10% -> 90%).
 const MIN_PROGRESS_INTERVAL = 5000; // 5 seconds
+const MIN_PROGRESS_PERCENT = 5; // send if advanced >= 5% since last message
 
 function updateProgress(
   loaded: number,
@@ -423,9 +439,11 @@ function updateProgress(
   
   const now = Date.now();
   const timeDelta = now - currentDownload.lastProgressTime;
+  const percent = total > 0 ? (loaded / total) * 100 : 0;
+  const percentDelta = Math.abs(percent - currentDownload.lastProgressPercent);
   
-  // Only update if enough time has passed or forced
-  if (!force && timeDelta < MIN_PROGRESS_INTERVAL) {
+  // Only update if enough time OR visible progress has passed, or forced.
+  if (!force && timeDelta < MIN_PROGRESS_INTERVAL && percentDelta < MIN_PROGRESS_PERCENT) {
     // Still update the downloaded count, but don't send message
     currentDownload.downloaded = loaded;
     return;
@@ -457,6 +475,7 @@ function updateProgress(
   currentDownload.downloaded = loaded;
   currentDownload.lastProgressTime = now;
   currentDownload.lastProgressBytes = loaded;
+  currentDownload.lastProgressPercent = percent;
   currentDownload.phase = phase;
   
   postMessage({
@@ -648,6 +667,7 @@ async function downloadAndStoreKDB(
     isCancelled: false,
     phase: 'downloading',
     speedHistory: [],
+    lastProgressPercent: 0,
   };
   
   // Start heartbeat
@@ -671,7 +691,7 @@ async function downloadAndStoreKDB(
     const totalSize = info.data.kdb_info.file_size;
     currentDownload.totalSize = totalSize;
     
-    updateProgress(0, totalSize, 'downloading', 'Starting download...');
+    updateProgress(0, totalSize, 'downloading', 'Starting download...', true);
     
     // Download with resume and stall detection
     const kdbData = await downloadWithResume(kdbName, baseUrl, totalSize);

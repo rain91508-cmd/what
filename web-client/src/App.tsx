@@ -81,7 +81,7 @@ import { SESSION_VERSION } from './types/session'
 import type { Signal } from './types/kdb'
 import type { WaveformInfo, ColumnWidths, TimeConfig, Tab, NavigationHistoryEntry, SignalGroup } from './components/TabPanel'
 import { initTimeConfig, parseTimeUnitStr } from './components/TabPanel'
-import type { SignalWithFormat, RawSignalValuesResult } from './core/waveformProviderInterface'
+import type { SignalWithFormat, RawSignalValuesResult, WaveformProviderInterface } from './core/waveformProviderInterface'
 import type { DisplayFormat } from './core/waveformProviderInterface'
 
 // i18n
@@ -202,6 +202,13 @@ function App() {
     const saved = localStorage.getItem('memory_cache_enabled');
     return saved !== 'false'; // Default to true if not set
   })
+
+  // Waveform data prefetch enabled state
+  const [prefetchEnabled, setPrefetchEnabled] = useState<boolean>(() => {
+    // Check localStorage for saved preference, default to true
+    const saved = localStorage.getItem('prefetch_enabled');
+    return saved !== 'false'; // Default to true if not set
+  })
   
   // Helper function to create default groups
   const createDefaultGroups = () => ({
@@ -243,8 +250,12 @@ function App() {
   // Get current active tab data
   const activeTabData = tabs.find(t => t.id === activeTab)
 
-  // Get shared waveform provider
-  const { provider: waveformProvider, isLoading: isProviderLoading } = useWaveformProvider()
+  // App is the PARENT of <WaveformProviderProvider>, so it cannot read the live
+  // provider from context (it would only get the default `null`). We therefore own a
+  // ref that the provider populates when it is created, so the menu toggles below can
+  // reach the live worker instance directly.
+  const providerRef = useRef<WaveformProviderInterface | null>(null)
+  const { isLoading: isProviderLoading } = useWaveformProvider()
 
   // Get last active waveform tab's cursor time
   const getLastActiveWaveformCursorTime = useCallback((): number | undefined => {
@@ -482,7 +493,19 @@ function App() {
     const newValue = !opfsCacheEnabled;
     setOpfsCacheEnabled(newValue);
     setOpfsEnabled(newValue);
+    // Propagate to the live worker provider so the switch takes effect immediately
+    // (worker calls init_with_opfs and honors self.enable_opfs for is_cache_enabled).
+    providerRef.current?.setOpfsEnabled(newValue);
     localStorage.setItem('opfs_cache_enabled', newValue.toString());
+    // Constraint: prefetch requires a backing cache, so disabling OPFS forces prefetch off.
+    if (!newValue) {
+      setPrefetchEnabled(false);
+      providerRef.current?.setPrefetchEnabled(false);
+      localStorage.setItem('prefetch_enabled', 'false');
+      setTimeout(() => {
+        addMessage('Waveform Prefetch disabled (OPFS cache off)');
+      }, 0);
+    }
     // Use setTimeout to avoid circular dependency with addMessage
     setTimeout(() => {
       addMessage(`OPFS Cache ${newValue ? 'enabled' : 'disabled'}`);
@@ -494,11 +517,57 @@ function App() {
     setMemoryCacheEnabled(newValue);  // Update React state
     setWasmMemoryCacheEnabled(newValue);  // Call WASM function
     localStorage.setItem('memory_cache_enabled', newValue.toString());
+    // Constraint: prefetch requires a backing cache, so disabling Memory cache forces prefetch off.
+    if (!newValue) {
+      setPrefetchEnabled(false);
+      providerRef.current?.setPrefetchEnabled(false);
+      localStorage.setItem('prefetch_enabled', 'false');
+      setTimeout(() => {
+        addMessage('Waveform Prefetch disabled (Memory cache off)');
+      }, 0);
+    }
     // Use setTimeout to avoid circular dependency with addMessage
     setTimeout(() => {
       addMessage(`Memory Cache ${newValue ? 'enabled' : 'disabled'}`);
     }, 0);
   }, [memoryCacheEnabled]);
+
+  const handleTogglePrefetch = useCallback(() => {
+    const desired = !prefetchEnabled;
+    // Constraint: prefetch can only be ON when BOTH OPFS and Memory caches are ON.
+    if (desired && (!opfsCacheEnabled || !memoryCacheEnabled)) {
+      setTimeout(() => {
+        addMessage('Waveform Prefetch requires both OPFS and Memory cache enabled');
+      }, 0);
+      return;
+    }
+    setPrefetchEnabled(desired);
+    localStorage.setItem('prefetch_enabled', desired.toString());
+    console.log(`[App] Toggle Prefetch -> ${desired} (provider type: ${providerRef.current?.constructor?.name ?? 'null'})`);
+    // Propagate to the live worker provider so the switch takes effect immediately
+    // without recreating the whole provider (worker handles SET_PREFETCH_ENABLED).
+    providerRef.current?.setPrefetchEnabled(desired);
+    // Use setTimeout to avoid circular dependency with addMessage
+    setTimeout(() => {
+      addMessage(`Waveform Prefetch ${desired ? 'enabled' : 'disabled'}`);
+    }, 0);
+  }, [prefetchEnabled, opfsCacheEnabled, memoryCacheEnabled]);
+
+  // Constraint enforcement: if either OPFS or Memory cache is off, prefetch must be off.
+  // Covers the case where the initial persisted state has prefetch on but a cache off.
+  useEffect(() => {
+    if (!opfsCacheEnabled || !memoryCacheEnabled) {
+      if (prefetchEnabled) {
+        setPrefetchEnabled(false);
+        providerRef.current?.setPrefetchEnabled(false);
+        localStorage.setItem('prefetch_enabled', 'false');
+        setTimeout(() => {
+          addMessage('Waveform Prefetch disabled (requires OPFS and Memory cache)');
+        }, 0);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opfsCacheEnabled, memoryCacheEnabled]);
 
   const addMessage = useCallback((msg: string) => {
     setMessages(prev => {
@@ -1487,11 +1556,24 @@ function App() {
           }
           return
         }
-        // Download phase: report by percent (throttled to every 10%).
+        // Download phase: report by percent, updating a single line in place
+        // so the user sees live progress without the log filling with one
+        // line per 10%.
         const percent = Math.round((downloaded / total) * 100)
-        if (percent !== lastStorePercent && percent % 10 === 0) {
+        if (percent !== lastStorePercent) {
           lastStorePercent = percent
-          addMessage(`Downloading KDB: ${percent}%`)
+          setMessages(prev => {
+            const last = prev.length > 0 ? prev[prev.length - 1] : ''
+            // Same dynamic download line -> replace it in place so it advances
+            // live instead of appending a new line each tick.
+            if (last.includes('Downloading KDB:')) {
+              const updated = prev.slice()
+              updated[updated.length - 1] = `[${new Date().toLocaleTimeString()}] Downloading KDB: ${percent}%`
+              return updated
+            }
+            const next = [...prev, `[${new Date().toLocaleTimeString()}] Downloading KDB: ${percent}%`]
+            return next.length > 100 ? next.slice(-100) : next
+          })
         }
       }
     )
@@ -3408,7 +3490,7 @@ function App() {
           cursorPosition: Math.floor(newCursorPos),
         } : tab
       ))
-      addMessage(`Zoom in: ${newViewport.timeStart} to ${newViewport.timeEnd} LoD0Units`)
+      // Zoom range + current LOD is reported by WaveformWindow's onMessage handler
     }
   }
 
@@ -3438,7 +3520,7 @@ function App() {
           cursorPosition: newCursorPos,
         } : tab
       ))
-      addMessage(`Zoom out: ${newViewport.timeStart} to ${newViewport.timeEnd} LoD0Units`)
+      // Zoom range + current LOD is reported by WaveformWindow's onMessage handler
     }
   }
 
@@ -3463,7 +3545,7 @@ function App() {
           },
         } : tab
       ))
-      addMessage(`Zoom full: ${sanitized.timeStart} to ${sanitized.timeEnd} LoD0Units`)
+      // Zoom range + current LOD is reported by WaveformWindow's onMessage handler
     }
   }
 
@@ -4054,6 +4136,7 @@ function App() {
 
   return (
     <WaveformProviderProvider
+      providerRef={providerRef}
       serverUrl={serverUrl}
       waveformName={currentWaveName || ''}
       signalPrefix={currentWaveSignalPrefix}
@@ -4062,6 +4145,7 @@ function App() {
       timeStamp={currentWaveTimeStamp}
       enableOpfs={opfsCacheEnabled}
       enableMemoryCache={memoryCacheEnabled}
+      enablePrefetch={prefetchEnabled}
     >
     <div className="app">
       {/* Menu Bar */}
@@ -4089,6 +4173,9 @@ function App() {
         onToggleOpfs={handleToggleOpfs}
         memoryCacheEnabled={memoryCacheEnabled}
         onToggleMemoryCache={handleToggleMemoryCache}
+        prefetchEnabled={prefetchEnabled}
+        prefetchDisabled={!opfsCacheEnabled || !memoryCacheEnabled}
+        onTogglePrefetch={handleTogglePrefetch}
         // View menu
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
@@ -4430,6 +4517,7 @@ function App() {
                   ));
                 }}
                 onSignalDoubleClick={handleWaveformSignalDoubleClick}
+                onMessage={addMessage}
               />
             ) : null}
           </TabPanel>

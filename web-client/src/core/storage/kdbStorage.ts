@@ -190,6 +190,19 @@ import { indexedDBManager } from './indexedDB';
 import { isOpfsAvailable, globalMemoryStorage } from '../../utils/opfsUtils';
 import type { Module, SignalDef } from '../../types/kdb';
 
+// KDB unpacked data lives under a `kdb/` subfolder in OPFS so it is clearly
+// separated from the `wave_cache` directory used for waveform data.
+const KDB_OPFS_ROOT = 'kdb';
+
+async function getKdbDir(
+  root: FileSystemDirectoryHandle,
+  kdbId: string,
+  create: boolean,
+): Promise<FileSystemDirectoryHandle> {
+  const kdbParent = await root.getDirectoryHandle(KDB_OPFS_ROOT, { create });
+  return await kdbParent.getDirectoryHandle(kdbId, { create });
+}
+
 /**
  * Store knowledge base metadata
  * WASM stores: { id, header, hierarchies }
@@ -269,7 +282,7 @@ async function writeOpfsBinary(kdbId: string, fileName: string, bytes: Uint8Arra
 
   try {
     const root = await navigator.storage.getDirectory();
-    const kdbDir = await root.getDirectoryHandle(kdbId, { create: true });
+    const kdbDir = await getKdbDir(root, kdbId, true);
     const fileHandle = await kdbDir.getFileHandle(fileName, { create: true });
     const writable = await fileHandle.createWritable();
     await writable.write(view as any);
@@ -291,7 +304,7 @@ async function readOpfsWhole(kdbId: string, fileName: string): Promise<ArrayBuff
   if (!isOpfsAvailable()) return null;
   try {
     const root = await navigator.storage.getDirectory();
-    const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
+    const kdbDir = await getKdbDir(root, kdbId, false);
     const fileHandle = await kdbDir.getFileHandle(fileName, { create: false });
     const file = await fileHandle.getFile();
     return await file.arrayBuffer();
@@ -308,7 +321,7 @@ async function readOpfsRange(kdbId: string, fileName: string, startByte: number,
   if (!isOpfsAvailable()) return null;
   try {
     const root = await navigator.storage.getDirectory();
-    const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
+    const kdbDir = await getKdbDir(root, kdbId, false);
     const fileHandle = await kdbDir.getFileHandle(fileName, { create: false });
     const file = await fileHandle.getFile();
     const slice = file.slice(startByte, endByte);
@@ -337,7 +350,7 @@ async function getSourceContentIndex(
   if (!isOpfsAvailable()) return null;
   try {
     const root = await navigator.storage.getDirectory();
-    const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
+    const kdbDir = await getKdbDir(root, kdbId, false);
     const fh = await kdbDir.getFileHandle('source_index.bin', { create: false });
     const file = await fh.getFile();
     const buf = new Uint8Array(await file.arrayBuffer());
@@ -378,7 +391,7 @@ async function readSourceFileBytes(
     const absEnd = entry.start + Math.min(endByte, entry.start + entry.len);
     if (absEnd <= absStart) return new Uint8Array(0);
     const root = await navigator.storage.getDirectory();
-    const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
+    const kdbDir = await getKdbDir(root, kdbId, false);
     const fh = await kdbDir.getFileHandle('source_content.bin', { create: false });
     const file = await fh.getFile();
     const slice = file.slice(absStart, absEnd);
@@ -386,7 +399,7 @@ async function readSourceFileBytes(
   }
   // Legacy per-file fallback.
   const root = await navigator.storage.getDirectory();
-  const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
+  const kdbDir = await getKdbDir(root, kdbId, false);
   const fh = await kdbDir.getFileHandle(`file_${fileId}.content`, { create: false });
   const file = await fh.getFile();
   const slice = file.slice(startByte, endByte);
@@ -445,7 +458,7 @@ async function writeLineIndexToOPFS(kdbId: string): Promise<void> {
   }
 
   const root = await navigator.storage.getDirectory();
-  const kdbDir = await root.getDirectoryHandle(kdbId, { create: true });
+  const kdbDir = await getKdbDir(root, kdbId, true);
   const fh: any = await kdbDir.getFileHandle('source_line_index.bin', { create: true });
   const isWorker = typeof (self as any).Window === 'undefined';
   if (isWorker && typeof fh.createSyncAccessHandle === 'function') {
@@ -487,7 +500,7 @@ async function getSourceLineIndex(kdbId: string, fileId: number): Promise<Int32A
   if (!toc || !buffer) {
     if (!isOpfsAvailable()) return [];
     const root = await navigator.storage.getDirectory();
-    const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
+    const kdbDir = await getKdbDir(root, kdbId, false);
     const fh = await kdbDir.getFileHandle('source_line_index.bin', { create: false });
     const file = await fh.getFile();
     buffer = await file.arrayBuffer();
@@ -760,7 +773,7 @@ async function store_source_file_content_opfs(id: number, content: Uint8Array, k
     const root = await navigator.storage.getDirectory();
     
     // Create/get KDB-specific directory
-    const kdbDir = await root.getDirectoryHandle(kdbId, { create: true });
+    const kdbDir = await getKdbDir(root, kdbId, true);
     
     // Create/get file handle
     const fileName = `file_${id}.content`;
@@ -965,13 +978,14 @@ async function clear_kdb_data(kdbId: string): Promise<void> {
   }
 
   // Clear file contents from OPFS (single native dir removal). The per-file
-  // store path recreates the directory via getDirectoryHandle(kdbId, {create:true}).
+  // store path recreates the directory under `kdb/` via getKdbDir.
   try {
     const root = await navigator.storage.getDirectory();
-    await root.removeEntry(kdbId, { recursive: true });
-    console.log(`[${ts()}] [KdbStorage] Cleared OPFS directory: ${kdbId}`);
+    const kdbParent = await root.getDirectoryHandle('kdb', { create: false });
+    await kdbParent.removeEntry(kdbId, { recursive: true });
+    console.log(`[${ts()}] [KdbStorage] Cleared OPFS directory: kdb/${kdbId}`);
   } catch (e) {
-    console.log(`[${ts()}] [KdbStorage] OPFS directory not found for KDB: ${kdbId}`);
+    console.log(`[${ts()}] [KdbStorage] OPFS directory not found for KDB: kdb/${kdbId}`);
   }
 
   console.log(`[${ts()}] [KdbStorage] Cleared data for KDB:`, kdbId);

@@ -1102,8 +1102,15 @@ impl WaveformDataProvider {
     }
     
     /// Check if any cache is enabled (helper method)
+    ///
+    /// Uses `self.enable_opfs` (the live OPFS toggle, also set during
+    /// `init_with_opfs`) rather than `opfs_cache.is_enabled()`, because the
+    /// worker path initializes the global cache only once and the live
+    /// `set_opfs_enabled` toggle only updates `self.enable_opfs`. Gating on
+    /// `self.enable_opfs` makes the OPFS switch actually take effect at
+    /// runtime without requiring a provider recreation.
     fn is_cache_enabled(&self) -> bool {
-        self.opfs_cache.is_enabled() || self.opfs_cache.is_memory_cache_enabled()
+        self.enable_opfs || self.opfs_cache.is_memory_cache_enabled()
     }
 
     /// Parse @[...] format for bit extraction
@@ -1664,6 +1671,8 @@ if tile_missing_signals.is_empty() {
     pub async fn prefetch_tiles(&mut self, signal_names: Vec<String>) -> Result<(), JsValue> {
         // Skip if both OPFS and memory cache are disabled
         if !self.is_cache_enabled() {
+            console_log!("[WASM] prefetch_tiles skipped: is_cache_enabled=false (enable_opfs={}, memory_cache_enabled={})",
+                self.enable_opfs, self.opfs_cache.is_memory_cache_enabled());
             return Ok(());
         }
 
