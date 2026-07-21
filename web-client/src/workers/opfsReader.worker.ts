@@ -45,6 +45,17 @@ interface OPFSReaderResponse {
   error?: string;
 }
 
+// KDB unpacked data lives under a `kdb/` subfolder in OPFS so it is clearly
+// separated from the `wave_cache` directory used for waveform data.
+async function getKdbDir(
+  root: FileSystemDirectoryHandle,
+  kdbId: string,
+  create: boolean,
+): Promise<FileSystemDirectoryHandle> {
+  const kdbParent = await root.getDirectoryHandle('kdb', { create });
+  return await kdbParent.getDirectoryHandle(kdbId, { create });
+}
+
 // ============================================
 // State
 // ============================================
@@ -62,7 +73,7 @@ async function loadSourceIndex(
 ): Promise<Map<number, { start: number; len: number }> | null> {
   try {
     const root = await navigator.storage.getDirectory();
-    const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
+    const kdbDir = await getKdbDir(root, kdbId, false);
     const fh = await kdbDir.getFileHandle('source_index.bin', { create: false });
     const file = await fh.getFile();
     const buf = new Uint8Array(await file.arrayBuffer());
@@ -213,7 +224,7 @@ self.onmessage = async (event: MessageEvent<OPFSReaderMessage>) => {
           // layout) using this file's offset from source_index.bin; fall back to
           // the legacy per-file `file_${fileId}.content` for older data.
           const root = await navigator.storage.getDirectory();
-          const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
+          const kdbDir = await getKdbDir(root, kdbId, false);
           const index = await loadSourceIndex(kdbId);
           const entry = index?.get(fileId);
           

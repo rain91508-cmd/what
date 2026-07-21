@@ -19,6 +19,9 @@ interface MenuBarProps {
   onToggleOpfs?: () => void;
   memoryCacheEnabled?: boolean;
   onToggleMemoryCache?: () => void;
+  prefetchEnabled?: boolean;
+  prefetchDisabled?: boolean;
+  onTogglePrefetch?: () => void;
   onZoomIn?: () => void;
   onZoomOut?: () => void;
   onZoomFull?: () => void;
@@ -53,7 +56,7 @@ interface Menu {
 
 export function MenuBar({
   connected, onConnect, onDisconnect, onOpenKdbList, onOpenWaveList, onCloseKdb, onCloseWave, hasKdbLoaded, hasWaveLoaded, infoText,
-  onOpenDebugTool, onSaveSession, onRestoreSession, opfsEnabled, onToggleOpfs, memoryCacheEnabled, onToggleMemoryCache,
+  onOpenDebugTool, onSaveSession, onRestoreSession, opfsEnabled, onToggleOpfs, memoryCacheEnabled, onToggleMemoryCache, prefetchEnabled, prefetchDisabled, onTogglePrefetch,
   onZoomIn, onZoomOut, onZoomFull, canZoom,
   onHistoryBack, onHistoryForward, canGoBack, canGoForward, onAddBookmark, onFindDriver, onFindDefinition, hasSelectedWord,
   onAddSignal, onRemoveSignal, canAddSignal, canRemoveSignal,
@@ -138,6 +141,14 @@ export function MenuBar({
         {
           label: memoryCacheEnabled ? `✓ ${t('menuItems.memoryCache')}` : `  ${t('menuItems.memoryCache')}`,
           onClick: onToggleMemoryCache,
+        },
+        { separator: true, label: '' },
+        {
+          label: prefetchDisabled
+            ? `${t('menuItems.prefetchCache')} (${t('menuItems.prefetchRequiresCache')})`
+            : prefetchEnabled ? `✓ ${t('menuItems.prefetchCache')}` : `  ${t('menuItems.prefetchCache')}`,
+          onClick: onTogglePrefetch,
+          disabled: prefetchDisabled,
         },
       ],
     },

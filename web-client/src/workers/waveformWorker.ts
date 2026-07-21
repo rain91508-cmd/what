@@ -17,6 +17,7 @@ import {
   TimeRangeOnly,
   TimeConfig,
 } from '../core/render/waveformDrawing';
+import { opfsRead, opfsWrite, opfsExists, isOpfsSupported } from '../core/cache/opfsAccess';
 import type { RenderSegment } from '../core/waveformProviderInterface';
 
 // Worker 启动日志
@@ -46,6 +47,8 @@ let currentRenderTask: RenderTask | null = null;
 // 预取任务管理
 let prefetchTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingPrefetchSignals: string[] | null = null;
+let lastRenderSignalNames: string[] = []; // 最近一次渲染的信号名，用于切换预取开关后立即触发
+let prefetchEnabled = true; // 是否在渲染后预取相邻 tile（可由 SET_PREFETCH_ENABLED 或初始化配置控制）
 const PREFETCH_DELAY_MS = 500; // 延迟500ms后才开始预取，避免频繁渲染时触发
 
 // 请求队列（用于处理并发请求）
@@ -161,6 +164,11 @@ self.onmessage = async (event) => {
 
       case 'SET_MEMORY_CACHE_ENABLED': {
         handleSetMemoryCacheEnabled(payload, id);
+        break;
+      }
+
+      case 'SET_PREFETCH_ENABLED': {
+        handleSetPrefetchEnabled(payload, id);
         break;
       }
 
@@ -332,10 +340,33 @@ async function handleInitialize(payload: any, id: number): Promise<void> {
     BigInt(config.timeStamp)
   );
 
+  // 初始化 OPFS 缓存回调（与直接路径一致）
+  // 注意：Worker 是模块 Worker，没有 window，需用 globalThis 暴露包装函数。
+  if (isOpfsSupported()) {
+    const g = globalThis as any;
+    g.opfsReadWrapper = async (path: string): Promise<Uint8Array | null> => opfsRead(path);
+    g.opfsWriteWrapper = async (path: string, data: Uint8Array): Promise<void> => opfsWrite(path, data);
+    g.opfsExistsWrapper = async (path: string): Promise<boolean> => opfsExists(path);
+
+    const readCallback = new Function('path', 'return globalThis.opfsReadWrapper(path);');
+    const writeCallback = new Function('path', 'data', 'return globalThis.opfsWriteWrapper(path, data);');
+    const existsCallback = new Function('path', 'return globalThis.opfsExistsWrapper(path);');
+
+    wasmProvider.init_with_opfs(
+      readCallback as any,
+      writeCallback as any,
+      existsCallback as any,
+      config.enableOpfs === true
+    );
+  }
+
   // 设置内存缓存
   if (config.enableMemoryCache !== undefined) {
     wasmProvider.set_memory_cache_enabled(config.enableMemoryCache);
   }
+
+  // 设置预取开关
+  prefetchEnabled = config.enablePrefetch !== undefined ? config.enablePrefetch : true;
 
   sendSuccess(id, null);
 }
@@ -781,6 +812,7 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
     );
 
     // 8. 调度预取任务（延迟执行，避免阻塞下一次渲染）
+    lastRenderSignalNames = signalNames;
     schedulePrefetch(signalNames);
 
     // 9. 返回成功
@@ -810,6 +842,13 @@ function cancelPendingPrefetch(): void {
  * 使用异步 prefetch，不加入队列，不阻塞渲染
  */
 function schedulePrefetch(signalNames: string[]): void {
+  // Debug: confirm prefetch gate state on every render
+  console.log(`[WaveformWorker] schedulePrefetch prefetchEnabled=${prefetchEnabled} signals=${signalNames.length}`);
+  // 预取被禁用时直接跳过（不发起后台 tile 预取）
+  if (!prefetchEnabled) {
+    return;
+  }
+
   // 取消之前的预取任务（如果有）
   cancelPendingPrefetch();
 
@@ -863,6 +902,25 @@ function handleSetMemoryCacheEnabled(payload: any, id: number): void {
 
   const { enabled } = payload;
   wasmProvider.set_memory_cache_enabled(enabled);
+  sendSuccess(id, null);
+}
+
+/**
+ * 处理 SET_PREFETCH_ENABLED
+ * 开关波形渲染后的相邻 tile 后台预取
+ */
+function handleSetPrefetchEnabled(payload: any, id: number): void {
+  const { enabled } = payload;
+  prefetchEnabled = enabled !== false; // 默认开启
+  console.log(`[WaveformWorker] SET_PREFETCH_ENABLED received enabled=${enabled} -> prefetchEnabled=${prefetchEnabled}`);
+  // 关闭时立即取消任何待执行的预取任务
+  if (!prefetchEnabled) {
+    cancelPendingPrefetch();
+  } else if (lastRenderSignalNames.length > 0) {
+    // 开启时立即用最近一次渲染的信号触发一次预取，确保开关有立即可见的效果
+    console.log(`[WaveformWorker] Prefetch enabled -> re-scheduling with ${lastRenderSignalNames.length} signals`);
+    schedulePrefetch(lastRenderSignalNames);
+  }
   sendSuccess(id, null);
 }
 

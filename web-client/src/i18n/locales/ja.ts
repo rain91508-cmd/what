@@ -34,6 +34,8 @@ const translations: Translations = {
     removeSignal: '信号を削除',
     opfsCache: 'OPFSキャッシュ',
     memoryCache: 'メモリキャッシュ',
+    prefetchCache: 'プリフェッチ',
+    prefetchRequiresCache: 'OPFS + メモリが必要',
     kdbDebugTool: 'KDBデバッグツール',
     about: 'バージョン情報',
   },

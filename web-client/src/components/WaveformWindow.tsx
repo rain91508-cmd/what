@@ -129,6 +129,25 @@ interface WaveformWindowProps {
   onSignalSelect?: (signal: Signal & { unique_id: number }) => void;
   // Signal double click callback (jump to declaration)
   onSignalDoubleClick?: (signal: Signal & { unique_id: number }) => void;
+  // Message log callback (e.g. to surface zoom/LOD info in the global console)
+  onMessage?: (msg: string) => void;
+}
+
+/**
+ * 根据可见时间跨度与画布宽度计算当前 LoD 层级。
+ * 算法与 Rust 端 `select_lod` 保持一致：
+ *   time_per_pixel = (timeEnd - timeStart) / canvasWidth
+ *   选取满足 2^lod >= time_per_pixel 的最小 lod（即每个像素至多一个跳变点）
+ *   若都不满足则取最大层级 32。
+ * timeSpan 与 canvasWidth 均使用同一像素单位，故可直接比较。
+ */
+function selectLodForRange(timeSpan: number, canvasWidth: number): number {
+  if (canvasWidth <= 0) return 0;
+  const timePerPixel = timeSpan / canvasWidth;
+  for (let lod = 0; lod <= 32; lod++) {
+    if (Math.pow(2, lod) >= timePerPixel) return lod;
+  }
+  return 32;
 }
 
 interface CursorState {
@@ -193,6 +212,7 @@ export function WaveformWindow({
   wavemarks = [],
   onSignalSelect,
   onSignalDoubleClick,
+  onMessage,
   activeTabId,
 }: WaveformWindowProps) {
   const { t } = useT();
@@ -1212,6 +1232,27 @@ export function WaveformWindow({
       throttledRenderWaveform();
     }
   }, [viewport.timeStart, viewport.timeEnd, canvasWidth, groups, expandedSignals, throttledRenderWaveform]);
+
+  // 监听可见时间跨度变化，打印缩放范围与当前 LoD 层级。
+  // 仅在跨度真正改变时触发（放大/缩小），平移（跨度不变）不会打印。
+  // 首次挂载与切换 tab 时（key 变化导致组件重建）prevSpan 为 null，跳过首条消息。
+  const prevSpanRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!onMessage || canvasWidth <= 0) return;
+    const span = viewport.timeEnd - viewport.timeStart;
+    const prevSpan = prevSpanRef.current;
+    prevSpanRef.current = span;
+    if (prevSpan === null || prevSpan === span) return;
+
+    const lod = selectLodForRange(span, canvasWidth);
+    const resolution = Math.pow(2, lod);
+    const direction = span < prevSpan ? 'In' : 'Out';
+    const fmt = (n: number) => formatNumberWithCommas(Math.round(n));
+    onMessage(
+      `Zoom ${direction}: range [${fmt(viewport.timeStart)}, ${fmt(viewport.timeEnd)}] LoD0Unit, ` +
+      `current LOD: L${lod} (resolution 2^${lod} = ${fmt(resolution)} LoD0Unit/px)`
+    );
+  }, [viewport.timeStart, viewport.timeEnd, canvasWidth, onMessage]);
 
   // 监听 timeConfig 变化，重新渲染波形（影响标尺显示）
   useEffect(() => {

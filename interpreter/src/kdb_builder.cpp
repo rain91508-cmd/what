@@ -533,7 +533,31 @@ const ModuleInfo* KdbBuilder::findModuleByName(const std::string& name) const {
     if (it != moduleNameToId_.end()) {
         return findModuleById(it->second);
     }
-    return nullptr;
+    // Fallback: moduleNameToId_ is keyed by hierarchical fullName
+    // (e.g. "work@eh2_veer_wrapper", "tb_top.rvtop"), but callers such as the
+    // -top option and `kdb_viewer -M <name>` pass the bare module name. Match
+    // by bare name, preferring the hierarchy root (parentModuleId == 0) so the
+    // top module resolves to the design root rather than a nested instance.
+    // A bare name matches if it equals the module name or its simple name
+    // (the part after the last '@' or '.'), which strips library/instance
+    // prefixes like "work@" and hierarchy paths like "tb_top.".
+    auto simpleName = [](const std::string& n) {
+        size_t pos = n.find_last_of("@.");
+        return (pos == std::string::npos) ? n : n.substr(pos + 1);
+    };
+    std::string simple = simpleName(name);
+    const ModuleInfo* rootMatch = nullptr;
+    const ModuleInfo* anyMatch = nullptr;
+    for (const auto& mod : modules_) {
+        if (mod->name == name || simpleName(mod->name) == simple) {
+            if (!anyMatch) anyMatch = mod.get();
+            if (mod->parentModuleId == 0) {
+                rootMatch = mod.get();
+                break;
+            }
+        }
+    }
+    return rootMatch ? rootMatch : anyMatch;
 }
 
 const ModuleInfo* KdbBuilder::findModuleById(uint32_t id) const {

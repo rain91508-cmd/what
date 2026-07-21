@@ -34,6 +34,8 @@ const translations: Translations = {
     removeSignal: 'Remove Signal',
     opfsCache: 'OPFS Cache',
     memoryCache: 'Memory Cache',
+    prefetchCache: 'Prefetch',
+    prefetchRequiresCache: 'requires OPFS + Memory',
     kdbDebugTool: 'KDB Debug Tool',
     about: 'About',
   },

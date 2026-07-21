@@ -34,6 +34,8 @@ const translations: Translations = {
     removeSignal: '移除訊號',
     opfsCache: 'OPFS快取',
     memoryCache: '記憶體快取',
+    prefetchCache: '預取',
+    prefetchRequiresCache: '需要 OPFS + 記憶體快取',
     kdbDebugTool: 'KDB除錯工具',
     about: '關於',
   },

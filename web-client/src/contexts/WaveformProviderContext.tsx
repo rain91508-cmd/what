@@ -9,7 +9,7 @@
  * - Worker 管理多个 Canvas（每个 Tab 一个）
  */
 
-import { createContext, useContext, useEffect, useState, ReactNode, useRef } from 'react';
+import { createContext, useContext, useEffect, useState, ReactNode, useRef, MutableRefObject } from 'react';
 import { WaveformProviderInterface } from '../core/waveformProviderInterface';
 import { createWaveformProvider } from '../wasm/waveformProviderFactory';
 
@@ -38,6 +38,10 @@ const WaveformProviderContext = createContext<WaveformProviderContextType>({
  */
 interface WaveformProviderProviderProps {
   children: ReactNode;
+  // Optional ref that the live provider instance is written into, so consumers
+  // that live OUTSIDE this provider's subtree (e.g. App, which is the parent)
+  // can still reach the live provider for dynamic settings.
+  providerRef?: MutableRefObject<WaveformProviderInterface | null>;
   serverUrl?: string;
   waveformName?: string;
   signalPrefix?: string;      // Local prefix (removed from local signal name)
@@ -46,6 +50,7 @@ interface WaveformProviderProviderProps {
   timeStamp?: number;
   enableOpfs?: boolean;
   enableMemoryCache?: boolean;
+  enablePrefetch?: boolean;
 }
 
 /**
@@ -63,27 +68,36 @@ export function WaveformProviderProvider({
   timeStamp = 0,
   enableOpfs = false,
   enableMemoryCache = true,
+  enablePrefetch = true,
+  providerRef,
 }: WaveformProviderProviderProps) {
   const [provider, setProvider] = useState<WaveformProviderInterface | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   
-  // Track previous values of props that require recreating provider
+  // Track previous values of props that require recreating provider.
+  // NOTE: enableOpfs / enablePrefetch are intentionally NOT in this list. They are
+  // applied dynamically via the live provider's setOpfsEnabled / setPrefetchEnabled
+  // (which post messages to the worker). Recreating the whole WASM worker on those
+  // toggles would be wasteful and lose the OPFS/in-memory cache.
   const prevPropsRef = useRef({
     serverUrl: '',
     waveformName: '',
     timeStamp: 0,
-    enableOpfs: false,
     enableMemoryCache: true,
   });
 
+  // Effect A: (re)create the provider only when the *recreate-relevant* config changes
+  // (server URL, waveform name, timestamp, memory cache). OPFS / Prefetch toggles and the
+  // signal-name formatting settings are applied dynamically and must NOT tear down the
+  // worker — otherwise the live-provider ref consumed by the parent (menu toggles) would be
+  // invalidated on every unrelated re-render.
   useEffect(() => {
     const prevProps = prevPropsRef.current;
-    const needsNewProvider = 
+    const needsNewProvider =
       prevProps.serverUrl !== serverUrl ||
       prevProps.waveformName !== waveformName ||
       prevProps.timeStamp !== timeStamp ||
-      prevProps.enableOpfs !== enableOpfs ||
       prevProps.enableMemoryCache !== enableMemoryCache;
 
     // 只有在有有效的配置时才创建 Provider
@@ -92,16 +106,20 @@ export function WaveformProviderProvider({
 
     console.log('[WaveformProviderContext] Checking provider:', {
       prevProps,
-      currentProps: { serverUrl, waveformName, timeStamp, enableOpfs, enableMemoryCache },
+      currentProps: { serverUrl, waveformName, timeStamp, enableOpfs, enableMemoryCache, enablePrefetch },
       needsNewProvider,
       hasValidConfig
     });
 
+    // Only formatting/prefix settings changed (handled by Effect B) while the worker is
+    // already alive — do NOT recreate or dispose it.
+    if (!needsNewProvider && hasValidConfig && providerRef?.current) {
+      return;
+    }
+
     if (needsNewProvider && hasValidConfig) {
       console.log('[WaveformProviderContext] Recreating provider...');
-      // Recreate provider
       let isMounted = true;
-      let oldProvider: WaveformProviderInterface | null = null;
 
       const initProvider = async () => {
         try {
@@ -113,7 +131,8 @@ export function WaveformProviderProvider({
             waveformName,
             timeStamp,
             enableOpfs,
-            enableMemoryCache
+            enableMemoryCache,
+            enablePrefetch,
           });
 
           const newProvider = await createWaveformProvider({
@@ -126,13 +145,17 @@ export function WaveformProviderProvider({
             timeStamp,
             enableOpfs,
             enableMemoryCache,
+            enablePrefetch,
           });
 
           if (isMounted) {
-            oldProvider = provider;
             setProvider(newProvider);
+            if (providerRef) providerRef.current = newProvider;
             setIsLoading(false);
-            prevPropsRef.current = { serverUrl, waveformName, timeStamp, enableOpfs, enableMemoryCache };
+            prevPropsRef.current = { serverUrl, waveformName, timeStamp, enableMemoryCache };
+          } else {
+            // Superseded by a newer effect before creation finished.
+            newProvider.dispose();
           }
         } catch (err) {
           if (isMounted) {
@@ -146,21 +169,24 @@ export function WaveformProviderProvider({
 
       return () => {
         isMounted = false;
-        if (oldProvider) {
-          oldProvider.dispose();
-        } else if (provider) {
-          provider.dispose();
-        }
+        // Tearing down the worker: clear the live-provider ref so consumers in the
+        // parent (e.g. the menu toggles) can no longer call into a disposed instance.
+        if (providerRef) providerRef.current = null;
+        setProvider(null);
       };
-    } else if (!needsNewProvider && provider) {
-      // Just update signalPrefix, serverPrefix and/or spaceBeforeBracket on existing provider
-      if (provider) {
-        provider.setSignalPrefix(signalPrefix);
-        provider.setServerPrefix(serverPrefix);
-        provider.setSpaceBeforeBracket(spaceBeforeBracket);
-      }
     }
-  }, [serverUrl, waveformName, signalPrefix, serverPrefix, spaceBeforeBracket, timeStamp, enableOpfs, enableMemoryCache]);
+  }, [serverUrl, waveformName, timeStamp, enableMemoryCache, providerRef]);
+
+  // Effect B: apply signal-name formatting settings to the live provider WITHOUT
+  // recreating the worker. Runs whenever those props change; never disposes anything.
+  useEffect(() => {
+    const liveProvider = providerRef?.current ?? provider;
+    if (liveProvider) {
+      liveProvider.setSignalPrefix(signalPrefix);
+      liveProvider.setServerPrefix(serverPrefix);
+      liveProvider.setSpaceBeforeBracket(spaceBeforeBracket);
+    }
+  }, [signalPrefix, serverPrefix, spaceBeforeBracket, provider]);
 
   const value: WaveformProviderContextType = {
     provider,

@@ -46,6 +46,8 @@ export interface Translations {
     removeSignal: string;
     opfsCache: string;
     memoryCache: string;
+    prefetchCache: string;
+    prefetchRequiresCache: string;
     // Help
     kdbDebugTool: string;
     about: string;
