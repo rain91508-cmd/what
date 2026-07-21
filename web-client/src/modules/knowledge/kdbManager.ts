@@ -673,7 +673,7 @@ class KdbManager {
    * Get source file info by ID (metadata only)
    */
   async getSourceFileInfo(id: number): Promise<SourceFileInfo | null> {
-    return indexedDBManager.getSourceFileInfo(id);
+    return indexedDBManager.getSourceFileInfo(id, this.currentKdbId);
   }
 
   /**
@@ -689,7 +689,7 @@ class KdbManager {
    * Uses stored totalLines from file info
    */
   async getSourceFileTotalLines(id: number): Promise<number> {
-    const fileInfo = await indexedDBManager.getSourceFileInfo(id);
+    const fileInfo = await indexedDBManager.getSourceFileInfo(id, this.currentKdbId);
     return fileInfo?.totalLines || 0;
   }
 
