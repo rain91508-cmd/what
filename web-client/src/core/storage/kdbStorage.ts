@@ -33,7 +33,7 @@ function ts(): string {
 // getting reset. Only meaningful inside a Web Worker; on the main thread
 // `self.Window` exists, so this is a no-op there.
 let _lastWorkerHeartbeat = 0;
-function postWorkerHeartbeat(): void {
+export function postWorkerHeartbeat(): void {
   if (typeof (self as any).Window !== 'undefined') return;
   const now = Date.now();
   if (now - _lastWorkerHeartbeat < 2000) return; // at most one every 2s
@@ -87,19 +87,39 @@ async function flushBatch<T>(storeName: string, batch: T[]): Promise<void> {
   if (batch.length === 0) return;
   if (_flushing[storeName]) return;
   _flushing[storeName] = true;
+  const t0 = performance.now();
   try {
     const db = await getDb();
     if (!db) return;
-    const tx = db.transaction(storeName, 'readwrite');
-    const store = tx.objectStore(storeName);
-    for (const rec of batch) store.put(rec);
-    await tx.done;
+    if (storeName === 'source-file-info' || storeName === 'source-file-line-index') {
+      // Bundle ALL records into ONE put. This IDB backend costs ~0.4s PER put()
+      // (measured ~240s for 483 records), so we must not write them one-by-one.
+      // A single record (= one commit) is sub-second. The read helpers in
+      // indexedDB.ts unpack the bundle by id. One KDB is loaded at a time and
+      // clear_kdb_data truncates the store first, so keying the bundle by kdbId
+      // is unambiguous.
+      const sample = batch[0] as any;
+      const kdbId = (sample && sample.kdbId) || '';
+      await db.put(storeName, { id: kdbId, kdbId, records: batch });
+      if (typeof (indexedDBManager as any).setActiveKdb === 'function') {
+        (indexedDBManager as any).setActiveKdb(kdbId);
+      }
+    } else {
+      const tx = db.transaction(storeName, 'readwrite');
+      const store = tx.objectStore(storeName);
+      for (const rec of batch) store.put(rec);
+      await tx.done;
+    }
     const count = (_flushCount[storeName] = (_flushCount[storeName] || 0) + 1);
     // Throttle logging: signal-insts flushes are very frequent (2M records),
     // so only log every 50th flush plus the final partial one. This keeps the
     // console readable and avoids the (non-trivial) cost of thousands of logs.
     if (count % 50 === 0 || batch.length < STORE_BATCH_SIZE) {
-      console.log(`[${ts()}] [KdbStorage] Flushed ${batch.length} records to ${storeName} (batch #${count})`);
+      console.log(
+        `[${ts()}] [KdbStorage] Flushed ${batch.length} records to ${storeName} (batch #${count}) in ${(
+          performance.now() - t0
+        ).toFixed(0)}ms`,
+      );
     }
     // Keep the main thread's heartbeat stall-timer alive during the long store.
     postWorkerHeartbeat();
@@ -110,10 +130,19 @@ async function flushBatch<T>(storeName: string, batch: T[]): Promise<void> {
 }
 
 async function flushAllBatches(): Promise<void> {
+  const nInfo = _fileInfoBatch.length;
+  const nLine = _fileLineIndexBatch.length;
+  const t0 = performance.now();
   await Promise.all([
     flushBatch('source-file-info', _fileInfoBatch as any),
     flushBatch('source-file-line-index', _fileLineIndexBatch as any),
   ]);
+  const dt = performance.now() - t0;
+  if (dt > 50 || nInfo > 0 || nLine > 0) {
+    console.log(
+      `[${ts()}] [KdbStorage] flushAllBatches took ${dt.toFixed(0)}ms (info=${nInfo}, lineIdx=${nLine})`,
+    );
+  }
 }
 
 // Ensure a periodic flush runs so the last partial batch is never lost.
@@ -267,6 +296,80 @@ async function readOpfsRange(kdbId: string, fileName: string, startByte: number,
     console.warn(`[KdbStorage] Failed to read range from ${fileName}:`, e);
     return null;
   }
+}
+
+// ------------------------------------------------------------------
+// Concatenated source-content storage (see kdbDownload.worker.ts OPFSWriter).
+//
+// Instead of one OPFS file per source file (`file_${id}.content`), all source
+// content is appended into a single `source_content.bin` with one fsync. A tiny
+// `source_index.bin` records each file's [id, byteStart, byteLen]. We cache the
+// index per KDB so reads don't re-parse it on every file access.
+// ------------------------------------------------------------------
+const _sourceIndexCache: Map<string, Map<number, { start: number; len: number }>> = new Map();
+
+async function getSourceContentIndex(
+  kdbId: string,
+): Promise<Map<number, { start: number; len: number }> | null> {
+  const cached = _sourceIndexCache.get(kdbId);
+  if (cached) return cached;
+  if (!isOpfsAvailable()) return null;
+  try {
+    const root = await navigator.storage.getDirectory();
+    const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
+    const fh = await kdbDir.getFileHandle('source_index.bin', { create: false });
+    const file = await fh.getFile();
+    const buf = new Uint8Array(await file.arrayBuffer());
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    const count = dv.getUint32(0, true);
+    const map = new Map<number, { start: number; len: number }>();
+    let off = 4;
+    for (let i = 0; i < count; i++) {
+      const id = dv.getUint32(off, true);
+      const start = dv.getUint32(off + 4, true);
+      const len = dv.getUint32(off + 8, true);
+      map.set(id, { start, len });
+      off += 12;
+    }
+    _sourceIndexCache.set(kdbId, map);
+    return map;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read a byte range of a source file from OPFS. Prefers the concatenated
+ * `source_content.bin` (new layout); falls back to the legacy per-file
+ * `file_${id}.content` (main-thread store path / older data) when no index
+ * entry exists. `endByte` may be Number.MAX_SAFE_INTEGER to read to EOF.
+ */
+async function readSourceFileBytes(
+  kdbId: string,
+  fileId: number,
+  startByte: number,
+  endByte: number,
+): Promise<Uint8Array | null> {
+  const index = await getSourceContentIndex(kdbId);
+  const entry = index?.get(fileId);
+  if (entry) {
+    const absStart = entry.start + startByte;
+    const absEnd = entry.start + Math.min(endByte, entry.start + entry.len);
+    if (absEnd <= absStart) return new Uint8Array(0);
+    const root = await navigator.storage.getDirectory();
+    const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
+    const fh = await kdbDir.getFileHandle('source_content.bin', { create: false });
+    const file = await fh.getFile();
+    const slice = file.slice(absStart, absEnd);
+    return new Uint8Array(await slice.arrayBuffer());
+  }
+  // Legacy per-file fallback.
+  const root = await navigator.storage.getDirectory();
+  const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
+  const fh = await kdbDir.getFileHandle(`file_${fileId}.content`, { create: false });
+  const file = await fh.getFile();
+  const slice = file.slice(startByte, endByte);
+  return new Uint8Array(await slice.arrayBuffer());
 }
 
 /**
@@ -564,35 +667,12 @@ async function get_source_file_content(fileId: number, kdbId: string): Promise<s
   }
   
   try {
-    // Get OPFS root directory
-    const root = await navigator.storage.getDirectory();
-    
-    // Get KDB-specific directory
-    let kdbDir: FileSystemDirectoryHandle;
-    try {
-      kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
-    } catch (e) {
-      console.error(`[KdbStorage] KDB directory not found: ${kdbId}`, e);
+    const bytes = await readSourceFileBytes(kdbId, fileId, 0, Number.MAX_SAFE_INTEGER);
+    if (!bytes) {
+      console.error(`[KdbStorage] Source content not found for file ${fileId}`);
       return null;
     }
-    
-    // Get file handle
-    const fileName = `file_${fileId}.content`;
-    let fileHandle: FileSystemFileHandle;
-    try {
-      fileHandle = await kdbDir.getFileHandle(fileName, { create: false });
-    } catch (e) {
-      console.error(`[KdbStorage] File not found: ${kdbId}/${fileName}`, e);
-      return null;
-    }
-    
-    // Get file and read all content
-    const file = await fileHandle.getFile();
-    const arrayBuffer = await file.arrayBuffer();
-    
-    // Decode UTF-8 bytes to string
-    const content = new TextDecoder().decode(arrayBuffer);
-    return content;
+    return new TextDecoder().decode(bytes);
   } catch (e) {
     console.error('[KdbStorage] Failed to get content from OPFS:', e);
     return null;
@@ -624,23 +704,9 @@ async function get_source_file_content_by_range(
   }
   
   try {
-    // Get OPFS root directory
-    const root = await navigator.storage.getDirectory();
-    
-    // Get KDB-specific directory
-    const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
-    
-    // Get file handle
-    const fileName = `file_${fileId}.content`;
-    const fileHandle = await kdbDir.getFileHandle(fileName, { create: false });
-    
-    // Get file
-    const file = await fileHandle.getFile();
-    
-    // Read specific byte range using slice
-    const slice = file.slice(startByte, endByte);
-    const arrayBuffer = await slice.arrayBuffer();
-    return new Uint8Array(arrayBuffer);
+    const bytes = await readSourceFileBytes(kdbId, fileId, startByte, endByte);
+    if (!bytes) throw new Error(`Source content not found for file ${fileId}`);
+    return bytes;
   } catch (e) {
     console.error('[KdbStorage] Failed to get content by range from OPFS:', e);
     throw e;
@@ -662,14 +728,14 @@ async function get_source_file_lines_by_range(
   const db = (indexedDBManager as any).db;
   if (!db) throw new Error('IndexedDB not initialized');
   
-  const fileInfo = await db.get('source-file-info', fileId);
+  const fileInfo = await indexedDBManager.getSourceFileInfo(fileId, kdbId);
   if (!fileInfo || fileInfo.kdbId !== kdbId) {
     throw new Error(`File info not found: ${fileId}`);
   }
   
   // Line offset index lives in its own store (`source-file-line-index`), read
   // lazily only when a file is opened for line seeking.
-  const lineIndexOffset: number[] = await indexedDBManager.getSourceFileLineIndex(fileId);
+  const lineIndexOffset: number[] = await indexedDBManager.getSourceFileLineIndex(fileId, kdbId);
   const totalLines: number = fileInfo.totalLines || 0;
   
   // Validate line range
@@ -688,16 +754,10 @@ async function get_source_file_lines_by_range(
   // For simplicity, read from startByteOffset to end of file, then parse lines
   // A more optimized version would estimate the end byte
   
-  // 3. Read content from OPFS
-  const root = await navigator.storage.getDirectory();
-  const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
-  const fileHandle = await kdbDir.getFileHandle(`file_${fileId}.content`, { create: false });
-  const file = await fileHandle.getFile();
-  
-  // Read from calculated start offset to end of file
-  const slice = file.slice(startByteOffset);
-  const arrayBuffer = await slice.arrayBuffer();
-  const content = new Uint8Array(arrayBuffer);
+  // 3. Read content from OPFS (concatenated source_content.bin, or legacy per-file)
+  const bytes = await readSourceFileBytes(kdbId, fileId, startByteOffset, Number.MAX_SAFE_INTEGER);
+  if (!bytes) throw new Error(`Source content not found for file ${fileId}`);
+  const content = bytes;
   
   // 4. Parse lines
   const lines: string[] = [];
@@ -737,6 +797,9 @@ async function get_source_file_lines_by_range(
  */
 async function clear_kdb_data(kdbId: string): Promise<void> {
   console.log('[KdbStorage] Clearing data for KDB:', kdbId);
+  // Drop any cached source-content offset index for this KDB so the next load
+  // re-reads source_index.bin (or falls back to legacy per-file content).
+  _sourceIndexCache.delete(kdbId);
   await indexedDBManager.initialize();
   const db = (indexedDBManager as any).db;
   if (!db) throw new Error('IndexedDB not initialized');

@@ -28,6 +28,7 @@ import {
   store_source_file_info,
   get_source_file_content_by_range,
   clear_kdb_data,
+  postWorkerHeartbeat,
 } from '../core/storage/kdbStorage';
 
 // Create window alias for self (Worker global scope)
@@ -72,6 +73,16 @@ function ts(): string {
   } as KDBProgressMessage);
 };
 
+// WASM calls this from inside its long synchronous serialization loops (modules
+// / signal defs / signals / drivers) to keep the main thread's worker-stall
+// watchdog alive. postWorkerHeartbeat posts a 'heartbeat' to the main thread,
+// which re-arms the timeout — and crucially, that postMessage is delivered even
+// while the worker is CPU-bound in a tight WASM loop (no yield required). The
+// 2s throttle inside it bounds how often we actually send.
+(self as any).report_heartbeat = () => {
+  postWorkerHeartbeat();
+};
+
 /**
  * Setup storage functions with OPFSWriter integration
  * This is called after OPFSWriter is initialized
@@ -83,11 +94,12 @@ function setupStorageFunctions(writer: OPFSWriter) {
     // Fire-and-forget with a copy: WASM owns the bytes we are handed (a view
     // into its linear memory) and frees them as soon as this call returns, so
     // we MUST copy before letting the write run in the background.
-    // OPFSWriter's internal queue then runs up to WRITE_CONCURRENCY (4) writes
-    // in parallel instead of serializing all source files (each does
-    // createWritable -> write -> close). Awaiting here previously stalled
-    // "Step 4: Storing source files" for minutes on large designs. The worker
-    // calls opfsWriter.waitForAll() after parse_and_store_kdb to guarantee every
+    // OPFSWriter appends every source file into a single source_content.bin
+    // stream and closes it once (a single fsync) instead of writing each file
+    // to its own `file_${id}.content` (createWritable -> write -> close per
+    // file, close fsyncs). The old per-file approach stalled "Step 4: Storing
+    // source files" for minutes on large designs. The worker calls
+    // opfsWriter.waitForAll() after parse_and_store_kdb to guarantee every
     // file is physically written before completion is reported.
     writer.writeFile(id, new Uint8Array(content)).catch((e) => {
       console.error(`[KDBWorker] Source file content write failed for id ${id}:`, e);
@@ -189,7 +201,6 @@ interface KDBWorkerSchema extends DBSchema {
 const DB_NAME = 'hwda-database';
 const DB_VERSION = 6;
 const BATCH_SIZE = 100; // Batch size for metadata writes
-const WRITE_CONCURRENCY = 4; // Max concurrent OPFS writes
 const CWDK_MAGIC = 0x4B445743; // "CWDK" in little-endian
 
 // Download resume and stall detection constants
@@ -245,25 +256,41 @@ async function initWasm(): Promise<void> {
 // ============================================
 
 class OPFSWriter {
-  private kdbDir: FileSystemDirectoryHandle | null = null;
   private kdbId: string = '';
-  private writeQueue: (() => Promise<void>)[] = [];
-  private activeWrites = 0;
   private usePostMessageFallback = false;
   private pendingFiles: Map<number, Uint8Array> = new Map();
-  
+
+  // ------------------------------------------------------------------
+  // Buffer ALL source-file content in memory during parse, then write it in
+  // ONE shot at the end via a synchronous access handle.
+  //
+  // The previous two attempts both stalled ~4 minutes on C910:
+  //   1) one OPFS file per source file (createWritable -> write -> close per
+  //      file): 483 close() fsyncs.
+  //   2) one append stream with 483 serialized contentWritable.write() calls:
+  //      in this OPFS backend each write() also costs ~0.5s (it fsyncs or
+  //      otherwise blocks per call), so 483 writes == the same ~4 min.
+  //
+  // A FileSystemSyncAccessHandle does NOT fsync on every write — write() is a
+  // synchronous memcpy into the OS page cache and flush() persists once. So we
+  // record each file's [id, start, len] here (in memory) and, in waitForAll(),
+  // open a sync handle and write the whole blob with one flush(). Source content
+  // is only ~20MB for C910, so holding it in memory during parse is cheap.
+  // ------------------------------------------------------------------
+  private contentChunks: Uint8Array[] = []; // one entry per source file, append order
+  private contentIndex: number[] = []; // flattened: [id, start, len, ...]
+  private contentTotal = 0;
+
   async init(kdbId: string): Promise<void> {
     this.kdbId = kdbId;
-    
+
     // Check if OPFS is available in this context
     if (typeof navigator.storage === 'undefined' || !navigator.storage.getDirectory) {
       console.warn('[KDBWorker] OPFS not available in Worker, will use postMessage fallback');
       this.usePostMessageFallback = true;
       return;
     }
-    
-    // Don't create directory here - it will be created on first write
-    // This avoids the race condition with clear_kdb_data
+
     console.log('[KDBWorker] OPFS available, directory will be created on first write:', kdbId);
   }
 
@@ -275,50 +302,15 @@ class OPFSWriter {
       return;
     }
 
-    // Create write task
-    const writeTask = async () => {
-      const fileName = `file_${fileId}.content`;
-      
-      // Lazy initialization: create directory on first write
-      // This ensures directory exists even if clear_kdb_data deleted it
-      if (!this.kdbDir) {
-        try {
-          const root = await navigator.storage.getDirectory();
-          this.kdbDir = await root.getDirectoryHandle(this.kdbId, { create: true });
-          console.log('[KDBWorker] Created OPFS directory on first write:', this.kdbId);
-        } catch (e) {
-          console.error('[KDBWorker] Failed to create directory:', e);
-          throw new Error('Failed to create OPFS directory');
-        }
-      }
-      
-      let fileHandle: FileSystemFileHandle;
-      
-      try {
-        fileHandle = await this.kdbDir.getFileHandle(fileName, { create: true });
-      } catch (e) {
-        // Directory might have been deleted by clear_kdb_data, recreate it
-        console.warn('[KDBWorker] Directory handle invalid, recreating:', e);
-        const root = await navigator.storage.getDirectory();
-        this.kdbDir = await root.getDirectoryHandle(this.kdbId, { create: true });
-        fileHandle = await this.kdbDir.getFileHandle(fileName, { create: true });
-      }
-      
-      const writable = await fileHandle.createWritable();
-      
-      try {
-        // Create a view of the exact data to write
-        const contentView = new Uint8Array(content.buffer, content.byteOffset, content.byteLength);
-        await writable.write(contentView as any);
-      } finally {
-        await writable.close();
-      }
-    };
-
-    // Add to queue with concurrency control
-    await this.enqueueWrite(writeTask);
+    // Copy out of WASM linear memory immediately (WASM frees the bytes on
+    // return). Just buffer in memory; the actual OPFS write happens once in
+    // waitForAll() via a sync access handle.
+    const copy = new Uint8Array(content);
+    this.contentIndex.push(fileId, this.contentTotal, copy.byteLength);
+    this.contentTotal += copy.byteLength;
+    this.contentChunks.push(copy);
   }
-  
+
   /**
    * Get all pending files for postMessage fallback
    * Called at the end of download to send files to main thread
@@ -326,7 +318,7 @@ class OPFSWriter {
   getPendingFiles(): Map<number, Uint8Array> {
     return this.pendingFiles;
   }
-  
+
   /**
    * Check if using postMessage fallback
    */
@@ -334,39 +326,59 @@ class OPFSWriter {
     return this.usePostMessageFallback;
   }
 
-  private async enqueueWrite(task: () => Promise<void>): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const wrappedTask = async () => {
-        try {
-          await task();
-          resolve();
-        } catch (error) {
-          reject(error);
-        } finally {
-          this.activeWrites--;
-          this.processQueue();
-        }
-      };
-
-      this.writeQueue.push(wrappedTask);
-      this.processQueue();
-    });
-  }
-
-  private processQueue(): void {
-    while (this.activeWrites < WRITE_CONCURRENCY && this.writeQueue.length > 0) {
-      const task = this.writeQueue.shift();
-      if (task) {
-        this.activeWrites++;
-        task();
-      }
-    }
-  }
-
   async waitForAll(): Promise<void> {
-    while (this.activeWrites > 0 || this.writeQueue.length > 0) {
-      await new Promise(resolve => setTimeout(resolve, 10));
+    if (this.usePostMessageFallback) return;
+
+    const t0 = performance.now();
+    const root = await navigator.storage.getDirectory();
+    const kdbDir: any = await root.getDirectoryHandle(this.kdbId, { create: true });
+    const fh: any = await kdbDir.getFileHandle('source_content.bin', { create: true });
+    const handle: any = await fh.createSyncAccessHandle();
+    const tOpen = performance.now();
+
+    handle.truncate(this.contentTotal);
+    let pos = 0;
+    for (let i = 0; i < this.contentChunks.length; i++) {
+      const chunk = this.contentChunks[i];
+      handle.write(chunk, { at: pos });
+      pos += chunk.byteLength;
     }
+    const tWrite = performance.now();
+    handle.flush();
+    const tFlush = performance.now();
+    handle.close();
+    const tClose = performance.now();
+
+    // Free the in-memory copy now that it is on disk.
+    this.contentChunks = [];
+
+    console.log(
+      `[${ts()}] [KDBWorker] source_content.bin write: open=${(tOpen - t0).toFixed(0)}ms ` +
+        `write=${(tWrite - tOpen).toFixed(0)}ms flush=${(tFlush - tWrite).toFixed(0)}ms ` +
+        `close=${(tClose - tFlush).toFixed(0)}ms  ${this.contentTotal} bytes, ` +
+        `${this.contentIndex.length / 3} files`,
+    );
+
+    await this.writeIndex(kdbDir);
+  }
+
+  private async writeIndex(kdbDir: any): Promise<void> {
+    const count = this.contentIndex.length / 3;
+    const buf = new ArrayBuffer(4 + count * 12);
+    const dv = new DataView(buf);
+    dv.setUint32(0, count, true);
+    let off = 4;
+    for (let i = 0; i < count; i++) {
+      dv.setUint32(off, this.contentIndex[i * 3], true);
+      dv.setUint32(off + 4, this.contentIndex[i * 3 + 1], true);
+      dv.setUint32(off + 8, this.contentIndex[i * 3 + 2], true);
+      off += 12;
+    }
+    const fh: any = await kdbDir.getFileHandle('source_index.bin', { create: true });
+    const writable = await fh.createWritable();
+    await writable.write(new Uint8Array(buf));
+    await writable.close();
+    console.log(`[${ts()}] [KDBWorker] Wrote source index: ${count} files`);
   }
 }
 
@@ -691,18 +703,21 @@ async function downloadAndStoreKDB(
       throw new Error('Failed to parse KDB');
     }
 
-    // Source-file content writes are fire-and-forget (enqueued into OPFSWriter's
-    // parallel queue) so they overlap with parsing instead of blocking it. Wait
-    // for them to finish here so we never report completion before the files
-    // are physically on disk.
+    // Source-file content writes are buffered in memory during parse and written
+    // in one shot here (single sync access handle). Wait for it to finish so we
+    // never report completion before the files are physically on disk.
+    const tw0 = performance.now();
     await opfsWriter.waitForAll();
+    console.log(`[${ts()}] [KDBWorker] waitForAll (source_content.bin) took ${(performance.now() - tw0).toFixed(0)}ms`);
 
     // Flush any buffered IndexedDB records (the per-record store_* calls
     // batch writes; the final partial batch must be flushed before we
     // report completion).
+    const tf0 = performance.now();
     if ((self as any).__flushKdbBatches) {
       await (self as any).__flushKdbBatches();
     }
+    console.log(`[${ts()}] [KDBWorker] __flushKdbBatches (IDB) took ${(performance.now() - tf0).toFixed(0)}ms`);
     
     stopHeartbeat();
     

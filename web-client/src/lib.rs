@@ -90,6 +90,16 @@ extern "C" {
     // describes the current step.
     #[wasm_bindgen(js_namespace = window, js_name = report_kdb_progress)]
     fn report_kdb_progress(step: u32, total: u32, message: &str);
+
+    // Lightweight heartbeat to the host's worker-stall watchdog. Called from
+    // inside the long synchronous serialization loops (modules / signal defs /
+    // signals / drivers) so the main thread keeps re-arming its heartbeat
+    // timeout even while the worker is CPU-bound in a tight WASM loop where the
+    // worker's own setInterval timer cannot fire. A postMessage to the main
+    // thread is delivered independently of the worker yielding, so the host
+    // receives it in real time.
+    #[wasm_bindgen(js_namespace = window, js_name = report_heartbeat)]
+    fn report_heartbeat();
 }
 
 /// Total number of discrete "unpacking to local storage" steps reported to the
@@ -99,6 +109,23 @@ const KDB_STORE_TOTAL_STEPS: u32 = 6;
 /// Best-effort progress report to the host UI. Never fails the store.
 fn report_step(step: u32, message: &str) {
     report_kdb_progress(step, KDB_STORE_TOTAL_STEPS, message);
+}
+
+/// How often (in records) to emit a heartbeat from inside a serialization loop.
+/// Small enough that no synchronous loop stretch can outlast the host's
+/// 'storing'-phase watchdog window; large enough that the wasm->JS FFI cost is
+/// negligible (a handful of calls even for hundreds of thousands of records).
+const HEARTBEAT_EVERY: u32 = 20000;
+
+/// Feed the host's worker-stall watchdog from inside a long synchronous loop.
+/// `count` is the 1-based record index; we fire once every `HEARTBEAT_EVERY`
+/// records. Delivery does not require the worker to yield (postMessage is
+/// independent of the worker event loop), so the main thread keeps resetting
+/// its heartbeat timeout throughout the CPU-bound serialize.
+fn keep_heartbeat_alive(count: u32, every: u32) {
+    if every > 0 && count % every == 0 {
+        report_heartbeat();
+    }
 }
 
 macro_rules! console_log {
@@ -416,7 +443,8 @@ async fn store_kdb_to_indexeddb(mut kdb_data: KnowledgeBase, kdb_id: &str) -> Re
     let mut name_pool: Vec<u8> = Vec::new();
     let mut child_pool: Vec<u8> = Vec::new();
     let mut skeleton_records: Vec<u8> = Vec::with_capacity(module_count * MODULE_RECORD_SIZE);
-    for module in &kdb_data.modules {
+    for (mi, module) in kdb_data.modules.iter().enumerate() {
+        keep_heartbeat_alive(mi as u32 + 1, HEARTBEAT_EVERY);
         let name_bytes = module.name.as_bytes();
         let name_off = name_pool.len() as u32;
         name_pool.extend_from_slice(name_bytes);
@@ -480,7 +508,15 @@ async fn store_kdb_to_indexeddb(mut kdb_data: KnowledgeBase, kdb_id: &str) -> Re
     //   decl_file_id:u32, decl_line:u32, direction:i32
     let mut regions: Vec<Vec<u8>> = Vec::with_capacity(module_count);
     let mut def_counts: Vec<u32> = Vec::with_capacity(module_count);
-    for module in &kdb_data.modules {
+    for (di, module) in kdb_data.modules.iter().enumerate() {
+        keep_heartbeat_alive(di as u32 + 1, HEARTBEAT_EVERY);
+        // Visibility into this otherwise-silent synchronous loop: log every
+        // 2000 modules so the console shows the signal-def serialization
+        // advancing (the worker yields nowhere here, so without this the gap
+        // between "Stored 17559 modules" and "Stored signal defs" looks hung).
+        if (di as u32 + 1) % 2000 == 0 {
+            store_log!("[WASM] Serializing signal defs... {}/{}", di + 1, module_count);
+        }
         let mut region: Vec<u8> = Vec::new();
         let defs = &module.signal_defs;
         def_counts.push(defs.len() as u32);
@@ -565,7 +601,15 @@ async fn store_kdb_to_indexeddb(mut kdb_data: KnowledgeBase, kdb_id: &str) -> Re
     // signals.bin : 18 bytes/record (msb u32, lsb u32, parent u32, driver_start u32, driver_count u16)
     const SIGNAL_RECORD_SIZE: usize = 18;
     let mut signals_buf: Vec<u8> = Vec::with_capacity(signal_insts.len() * SIGNAL_RECORD_SIZE);
-    for s in &signal_insts {
+    for (si, s) in signal_insts.iter().enumerate() {
+        keep_heartbeat_alive(si as u32 + 1, HEARTBEAT_EVERY);
+        // Visibility into this otherwise-silent synchronous loop (the biggest
+        // one: 541k records). Log every HEARTBEAT_EVERY records so the console
+        // shows the signal serialization advancing between the surrounding
+        // "Stored ..." prints.
+        if (si as u32 + 1) % HEARTBEAT_EVERY == 0 {
+            store_log!("[WASM] Serializing signals... {}/{}", si + 1, signal_count);
+        }
         signals_buf.extend_from_slice(&s.msb.to_le_bytes());
         signals_buf.extend_from_slice(&s.lsb.to_le_bytes());
         signals_buf.extend_from_slice(&s.parent_module_id.to_le_bytes());
@@ -590,7 +634,8 @@ async fn store_kdb_to_indexeddb(mut kdb_data: KnowledgeBase, kdb_id: &str) -> Re
     // drivers.bin : 12 bytes/record (driver_signal_global_id u64, line u32)
     const DRIVER_RECORD_SIZE: usize = 12;
     let mut drivers_buf: Vec<u8> = Vec::with_capacity(driver_locs.len() * DRIVER_RECORD_SIZE);
-    for d in &driver_locs {
+    for (dri, d) in driver_locs.iter().enumerate() {
+        keep_heartbeat_alive(dri as u32 + 1, HEARTBEAT_EVERY);
         drivers_buf.extend_from_slice(&d.driver_signal_global_id.to_le_bytes());
         drivers_buf.extend_from_slice(&d.line.to_le_bytes());
     }

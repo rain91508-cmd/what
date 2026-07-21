@@ -51,8 +51,37 @@ interface OPFSReaderResponse {
 
 let syncHandle: FileSystemSyncAccessHandle | null = null;
 let fileSize: number = 0;
+let fileBase: number = 0; // Absolute offset of this file inside source_content.bin
 let lineIndex: number[] = []; // Sparse line index: lineIndex[n] = byte offset of line (256*n + 1)
 const LINE_INDEX_STRIDE = 256; // One checkpoint every 256 lines
+
+// Per-file offset index for the concatenated source_content.bin (see
+// kdbDownload.worker.ts). Maps fileId -> { start, len }.
+async function loadSourceIndex(
+  kdbId: string,
+): Promise<Map<number, { start: number; len: number }> | null> {
+  try {
+    const root = await navigator.storage.getDirectory();
+    const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
+    const fh = await kdbDir.getFileHandle('source_index.bin', { create: false });
+    const file = await fh.getFile();
+    const buf = new Uint8Array(await file.arrayBuffer());
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    const count = dv.getUint32(0, true);
+    const map = new Map<number, { start: number; len: number }>();
+    let off = 4;
+    for (let i = 0; i < count; i++) {
+      const id = dv.getUint32(off, true);
+      const start = dv.getUint32(off + 4, true);
+      const len = dv.getUint32(off + 8, true);
+      map.set(id, { start, len });
+      off += 12;
+    }
+    return map;
+  } catch {
+    return null;
+  }
+}
 
 // ============================================
 // Helper Functions
@@ -63,9 +92,12 @@ const LINE_INDEX_STRIDE = 256; // One checkpoint every 256 lines
  */
 function readChunkAt(offset: number, length: number): Uint8Array {
   if (!syncHandle) throw new Error('OPFS not initialized');
-  
-  const buffer = new Uint8Array(length);
-  const bytesRead = syncHandle.read(buffer, { at: offset });
+  if (offset < 0) offset = 0;
+  const avail = Math.max(0, fileSize - offset);
+  const len = Math.min(length, avail);
+  if (len <= 0) return new Uint8Array(0);
+  const buffer = new Uint8Array(len);
+  const bytesRead = syncHandle.read(buffer, { at: fileBase + offset });
   return buffer.subarray(0, bytesRead);
 }
 
@@ -177,15 +209,26 @@ self.onmessage = async (event: MessageEvent<OPFSReaderMessage>) => {
         }
         
         try {
-          // Open OPFS file
+          // Open OPFS file. Prefer the concatenated source_content.bin (new
+          // layout) using this file's offset from source_index.bin; fall back to
+          // the legacy per-file `file_${fileId}.content` for older data.
           const root = await navigator.storage.getDirectory();
           const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
-          const fileHandle = await kdbDir.getFileHandle(`file_${fileId}.content`, { create: false });
+          const index = await loadSourceIndex(kdbId);
+          const entry = index?.get(fileId);
           
-          // Create sync access handle for efficient random access
-          // Use type assertion since createSyncAccessHandle is not yet in standard TypeScript lib
-          syncHandle = await (fileHandle as any).createSyncAccessHandle();
-          fileSize = syncHandle!.getSize();
+          let fileHandle: any;
+          if (entry) {
+            fileBase = entry.start;
+            fileHandle = await kdbDir.getFileHandle('source_content.bin', { create: false });
+            syncHandle = await (fileHandle as any).createSyncAccessHandle();
+            fileSize = entry.len;
+          } else {
+            fileBase = 0;
+            fileHandle = await kdbDir.getFileHandle(`file_${fileId}.content`, { create: false });
+            syncHandle = await (fileHandle as any).createSyncAccessHandle();
+            fileSize = syncHandle!.getSize();
+          }
           
           // Build line index
           const lineCount = await buildLineIndex();
