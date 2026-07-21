@@ -1431,7 +1431,22 @@ impl WaveformDataProvider {
                                             value: t.value,
                                         })
                                         .collect();
-                                    
+
+                                    // [DEBUG] LoD 0 cache format diagnostic: cached LoD 0 data stores
+                                    // time == 0 (only actual_time is persisted). Count how many are in the
+                                    // "cache zero-time" form vs carrying a real time, so we can confirm the
+                                    // format mismatch that previously dropped all transitions.
+                                    if lod == 0 {
+                                        let total = transitions.len();
+                                        let zero_time = transitions.iter().filter(|t| t.time == 0).count();
+                                        let boundary = transitions.iter().filter(|t| t.time == 0xFFFFFFFFFFFFFFFF).count();
+                                        console_log!(
+                                            "[WASM][DEBUG] cache lod0 read: signal='{}' tile={} total={} time==0={} boundary={} (actual_time sample={:?})",
+                                            signal_name, tile_id, total, zero_time, boundary,
+                                            transitions.iter().take(3).map(|t| t.actual_time).collect::<Vec<_>>()
+                                        );
+                                    }
+
                                     // For LoD 0: use same processing as server fetch
                                     // For LoD 1+: parse into bucket_data
                                     if lod == 0 {
@@ -2775,12 +2790,38 @@ if tile_missing_signals.is_empty() {
         let start_value = transitions.iter()
             .find(|t| t.time == BOUNDARY_TIME_START)
             .cloned();
-        
-        // Filter normal transitions within viewport
+
+        // Filter normal transitions within viewport.
+        //
+        // IMPORTANT (LoD 0 / cache bug):
+        // For LoD 0 the cache format stores `time = 0` (only `actual_time` is
+        // persisted, see opfs_cache.rs serialize/read_group_data_v2). The server
+        // path, by contrast, sets `time == actual_time` for LoD 0. Filtering on
+        // `t.time` therefore silently drops every transition when the data comes
+        // from the OPFS/memory cache (0 >= tile_start is always false), which is
+        // exactly why zooming to LoD 0 with cache enabled renders no transitions.
+        // `process_tile_transitions` is only ever called for LoD 0 (both callers
+        // guard on lod/level == 0), so filtering on `actual_time` is correct for
+        // every caller: server path has time == actual_time anyway, and the cache
+        // path keeps the real timestamp in `actual_time`.
         let normal_transitions: Vec<Transition> = transitions.into_iter()
-            .filter(|t| t.time != BOUNDARY_TIME_START && t.time >= viewport_start && t.time <= viewport_end)
+            .filter(|t| {
+                if t.time == BOUNDARY_TIME_START {
+                    return false;
+                }
+                let at = t.actual_time;
+                at >= viewport_start && at <= viewport_end
+            })
             .collect();
-        
+
+        // [DEBUG] LoD 0 transition filtering diagnostic
+        console_log!(
+            "[WASM][DEBUG] process_tile_transitions: viewport=[{},{}], start_value={}, normal_transitions={}",
+            viewport_start, viewport_end,
+            if start_value.is_some() { "some" } else { "none" },
+            normal_transitions.len()
+        );
+
         (start_value, normal_transitions)
     }
 
@@ -3755,9 +3796,13 @@ if tile_missing_signals.is_empty() {
                 signal_name: signal_name.to_string(),
             });
         }
-    }
 
-    /// Generate segments for LoD 1+ (min/max format) according to the drawing spec
+        // [DEBUG] LoD 0 segment generation diagnostic
+        console_log!(
+            "[WASM][DEBUG] generate_normal_segments: signal='{}' width={} normal_transitions_input={} segments_produced={}",
+            signal_name, width, transitions.len(), segments.len()
+        );
+    }
     /// 
     /// Drawing Rules:
     /// - First transition at/after viewport start: start value -> first transition
