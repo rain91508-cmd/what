@@ -47,10 +47,14 @@ export function postWorkerHeartbeat(): void {
   });
 }
 
-// Lightweight metadata only — the heavy per-256-line byte offsets are written
-// to the separate `source-file-line-index` store so the Files tab never loads them.
+// Lightweight metadata (what the Files tab needs) goes to the `source-file-info`
+// IndexedDB store. The heavy per-256-line byte offsets used for line seeking are
+// NOT stored in IDB (a ~36 MB blob there, plus a ~36 MB JS spike on first file
+// open when the whole bundle is read back). They are buffered during parse and
+// written once to OPFS as `source_line_index.bin` (see store_source_file_info /
+// writeLineIndexToOPFS), then read lazily per file.
 interface FileInfoRecord { id: number; path: string; name: string; fullName: string; totalLines: number; kdbId: string; }
-interface FileLineIndexRecord { id: number; lineIndexOffset: number[]; kdbId: string; }
+interface LineIndexChunk { id: number; offsets: number[]; }
 
 // Flat OPFS binary layout for signals + drivers (see lib.rs store path).
 //   signals.bin : SIGNAL_RECORD_SIZE bytes/record, indexed by signal global id
@@ -73,7 +77,15 @@ function getDb(): Promise<any> {
 }
 
 const _fileInfoBatch: FileInfoRecord[] = [];
-const _fileLineIndexBatch: FileLineIndexRecord[] = [];
+
+// Per-256-line byte offsets, buffered during parse and flushed ONCE to OPFS
+// (source_line_index.bin) at the end of load. Keyed by file id for lazy reads.
+const _lineIndexChunks: LineIndexChunk[] = [];
+// Caches for the OPFS-backed line index (read lazily, one file at a time).
+const _lineIndexBufferCache: Map<string, ArrayBuffer> = new Map();
+const _lineIndexTocCache: Map<string, Map<number, { off: number; num: number }>> = new Map();
+// Memory fallback when OPFS is unavailable (populated by writeLineIndexToOPFS).
+const _lineIndexMemoryCache: Map<string, Map<number, number[]>> = new Map();
 
 // Per-store "flush in flight" guard. The periodic timer in ensureFlushTimer()
 // and the in-line flushes from the store loop can race: both may try to flush
@@ -91,13 +103,12 @@ async function flushBatch<T>(storeName: string, batch: T[]): Promise<void> {
   try {
     const db = await getDb();
     if (!db) return;
-    if (storeName === 'source-file-info' || storeName === 'source-file-line-index') {
-      // Bundle ALL records into ONE put. This IDB backend costs ~0.4s PER put()
-      // (measured ~240s for 483 records), so we must not write them one-by-one.
-      // A single record (= one commit) is sub-second. The read helpers in
-      // indexedDB.ts unpack the bundle by id. One KDB is loaded at a time and
-      // clear_kdb_data truncates the store first, so keying the bundle by kdbId
-      // is unambiguous.
+    if (storeName === 'source-file-info') {
+      // Bundle ALL metadata records into ONE put. This IDB backend costs ~0.4s
+      // PER put() (measured ~240s for 483 records), so we must not write them
+      // one-by-one. A single record (= one commit) is sub-second. The read
+      // helper in indexedDB.ts unpacks the bundle by id. clear_kdb_data
+      // truncates the store first, so keying the bundle by kdbId is unambiguous.
       const sample = batch[0] as any;
       const kdbId = (sample && sample.kdbId) || '';
       await db.put(storeName, { id: kdbId, kdbId, records: batch });
@@ -131,16 +142,14 @@ async function flushBatch<T>(storeName: string, batch: T[]): Promise<void> {
 
 async function flushAllBatches(): Promise<void> {
   const nInfo = _fileInfoBatch.length;
-  const nLine = _fileLineIndexBatch.length;
   const t0 = performance.now();
   await Promise.all([
     flushBatch('source-file-info', _fileInfoBatch as any),
-    flushBatch('source-file-line-index', _fileLineIndexBatch as any),
   ]);
   const dt = performance.now() - t0;
-  if (dt > 50 || nInfo > 0 || nLine > 0) {
+  if (dt > 50 || nInfo > 0) {
     console.log(
-      `[${ts()}] [KdbStorage] flushAllBatches took ${dt.toFixed(0)}ms (info=${nInfo}, lineIdx=${nLine})`,
+      `[${ts()}] [KdbStorage] flushAllBatches took ${dt.toFixed(0)}ms (info=${nInfo})`,
     );
   }
 }
@@ -160,6 +169,18 @@ ensureFlushTimer();
 // Use `self` (not `window`) so it is available in both the window context and
 // Web Worker context — the worker imports this module and `window` is undefined there.
 (self as any).__flushKdbBatches = flushAllBatches;
+// Hook for the worker to flush the buffered line-index offsets to OPFS once,
+// after parsing completes (replaces the source-file-line-index IDB store).
+(self as any).__flushKdbLineIndex = writeLineIndexToOPFS;
+// Reset in-memory write buffers at the start of a fresh load so a reused worker
+// doesn't carry stale chunks/records from a previous (possibly aborted) load
+// into the next KDB (the line-index binary is keyed by the worker's kdbId, so a
+// stale chunk would otherwise be written under the wrong KDB).
+function resetKdbBatches(): void {
+  _fileInfoBatch.length = 0;
+  _lineIndexChunks.length = 0;
+}
+(self as any).__resetKdbBatches = resetKdbBatches;
 
 
 // Exposes IndexedDB operations to WASM as global functions
@@ -370,6 +391,123 @@ async function readSourceFileBytes(
   const file = await fh.getFile();
   const slice = file.slice(startByte, endByte);
   return new Uint8Array(await slice.arrayBuffer());
+}
+
+/**
+ * Write the buffered per-256-line byte offsets to OPFS as a single flat binary
+ * (`source_line_index.bin`), replacing the old `source-file-line-index` IndexedDB
+ * store. This removes a ~36 MB IDB blob (and the ~36 MB JS spike on first file
+ * open) — exactly the same reasoning that moved source content + signals to OPFS.
+ *
+ * Layout (all little-endian u32):
+ *   [ count ]
+ *   [ TOC:  count × (id, dataOffset, numOffsets) ]   dataOffset = absolute byte
+ *                                                      offset of this file's
+ *                                                      offsets within the file
+ *   [ DATA: concatenated u32 offsets, per file in order ]
+ */
+async function writeLineIndexToOPFS(kdbId: string): Promise<void> {
+  if (_lineIndexChunks.length === 0) return;
+  const chunks = _lineIndexChunks;
+  const n = chunks.length;
+  let totalOffsets = 0;
+  for (const c of chunks) totalOffsets += c.offsets.length;
+  const headerSize = 4 + n * 12;
+  const fileSize = headerSize + totalOffsets * 4;
+  const buf = new ArrayBuffer(fileSize);
+  const dv = new DataView(buf);
+  dv.setUint32(0, n, true);
+  let tocOff = 4;
+  let dataOff = headerSize;
+  for (const c of chunks) {
+    dv.setUint32(tocOff, c.id, true);
+    dv.setUint32(tocOff + 4, dataOff, true);
+    dv.setUint32(tocOff + 8, c.offsets.length, true);
+    tocOff += 12;
+    const offs = c.offsets;
+    for (let k = 0; k < offs.length; k++) {
+      dv.setUint32(dataOff + k * 4, offs[k] | 0, true);
+    }
+    dataOff += offs.length * 4;
+  }
+
+  const t0 = performance.now();
+  if (!isOpfsAvailable()) {
+    // No OPFS: keep the chunks in memory so reads still work (lost on reload).
+    const map = new Map<number, number[]>();
+    for (const c of chunks) map.set(c.id, c.offsets);
+    _lineIndexMemoryCache.set(kdbId, map);
+    _lineIndexChunks.length = 0;
+    console.log(
+      `[${ts()}] [KdbStorage] source_line_index kept in memory (no OPFS): ${n} files, ${totalOffsets} offsets`,
+    );
+    return;
+  }
+
+  const root = await navigator.storage.getDirectory();
+  const kdbDir = await root.getDirectoryHandle(kdbId, { create: true });
+  const fh: any = await kdbDir.getFileHandle('source_line_index.bin', { create: true });
+  const isWorker = typeof (self as any).Window === 'undefined';
+  if (isWorker && typeof fh.createSyncAccessHandle === 'function') {
+    // Worker context: sync access handle is available and avoids the per-call
+    // fsync cost of createWritable (same as source_content.bin).
+    const handle: any = await fh.createSyncAccessHandle();
+    handle.truncate(fileSize);
+    handle.write(new Uint8Array(buf), { at: 0 });
+    handle.flush();
+    handle.close();
+  } else {
+    const writable = await fh.createWritable();
+    await writable.write(new Uint8Array(buf));
+    await writable.close();
+  }
+  const dt = performance.now() - t0;
+  console.log(
+    `[${ts()}] [KdbStorage] source_line_index.bin write: ${dt.toFixed(0)}ms, ${n} files, ` +
+      `${totalOffsets} offsets, ${(fileSize / 1e6).toFixed(1)} MB`,
+  );
+  // Free the in-memory copy now that it is on disk.
+  _lineIndexChunks.length = 0;
+}
+
+/**
+ * Read the per-256-line byte offsets for a single source file from OPFS
+ * (source_line_index.bin), lazily and cached per KDB. Only the TOC (a few KB for
+ * hundreds of files) is materialised into JS; each file's offsets are returned as
+ * a zero-copy Int32Array view over the cached file buffer, so opening one file
+ * never loads the whole ~36 MB at once.
+ */
+async function getSourceLineIndex(kdbId: string, fileId: number): Promise<Int32Array | number[]> {
+  // Memory fallback (no OPFS).
+  const mem = _lineIndexMemoryCache.get(kdbId);
+  if (mem) return mem.get(fileId) || [];
+
+  let toc = _lineIndexTocCache.get(kdbId);
+  let buffer = _lineIndexBufferCache.get(kdbId);
+  if (!toc || !buffer) {
+    if (!isOpfsAvailable()) return [];
+    const root = await navigator.storage.getDirectory();
+    const kdbDir = await root.getDirectoryHandle(kdbId, { create: false });
+    const fh = await kdbDir.getFileHandle('source_line_index.bin', { create: false });
+    const file = await fh.getFile();
+    buffer = await file.arrayBuffer();
+    const dv = new DataView(buffer);
+    const n = dv.getUint32(0, true);
+    toc = new Map<number, { off: number; num: number }>();
+    let t = 4;
+    for (let i = 0; i < n; i++) {
+      const id = dv.getUint32(t, true);
+      const dataOffset = dv.getUint32(t + 4, true);
+      const num = dv.getUint32(t + 8, true);
+      toc.set(id, { off: dataOffset, num });
+      t += 12;
+    }
+    _lineIndexBufferCache.set(kdbId, buffer);
+    _lineIndexTocCache.set(kdbId, toc);
+  }
+  const entry = toc.get(fileId);
+  if (!entry) return [];
+  return new Int32Array(buffer!, entry.off, entry.num);
 }
 
 /**
@@ -592,19 +730,13 @@ async function store_source_file_info(
     kdbId,
   });
 
-  // Heavy per-256-line byte offsets — stored separately so the Files tab never
-  // loads them. Only read back when a file is actually opened (line seeking).
-  _fileLineIndexBatch.push({
-    id,
-    lineIndexOffset: lineIndexOffset || [],
-    kdbId,
-  });
+  // Heavy per-256-line byte offsets — buffered for a single OPFS write at the
+  // end of load (writeLineIndexToOPFS), NOT per-record IDB puts. Read back lazily
+  // only when a file is actually opened for line seeking (getSourceLineIndex).
+  _lineIndexChunks.push({ id, offsets: lineIndexOffset || [] });
 
   if (_fileInfoBatch.length >= STORE_BATCH_SIZE) {
     await flushBatch('source-file-info', _fileInfoBatch as any);
-  }
-  if (_fileLineIndexBatch.length >= STORE_BATCH_SIZE) {
-    await flushBatch('source-file-line-index', _fileLineIndexBatch as any);
   }
 }
 
@@ -715,7 +847,7 @@ async function get_source_file_content_by_range(
 
 /**
  * Get source file content by line range using index offset
- * First gets the line_index_offset from IndexedDB, then reads from OPFS
+ * First gets the line_index_offset from OPFS (source_line_index.bin), then reads content from OPFS
  */
 async function get_source_file_lines_by_range(
   fileId: number,
@@ -733,9 +865,9 @@ async function get_source_file_lines_by_range(
     throw new Error(`File info not found: ${fileId}`);
   }
   
-  // Line offset index lives in its own store (`source-file-line-index`), read
-  // lazily only when a file is opened for line seeking.
-  const lineIndexOffset: number[] = await indexedDBManager.getSourceFileLineIndex(fileId, kdbId);
+  // Per-256-line byte offsets live in OPFS (source_line_index.bin), read lazily
+  // only when a file is actually opened for line seeking.
+  const lineIndexOffset = await getSourceLineIndex(kdbId, fileId);
   const totalLines: number = fileInfo.totalLines || 0;
   
   // Validate line range
@@ -800,6 +932,12 @@ async function clear_kdb_data(kdbId: string): Promise<void> {
   // Drop any cached source-content offset index for this KDB so the next load
   // re-reads source_index.bin (or falls back to legacy per-file content).
   _sourceIndexCache.delete(kdbId);
+  // Drop cached OPFS line-index state for this KDB (the OPFS dir itself is
+  // removed below, which deletes source_line_index.bin).
+  _lineIndexTocCache.delete(kdbId);
+  _lineIndexBufferCache.delete(kdbId);
+  _lineIndexMemoryCache.delete(kdbId);
+  _lineIndexChunks.length = 0;
   await indexedDBManager.initialize();
   const db = (indexedDBManager as any).db;
   if (!db) throw new Error('IndexedDB not initialized');

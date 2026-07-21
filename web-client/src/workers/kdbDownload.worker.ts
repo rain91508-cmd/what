@@ -697,6 +697,7 @@ async function downloadAndStoreKDB(
     }
     
     // Call WASM to parse and store
+    if ((self as any).__resetKdbBatches) (self as any).__resetKdbBatches();
     const designName = await wasmModule.parse_and_store_kdb(kdbId, kdbData);
     
     if (!designName) {
@@ -709,6 +710,14 @@ async function downloadAndStoreKDB(
     const tw0 = performance.now();
     await opfsWriter.waitForAll();
     console.log(`[${ts()}] [KDBWorker] waitForAll (source_content.bin) took ${(performance.now() - tw0).toFixed(0)}ms`);
+
+    // Flush the per-256-line byte offsets to OPFS as source_line_index.bin (one
+    // flat binary; replaces the old source-file-line-index IDB store).
+    const tl0 = performance.now();
+    if ((self as any).__flushKdbLineIndex) {
+      await (self as any).__flushKdbLineIndex(kdbId);
+    }
+    console.log(`[${ts()}] [KDBWorker] __flushKdbLineIndex (OPFS) took ${(performance.now() - tl0).toFixed(0)}ms`);
 
     // Flush any buffered IndexedDB records (the per-record store_* calls
     // batch writes; the final partial batch must be flushed before we
