@@ -25,6 +25,7 @@ export interface Translations {
     connect: string;
     disconnect: string;
     openKdb: string;
+    openCachedKdb: string;
     openWaveform: string;
     closeKdb: string;
     closeWaveform: string;
@@ -57,6 +58,7 @@ export interface Translations {
     connect: string;
     connected: string;
     openKdb: string;
+    openCachedKdb: string;
     openWaveform: string;
     zoomIn: string;
     zoomOut: string;
@@ -114,6 +116,17 @@ export interface Translations {
       selectPrompt: string;
       filterPlaceholder: string;
       size: string;
+    };
+    // Cached (local IDB/OPFS) KDB Selection
+    cachedKdb: {
+      title: string;
+      loading: string;
+      error: string;
+      empty: string;
+      noMatching: string;
+      selectPrompt: string;
+      filterPlaceholder: string;
+      open: string;
     };
     // Wave Selection
     waveSelection: {

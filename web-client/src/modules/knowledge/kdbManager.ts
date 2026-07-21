@@ -136,10 +136,43 @@ class KdbManager {
   }
 
   /**
+   * Open a KDB that is already stored in the local IDB/OPFS cache (no server
+   * download). Verifies a record exists in the `knowledge-base` store, then
+   * loads modules + signal instances into memory exactly like the post-download
+   * path. Returns false if no cached data is found for the given id.
+   */
+  async openCachedKdb(kdbId: string): Promise<boolean> {
+    if (this.downloading) {
+      console.warn('[KdbManager] Download in progress; ignoring openCachedKdb');
+      return false;
+    }
+    if (!kdbId) return false;
+
+    // Verify the KDB was actually cached locally (OPFS holds the real data)
+    // before claiming it "loaded". This succeeds for legacy caches too, which
+    // may not have an IndexedDB header or header.json.
+    const exists = await indexedDBManager.knowledgeBaseExists(kdbId);
+    if (!exists) {
+      console.warn('[KdbManager] No cached KDB found for id:', kdbId);
+      return false;
+    }
+
+    try {
+      this.currentKdbId = kdbId;
+      await this.loadKdbData();
+      console.log('[KdbManager] Opened cached KDB:', kdbId);
+      return true;
+    } catch (error) {
+      console.error('[KdbManager] Failed to open cached KDB:', error);
+      this.currentKdbId = null;
+      return false;
+    }
+  }
+
+  /**
    * Load KDB data from IndexedDB into memory
    */
-  private async loadKdbData(): Promise<void> {
-    if (!this.currentKdbId) return;
+  private async loadKdbData(): Promise<void> {    if (!this.currentKdbId) return;
     
     // Load only module *skeletons* (no signalDefs) — the heavy signal
     // definitions stay in IndexedDB and are fetched lazily, per module, when a

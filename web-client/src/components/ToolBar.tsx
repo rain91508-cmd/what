@@ -42,6 +42,7 @@ interface ToolBarProps {
   maxWaveformTimeLod0?: number;
   onConnect?: () => void;
   onOpenKdb?: () => void;
+  onOpenCachedKdb?: () => void;
   onOpenWaveform?: () => void;
   connected?: boolean;
   onRefreshCheck?: () => void;
@@ -104,6 +105,7 @@ export function ToolBar({
   maxWaveformTimeLod0 = 1000000,
   onConnect,
   onOpenKdb,
+  onOpenCachedKdb,
   onOpenWaveform,
   connected = false,
   onRefreshCheck,
@@ -586,6 +588,13 @@ export function ToolBar({
         onClick={onOpenKdb}
       >
         📂
+      </button>
+      <button
+        className="tool-bar-button"
+        title={t('toolbar.openCachedKdb')}
+        onClick={onOpenCachedKdb}
+      >
+        💾
       </button>
       <button
         className="tool-bar-button"
