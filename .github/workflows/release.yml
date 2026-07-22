@@ -4,7 +4,8 @@ name: Build & Release Binaries
 # uploads them as downloadable assets on a GitHub Release.
 #
 # The server package is self-contained: it bundles the compiled web client
-# (./web) plus the example KDB/FST data (./kdb, ./waves), so a user can just
+# (./web) plus the example KDB data (./kdb). Example wave (FST) data is
+# optional - it is only bundled if present (./waves) - so a user can just
 # run the extracted server and open the bundled web UI against the example.
 #
 # Release version is determined by the Git tag:
@@ -416,7 +417,12 @@ jobs:
           cp "$BIN" pkg/what-server
           cp -r web-dist/. pkg/web/
           cp server/examples/kdb/* pkg/kdb/
-          cp server/examples/waves/* pkg/waves/
+          # waves are optional: the example .fst files may have been removed.
+          if compgen -G "server/examples/waves/*" > /dev/null; then
+            cp server/examples/waves/* pkg/waves/
+          else
+            echo "No example waves found, packaging without them."
+          fi
           tar -czf what-server-linux-x86_64.tar.gz -C pkg .
 
       - name: Upload artifact
@@ -472,7 +478,12 @@ jobs:
           cp "$BIN" pkg/what-server
           cp -r web-dist/. pkg/web/
           cp server/examples/kdb/* pkg/kdb/
-          cp server/examples/waves/* pkg/waves/
+          # waves are optional: the example .fst files may have been removed.
+          if compgen -G "server/examples/waves/*" > /dev/null; then
+            cp server/examples/waves/* pkg/waves/
+          else
+            echo "No example waves found, packaging without them."
+          fi
           tar -czf what-server-linux-arm64.tar.gz -C pkg .
 
       - name: Upload artifact
@@ -536,7 +547,12 @@ jobs:
           Copy-Item $bin pkg/what-server.exe
           Copy-Item -Recurse -Force web-dist/* pkg/web/
           Copy-Item -Recurse -Force server/examples/kdb/* pkg/kdb/
-          Copy-Item -Recurse -Force server/examples/waves/* pkg/waves/
+          # waves are optional: the example .fst files may have been removed.
+          if (Test-Path server/examples/waves/*) {
+            Copy-Item -Recurse -Force server/examples/waves/* pkg/waves/
+          } else {
+            Write-Host "No example waves found, packaging without them."
+          }
           Compress-Archive -Path pkg/* -DestinationPath what-server-windows-x86_64.zip
 
       - name: Upload artifact
