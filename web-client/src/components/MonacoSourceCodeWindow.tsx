@@ -108,6 +108,22 @@ function MonacoSourceCodeWindow({
   const largeFileControllerRef = useRef<LargeFileController | null>(null);
   const isLargeFileModeRef = useRef(false);
 
+  // Refs mirroring the latest props so the Monaco event listeners (which are
+  // attached exactly ONCE on editor mount, via onMount) always read up-to-date
+  // values instead of the stale closure captured at mount time.
+  //
+  // Without this, after a trace-driver jumps the source to a new module scope,
+  // the click handler keeps using the mount-time module range and silently
+  // blocks every click (returning *before* onWordClick is invoked) — which
+  // looked like "double-click does nothing, no console prints".
+  const onWordClickRef = useRef(onWordClick);
+  onWordClickRef.current = onWordClick;
+  const moduleRangeRef = useRef<{ start?: number | null; end?: number | null }>({
+    start: moduleStartLine,
+    end: moduleEndLine,
+  });
+  moduleRangeRef.current = { start: moduleStartLine, end: moduleEndLine };
+
   // In windowed (large-file) mode the Monaco model only holds lines
   // [windowStartLine, windowStartLine + N - 1], so absolute file line numbers
   // must be shifted into model-relative (1-based) coordinates.
@@ -1043,7 +1059,7 @@ function MonacoSourceCodeWindow({
       }
     }
 
-    // Handle single click - use onMouseDown
+    // Handle single click (and double-click detection) - use onMouseDown
     const handleMouseDown = (e: monaco.editor.IEditorMouseEvent) => {
       if (e.target.type !== monaco.editor.MouseTargetType.CONTENT_TEXT) return;
 
@@ -1052,14 +1068,14 @@ function MonacoSourceCodeWindow({
 
       const lineNumber = position.lineNumber;
 
-      // Check if line is within module range (if module info is available).
-      // If outside, still allow the click — the signal might belong to a
-      // parent or sibling module in the same source file. The App's
-      // handleWordClick will do a broader search if needed.
-      if (moduleStartLine && moduleEndLine) {
-        if (lineNumber < moduleStartLine || lineNumber > moduleEndLine) {
-          console.log('[Monaco] Word click outside module range, but allowing');
-          // Don't return — let App.tsx handle it with broader search
+      // Check if line is within the CURRENT module range (read live via ref so
+      // it always reflects the displayed scope, not the mount-time closure).
+      // If outside, block the click — the signal belongs to a different module
+      // and should not be traced from this scope.
+      const { start: modStart, end: modEnd } = moduleRangeRef.current;
+      if (modStart && modEnd) {
+        if (lineNumber < modStart || lineNumber > modEnd) {
+          return; // Outside range, do nothing
         }
       }
 
@@ -1072,46 +1088,13 @@ function MonacoSourceCodeWindow({
 
       const word = wordInfo.word;
 
-      // Call the callback for single click
-      if (onWordClick) {
-        onWordClick(word, lineNumber, false); // false = single click
-      }
-    };
+      // detail === 2 indicates a double click (Monaco's IMouseEvent carries the
+      // click count). Fall back to single-click otherwise.
+      const isDoubleClick = e.event.detail === 2;
 
-    // Handle double click - use onDidChangeCursorSelection (Monaco's built-in double click detection)
-    const handleSelectionChange = (e: monaco.editor.ICursorSelectionChangedEvent) => {
-      // Check if this is a double-click selection (selection is not empty and reason is 'word')
-      if (e.reason !== monaco.editor.CursorChangeReason.Explicit) return;
-
-      const selection = e.selection;
-      if (selection.isEmpty()) return;
-
-      // Check if it's a single line selection (word selection from double click)
-      if (selection.startLineNumber !== selection.endLineNumber) return;
-
-      const lineNumber = selection.startLineNumber;
-
-      // Check if line is within module range (if module info is available).
-      // If outside, still allow the click — the signal might belong to a
-      // parent or sibling module in the same source file. The App's
-      // handleWordClick will do a broader search if needed.
-      if (moduleStartLine && moduleEndLine) {
-        if (lineNumber < moduleStartLine || lineNumber > moduleEndLine) {
-          console.log('[Monaco] Word click outside module range, but allowing');
-          // Don't return — let App.tsx handle it with broader search
-        }
-      }
-
-      // Get the selected text (word)
-      const model = editor.getModel();
-      if (!model) return;
-
-      const word = model.getValueInRange(selection);
-      if (!word) return;
-
-      // Call the callback for double click
-      if (onWordClick) {
-        onWordClick(word, lineNumber, true); // true = double click
+      // Call the callback (live ref, always up to date)
+      if (onWordClickRef.current) {
+        onWordClickRef.current(word, lineNumber, isDoubleClick);
       }
     };
 
@@ -1125,8 +1108,9 @@ function MonacoSourceCodeWindow({
       if (!lineNumber) return;
 
       // Check if line is within display module range (same logic as driver lookup)
-      if (moduleStartLine && moduleEndLine) {
-        if (lineNumber < moduleStartLine || lineNumber > moduleEndLine) {
+      const { start: modStart, end: modEnd } = moduleRangeRef.current;
+      if (modStart && modEnd) {
+        if (lineNumber < modStart || lineNumber > modEnd) {
           return; // Silently ignore clicks outside module range
         }
       }
@@ -1136,7 +1120,6 @@ function MonacoSourceCodeWindow({
 
     // Subscribe to events
     const disposable1 = editor.onMouseDown(handleMouseDown);
-    const disposable2 = editor.onDidChangeCursorSelection(handleSelectionChange);
     const disposable4 = editor.onMouseDown(handleGlyphMarginClick);
 
     // Handle scroll for large file mode
@@ -1211,11 +1194,10 @@ function MonacoSourceCodeWindow({
       }
 
       disposable1.dispose();
-      disposable2.dispose();
       disposable3.dispose();
       disposable4.dispose();
     };
-  }, [highlightLine, applyHighlight, moduleStartLine, moduleEndLine, content, applyGrayOutDecoration, onWordClick, windowStartLine, toggleLineExpansion, displayModuleIndex, fileId, tabId]);
+  }, [highlightLine, applyHighlight, content, applyGrayOutDecoration, windowStartLine, toggleLineExpansion, displayModuleIndex, fileId, tabId]);
 
   // Save editor state when component unmounts
   // Note: We don't rely on this for expandedLines since the ref may be reset on remount
