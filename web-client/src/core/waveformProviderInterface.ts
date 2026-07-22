@@ -175,7 +175,7 @@ export interface ProviderConfig {
   timeStamp: number;
   enableOpfs?: boolean;
   enableMemoryCache?: boolean;
-  // Whether to prefetch neighbouring waveform tiles in the background (optional, defaults to true)
+  // Whether to prefetch neighbouring waveform tiles in the background (optional, defaults to false)
   enablePrefetch?: boolean;
 }
 

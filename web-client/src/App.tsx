@@ -207,9 +207,9 @@ function App() {
 
   // Waveform data prefetch enabled state
   const [prefetchEnabled, setPrefetchEnabled] = useState<boolean>(() => {
-    // Check localStorage for saved preference, default to true
+    // Check localStorage for saved preference, default to false (disabled)
     const saved = localStorage.getItem('prefetch_enabled');
-    return saved !== 'false'; // Default to true if not set
+    return saved === 'true'; // Default to false if not set
   })
   
   // Helper function to create default groups

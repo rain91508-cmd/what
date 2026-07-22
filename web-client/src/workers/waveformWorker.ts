@@ -48,7 +48,7 @@ let currentRenderTask: RenderTask | null = null;
 let prefetchTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingPrefetchSignals: string[] | null = null;
 let lastRenderSignalNames: string[] = []; // 最近一次渲染的信号名，用于切换预取开关后立即触发
-let prefetchEnabled = true; // 是否在渲染后预取相邻 tile（可由 SET_PREFETCH_ENABLED 或初始化配置控制）
+let prefetchEnabled = false; // 是否在渲染后预取相邻 tile（可由 SET_PREFETCH_ENABLED 或初始化配置控制）
 const PREFETCH_DELAY_MS = 500; // 延迟500ms后才开始预取，避免频繁渲染时触发
 
 // 请求队列（用于处理并发请求）
@@ -366,7 +366,7 @@ async function handleInitialize(payload: any, id: number): Promise<void> {
   }
 
   // 设置预取开关
-  prefetchEnabled = config.enablePrefetch !== undefined ? config.enablePrefetch : true;
+  prefetchEnabled = config.enablePrefetch !== undefined ? config.enablePrefetch : false;
 
   sendSuccess(id, null);
 }
