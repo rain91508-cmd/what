@@ -2065,6 +2065,126 @@ function App() {
     addMessage(`Open source at ${signal.name} declaration (line ${line})`);
   };
 
+  // Trace drivers of a signal (mirrors double-click on a signal in the source
+  // tab). Opens a NEW source tab and jumps to the first driver. If the signal
+  // has no drivers, does nothing.
+  const handleWaveformSignalTraceDriver = async (signal: Signal & { unique_id: number }) => {
+    console.log('[App] handleWaveformSignalTraceDriver called, signal:', signal.name, 'globalId:', signal.globalId);
+
+    const signalGlobalId = signal.globalId;
+    if (!signalGlobalId) {
+      addMessage(`No globalId for signal: ${signal.name}`);
+      return;
+    }
+
+    // Get drivers for this signal
+    const driverLocations = await kdbManager.getDriverBySignalId(signalGlobalId);
+    console.log('[App] driverLocations:', driverLocations);
+
+    // If there is no driver, do nothing.
+    if (!driverLocations || driverLocations.length === 0) {
+      return;
+    }
+
+    // Build the target signal info (for the driver group label).
+    const fullSignal = await kdbManager.buildSignal(signalGlobalId);
+    if (!fullSignal) {
+      addMessage(`Cannot find signal info for ${signal.name}`);
+      return;
+    }
+
+    // Add a driver group so it shows up in the Drivers tab.
+    const { driverManager } = await import('./modules/knowledge/driverManager');
+    const driversWithDeclaration = await Promise.all(driverLocations.map(async (d) => {
+      const driverSignal = await kdbManager.buildSignal(d.driverSignalGlobalId);
+      return {
+        driverSignalGlobalId: d.driverSignalGlobalId,
+        line: d.line,
+        driverDeclarationLine: driverSignal?.declaration?.line,
+      };
+    }));
+
+    // Click location = the target signal's own declaration (where the user
+    // "clicked" from the waveform).
+    let clickFileId = fullSignal.declaration?.fileId || 0;
+    let clickFileName = '';
+    if (clickFileId) {
+      const fileInfo = await kdbManager.getFileInfo(clickFileId);
+      if (fileInfo) clickFileName = fileInfo.fullName;
+    }
+
+    driverManager.addDriverGroup({
+      targetSignal: {
+        globalId: signalGlobalId,
+        fullName: fullSignal.fullName,
+        parentModuleId: fullSignal.parentModuleId,
+      },
+      clickLocation: {
+        fileId: clickFileId || 0,
+        lineNumber: fullSignal.declaration?.line || 0,
+        fileName: clickFileName || 'Unknown',
+      },
+      drivers: driversWithDeclaration,
+    });
+
+    addMessage(`Added ${driverLocations.length} driver(s) for signal: ${signal.name}`);
+
+    // Jump to the FIRST driver in a NEW source tab.
+    const firstDriver = driverLocations[0];
+    const driverSignal = await kdbManager.buildSignal(firstDriver.driverSignalGlobalId);
+    if (!driverSignal) {
+      addMessage(`Driver signal not found: ${firstDriver.driverSignalGlobalId}`);
+      return;
+    }
+
+    const driverModuleId = driverSignal.parentModuleId;
+    const driverModule = kdbManager.getModuleById(driverModuleId);
+    if (!driverModule) {
+      addMessage(`Parent module not found for driver signal: ${driverSignal.name}`);
+      return;
+    }
+
+    const driverFileId = driverModule.definition?.fileId;
+    if (!driverFileId) {
+      addMessage(`File not found for driver signal: ${driverSignal.name}`);
+      return;
+    }
+
+    // Determine display range based on the driver's parent module.
+    let displayStartLine: number | undefined;
+    let displayEndLine: number | undefined;
+    if (!driverModule.isInstance) {
+      displayStartLine = driverModule.definition?.startLine;
+      displayEndLine = driverModule.definition?.endLine;
+    } else {
+      const defModuleId = driverModule.defModuleId;
+      if (defModuleId > 0) {
+        const defModule = kdbManager.getModuleById(defModuleId);
+        displayStartLine = defModule?.definition?.startLine;
+        displayEndLine = defModule?.definition?.endLine;
+      }
+    }
+
+    // Open a new source tab focused on the driver.
+    const sourceCounter = tabCounters.current.source++;
+    const newId = `source-${sourceCounter}`;
+    const newTab: Tab = {
+      id: newId,
+      label: `Source ${sourceCounter}`,
+      type: 'source',
+      moduleIndex: driverModuleId,
+      displayModuleIndex: driverModuleId,
+      signalDeclarationLine: firstDriver.line,
+      moduleStartLine: displayStartLine,
+      moduleEndLine: displayEndLine,
+    };
+    setTabs(prev => [...prev, newTab]);
+    setActiveTab(newId);
+
+    setTimeout(() => addNavigationEntry(driverFileId, firstDriver.line, driverModuleId), 0);
+    addMessage(`Jump to driver: ${driverSignal.name} (line ${firstDriver.line})`);
+  };
+
   // Calculate module chain from root to target module
   const getModuleChain = (targetModuleId: number): number[] => {
     const chain: number[] = [];
@@ -4609,6 +4729,7 @@ function App() {
                   ));
                 }}
                 onSignalDoubleClick={handleWaveformSignalDoubleClick}
+                onSignalTraceDriver={handleWaveformSignalTraceDriver}
                 onMessage={addMessage}
                 onSignalNotFound={handleSignalNotFoundFromRender}
               />

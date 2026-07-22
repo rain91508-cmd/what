@@ -127,8 +127,12 @@ interface WaveformWindowProps {
   wavemarks?: Wavemark[];
   // Signal selection callback
   onSignalSelect?: (signal: Signal & { unique_id: number }) => void;
-  // Signal double click callback (jump to declaration)
+  // Signal double click callback (jump to declaration). Now triggered by
+  // double-clicking the rendered waveform canvas.
   onSignalDoubleClick?: (signal: Signal & { unique_id: number }) => void;
+  // Signal trace-driver callback (open new source tab at first driver). Now
+  // triggered by double-clicking a signal row in the signal panel.
+  onSignalTraceDriver?: (signal: Signal & { unique_id: number }) => void;
   // Message log callback (e.g. to surface zoom/LOD info in the global console)
   onMessage?: (msg: string) => void;
   // Called when a signal was added but the server reported it as not found
@@ -216,6 +220,7 @@ export function WaveformWindow({
   wavemarks = [],
   onSignalSelect,
   onSignalDoubleClick,
+  onSignalTraceDriver,
   onMessage,
   onSignalNotFound,
   activeTabId,
@@ -1328,11 +1333,31 @@ export function WaveformWindow({
     };
   }, []);
 
-  // 鼠标按下：立即设置 cursor 并开始选择
-  // 注意：Canvas 坐标是相对于 canvas 元素的，canvas 从 Info Bar 下方开始
+  // Canvas 坐标是相对于 canvas 元素的，canvas 从 Info Bar 下方开始
   // 所以 canvas 内的 y 坐标 0 对应的是 Ruler 的顶部
   const RULER_HEIGHT = 20; // 标尺区域高度（在 canvas 内）
   const SIGNAL_ROW_HEIGHT = 24; // 信号行高度，与 CSS 中的 .waveform-signal-item 高度一致
+
+  // 根据 canvas 内的 Y 坐标找到对应的可见 treeNode（考虑 group 占位）
+  const getTreeNodeAtCanvasY = (y: number): TreeNode | null => {
+    const signalY = y - RULER_HEIGHT;
+    const visibleRowIndex = Math.floor(signalY / SIGNAL_ROW_HEIGHT);
+    const nodeIndex = visibleRowIndex + (visibleRangeRef.current?.start ?? 0);
+    return treeNodes[nodeIndex] ?? null;
+  };
+
+  // 在渲染的波形 canvas 上双击：跳转到该信号声明（与 .waveform-signal-item 原行为一致）
+  const handleCanvasDoubleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    // 标尺区域双击不做任何事
+    if (y < RULER_HEIGHT) return;
+    const node = getTreeNodeAtCanvasY(y);
+    if (node?.type === 'signal' && node.signal) {
+      onSignalDoubleClick?.(node.signal as Signal & { unique_id: number });
+    }
+  }, [getTreeNodeAtCanvasY, onSignalDoubleClick]);
 
   const handleCanvasMouseDown = useCallback(async (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current) return;
@@ -2981,10 +3006,10 @@ export function WaveformWindow({
                         }}
                         onDoubleClick={(e) => {
                           e.stopPropagation();
-                          onSignalDoubleClick?.(signal);
+                          onSignalTraceDriver?.(signal);
                         }}
                         style={{ cursor: 'pointer' }}
-                        title="Double-click to jump to declaration, drag to Signal Panel"
+                        title="Double-click to trace driver, drag to Signal Panel"
                       >
                         {getSignalDisplayName(signal)}
                       </span>
@@ -3630,6 +3655,7 @@ export function WaveformWindow({
             onMouseMove={handleCanvasMouseMove}
             onMouseUp={handleCanvasMouseUp}
             onMouseLeave={handleCanvasMouseLeave}
+            onDoubleClick={handleCanvasDoubleClick}
           />
           {/* Cursor vertical line - HTML overlay */}
           {cursor.visible && (
