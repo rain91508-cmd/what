@@ -98,3 +98,6 @@ __pycache__/
 *.tmp
 *.temp
 *.bak
+
+# Waveform files
+*.fst
