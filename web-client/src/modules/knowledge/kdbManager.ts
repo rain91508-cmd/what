@@ -1013,20 +1013,20 @@ class KdbManager {
   /**
    * JS fallback for finding signal by name.
    * Searches the given module first, then recursively searches child modules.
-   * Falls back to searching the parent module if not found in children.
-   * This is needed because source code files often contain signals from multiple
-   * child modules (e.g., a top-level file listing all submodule ports), and also
-   * because the source tab may be opened for a child module while the signal
-   * declaration is in the parent's file.
+   * If not found, also searches parent modules up to the root.
+   * This handles the common case where a source file references signals from
+   * child modules (submodule ports), sibling instances, or parent modules.
    */
-  private async findSignalByNameJS(moduleId: number, signalName: string, visited?: Set<number>): Promise<number | null> {
-    const module = this.getModuleById(moduleId);
-    if (!module) return null;
-
-    // Track visited modules to prevent infinite recursion
-    if (!visited) visited = new Set<number>();
+  private async findSignalByNameJS(
+    moduleId: number,
+    signalName: string,
+    visited: Set<number> = new Set(),
+  ): Promise<number | null> {
     if (visited.has(moduleId)) return null;
     visited.add(moduleId);
+
+    const module = this.getModuleById(moduleId);
+    if (!module) return null;
 
     // Search this module's signal defs
     const signalDefs = await this.getSignalDefs(moduleId);
@@ -1050,25 +1050,20 @@ class KdbManager {
       }
     }
 
-    // Not found in this module — search child modules.
-    // This handles the case where a parent module's source file contains
-    // port declarations for child module signals.
-    const childIds = module.childModuleIds || [];
-    for (const childId of childIds) {
+    // Not found in this module — search child modules recursively.
+    for (const childId of (module.childModuleIds || [])) {
       const result = await this.findSignalByNameJS(childId, signalName, visited);
       if (result !== null) {
-        console.log(`[KdbManager] Found signal via JS in child module ${childId}: ${signalName} at globalId=${result}`);
         return result;
       }
     }
 
-    // Not found in children either — search the parent module.
-    // This handles the case where a child module's source tab is open
-    // but the signal declaration is in the parent module's file.
-    if (module.parentModuleId > 0) {
+    // Not found in children either — search parent module.
+    // This handles signals declared in the parent scope that are referenced
+    // from a child module's source file.
+    if (module.parentModuleId > 0 && !visited.has(module.parentModuleId)) {
       const result = await this.findSignalByNameJS(module.parentModuleId, signalName, visited);
       if (result !== null) {
-        console.log(`[KdbManager] Found signal via JS in parent module ${module.parentModuleId}: ${signalName} at globalId=${result}`);
         return result;
       }
     }
