@@ -520,7 +520,12 @@ async function downloadWithResume(
 ): Promise<Uint8Array> {
   if (!currentDownload) throw new Error('Download not initialized');
   
-  const chunks: Uint8Array[] = [];
+  // §3.9: Use a single pre-allocated buffer instead of chunks[] + combined.
+  // This eliminates the intermediate chunks[] array (holding references to
+  // every chunk) and the final copy into combined. For a 500MB KDB this
+  // saves ~500MB of peak JS heap memory (the chunks array + its contents
+  // are freed immediately instead of living until the final combine step).
+  const kdbData = new Uint8Array(totalSize);
   let downloaded = currentDownload.downloaded;
   let lastChunkTime = Date.now();
   
@@ -577,7 +582,7 @@ async function downloadWithResume(
         throw new Error('No response body');
       }
       
-      // Read stream with stall detection
+      // Read stream with stall detection — write directly into the pre-allocated buffer
       const reader = response.body.getReader();
       
       try {
@@ -593,7 +598,8 @@ async function downloadWithResume(
           if (done) break;
           if (!value) continue;
           
-          chunks.push(value);
+          // Write chunk directly into the pre-allocated buffer
+          kdbData.set(value, downloaded);
           downloaded += value.length;
           lastChunkTime = Date.now();
           
@@ -636,17 +642,7 @@ async function downloadWithResume(
     }
   }
   
-  // Combine all chunks
-  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const combined = new Uint8Array(totalLength);
-  let position = 0;
-  
-  for (const chunk of chunks) {
-    combined.set(chunk, position);
-    position += chunk.length;
-  }
-  
-  return combined;
+  return kdbData;
 }
 
 async function checkRangeSupport(baseUrl: string, kdbName: string): Promise<boolean> {
@@ -814,7 +810,22 @@ async function downloadAndStoreKDB(
     // Download with resume and stall detection
     const kdbData = await downloadWithResume(kdbName, baseUrl, totalSize);
 
-    await storeKdbBytesInStorage(kdbData, kdbId);
+    // §3.9: Use streaming parser API — validates magic, decompresses, parses,
+    // and stores. The kdbData buffer is released as soon as WASM copies it.
+    if (wasmModule && (wasmModule as any).KdbStreamParser) {
+      const KdbStreamParser = (wasmModule as any).KdbStreamParser;
+      const parser = KdbStreamParser.create(kdbId);
+      parser.feed_complete(kdbData);
+      // Clear the raw download data from WASM linear memory early
+      kdbData.fill(0);
+      const designName = parser.finalize();
+      if (designName) {
+        await parser.store_async();
+      }
+    } else {
+      // Fallback: original non-streaming path
+      await storeKdbBytesInStorage(kdbData, kdbId);
+    }
   } catch (error) {
     stopHeartbeat();
 

@@ -1,0 +1,15 @@
+{
+  "name": "hwda-wasm",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "hwda_wasm_bg.wasm",
+    "hwda_wasm.js",
+    "hwda_wasm.d.ts"
+  ],
+  "main": "hwda_wasm.js",
+  "types": "hwda_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
