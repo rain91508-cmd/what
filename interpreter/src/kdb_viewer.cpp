@@ -477,7 +477,9 @@ void printSignalDriverTrace(const KdbBuilder& builder, const std::string& signal
     std::cout << "  Drivers (" << merged.size() << "):\n";
     for (size_t i = 0; i < merged.size(); ++i) {
         uint64_t driverId = merged[i].driverSignalGlobalId;
-        const auto* driver = builder.findSignalById(driverId);
+        // driverSignalGlobalId == 0 is the sentinel for a constant/unknown
+        // driver (e.g. `x <= 0;`), NOT a real signal with global ID 0.
+        const auto* driver = (driverId != 0) ? builder.findSignalById(driverId) : nullptr;
         if (driver) {
             std::cout << "    [" << i + 1 << "] ID=" << driverId
                       << " Name=" << driver->fullName

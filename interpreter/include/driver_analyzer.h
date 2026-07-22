@@ -83,9 +83,12 @@ public:
     
 private:
     // Extract driver signal references from an RHS expression and record edges
-    // driving 'drivenObj' (with 'drivenName' as fallback).
-    void extractRhsSignals(const UHDM::expr* expr, uintptr_t drivenObj,
-                          const std::string& drivenName, uint32_t line);
+    // driving 'drivenObj' (with 'drivenName' as fallback). Returns true if at
+    // least one driver signal reference was found in the expression (false for
+    // a pure constant RHS such as `x <= 0;`, which the caller records as a
+    // constant/unknown driver instead of dropping the write entirely).
+    bool extractRhsSignals(const UHDM::expr* expr, uintptr_t drivenObj,
+                           const std::string& drivenName, uint32_t line);
     void processAssignment(const UHDM::assignment* assign);
     void processProcessStmt(const UHDM::process_stmt* process);
     void processStmt(const UHDM::BaseClass* stmt);

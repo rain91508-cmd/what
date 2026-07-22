@@ -40,9 +40,18 @@ void DriverAnalyzer::analyzeContinuousAssignments(const UHDM::module_inst* modul
         uint32_t line = contAssign->VpiLineNo();
         
         // Record the edge. If RHS exists, each referenced signal becomes a
-        // driver; otherwise this is a constant driver (driverObj = 0).
+        // driver; otherwise this is a constant driver (driverObj = 0). For a
+        // constant RHS (e.g. `assign x = 0;`) there are no signal references,
+        // so record it explicitly as a constant driver at the assignment line.
         if (rhs) {
-            extractRhsSignals(rhs, drivenObj, drivenName, line);
+            if (auto* rhsExpr = rhs->Cast<UHDM::expr>()) {
+                bool found = extractRhsSignals(rhsExpr, drivenObj, drivenName, line);
+                if (!found) {
+                    rawEdges_.push_back({drivenObj, 0, drivenName, std::string(), line});
+                }
+            } else {
+                rawEdges_.push_back({drivenObj, 0, drivenName, std::string(), line});
+            }
         } else {
             rawEdges_.push_back({drivenObj, 0, drivenName, std::string(), line});
         }
@@ -246,6 +255,40 @@ void DriverAnalyzer::processStmt(const UHDM::BaseClass* stmt) {
             processStmt(elseStmt);
         }
     }
+    // Process case statement (case/casez/casex) - each case_item has a body
+    // statement reached via Stmt(). Without this, assignments nested inside a
+    // case (e.g. `case (state) ... mem_wstrb <= 0;`) were never traversed and
+    // the driver at that line was lost entirely.
+    else if (auto* caseStmt = stmt->Cast<UHDM::case_stmt>()) {
+        VERBOSE_LOG("DEBUG: Found case statement\n");
+        auto* items = caseStmt->Case_items();
+        if (items) {
+            for (auto* item : *items) {
+                if (!item) continue;
+                auto* bodyStmt = item->Stmt();
+                if (bodyStmt) {
+                    processStmt(bodyStmt);
+                }
+            }
+        }
+    }
+    // Process loop statements (for / while / foreach / repeat) - body via Stmt()
+    else if (auto* loopStmt = stmt->Cast<UHDM::for_stmt>()) {
+        auto* bodyStmt = loopStmt->VpiStmt();
+        if (bodyStmt) processStmt(bodyStmt);
+    }
+    else if (auto* loopStmt = stmt->Cast<UHDM::while_stmt>()) {
+        auto* bodyStmt = loopStmt->VpiStmt();
+        if (bodyStmt) processStmt(bodyStmt);
+    }
+    else if (auto* loopStmt = stmt->Cast<UHDM::foreach_stmt>()) {
+        auto* bodyStmt = loopStmt->VpiStmt();
+        if (bodyStmt) processStmt(bodyStmt);
+    }
+    else if (auto* loopStmt = stmt->Cast<UHDM::repeat>()) {
+        auto* bodyStmt = loopStmt->VpiStmt();
+        if (bodyStmt) processStmt(bodyStmt);
+    }
     // Process assignment
     else if (auto* assign = stmt->Cast<UHDM::assignment>()) {
         VERBOSE_LOG("DEBUG: Found assignment\n");
@@ -288,10 +331,19 @@ void DriverAnalyzer::processAssignment(const UHDM::assignment* assign) {
     VERBOSE_LOG("DEBUG: Processing assignment to " << drivenName << " at line " << line << "\n");
     
     // If RHS exists, each referenced signal becomes a driver; otherwise this is
-    // a constant driver (driverObj = 0).
+    // a constant driver (driverObj = 0). For a constant RHS (e.g. `x <= 0;`)
+    // there are no signal references, so record it explicitly as a constant
+    // driver at the assignment line instead of dropping the write.
     if (rhs) {
         if (auto* rhsExpr = rhs->Cast<UHDM::expr>()) {
-            extractRhsSignals(rhsExpr, drivenObj, drivenName, line);
+            bool found = extractRhsSignals(rhsExpr, drivenObj, drivenName, line);
+            if (!found) {
+                VERBOSE_LOG("DEBUG: Assignment RHS is a constant/non-signal expression\n");
+                rawEdges_.push_back({drivenObj, 0, drivenName, std::string(), line});
+            }
+        } else {
+            // RHS present but not modelled as an expr -> constant driver fallback.
+            rawEdges_.push_back({drivenObj, 0, drivenName, std::string(), line});
         }
     } else {
         VERBOSE_LOG("DEBUG: Assignment has no RHS (constant assignment)\n");
@@ -299,10 +351,11 @@ void DriverAnalyzer::processAssignment(const UHDM::assignment* assign) {
     }
 }
 
-void DriverAnalyzer::extractRhsSignals(const UHDM::expr* expr, uintptr_t drivenObj,
+bool DriverAnalyzer::extractRhsSignals(const UHDM::expr* expr, uintptr_t drivenObj,
                                        const std::string& drivenName, uint32_t line) {
-    if (!expr) return;
+    if (!expr) return false;
     
+    bool found = false;
     if (auto* refObj = expr->Cast<UHDM::ref_obj>()) {
         uintptr_t driverObj = 0;
         std::string driverName;
@@ -314,6 +367,7 @@ void DriverAnalyzer::extractRhsSignals(const UHDM::expr* expr, uintptr_t drivenO
             VERBOSE_LOG("DEBUG: Found RHS signal: " << driverName << " for LHS: " << drivenName 
                       << " at line " << line << "\n");
             rawEdges_.push_back({drivenObj, driverObj, drivenName, driverName, line});
+            found = true;
         }
     }
     
@@ -322,11 +376,13 @@ void DriverAnalyzer::extractRhsSignals(const UHDM::expr* expr, uintptr_t drivenO
         if (operands) {
             for (auto* operand : *operands) {
                 if (auto* operandExpr = operand->Cast<UHDM::expr>()) {
-                    extractRhsSignals(operandExpr, drivenObj, drivenName, line);
+                    if (extractRhsSignals(operandExpr, drivenObj, drivenName, line))
+                        found = true;
                 }
             }
         }
     }
+    return found;
 }
 
 void DriverAnalyzer::registerSignalObject(const UHDM::BaseClass* obj, uint64_t tempId) {
