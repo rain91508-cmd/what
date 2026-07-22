@@ -3039,6 +3039,34 @@ function App() {
     addMessage(`Removed signal from waveform: ${signal.name}`)
   }
 
+  // Surfaces the existing "Signal Not Found" dialog when a signal that was
+  // added to the waveform tab turns out to not exist on the server (detected
+  // during render, then auto-removed). Mirrors the not-found UX of the
+  // search/add flow.
+  const handleSignalNotFoundFromRender = useCallback(async (attempted: string) => {
+    let firstAvailable = 'N/A'
+    if (currentWaveName) {
+      try {
+        const resp = await apiService.getWaveformSignals(currentWaveName, { limit: 1 })
+        if (resp.status === 'success' && resp.data && resp.data.signals.length > 0) {
+          firstAvailable = resp.data.signals[0].name
+        }
+      } catch {
+        // best-effort; fall back to 'N/A'
+      }
+    }
+    setSignalNotFoundInfo({
+      attempted,
+      matched: '',
+      prefix: '',
+      serverPrefix: '',
+      spaceBeforeBracket: false,
+      firstAvailable,
+      success: false,
+    })
+    setShowSignalNotFoundDialog(true)
+  }, [currentWaveName])
+
   // Tab management functions
   // For waveform tabs, optional customRange can be provided by user
   const handleAddTab = (type: 'source' | 'waveform' | 'tableview', customRange?: { start: number; end: number }) => {
@@ -4582,6 +4610,7 @@ function App() {
                 }}
                 onSignalDoubleClick={handleWaveformSignalDoubleClick}
                 onMessage={addMessage}
+                onSignalNotFound={handleSignalNotFoundFromRender}
               />
             ) : null}
           </TabPanel>

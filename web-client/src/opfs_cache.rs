@@ -32,27 +32,51 @@ macro_rules! console_log {
 /// true = OPFS operation in progress, false = OPFS is free
 static OPFS_LOCK: AtomicBool = AtomicBool::new(false);
 
-/// Acquire OPFS lock (spinlock with yield)
-async fn acquire_opfs_lock() {
-    let mut spin_count = 0;
-    while OPFS_LOCK.swap(true, Ordering::Acquire) {
-        spin_count += 1;
-        if spin_count > 100 {
-            // After 100 spins, yield to event loop
-            wasm_bindgen_futures::JsFuture::from(js_sys::Promise::new(&mut |resolve, _| {
-                web_sys::window()
-                    .unwrap()
-                    .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 0)
-                    .unwrap();
-            })).await.ok();
-            spin_count = 0;
+/// Guard that releases the OPFS lock when dropped, even if the async op panics
+/// (e.g. a JS callback throws while we hold the lock). Without this, a single
+/// panic between acquire and release would leave OPFS_LOCK stuck `true` forever,
+/// and because the OPFS cache read runs at the start of every render, that would
+/// wedge the entire render worker permanently (while the UI itself stays alive).
+struct OpfsLockGuard;
+
+impl OpfsLockGuard {
+    /// Acquire the OPFS lock. Returns `Err` (instead of spinning/panicking forever)
+    /// if the lock cannot be obtained within a bounded number of yields, so a
+    /// stuck lock degrades to a cache miss rather than wedging the render worker.
+    async fn acquire() -> Result<OpfsLockGuard, JsValue> {
+        let mut spin_count = 0u32;
+        const MAX_SPIN: u32 = 100;
+        const MAX_ACQUIRE_ATTEMPTS: u32 = 50;
+        let mut attempts = 0u32;
+        loop {
+            if !OPFS_LOCK.swap(true, Ordering::Acquire) {
+                return Ok(OpfsLockGuard);
+            }
+            spin_count += 1;
+            if spin_count > MAX_SPIN {
+                wasm_bindgen_futures::JsFuture::from(js_sys::Promise::new(&mut |resolve, _| {
+                    web_sys::window()
+                        .unwrap()
+                        .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 0)
+                        .unwrap();
+                })).await.ok();
+                spin_count = 0;
+                attempts += 1;
+                if attempts >= MAX_ACQUIRE_ATTEMPTS {
+                    console_log!("[OpfsCache] OPFS lock acquire timed out, treating as cache miss");
+                    // Ensure we are not the holder, then report as recoverable error.
+                    OPFS_LOCK.store(false, Ordering::Release);
+                    return Err(JsValue::from_str("OPFS_LOCK acquire timed out"));
+                }
+            }
         }
     }
 }
 
-/// Release OPFS lock
-fn release_opfs_lock() {
-    OPFS_LOCK.store(false, Ordering::Release);
+impl Drop for OpfsLockGuard {
+    fn drop(&mut self) {
+        OPFS_LOCK.store(false, Ordering::Release);
+    }
 }
 
 // =============================================================================
@@ -906,8 +930,13 @@ impl OpfsCacheManager {
             if let Some(ref opfs_read_fn) = opfs_read {
                 // console_log!("[OpfsCache] OPFS read: {}", path);
 
-                // Acquire lock for OPFS operation
-                acquire_opfs_lock().await;
+                // Acquire lock for OPFS operation (RAII guard releases on drop / panic).
+                // If the lock cannot be obtained (bounded timeout), fall back to a
+                // cache miss instead of wedging the render worker.
+                let _guard = match OpfsLockGuard::acquire().await {
+                    Ok(guard) => guard,
+                    Err(_) => return Ok(None),
+                };
 
                 // Call JS callback: (path: string) -> Promise<Uint8Array | null>
                 let this = JsValue::NULL;
@@ -915,16 +944,12 @@ impl OpfsCacheManager {
                 let result = opfs_read_fn.call1(&this, &path_js);
                 
                 if let Err(e) = result {
-                    release_opfs_lock();
                     return Err(e);
                 }
 
                 // Await the promise
                 let promise: js_sys::Promise = result.unwrap().dyn_into()?;
                 let data_js = wasm_bindgen_futures::JsFuture::from(promise).await;
-                
-                // Release lock after OPFS operation
-                release_opfs_lock();
                 
                 let data_js = data_js?;
 
@@ -971,8 +996,14 @@ impl OpfsCacheManager {
             if let Some(ref opfs_write_fn) = opfs_write {
                 // console_log!("[OpfsCache] OPFS write: {}, size: {}", path, data.len());
 
-                // Acquire lock for OPFS operation
-                acquire_opfs_lock().await;
+                // Acquire lock for OPFS operation (RAII guard releases on drop / panic).
+                // If the lock cannot be obtained (bounded timeout), skip the OPFS
+                // write (memory cache already holds the data) rather than wedging
+                // the render worker.
+                let _guard = match OpfsLockGuard::acquire().await {
+                    Ok(guard) => guard,
+                    Err(_) => return Ok(()),
+                };
 
                 // Call JS callback: (path: string, data: Uint8Array) -> Promise<()>
                 let this = JsValue::NULL;
@@ -981,16 +1012,12 @@ impl OpfsCacheManager {
                 let result = opfs_write_fn.call2(&this, &path_js, &data_js);
                 
                 if let Err(e) = result {
-                    release_opfs_lock();
                     return Err(e);
                 }
 
                 // Await the promise
                 let promise: js_sys::Promise = result.unwrap().dyn_into()?;
                 let write_result = wasm_bindgen_futures::JsFuture::from(promise).await;
-                
-                // Release lock after OPFS operation
-                release_opfs_lock();
                 
                 write_result?;
             }

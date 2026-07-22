@@ -301,7 +301,7 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
     signalPrefix?: string;
     serverPrefix?: string;
     spaceBeforeBracket?: boolean;
-  }): Promise<void> {
+  }): Promise<any> {
     if (!this.worker) {
       throw new WaveformProviderError('Worker not initialized');
     }
@@ -317,7 +317,7 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
       DisplayUnitPerLoD0Unit: timeConfig.displayUnitPerLoD0Unit
     };
 
-    await this.sendMessage(
+    return this.sendMessage(
       'RENDER_WAVEFORM',
       {
         canvasId,

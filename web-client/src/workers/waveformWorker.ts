@@ -817,7 +817,15 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
 
     // 9. 返回成功
     // Debug: console.log('[WaveformWorker] Render complete');
-    sendSuccess(id, { rendered: true, segmentCount: segments.length });
+    // Report signals the server could not find so the UI can drop them.
+    let not_found: string[] = [];
+    try {
+      const nf = (wasmProvider as any).get_not_found_signals?.();
+      if (nf && Array.isArray(nf)) {
+        not_found = nf as string[];
+      }
+    } catch (_) { /* ignore */ }
+    sendSuccess(id, { rendered: true, segmentCount: segments.length, notFoundSignals: not_found });
   } catch (error) {
     console.error('[WaveformWorker] Error in handleRenderWaveform:', error);
     sendError(id, error instanceof Error ? error.message : String(error));

@@ -131,6 +131,10 @@ interface WaveformWindowProps {
   onSignalDoubleClick?: (signal: Signal & { unique_id: number }) => void;
   // Message log callback (e.g. to surface zoom/LOD info in the global console)
   onMessage?: (msg: string) => void;
+  // Called when a signal was added but the server reported it as not found
+  // during render (so it gets auto-removed). Lets the parent surface a
+  // "Signal Not Found" dialog to the user.
+  onSignalNotFound?: (attempted: string) => void;
 }
 
 /**
@@ -213,6 +217,7 @@ export function WaveformWindow({
   onSignalSelect,
   onSignalDoubleClick,
   onMessage,
+  onSignalNotFound,
   activeTabId,
 }: WaveformWindowProps) {
   const { t } = useT();
@@ -1063,29 +1068,62 @@ export function WaveformWindow({
       }
 
       // 调用 Adapter 的 render_waveform 并传递完整参数
-      await wasmProviderRef.current.render_waveform({
-        signals: wasmSignals,
-        viewport: {
-          startTime: viewport.timeStart,
-          endTime: viewport.timeEnd,
-          width,
-          height,
-        },
-        canvasConfig: {
-          width,
-          height,
-          rowHeight: 24,
-        },
-        displayFormat: displayFormat,
-        timeConfig: {
-          displayUnit: 'ps',
-          lod0Unit: 1,
-          displayUnitPerLoD0Unit: timeConfig.DisplayUnitPerLoD0Unit,
-        },
-        signalPrefix: _signalPrefix,
-        serverPrefix: _serverPrefix,
-        spaceBeforeBracket: _spaceBeforeBracket,
-      });
+      try {
+        const result: any = await wasmProviderRef.current.render_waveform({
+          signals: wasmSignals,
+          viewport: {
+            startTime: viewport.timeStart,
+            endTime: viewport.timeEnd,
+            width,
+            height,
+          },
+          canvasConfig: {
+            width,
+            height,
+            rowHeight: 24,
+          },
+          displayFormat: displayFormat,
+          timeConfig: {
+            displayUnit: 'ps',
+            lod0Unit: 1,
+            displayUnitPerLoD0Unit: timeConfig.DisplayUnitPerLoD0Unit,
+          },
+          signalPrefix: _signalPrefix,
+          serverPrefix: _serverPrefix,
+          spaceBeforeBracket: _spaceBeforeBracket,
+        });
+
+        // Drop any signal the server reported as not found (SIGNAL_NOT_FOUND / 404).
+        // The WASM layer now falls back to per-signal fetching, so the render still
+        // succeeds for the rest of the signals; we just remove the bad one so it
+        // stops occupying a row and re-triggering doomed requests.
+        const notFound: string[] = (result && result.notFoundSignals) || [];
+        // Normalize a signal name by stripping the common scope prefixes so a
+        // `work@...` local name matches a `TOP....` server name and vice versa.
+        const normName = (n: string) => n.replace(/^work@/, '').replace(/^TOP\./, '').replace(/^tb_top\./, '');
+        for (const missingName of notFound) {
+          const found = signalList.find(
+            (s) =>
+              s.name === missingName ||
+              s.displayName === missingName ||
+              normName(s.name) === normName(missingName) ||
+              s.name.endsWith(missingName) ||
+              missingName.endsWith(s.name)
+          );
+          if (found) {
+            console.warn(`[WaveformWindow] Removing signal not found on server: ${found.name}`);
+            // Surface a "Signal Not Found" dialog to the user (mirrors the
+            // behavior when adding a genuinely missing signal via search).
+            if (onSignalNotFound) onSignalNotFound(found.name);
+            handleRemoveSignal({ ...(found as object), unique_id: (found as any).uniqueId } as Signal & { unique_id: number });
+            return;
+          }
+        }
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        // A hard render error (e.g. worker panic) is surfaced but does not remove signals.
+        console.error('[WaveformWindow] render_waveform failed:', errMsg);
+      }
     } else {
       // Mock 模式：使用旧流程
       let segments;

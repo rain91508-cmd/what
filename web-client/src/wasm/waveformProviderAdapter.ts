@@ -251,7 +251,7 @@ export class WaveformProviderAdapter {
     signalPrefix?: string,
     serverPrefix?: string,
     spaceBeforeBracket?: boolean,
-  }): Promise<void> {
+  }): Promise<any> {
     // 检查 Canvas 是否已注册
     if (!this.canvasRegistered) {
       return;
@@ -292,7 +292,7 @@ export class WaveformProviderAdapter {
     //   spaceBeforeBracket,
     // });
 
-    await this.provider.renderWaveform({
+    return this.provider.renderWaveform({
       canvasId: this.canvasId,
       signals: newSignals,
       viewport,

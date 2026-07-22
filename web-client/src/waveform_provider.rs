@@ -64,7 +64,26 @@ async fn fetch_data(url: &str) -> Result<js_sys::ArrayBuffer, JsValue> {
         .map_err(|_| JsValue::from_str("Invalid response"))?;
     
     if !resp.ok() {
-        return Err(JsValue::from_str(&format!("HTTP error: {}", resp.status())));
+        // Capture the response body so callers (and the UI) can see which signal
+        // the server reported as missing (e.g. SIGNAL_NOT_FOUND), and add debug
+        // prints to make stalled renders diagnosable.
+        let status = resp.status();
+        let body = wasm_bindgen_futures::JsFuture::from(
+            resp.text().map_err(|_| JsValue::from_str("Failed to read error body"))?
+        ).await
+            .ok()
+            .and_then(|v| v.as_string())
+            .unwrap_or_default();
+        // console_log!("[WASM] fetch_data HTTP {} for url: {}", status, url);
+        if !body.is_empty() {
+            // console_log!("[WASM] fetch_data error body: {}", body);
+        }
+        let err_msg = if body.is_empty() {
+            format!("HTTP error: {}", status)
+        } else {
+            format!("HTTP error: {} - {}", status, body)
+        };
+        return Err(JsValue::from_str(&err_msg));
     }
     
     // Get array buffer
@@ -517,6 +536,10 @@ pub struct WaveformDataProvider {
     enable_opfs: bool,  // OPFS cache enabled flag
     current_lod: Option<u32>,  // Current LoD level for bucket size calculation
     display_unit_per_lod0_unit: f64,  // Time unit conversion factor (display unit / LoD0 unit)
+    // Signals the server reported as not found (SIGNAL_NOT_FOUND / 404). Tracked so a
+    // single missing signal does not block the rest of the render and we avoid spamming
+    // the server with the same doomed request on every tile/viewport.
+    not_found_signals: std::collections::HashSet<String>,
 }
 
 #[wasm_bindgen]
@@ -562,6 +585,7 @@ impl WaveformDataProvider {
             enable_opfs: false,  // Disabled by default
             current_lod: None,  // Will be set when fetching data
             display_unit_per_lod0_unit: 1.0,  // Default to 1.0 (no conversion)
+            not_found_signals: std::collections::HashSet::new(),
         }
     }
 
@@ -620,7 +644,22 @@ impl WaveformDataProvider {
 
         self.signals_with_id = signals_with_id;
         self.signals = signals;
+        // The set of rendered signals changed; forget any previously-missing
+        // signals so a signal that was removed and re-added is not silently skipped.
+        self.not_found_signals.clear();
         Ok(())
+    }
+
+    /// Returns the list of signal names the server reported as not found during
+    /// the last fetch. The UI uses this to drop signals that don't exist.
+    /// Built manually with js_sys to avoid any (de)serialization dependency.
+    #[wasm_bindgen]
+    pub fn get_not_found_signals(&self) -> JsValue {
+        let arr = js_sys::Array::new();
+        for name in self.not_found_signals.iter() {
+            arr.push(&JsValue::from_str(name));
+        }
+        arr.into()
     }
 
     /// Process server chunk data and store in cache using pre-computed draw_sig_ids
@@ -1543,6 +1582,11 @@ if tile_missing_signals.is_empty() {
         let mut missing_signals_map: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         for signals in tile_missing_signals.values() {
             for (signal_name, draw_sig_id) in signals {
+                // Skip signals the server already told us don't exist, so we don't
+                // keep hitting the server with doomed requests every render.
+                if self.not_found_signals.contains(signal_name) {
+                    continue;
+                }
                 missing_signals_map.insert(signal_name.clone(), *draw_sig_id);
             }
         }
@@ -1606,16 +1650,19 @@ if tile_missing_signals.is_empty() {
                     encoded_batch,
                     self.time_stamp);
                 
-                // Fetch batch data (compatible with both main thread and Worker)
-                let array_buffer = fetch_data(&url).await?;
-                
-                let uint8_array = js_sys::Uint8Array::new(&array_buffer);
-                let mut bytes = vec![0u8; uint8_array.length() as usize];
-                uint8_array.copy_to(&mut bytes);
-                
-                // Parse multi-tile response
-                // Use unique_local_names and unique_draw_sig_ids (deduplicated) to match server response
-                self.parse_multi_tile_response(&bytes, &unique_local_names, &unique_draw_sig_ids, time_start, time_end, tile_span).await?;
+                // Fetch batch data with a 404 (signal-not-found) fallback so a single
+                // missing signal does not abort the whole render.
+                self.fetch_tile_range(
+                    lod,
+                    start_time,
+                    tile_span,
+                    num_tiles as u64,
+                    time_start,
+                    time_end,
+                    &server_names,
+                    &unique_local_names,
+                    &unique_draw_sig_ids,
+                ).await?;
                 
                 tile_idx += num_tiles;
             }
@@ -1625,6 +1672,98 @@ if tile_missing_signals.is_empty() {
         // console_log!("[WASM] 4. finish store to OPFS");
         
         Ok(())
+    }
+
+    /// Fetch one tile range for a batch of signals, then parse and cache it.
+    ///
+    /// If the combined request fails with HTTP 404 (the server returns
+    /// `SIGNAL_NOT_FOUND` for the *whole* batch as soon as any one signal is
+    /// missing), fall back to fetching each signal individually. This isolates
+    /// the missing signal(s) so the rest of the waveform still renders instead of
+    /// the entire tab stalling. Signals that individually 404 are recorded in
+    /// `not_found_signals` so they are skipped on subsequent renders.
+    async fn fetch_tile_range(
+        &mut self,
+        lod: u32,
+        start_time: u64,
+        tile_span: u64,
+        num_tiles: u64,
+        time_start: u64,
+        time_end: u64,
+        server_names: &[String],
+        local_names: &[String],
+        draw_sig_ids: &[u32],
+    ) -> Result<(), JsValue> {
+        let names_batch = server_names.join(",");
+        let encoded_batch = general_purpose::STANDARD.encode(&names_batch);
+        let url = format!(
+            "{}/api/wave/{}/lod/{}/tile/{}/{}/{}/compress/none/signals/b64:{}/data?time_stamp={}",
+            self.server_url,
+            self.waveform_name,
+            lod,
+            start_time,
+            tile_span,
+            num_tiles,
+            encoded_batch,
+            self.time_stamp
+        );
+
+        match fetch_data(&url).await {
+            Ok(array_buffer) => {
+                let uint8_array = js_sys::Uint8Array::new(&array_buffer);
+                let mut bytes = vec![0u8; uint8_array.length() as usize];
+                uint8_array.copy_to(&mut bytes);
+                self.parse_multi_tile_response(&bytes, local_names, draw_sig_ids, time_start, time_end, tile_span).await?;
+                Ok(())
+            }
+            Err(e) => {
+                let msg = e.as_string().unwrap_or_default();
+                if msg.contains("404") {
+                    // console_log!(
+                    //     "[WASM] Tile batch 404 (signal not found); falling back to per-signal fetch for {} signals",
+                    //     server_names.len()
+                    // );
+                    for i in 0..server_names.len() {
+                        let single = vec![server_names[i].clone()];
+                        let enc = general_purpose::STANDARD.encode(single.join(",").as_str());
+                        let u = format!(
+                            "{}/api/wave/{}/lod/{}/tile/{}/{}/{}/compress/none/signals/b64:{}/data?time_stamp={}",
+                            self.server_url,
+                            self.waveform_name,
+                            lod,
+                            start_time,
+                            tile_span,
+                            num_tiles,
+                            enc,
+                            self.time_stamp
+                        );
+                        match fetch_data(&u).await {
+                            Ok(ab) => {
+                                let ua = js_sys::Uint8Array::new(&ab);
+                                let mut b = vec![0u8; ua.length() as usize];
+                                ua.copy_to(&mut b);
+                                self.parse_multi_tile_response(
+                                    &b,
+                                    &[local_names[i].clone()],
+                                    &[draw_sig_ids[i]],
+                                    time_start,
+                                    time_end,
+                                    tile_span,
+                                ).await?;
+                            }
+                            Err(e2) => {
+                                let m2 = e2.as_string().unwrap_or_default();
+                                // console_log!("[WASM] Signal not found, skipping: {} (err: {})", local_names[i], m2);
+                                self.not_found_signals.insert(local_names[i].clone());
+                            }
+                        }
+                    }
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 
     /// Fetch data and get segments in one call
@@ -1811,6 +1950,7 @@ if tile_missing_signals.is_empty() {
                 enable_opfs,
                 current_lod,
                 display_unit_per_lod0_unit: 1.0,
+                not_found_signals: std::collections::HashSet::new(),
             };
             
             // Execute prefetch
@@ -1984,6 +2124,11 @@ if tile_missing_signals.is_empty() {
         let mut missing_signals_map: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         for signals in tile_missing_signals.values() {
             for (signal_name, draw_sig_id) in signals {
+                // Skip signals the server already told us don't exist, so we don't
+                // keep hitting the server with doomed requests every render.
+                if self.not_found_signals.contains(signal_name) {
+                    continue;
+                }
                 missing_signals_map.insert(signal_name.clone(), *draw_sig_id);
             }
         }
@@ -2368,9 +2513,9 @@ if tile_missing_signals.is_empty() {
         let signal_data = match self.signal_data.get(signal_name) {
             Some(data) => data,
             None => {
-                web_sys::console::log_1(&JsValue::from_str(&format!(
-                    "[WASM] Signal not found: {}", signal_name
-                )));
+                // web_sys::console::log_1(&JsValue::from_str(&format!(
+                //     "[WASM] Signal not found: {}", signal_name
+                // )));
                 return (default_transition, false, false);
             }
         };
