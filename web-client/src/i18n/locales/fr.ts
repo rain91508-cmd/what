@@ -17,6 +17,8 @@ const translations: Translations = {
     disconnect: 'Déconnecter',
     openKdb: 'Ouvrir KDB...',
     openCachedKdb: 'Ouvrir KDB en cache...',
+    openKdbUrl: 'Ouvrir une URL KDB...',
+    openLocalKdb: 'Ouvrir un KDB local...',
     openWaveform: 'Ouvrir la forme d\'onde...',
     closeKdb: 'Fermer KDB',
     closeWaveform: 'Fermer la forme d\'onde',
@@ -108,6 +110,14 @@ const translations: Translations = {
       selectPrompt: 'Sélectionnez un KDB en cache à ouvrir :',
       filterPlaceholder: 'Filtrer (* joker)...',
       open: 'Ouvrir',
+    },
+    kdbUrl: {
+      title: 'Ouvrir un KDB depuis une URL',
+      prompt: 'Saisissez une URL directe vers un fichier .kdb brut :',
+      placeholder: 'https://example.com/path/design.kdb',
+      empty: 'Veuillez saisir une URL',
+      invalid: 'Veuillez saisir une URL valide',
+      load: 'Charger',
     },
     waveSelection: {
       title: 'Sélectionner la forme d\'onde',

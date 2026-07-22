@@ -17,6 +17,8 @@ const translations: Translations = {
     disconnect: '切断',
     openKdb: 'KDBを開く...',
     openCachedKdb: 'キャッシュ済みKDBを開く...',
+    openKdbUrl: 'KDBのURLを開く...',
+    openLocalKdb: 'ローカルKDBを開く...',
     openWaveform: '波形を開く...',
     closeKdb: 'KDBを閉じる',
     closeWaveform: '波形を閉じる',
@@ -108,6 +110,14 @@ const translations: Translations = {
       selectPrompt: '開くキャッシュ済みKDBを選択:',
       filterPlaceholder: 'フィルタ (* ワイルドカード)...',
       open: '開く',
+    },
+    kdbUrl: {
+      title: 'URLからKDBを開く',
+      prompt: 'raw .kdb ファイルの直接URLを入力してください:',
+      placeholder: 'https://example.com/path/design.kdb',
+      empty: 'URLを入力してください',
+      invalid: '有効なURLを入力してください',
+      load: '読み込み',
     },
     waveSelection: {
       title: '波形を選択',

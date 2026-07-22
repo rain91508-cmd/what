@@ -20,7 +20,7 @@
 // │  Message Window                                                 │
 // └─────────────────────────────────────────────────────────────────┘
 
-import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
+import { useState, useEffect, useRef, useCallback, lazy, Suspense, type Dispatch, type SetStateAction } from 'react'
 import './App.css'
 
 // Core services
@@ -58,6 +58,7 @@ import { CachedKdbDialog } from './components/CachedKdbDialog'
 import { WaveSelectionDialog } from './components/WaveSelectionDialog'
 import { FileChangeDialog } from './components/FileChangeDialog'
 import { MockDataDialog } from './components/MockDataDialog'
+import { OpenKdbUrlDialog } from './components/OpenKdbUrlDialog'
 import { Splitter } from './components/ResizablePanel'
 import { SessionDialog } from './components/SessionDialog'
 import { SessionLoadingOverlay } from './components/SessionLoadingOverlay'
@@ -101,6 +102,54 @@ const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
   panel: 250,
 };
 
+// Shared progress logger for the worker-driven KDB loads (server URL / local
+// file). Mirrors the live-updating progress lines produced by handleLoadKdb.
+function reportKdbLoadProgress(
+  setMessages: Dispatch<SetStateAction<string[]>>,
+  downloaded: number,
+  total: number,
+  phase: string | undefined,
+  message: string | undefined,
+  state: { lastStorePercent: number; lastStoreStep: number }
+): void {
+  if (phase === 'storing') {
+    // WASM step messages read "Step X/N: ..." and carry the step index in
+    // `downloaded`. Surface each step so the user can see which stage of
+    // unpacking to local storage is running.
+    if (message && message.startsWith('Step') && total > 0) {
+      const label = `Unpacking KDB: ${message}`;
+      const step = downloaded;
+      setMessages(prev => {
+        const last = prev.length > 0 ? prev[prev.length - 1] : '';
+        const isUnpack = last.includes('Unpacking KDB:');
+        if (isUnpack && step === state.lastStoreStep) {
+          const updated = prev.slice();
+          updated[updated.length - 1] = `[${new Date().toLocaleTimeString()}] ${label}`;
+          return updated;
+        }
+        const next = [...prev, `[${new Date().toLocaleTimeString()}] ${label}`];
+        return next.length > 100 ? next.slice(-100) : next;
+      });
+      state.lastStoreStep = step;
+    }
+    return;
+  }
+  const percent = total > 0 ? Math.round((downloaded / total) * 100) : 0;
+  if (percent !== state.lastStorePercent) {
+    state.lastStorePercent = percent;
+    setMessages(prev => {
+      const last = prev.length > 0 ? prev[prev.length - 1] : '';
+      if (last.includes('Downloading KDB:')) {
+        const updated = prev.slice();
+        updated[updated.length - 1] = `[${new Date().toLocaleTimeString()}] Downloading KDB: ${percent}%`;
+        return updated;
+      }
+      const next = [...prev, `[${new Date().toLocaleTimeString()}] Downloading KDB: ${percent}%`];
+      return next.length > 100 ? next.slice(-100) : next;
+    });
+  }
+}
+
 function App() {
   const { t } = useT()
   const [initialized, setInitialized] = useState(false)
@@ -108,7 +157,9 @@ function App() {
   const [showConnectionDialog, setShowConnectionDialog] = useState(false)
   const [showKdbSelectionDialog, setShowKdbSelectionDialog] = useState(false)
   const [showCachedKdbDialog, setShowCachedKdbDialog] = useState(false)
+  const [showKdbUrlDialog, setShowKdbUrlDialog] = useState(false)
   const [showWaveSelectionDialog, setShowWaveSelectionDialog] = useState(false)
+  const localKdbInputRef = useRef<HTMLInputElement>(null)
   const [messages, setMessages] = useState<string[]>([])
   const [kdbLoaded, setKdbLoaded] = useState(false)
   const [, setWaveforms] = useState<WaveformInfo[]>([])
@@ -1798,6 +1849,90 @@ function App() {
     
     addMessage('KDB closed')
   }
+
+  // Load a KDB from a direct URL (option A: a direct URL to a raw .kdb file).
+  const handleLoadKdbFromUrl = useCallback(async (url: string) => {
+    setShowKdbUrlDialog(false);
+
+    // Close any previously loaded KDB first (mirrors handleKdbSelect).
+    if (kdbLoaded || currentKdbName) {
+      addMessage(`Closing previous KDB: ${currentKdbName || 'unknown'}...`);
+      await handleCloseKdb();
+    }
+
+    addMessage(`Loading KDB from URL: ${url}`);
+
+    const progressState = { lastStorePercent: -1, lastStoreStep: -1 };
+    const success = await kdbManager.loadKdbFromUrl(
+      url,
+      (downloaded, total, phase, message) =>
+        reportKdbLoadProgress(setMessages, downloaded, total, phase, message, progressState)
+    );
+
+    if (success) {
+      setKdbLoaded(true);
+      const kdbId = kdbManager.getCurrentKdbId() ?? url;
+      const designName = await kdbManager.getDesignName();
+      const header = await kdbManager.getHeader();
+      setCurrentKdbName(designName && designName !== kdbId ? designName : kdbId);
+      setCurrentKdbChecksum(null);
+      localStorage.setItem('currentKdbId', kdbId);
+
+      addMessage(`✓ KDB parsed successfully`);
+      addMessage(`  Design Name: ${designName}`);
+      if (header) {
+        addMessage(`  Version: ${header.version}`);
+        addMessage(`  Created: ${header.createdAt}`);
+      }
+
+      setSelectedModuleIndex(null);
+      setShowWaveSelectionDialog(true);
+    } else {
+      addMessage('✗ Failed to load KDB from URL');
+      addMessage('  Check the browser console / network; the host may block cross-origin requests (CORS)');
+    }
+  }, [kdbLoaded, currentKdbName, handleCloseKdb, setMessages]);
+
+  // Load a KDB from a local file picked from disk.
+  const handleLoadKdbFromLocalFile = useCallback(async (file: File) => {
+    // Close any previously loaded KDB first.
+    if (kdbLoaded || currentKdbName) {
+      addMessage(`Closing previous KDB: ${currentKdbName || 'unknown'}...`);
+      await handleCloseKdb();
+    }
+
+    addMessage(`Loading KDB from local file: ${file.name}`);
+
+    const progressState = { lastStorePercent: -1, lastStoreStep: -1 };
+    const success = await kdbManager.loadKdbFromLocalFile(
+      file,
+      (downloaded, total, phase, message) =>
+        reportKdbLoadProgress(setMessages, downloaded, total, phase, message, progressState)
+    );
+
+    if (success) {
+      setKdbLoaded(true);
+      const kdbId = kdbManager.getCurrentKdbId() ?? file.name;
+      const designName = await kdbManager.getDesignName();
+      const header = await kdbManager.getHeader();
+      setCurrentKdbName(designName && designName !== kdbId ? designName : kdbId);
+      setCurrentKdbChecksum(null);
+      localStorage.setItem('currentKdbId', kdbId);
+
+      addMessage(`✓ KDB parsed successfully`);
+      addMessage(`  Design Name: ${designName}`);
+      if (header) {
+        addMessage(`  Version: ${header.version}`);
+        addMessage(`  Created: ${header.createdAt}`);
+      }
+
+      setSelectedModuleIndex(null);
+      setShowWaveSelectionDialog(true);
+    } else {
+      addMessage('✗ Failed to load KDB from local file');
+      addMessage('  The file may not be a valid .kdb; check the browser console for details');
+    }
+  }, [kdbLoaded, currentKdbName, handleCloseKdb, setMessages]);
 
   // Handle close Waveform - clear wave data and close waveform tabs
   const handleCloseWave = async () => {
@@ -4365,6 +4500,8 @@ function App() {
         onDisconnect={handleDisconnect}
         onOpenKdbList={() => setShowKdbSelectionDialog(true)}
         onOpenCachedKdb={() => setShowCachedKdbDialog(true)}
+        onOpenKdbUrl={() => setShowKdbUrlDialog(true)}
+        onOpenLocalKdb={() => localKdbInputRef.current?.click()}
         onOpenWaveList={() => setShowWaveSelectionDialog(true)}
         onCloseKdb={handleCloseKdb}
         onCloseWave={handleCloseWave}
@@ -4761,6 +4898,30 @@ function App() {
           onCancel={() => setShowCachedKdbDialog(false)}
         />
       )}
+
+      {/* Open KDB from URL Dialog */}
+      {showKdbUrlDialog && (
+        <OpenKdbUrlDialog
+          onConfirm={handleLoadKdbFromUrl}
+          onCancel={() => setShowKdbUrlDialog(false)}
+        />
+      )}
+
+      {/* Hidden file input for "Open Local KDB" */}
+      <input
+        ref={localKdbInputRef}
+        type="file"
+        accept=".kdb"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files && e.target.files[0];
+          // Reset so selecting the same file again re-triggers onChange.
+          e.target.value = '';
+          if (file) {
+            handleLoadKdbFromLocalFile(file);
+          }
+        }}
+      />
 
       {/* Waveform Selection Dialog */}
       {showWaveSelectionDialog && (

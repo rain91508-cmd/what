@@ -17,6 +17,8 @@ const translations: Translations = {
     disconnect: '断开连接',
     openKdb: '打开KDB...',
     openCachedKdb: '打开缓存KDB...',
+    openKdbUrl: '打开KDB URL...',
+    openLocalKdb: '打开本地KDB...',
     openWaveform: '打开波形...',
     closeKdb: '关闭KDB',
     closeWaveform: '关闭波形',
@@ -108,6 +110,14 @@ const translations: Translations = {
       selectPrompt: '选择一个缓存的 KDB 打开：',
       filterPlaceholder: '过滤 (* 通配符)...',
       open: '打开',
+    },
+    kdbUrl: {
+      title: '通过 URL 打开 KDB',
+      prompt: '请输入一个指向原始 .kdb 文件的直接 URL：',
+      placeholder: 'https://example.com/path/design.kdb',
+      empty: '请输入 URL',
+      invalid: '请输入有效的 URL',
+      load: '加载',
     },
     waveSelection: {
       title: '选择波形',

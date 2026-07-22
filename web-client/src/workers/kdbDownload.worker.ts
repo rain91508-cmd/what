@@ -115,10 +115,12 @@ function setupStorageFunctions(writer: OPFSWriter) {
 // ============================================
 
 interface KDBDownloadMessage {
-  type: 'start' | 'cancel';
+  type: 'start' | 'cancel' | 'startUrl' | 'startBytes';
   kdbName?: string;
   baseUrl?: string;
   kdbId?: string;
+  url?: string;
+  bytes?: Uint8Array;
 }
 
 interface KDBProgressMessage {
@@ -647,13 +649,118 @@ async function checkRangeSupport(baseUrl: string, kdbName: string): Promise<bool
 // Main Worker Logic
 // ============================================
 
+// Decompress + store a raw .kdb byte buffer into OPFS/IndexedDB. Shared by all
+// three ingestion paths (server download, URL fetch, local file bytes). Assumes
+// `currentDownload` is already set (for progress reporting) and sets up its own
+// OPFSWriter. Throws on any failure so the caller can surface an error message.
+async function storeKdbBytesInStorage(
+  kdbData: Uint8Array,
+  kdbId: string
+): Promise<void> {
+  const opfsWriter = new OPFSWriter();
+
+  // Initialize storage
+  await opfsWriter.init(kdbId);
+
+  // Setup storage functions with OPFSWriter integration
+  // This ensures store_source_file_content_opfs uses OPFSWriter for proper fallback handling
+  setupStorageFunctions(opfsWriter);
+
+  // Check magic number
+  if (kdbData.length < 8) {
+    throw new Error('KDB file too small');
+  }
+
+  const magic = new DataView(kdbData.buffer).getUint32(0, true);
+  if (magic !== CWDK_MAGIC) {
+    throw new Error(`Invalid magic: 0x${magic.toString(16)}`);
+  }
+
+  // Report storing phase (download is already at 100% from downloadWithResume)
+  updateProgress(kdbData.length, kdbData.length, 'storing', 'Decompressing and storing...', true);
+
+  await initWasm();
+
+  if (!wasmModule) {
+    throw new Error('WASM not initialized');
+  }
+
+  // Call WASM to parse and store
+  if ((self as any).__resetKdbBatches) (self as any).__resetKdbBatches();
+  const designName = await wasmModule.parse_and_store_kdb(kdbId, kdbData);
+
+  if (!designName) {
+    throw new Error('Failed to parse KDB');
+  }
+
+  // Source-file content writes are buffered in memory during parse and written
+  // in one shot here (single sync access handle). Wait for it to finish so we
+  // never report completion before the files are physically on disk.
+  const tw0 = performance.now();
+  await opfsWriter.waitForAll();
+  console.log(`[${ts()}] [KDBWorker] waitForAll (source_content.bin) took ${(performance.now() - tw0).toFixed(0)}ms`);
+
+  // Flush the per-256-line byte offsets to OPFS as source_line_index.bin (one
+  // flat binary; replaces the old source-file-line-index IDB store).
+  const tl0 = performance.now();
+  if ((self as any).__flushKdbLineIndex) {
+    await (self as any).__flushKdbLineIndex(kdbId);
+  }
+  console.log(`[${ts()}] [KDBWorker] __flushKdbLineIndex (OPFS) took ${(performance.now() - tl0).toFixed(0)}ms`);
+
+  // Flush any buffered IndexedDB records (the per-record store_* calls
+  // batch writes; the final partial batch must be flushed before we
+  // report completion).
+  const tf0 = performance.now();
+  if ((self as any).__flushKdbBatches) {
+    await (self as any).__flushKdbBatches();
+  }
+  console.log(`[${ts()}] [KDBWorker] __flushKdbBatches (IDB) took ${(performance.now() - tf0).toFixed(0)}ms`);
+
+  stopHeartbeat();
+
+  // Check if we need to send files to main thread (OPFS fallback)
+  const pendingFiles = opfsWriter.isUsingFallback()
+    ? Array.from(opfsWriter.getPendingFiles().entries()).map(([fileId, content]) => ({ fileId, content }))
+    : undefined;
+
+  if (pendingFiles && pendingFiles.length > 0) {
+    console.log(`[${ts()}] [KDBWorker] Sending ${pendingFiles.length} files to main thread for storage`);
+
+    // Use Transferable Objects to avoid copying large data
+    // Extract Uint8Arrays for transfer
+    const transferableArrays: Transferable[] = [];
+    for (const file of pendingFiles) {
+      if (file.content.buffer) {
+        transferableArrays.push(file.content.buffer as ArrayBuffer);
+      }
+    }
+
+    (self as any).postMessage({
+      type: 'complete',
+      designName,
+      moduleCount: 0, // TODO: Get actual counts from WASM
+      signalCount: 0,
+      fileCount: 0,
+      pendingFiles,
+      kdbId,
+    } as KDBCompleteMessage, transferableArrays);
+  } else {
+    postMessage({
+      type: 'complete',
+      designName,
+      moduleCount: 0, // TODO: Get actual counts from WASM
+      signalCount: 0,
+      fileCount: 0,
+    } as KDBCompleteMessage);
+  }
+}
+
 async function downloadAndStoreKDB(
   kdbName: string,
   baseUrl: string,
   kdbId: string
 ): Promise<void> {
-  const opfsWriter = new OPFSWriter();
-  
   // Initialize download state
   currentDownload = {
     kdbName,
@@ -669,133 +776,127 @@ async function downloadAndStoreKDB(
     speedHistory: [],
     lastProgressPercent: 0,
   };
-  
+
   // Start heartbeat
   startHeartbeat();
-  
+
   try {
-    // Initialize storage
-    await opfsWriter.init(kdbId);
-    
-    // Setup storage functions with OPFSWriter integration
-    // This ensures store_source_file_content_opfs uses OPFSWriter for proper fallback handling
-    setupStorageFunctions(opfsWriter);
-    
     // Get file info first
     const infoResponse = await fetch(`${baseUrl}/api/kdb/${kdbName}`);
     if (!infoResponse.ok) {
       throw new Error(`Failed to get KDB info: ${infoResponse.status}`);
     }
-    
+
     const info = await infoResponse.json();
     const totalSize = info.data.kdb_info.file_size;
     currentDownload.totalSize = totalSize;
-    
+
     updateProgress(0, totalSize, 'downloading', 'Starting download...', true);
-    
+
     // Download with resume and stall detection
     const kdbData = await downloadWithResume(kdbName, baseUrl, totalSize);
 
-    // Check magic number
-    if (kdbData.length < 8) {
-      throw new Error('KDB file too small');
-    }
-
-    const magic = new DataView(kdbData.buffer).getUint32(0, true);
-    if (magic !== CWDK_MAGIC) {
-      throw new Error(`Invalid magic: 0x${magic.toString(16)}`);
-    }
-
-    // Use WASM to decompress and store
-    // Report storing phase (download is already at 100% from downloadWithResume)
-    updateProgress(totalSize, totalSize, 'storing', 'Decompressing and storing...', true);
-    
-    await initWasm();
-    
-    if (!wasmModule) {
-      throw new Error('WASM not initialized');
-    }
-    
-    // Call WASM to parse and store
-    if ((self as any).__resetKdbBatches) (self as any).__resetKdbBatches();
-    const designName = await wasmModule.parse_and_store_kdb(kdbId, kdbData);
-    
-    if (!designName) {
-      throw new Error('Failed to parse KDB');
-    }
-
-    // Source-file content writes are buffered in memory during parse and written
-    // in one shot here (single sync access handle). Wait for it to finish so we
-    // never report completion before the files are physically on disk.
-    const tw0 = performance.now();
-    await opfsWriter.waitForAll();
-    console.log(`[${ts()}] [KDBWorker] waitForAll (source_content.bin) took ${(performance.now() - tw0).toFixed(0)}ms`);
-
-    // Flush the per-256-line byte offsets to OPFS as source_line_index.bin (one
-    // flat binary; replaces the old source-file-line-index IDB store).
-    const tl0 = performance.now();
-    if ((self as any).__flushKdbLineIndex) {
-      await (self as any).__flushKdbLineIndex(kdbId);
-    }
-    console.log(`[${ts()}] [KDBWorker] __flushKdbLineIndex (OPFS) took ${(performance.now() - tl0).toFixed(0)}ms`);
-
-    // Flush any buffered IndexedDB records (the per-record store_* calls
-    // batch writes; the final partial batch must be flushed before we
-    // report completion).
-    const tf0 = performance.now();
-    if ((self as any).__flushKdbBatches) {
-      await (self as any).__flushKdbBatches();
-    }
-    console.log(`[${ts()}] [KDBWorker] __flushKdbBatches (IDB) took ${(performance.now() - tf0).toFixed(0)}ms`);
-    
-    stopHeartbeat();
-    
-    // Check if we need to send files to main thread (OPFS fallback)
-    const pendingFiles = opfsWriter.isUsingFallback() 
-      ? Array.from(opfsWriter.getPendingFiles().entries()).map(([fileId, content]) => ({ fileId, content }))
-      : undefined;
-    
-    if (pendingFiles && pendingFiles.length > 0) {
-      console.log(`[${ts()}] [KDBWorker] Sending ${pendingFiles.length} files to main thread for storage`);
-      
-      // Use Transferable Objects to avoid copying large data
-      // Extract Uint8Arrays for transfer
-      const transferableArrays: Transferable[] = [];
-      for (const file of pendingFiles) {
-        if (file.content.buffer) {
-          transferableArrays.push(file.content.buffer as ArrayBuffer);
-        }
-      }
-      
-      (self as any).postMessage({
-        type: 'complete',
-        designName,
-        moduleCount: 0, // TODO: Get actual counts from WASM
-        signalCount: 0,
-        fileCount: 0,
-        pendingFiles,
-        kdbId,
-      } as KDBCompleteMessage, transferableArrays);
-    } else {
-      postMessage({
-        type: 'complete',
-        designName,
-        moduleCount: 0, // TODO: Get actual counts from WASM
-        signalCount: 0,
-        fileCount: 0,
-      } as KDBCompleteMessage);
-    }
-    
+    await storeKdbBytesInStorage(kdbData, kdbId);
   } catch (error) {
     stopHeartbeat();
-    
+
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     const canRetry = currentDownload ? currentDownload.retryCount < MAX_RETRIES : false;
-    
+
     postMessage({
       type: 'error',
       error: errorMessage,
       canRetry,
+    } as KDBErrorMessage);
+  } finally {
+    currentDownload = null;
+  }
+}
+
+// Fetch a raw .kdb from an arbitrary URL (option A from the user: a direct URL
+// to a .kdb file) and store it via the shared pipeline. Subject to browser
+// CORS — the target host must allow cross-origin fetches.
+async function downloadFromUrlAndStore(
+  url: string,
+  kdbId: string
+): Promise<void> {
+  currentDownload = {
+    kdbName: url,
+    baseUrl: '',
+    kdbId,
+    totalSize: 0,
+    downloaded: 0,
+    lastProgressTime: Date.now(),
+    lastProgressBytes: 0,
+    retryCount: 0,
+    isCancelled: false,
+    phase: 'downloading',
+    speedHistory: [],
+    lastProgressPercent: 0,
+  };
+
+  startHeartbeat();
+
+  try {
+    updateProgress(0, 0, 'downloading', `Fetching ${url}...`, true);
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch KDB: HTTP ${response.status}`);
+    }
+
+    const kdbData = new Uint8Array(await response.arrayBuffer());
+    currentDownload.totalSize = kdbData.length;
+
+    await storeKdbBytesInStorage(kdbData, kdbId);
+  } catch (error) {
+    stopHeartbeat();
+
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+    postMessage({
+      type: 'error',
+      error: errorMessage,
+    } as KDBErrorMessage);
+  } finally {
+    currentDownload = null;
+  }
+}
+
+// Store a raw .kdb provided as in-memory bytes (e.g. a local file picked from
+// disk) via the shared pipeline. The buffer is transferred (not copied) from
+// the main thread.
+async function storeFromBytesAndStore(
+  bytes: Uint8Array,
+  kdbId: string
+): Promise<void> {
+  currentDownload = {
+    kdbName: kdbId,
+    baseUrl: '',
+    kdbId,
+    totalSize: bytes.length,
+    downloaded: 0,
+    lastProgressTime: Date.now(),
+    lastProgressBytes: 0,
+    retryCount: 0,
+    isCancelled: false,
+    phase: 'storing',
+    speedHistory: [],
+    lastProgressPercent: 0,
+  };
+
+  startHeartbeat();
+
+  try {
+    await storeKdbBytesInStorage(bytes, kdbId);
+  } catch (error) {
+    stopHeartbeat();
+
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+    postMessage({
+      type: 'error',
+      error: errorMessage,
     } as KDBErrorMessage);
   } finally {
     currentDownload = null;
@@ -807,10 +908,14 @@ async function downloadAndStoreKDB(
 // ============================================
 
 self.onmessage = async (event: MessageEvent<KDBDownloadMessage>) => {
-  const { type, kdbName, baseUrl, kdbId } = event.data;
+  const { type, kdbName, baseUrl, kdbId, url, bytes } = event.data;
   
   if (type === 'start' && kdbName && baseUrl && kdbId) {
     await downloadAndStoreKDB(kdbName, baseUrl, kdbId);
+  } else if (type === 'startUrl' && url && kdbId) {
+    await downloadFromUrlAndStore(url, kdbId);
+  } else if (type === 'startBytes' && bytes && kdbId) {
+    await storeFromBytesAndStore(bytes, kdbId);
   } else if (type === 'cancel') {
     if (currentDownload) {
       currentDownload.isCancelled = true;

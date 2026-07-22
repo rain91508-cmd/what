@@ -7,6 +7,8 @@ interface MenuBarProps {
   onDisconnect: () => void;
   onOpenKdbList: () => void;
   onOpenCachedKdb?: () => void;
+  onOpenKdbUrl?: () => void;
+  onOpenLocalKdb?: () => void;
   onOpenWaveList: () => void;
   onCloseKdb: () => void;
   onCloseWave: () => void;
@@ -56,7 +58,7 @@ interface Menu {
 }
 
 export function MenuBar({
-  connected, onConnect, onDisconnect, onOpenKdbList, onOpenCachedKdb, onOpenWaveList, onCloseKdb, onCloseWave, hasKdbLoaded, hasWaveLoaded, infoText,
+  connected, onConnect, onDisconnect, onOpenKdbList, onOpenCachedKdb, onOpenKdbUrl, onOpenLocalKdb, onOpenWaveList, onCloseKdb, onCloseWave, hasKdbLoaded, hasWaveLoaded, infoText,
   onOpenDebugTool, onSaveSession, onRestoreSession, opfsEnabled, onToggleOpfs, memoryCacheEnabled, onToggleMemoryCache, prefetchEnabled, prefetchDisabled, onTogglePrefetch,
   onZoomIn, onZoomOut, onZoomFull, canZoom,
   onHistoryBack, onHistoryForward, canGoBack, canGoForward, onAddBookmark, onFindDriver, onFindDefinition, hasSelectedWord,
@@ -99,6 +101,8 @@ export function MenuBar({
         { separator: true, label: '' },
         { label: t('menuItems.openKdb'), onClick: onOpenKdbList, disabled: !connected },
         { label: t('menuItems.openCachedKdb'), onClick: onOpenCachedKdb, disabled: !onOpenCachedKdb },
+        { label: t('menuItems.openKdbUrl'), onClick: onOpenKdbUrl, disabled: !onOpenKdbUrl },
+        { label: t('menuItems.openLocalKdb'), onClick: onOpenLocalKdb, disabled: !onOpenLocalKdb },
         { label: t('menuItems.openWaveform'), onClick: onOpenWaveList, disabled: !connected },
         { separator: true, label: '' },
         { label: t('menuItems.closeKdb'), onClick: onCloseKdb, disabled: !hasKdbLoaded },

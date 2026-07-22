@@ -17,6 +17,8 @@ const translations: Translations = {
     disconnect: 'Отключиться',
     openKdb: 'Открыть KDB...',
     openCachedKdb: 'Открыть кэшированный KDB...',
+    openKdbUrl: 'Открыть URL KDB...',
+    openLocalKdb: 'Открыть локальный KDB...',
     openWaveform: 'Открыть осциллограмму...',
     closeKdb: 'Закрыть KDB',
     closeWaveform: 'Закрыть осциллограмму',
@@ -108,6 +110,14 @@ const translations: Translations = {
       selectPrompt: 'Выберите кэшированный KDB для открытия:',
       filterPlaceholder: 'Фильтр (* подстановочный знак)...',
       open: 'Открыть',
+    },
+    kdbUrl: {
+      title: 'Открыть KDB по URL',
+      prompt: 'Введите прямую ссылку на файл .kdb:',
+      placeholder: 'https://example.com/path/design.kdb',
+      empty: 'Пожалуйста, введите URL',
+      invalid: 'Пожалуйста, введите корректный URL',
+      load: 'Загрузить',
     },
     waveSelection: {
       title: 'Выбрать осциллограмму',

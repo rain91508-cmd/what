@@ -17,6 +17,8 @@ const translations: Translations = {
     disconnect: 'Disconnect',
     openKdb: 'Open KDB...',
     openCachedKdb: 'Open Cached KDB...',
+    openKdbUrl: 'Open KDB URL...',
+    openLocalKdb: 'Open Local KDB...',
     openWaveform: 'Open Waveform...',
     closeKdb: 'Close KDB',
     closeWaveform: 'Close Waveform',
@@ -108,6 +110,14 @@ const translations: Translations = {
       selectPrompt: 'Select a cached KDB to open:',
       filterPlaceholder: 'Filter (* wildcard)...',
       open: 'Open',
+    },
+    kdbUrl: {
+      title: 'Open KDB from URL',
+      prompt: 'Enter a direct URL to a raw .kdb file:',
+      placeholder: 'https://example.com/path/design.kdb',
+      empty: 'Please enter a URL',
+      invalid: 'Please enter a valid URL',
+      load: 'Load',
     },
     waveSelection: {
       title: 'Select Waveform',

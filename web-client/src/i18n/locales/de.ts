@@ -17,6 +17,8 @@ const translations: Translations = {
     disconnect: 'Trennen',
     openKdb: 'KDB öffnen...',
     openCachedKdb: 'Cache-KDB öffnen...',
+    openKdbUrl: 'KDB-URL öffnen...',
+    openLocalKdb: 'Lokale KDB öffnen...',
     openWaveform: 'Wellenform öffnen...',
     closeKdb: 'KDB schließen',
     closeWaveform: 'Wellenform schließen',
@@ -108,6 +110,14 @@ const translations: Translations = {
       selectPrompt: 'Cache-KDB zum Öffnen auswählen:',
       filterPlaceholder: 'Filtern (* Platzhalter)...',
       open: 'Öffnen',
+    },
+    kdbUrl: {
+      title: 'KDB über URL öffnen',
+      prompt: 'Geben Sie eine direkte URL zu einer rohen .kdb-Datei ein:',
+      placeholder: 'https://example.com/path/design.kdb',
+      empty: 'Bitte eine URL eingeben',
+      invalid: 'Bitte eine gültige URL eingeben',
+      load: 'Laden',
     },
     waveSelection: {
       title: 'Wellenform auswählen',

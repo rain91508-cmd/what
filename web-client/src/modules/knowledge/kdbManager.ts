@@ -170,6 +170,123 @@ class KdbManager {
   }
 
   /**
+   * Derive a stable kdbId from a URL pointing at a raw .kdb file. Uses the URL
+   * path's last segment (stripped of query/fragment), mirroring the server
+   * convention where the kdbId equals the file name (e.g. "c910.kdb").
+   */
+  private deriveKdbIdFromUrl(url: string): string {
+    try {
+      const u = new URL(url);
+      let base = u.pathname.split('/').pop() || '';
+      base = base.split(/[?#]/)[0];
+      if (base) return base;
+    } catch {
+      // Not a valid URL — fall through to a best-effort split.
+    }
+    const seg = url.split(/[/\\]/).pop() || '';
+    return (seg.split(/[?#]/)[0] || 'kdb-from-url');
+  }
+
+  /**
+   * Derive a stable kdbId from a local file's name (last path segment).
+   */
+  private deriveKdbIdFromFileName(name: string): string {
+    const base = name.split(/[\\/]/).pop() || name;
+    return base || 'kdb-from-file';
+  }
+
+  /**
+   * Load a KDB directly from a URL (option A: a direct URL to a raw .kdb file).
+   * The bytes are fetched and stored into OPFS/IndexedDB exactly like the server
+   * path, so the KDB also becomes available in the "Open Cached KDB" list.
+   * The target host must permit cross-origin fetches (CORS).
+   */
+  async loadKdbFromUrl(
+    url: string,
+    onProgress?: (downloaded: number, total: number, phase?: string, message?: string) => void
+  ): Promise<boolean> {
+    if (this.downloading) {
+      console.warn('[KdbManager] Download already in progress');
+      return false;
+    }
+
+    this.downloading = true;
+
+    try {
+      const kdbId = this.deriveKdbIdFromUrl(url);
+      console.log('[KdbManager] Loading KDB from URL:', url, 'kdbId:', kdbId);
+
+      const result = await kdbDownloadManager.downloadKDBFromUrl(
+        url,
+        kdbId,
+        (progress: KDBDownloadProgress) => {
+          onProgress?.(progress.loaded, progress.total, progress.phase, progress.message);
+        }
+      );
+
+      if (!result.success) {
+        throw new Error(result.error || 'Download failed');
+      }
+
+      this.currentKdbId = kdbId;
+      await this.loadKdbData();
+      console.log('[KdbManager] KDB loaded from URL:', url);
+      return true;
+    } catch (error) {
+      console.error('[KdbManager] Failed to load KDB from URL:', error);
+      return false;
+    } finally {
+      this.downloading = false;
+    }
+  }
+
+  /**
+   * Load a KDB from a local file picked from disk. The bytes are stored into
+   * OPFS/IndexedDB like any other source, so the KDB also appears in the
+   * "Open Cached KDB" list for later reopening.
+   */
+  async loadKdbFromLocalFile(
+    file: File,
+    onProgress?: (downloaded: number, total: number, phase?: string, message?: string) => void
+  ): Promise<boolean> {
+    if (this.downloading) {
+      console.warn('[KdbManager] Download already in progress');
+      return false;
+    }
+
+    this.downloading = true;
+
+    try {
+      const kdbId = this.deriveKdbIdFromFileName(file.name);
+      console.log('[KdbManager] Loading KDB from local file:', file.name, 'kdbId:', kdbId);
+
+      const bytes = new Uint8Array(await file.arrayBuffer());
+
+      const result = await kdbDownloadManager.downloadKDBFromBytes(
+        bytes,
+        kdbId,
+        (progress: KDBDownloadProgress) => {
+          onProgress?.(progress.loaded, progress.total, progress.phase, progress.message);
+        }
+      );
+
+      if (!result.success) {
+        throw new Error(result.error || 'Load failed');
+      }
+
+      this.currentKdbId = kdbId;
+      await this.loadKdbData();
+      console.log('[KdbManager] KDB loaded from local file:', file.name);
+      return true;
+    } catch (error) {
+      console.error('[KdbManager] Failed to load KDB from local file:', error);
+      return false;
+    } finally {
+      this.downloading = false;
+    }
+  }
+
+  /**
    * Load KDB data from IndexedDB into memory
    */
   private async loadKdbData(): Promise<void> {    if (!this.currentKdbId) return;

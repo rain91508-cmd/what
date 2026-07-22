@@ -26,6 +26,8 @@ export interface Translations {
     disconnect: string;
     openKdb: string;
     openCachedKdb: string;
+    openKdbUrl: string;
+    openLocalKdb: string;
     openWaveform: string;
     closeKdb: string;
     closeWaveform: string;
@@ -127,6 +129,15 @@ export interface Translations {
       selectPrompt: string;
       filterPlaceholder: string;
       open: string;
+    };
+    // Open KDB from URL
+    kdbUrl: {
+      title: string;
+      prompt: string;
+      placeholder: string;
+      empty: string;
+      invalid: string;
+      load: string;
     };
     // Wave Selection
     waveSelection: {

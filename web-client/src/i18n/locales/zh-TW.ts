@@ -17,6 +17,8 @@ const translations: Translations = {
     disconnect: '中斷連線',
     openKdb: '開啟KDB...',
     openCachedKdb: '開啟快取KDB...',
+    openKdbUrl: '開啟KDB URL...',
+    openLocalKdb: '開啟本地KDB...',
     openWaveform: '開啟波形...',
     closeKdb: '關閉KDB',
     closeWaveform: '關閉波形',
@@ -108,6 +110,14 @@ const translations: Translations = {
       selectPrompt: '選擇一個快取的 KDB 開啟：',
       filterPlaceholder: '篩選 (* 萬用字元)...',
       open: '開啟',
+    },
+    kdbUrl: {
+      title: '透過 URL 開啟 KDB',
+      prompt: '請輸入一個指向原始 .kdb 檔案的直接 URL：',
+      placeholder: 'https://example.com/path/design.kdb',
+      empty: '請輸入 URL',
+      invalid: '請輸入有效的 URL',
+      load: '載入',
     },
     waveSelection: {
       title: '選擇波形',

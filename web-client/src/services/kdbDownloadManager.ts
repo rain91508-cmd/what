@@ -47,7 +47,7 @@ class KDBDownloadManager {
   private heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
 
   /**
-   * Download and store KDB using Web Worker
+   * Download and store KDB from server using Web Worker
    * @param kdbName Name of the KDB file
    * @param kdbId Unique KDB identifier
    * @param onProgress Progress callback
@@ -75,10 +75,86 @@ class KDBDownloadManager {
       };
     }
 
+    return this.startWorkerWithMessage(
+      { type: 'start', kdbName, baseUrl, kdbId },
+      kdbName,
+      onProgress,
+    );
+  }
+
+  /**
+   * Fetch a raw .kdb from an arbitrary URL and store it via the Web Worker.
+   * @param url Direct URL to a .kdb file
+   * @param kdbId Unique KDB identifier (derived from the URL by the caller)
+   * @param onProgress Progress callback
+   * @returns Download result
+   */
+  async downloadKDBFromUrl(
+    url: string,
+    kdbId: string,
+    onProgress?: (progress: KDBDownloadProgress) => void
+  ): Promise<KDBDownloadResult> {
+    if (this.currentDownload) {
+      return {
+        success: false,
+        error: 'Another KDB download is in progress',
+      };
+    }
+
+    return this.startWorkerWithMessage(
+      { type: 'startUrl', url, kdbId },
+      url,
+      onProgress,
+    );
+  }
+
+  /**
+   * Store a raw .kdb provided as in-memory bytes (e.g. a local file picked from
+   * disk) via the Web Worker. The bytes buffer is transferred (not copied).
+   * @param bytes Raw .kdb bytes
+   * @param kdbId Unique KDB identifier (derived from the file name by the caller)
+   * @param onProgress Progress callback
+   * @returns Download result
+   */
+  async downloadKDBFromBytes(
+    bytes: Uint8Array,
+    kdbId: string,
+    onProgress?: (progress: KDBDownloadProgress) => void
+  ): Promise<KDBDownloadResult> {
+    if (this.currentDownload) {
+      return {
+        success: false,
+        error: 'Another KDB download is in progress',
+      };
+    }
+
+    return this.startWorkerWithMessage(
+      { type: 'startBytes', bytes, kdbId },
+      kdbId,
+      onProgress,
+    );
+  }
+
+  /**
+   * (Re)create the Worker, wire up its handlers, and post the given message.
+   * Shared by all three ingestion paths (server / URL / bytes).
+   */
+  private startWorkerWithMessage(
+    message: {
+      type: 'start' | 'startUrl' | 'startBytes';
+      kdbName?: string;
+      baseUrl?: string;
+      kdbId: string;
+      url?: string;
+      bytes?: Uint8Array;
+    },
+    kdbName: string,
+    onProgress?: (progress: KDBDownloadProgress) => void
+  ): Promise<KDBDownloadResult> {
     return new Promise((resolve, reject) => {
       this.currentDownload = {
         kdbName,
-        kdbId,
+        kdbId: message.kdbId,
         resolve,
         reject,
         onProgress,
@@ -106,13 +182,14 @@ class KDBDownloadManager {
           });
         };
 
+        // Transfer the bytes buffer (if any) so we don't clone a large file.
+        const transfer: Transferable[] = [];
+        if (message.bytes && message.bytes.buffer) {
+          transfer.push(message.bytes.buffer as ArrayBuffer);
+        }
+
         // Start download
-        this.worker.postMessage({
-          type: 'start',
-          kdbName,
-          baseUrl,
-          kdbId,
-        });
+        this.worker.postMessage(message, transfer);
       } catch (error) {
         console.error('[KDBDownloadManager] Failed to create worker:', error);
         this.cleanup();
