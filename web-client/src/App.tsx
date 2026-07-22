@@ -2639,11 +2639,12 @@ function App() {
     const module = kdbManager.getModuleById(lookupModuleIndex);
     if (!module) return;
 
-    // Check if line is within module range
+    // Check if line is within module range (soft check — warn but don't block,
+    // because source files often contain signal declarations from multiple modules)
     if (activeTabData.moduleStartLine && activeTabData.moduleEndLine) {
       if (lineNumber < activeTabData.moduleStartLine || lineNumber > activeTabData.moduleEndLine) {
-        console.log('[App] Click outside module range');
-        return;
+        console.log('[App] Click outside module range (soft — will search broadly)');
+        // Don't return — allow the search to proceed with parent/child fallback
       }
     }
 
