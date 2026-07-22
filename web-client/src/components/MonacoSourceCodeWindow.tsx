@@ -1052,10 +1052,14 @@ function MonacoSourceCodeWindow({
 
       const lineNumber = position.lineNumber;
 
-      // Check if line is within module range (if module info is available)
+      // Check if line is within module range (if module info is available).
+      // If outside, still allow the click — the signal might belong to a
+      // parent or sibling module in the same source file. The App's
+      // handleWordClick will do a broader search if needed.
       if (moduleStartLine && moduleEndLine) {
         if (lineNumber < moduleStartLine || lineNumber > moduleEndLine) {
-          return; // Outside range, do nothing
+          console.log('[Monaco] Word click outside module range, but allowing');
+          // Don't return — let App.tsx handle it with broader search
         }
       }
 
@@ -1087,10 +1091,14 @@ function MonacoSourceCodeWindow({
 
       const lineNumber = selection.startLineNumber;
 
-      // Check if line is within module range (if module info is available)
+      // Check if line is within module range (if module info is available).
+      // If outside, still allow the click — the signal might belong to a
+      // parent or sibling module in the same source file. The App's
+      // handleWordClick will do a broader search if needed.
       if (moduleStartLine && moduleEndLine) {
         if (lineNumber < moduleStartLine || lineNumber > moduleEndLine) {
-          return; // Outside range, do nothing
+          console.log('[Monaco] Word click outside module range, but allowing');
+          // Don't return — let App.tsx handle it with broader search
         }
       }
 
