@@ -49,18 +49,20 @@ export class RenderCache {
 
   /**
    * 生成缓存键
+   * @param lodLevel 当前 LoD 级别，避免不同 LoD 的结果碰撞
    */
-  generateKey(signalNames: string[], viewport: ViewportConfig): string {
+  generateKey(signalNames: string[], viewport: ViewportConfig, lodLevel?: number): string {
     const signalsKey = signalNames.slice().sort().join(',');
     const viewportKey = `${viewport.startTime},${viewport.endTime},${viewport.width},${viewport.height}`;
-    return `${signalsKey}|${viewportKey}`;
+    const lodKey = lodLevel !== undefined ? `|lod=${lodLevel}` : '';
+    return `${signalsKey}|${viewportKey}${lodKey}`;
   }
 
   /**
    * 获取缓存的渲染结果
    */
-  get(signalNames: string[], viewport: ViewportConfig): RenderResult | null {
-    const key = this.generateKey(signalNames, viewport);
+  get(signalNames: string[], viewport: ViewportConfig, lodLevel?: number): RenderResult | null {
+    const key = this.generateKey(signalNames, viewport, lodLevel);
     const entry = this.cache.get(key);
 
     if (entry) {
@@ -78,8 +80,8 @@ export class RenderCache {
   /**
    * 存储渲染结果到缓存
    */
-  set(signalNames: string[], viewport: ViewportConfig, result: RenderResult): void {
-    const key = this.generateKey(signalNames, viewport);
+  set(signalNames: string[], viewport: ViewportConfig, result: RenderResult, lodLevel?: number): void {
+    const key = this.generateKey(signalNames, viewport, lodLevel);
 
     // 检查是否已存在
     if (this.cache.has(key)) {
@@ -114,8 +116,8 @@ export class RenderCache {
   /**
    * 检查是否有缓存
    */
-  has(signalNames: string[], viewport: ViewportConfig): boolean {
-    const key = this.generateKey(signalNames, viewport);
+  has(signalNames: string[], viewport: ViewportConfig, lodLevel?: number): boolean {
+    const key = this.generateKey(signalNames, viewport, lodLevel);
     return this.cache.has(key);
   }
 

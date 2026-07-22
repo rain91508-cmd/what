@@ -7,7 +7,7 @@
 import { apiService } from './api';
 
 export interface KDBDownloadProgress {
-  phase: 'downloading' | 'decompressing' | 'storing' | 'retrying';
+  phase: 'downloading' | 'decompressing' | 'storing' | 'retrying' | 'error';
   loaded: number;
   total: number;
   message: string;
@@ -33,6 +33,23 @@ export interface KDBDownloadHeartbeat {
 }
 
 type KDBDownloadWorker = Worker;
+
+// Default public CORS proxy used as a fallback when a direct browser fetch is
+// blocked by CORS. Override by setting the "kdbCorsProxy" localStorage key to
+// your own proxy (use the "{url}" placeholder if it needs a different shape), or
+// to an empty string to disable the fallback. Workers have no localStorage
+// access, so this is resolved on the main thread and passed in the message.
+const DEFAULT_CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+
+function resolveCorsProxy(): string {
+  try {
+    const stored = localStorage.getItem('kdbCorsProxy');
+    // null -> not set -> use default; '' -> explicitly disabled; otherwise use value.
+    return stored === null ? DEFAULT_CORS_PROXY : stored;
+  } catch {
+    return DEFAULT_CORS_PROXY;
+  }
+}
 
 class KDBDownloadManager {
   private worker: KDBDownloadWorker | null = null;
@@ -102,7 +119,7 @@ class KDBDownloadManager {
     }
 
     return this.startWorkerWithMessage(
-      { type: 'startUrl', url, kdbId },
+      { type: 'startUrl', url, kdbId, corsProxy: resolveCorsProxy() },
       url,
       onProgress,
     );
@@ -147,6 +164,7 @@ class KDBDownloadManager {
       kdbId: string;
       url?: string;
       bytes?: Uint8Array;
+      corsProxy?: string;
     },
     kdbName: string,
     onProgress?: (progress: KDBDownloadProgress) => void
@@ -220,6 +238,17 @@ class KDBDownloadManager {
     const timeoutMs = phase === 'storing' ? 180000 : 30000;
     this.heartbeatTimeout = setTimeout(() => {
       console.warn('[KDBDownloadManager] Worker heartbeat timeout');
+      // Notify the UI: send a timeout error so the user sees a "Download stalled" message.
+      this.currentDownload?.onProgress?.({
+        phase: 'error',
+        loaded: 0,
+        total: 0,
+        message: 'Download stalled — worker heartbeat timed out',
+      });
+      // Attempt to cancel the download (worker will also check isCancelled).
+      if (this.currentDownload && this.worker) {
+        this.worker.postMessage({ type: 'cancel' });
+      }
     }, timeoutMs);
   }
 

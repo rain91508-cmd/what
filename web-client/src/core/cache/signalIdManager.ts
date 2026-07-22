@@ -25,6 +25,12 @@ export class SignalIdManager {
   private waveform: string;
   private metadata: SignalMetadata;
   private opfsRoot: FileSystemDirectoryHandle | null = null;
+  // Serialized save chain: each saveMetadata() call awaits the previous one,
+  // preventing overlapping createWritable calls that would corrupt signals.json.
+  private savePromise: Promise<void> = Promise.resolve();
+  // Debounce timer: coalesces rapid allocations into one write.
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private savePending = false;
 
   constructor(waveform: string) {
     this.waveform = waveform;
@@ -72,13 +78,26 @@ export class SignalIdManager {
     const draw_sig_id = this.metadata.next_draw_sig_id++;
     this.metadata.signal_map[key] = draw_sig_id;
     
-    // Save asynchronously (don't await to avoid blocking)
-    this.saveMetadata().catch(e => {
-      console.warn(`[SignalIdManager] Failed to save metadata:`, e);
-    });
+    // Debounced serialized save: coalesce rapid allocations into one write.
+    this.scheduleSave();
 
     console.log(`[SignalIdManager] Allocated new ID: global_id=${global_id} -> draw_sig_id=${draw_sig_id}`);
     return draw_sig_id;
+  }
+
+  /**
+   * Schedule a debounced save (200ms). If called again within 200ms, the
+   * timer resets so rapid allocations produce a single OPFS write.
+   */
+  private scheduleSave(): void {
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      // Chain the save so overlapping writes never interleave.
+      this.savePromise = this.savePromise
+        .then(() => this.doSave())
+        .catch(e => console.warn(`[SignalIdManager] Failed to save metadata:`, e));
+    }, 200);
   }
 
   /**
@@ -165,9 +184,9 @@ export class SignalIdManager {
   }
 
   /**
-   * Save metadata to OPFS
+   * Save metadata to OPFS (serialized via savePromise chain)
    */
-  private async saveMetadata(): Promise<void> {
+  private async doSave(): Promise<void> {
     if (!this.opfsRoot) return;
 
     try {
@@ -206,23 +225,34 @@ export class SignalIdManager {
       next_draw_sig_id: 0,
       signal_map: {},
     };
-    await this.saveMetadata();
+    await this.doSave();
   }
 }
 
-// Singleton instance cache
+// Singleton instance cache with promise-based dedup
 const managerCache = new Map<string, SignalIdManager>();
+const managerPromises = new Map<string, Promise<SignalIdManager>>();
 
 /**
- * Get or create SignalIdManager for a waveform
+ * Get or create SignalIdManager for a waveform.
+ * Uses a promise-based lock to prevent duplicate managers when called concurrently.
  */
 export async function getSignalIdManager(waveform: string): Promise<SignalIdManager> {
-  let manager = managerCache.get(waveform);
-  if (!manager) {
-    manager = new SignalIdManager(waveform);
-    await manager.init();
-    managerCache.set(waveform, manager);
+  const existing = managerCache.get(waveform);
+  if (existing) return existing;
+
+  let p = managerPromises.get(waveform);
+  if (!p) {
+    p = (async () => {
+      const m = new SignalIdManager(waveform);
+      await m.init();
+      managerCache.set(waveform, m);
+      return m;
+    })();
+    managerPromises.set(waveform, p);
   }
+
+  const manager = await p;
   return manager;
 }
 

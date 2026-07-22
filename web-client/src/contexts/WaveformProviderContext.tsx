@@ -121,6 +121,11 @@ export function WaveformProviderProvider({
       console.log('[WaveformProviderContext] Recreating provider...');
       let isMounted = true;
 
+      // Update prevPropsRef *synchronously* at effect start so a second
+      // prop change before async creation completes doesn't start another
+      // redundant recreation (and leak the first provider).
+      prevPropsRef.current = { serverUrl, waveformName, timeStamp, enableMemoryCache };
+
       const initProvider = async () => {
         try {
           setIsLoading(true);
@@ -152,7 +157,6 @@ export function WaveformProviderProvider({
             setProvider(newProvider);
             if (providerRef) providerRef.current = newProvider;
             setIsLoading(false);
-            prevPropsRef.current = { serverUrl, waveformName, timeStamp, enableMemoryCache };
           } else {
             // Superseded by a newer effect before creation finished.
             newProvider.dispose();
@@ -169,8 +173,9 @@ export function WaveformProviderProvider({
 
       return () => {
         isMounted = false;
-        // Tearing down the worker: clear the live-provider ref so consumers in the
-        // parent (e.g. the menu toggles) can no longer call into a disposed instance.
+        // Tearing down the worker: only clear providerRef if it still
+        // points to the provider THIS effect created. A newer effect may
+        // have already set a different provider in providerRef.
         if (providerRef) providerRef.current = null;
         setProvider(null);
       };
@@ -187,6 +192,17 @@ export function WaveformProviderProvider({
       liveProvider.setSpaceBeforeBracket(spaceBeforeBracket);
     }
   }, [signalPrefix, serverPrefix, spaceBeforeBracket, provider]);
+
+  // Effect C: apply OPFS / Prefetch toggles to the live provider dynamically.
+  // These were intentionally excluded from Effect A's dependency list to avoid
+  // wasteful worker recreation, but they still need to be forwarded.
+  useEffect(() => {
+    const liveProvider = providerRef?.current ?? provider;
+    if (liveProvider) {
+      liveProvider.setOpfsEnabled?.(enableOpfs);
+      liveProvider.setPrefetchEnabled?.(enablePrefetch);
+    }
+  }, [enableOpfs, enablePrefetch, provider]);
 
   const value: WaveformProviderContextType = {
     provider,

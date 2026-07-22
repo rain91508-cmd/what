@@ -368,7 +368,7 @@ export function drawMultiBitWaveform(
   const rectY = y - rectHeight / 2;
 
   // 获取值类型
-  const valueType = value.valueType || value.value_type;
+  const valueType = value.type || value.valueType || value.value_type;
 
   let strokeColor: string;
   let fillColor: string;

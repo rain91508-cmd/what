@@ -121,6 +121,24 @@ interface KDBDownloadMessage {
   kdbId?: string;
   url?: string;
   bytes?: Uint8Array;
+  // Public CORS proxy used as a fallback when a direct browser fetch is blocked
+  // by CORS (e.g. GitHub release assets, which send no Access-Control-Allow-Origin).
+  // Browser-only — no backend required. Override via the "kdbCorsProxy" localStorage
+  // key; set it to an empty string to disable the fallback entirely.
+  corsProxy?: string;
+}
+
+// Default public CORS proxy. It adds Access-Control-Allow-Origin so the browser
+// can read cross-origin .kdb bytes. This is a third-party service, so it can be
+// slow or occasionally unavailable — override it with your own proxy if desired.
+const DEFAULT_CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+
+// Build the proxied URL. Supports a `{url}` placeholder in case the proxy uses a
+// different URL shape (e.g. "https://my-proxy.example.com/fetch?target={url}").
+function buildProxyUrl(proxy: string, url: string): string {
+  if (proxy.includes('{url}')) return proxy.replace('{url}', encodeURIComponent(url));
+  const sep = proxy.includes('?') ? '&' : '?';
+  return `${proxy}${sep}url=${encodeURIComponent(url)}`;
 }
 
 interface KDBProgressMessage {
@@ -813,12 +831,54 @@ async function downloadAndStoreKDB(
   }
 }
 
+// Fetch a URL as binary with streaming progress. Throws on network/CORS errors
+// or non-OK responses so the caller can decide whether to fall back.
+async function fetchBinaryWithProgress(
+  target: string,
+  onChunk: (received: number, total: number) => void,
+): Promise<Uint8Array> {
+  const response = await fetch(target);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch KDB: HTTP ${response.status}`);
+  }
+
+  const total = Number(response.headers.get('Content-Length')) || 0;
+  const reader = response.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+
+  if (reader) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      chunks.push(value);
+      received += value.length;
+      onChunk(received, total);
+    }
+  } else {
+    chunks.push(new Uint8Array(await response.arrayBuffer()));
+  }
+
+  const out = new Uint8Array(chunks.reduce((sum, c) => sum + c.length, 0));
+  let pos = 0;
+  for (const c of chunks) {
+    out.set(c, pos);
+    pos += c.length;
+  }
+  return out;
+}
+
 // Fetch a raw .kdb from an arbitrary URL (option A from the user: a direct URL
-// to a .kdb file) and store it via the shared pipeline. Subject to browser
-// CORS — the target host must allow cross-origin fetches.
+// to a .kdb file) and store it via the shared pipeline. The browser enforces
+// CORS, so a direct fetch of a cross-origin resource (e.g. GitHub release
+// assets) is normally blocked. We therefore try a direct fetch first, and if it
+// fails we automatically retry through a (configurable) public CORS proxy that
+// adds the missing Access-Control-Allow-Origin header. No backend is required.
 async function downloadFromUrlAndStore(
   url: string,
-  kdbId: string
+  kdbId: string,
+  corsProxy?: string
 ): Promise<void> {
   currentDownload = {
     kdbName: url,
@@ -838,16 +898,43 @@ async function downloadFromUrlAndStore(
   startHeartbeat();
 
   try {
-    updateProgress(0, 0, 'downloading', `Fetching ${url}...`, true);
+    let kdbData: Uint8Array | null = null;
 
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch KDB: HTTP ${response.status}`);
+    // 1) Direct browser fetch (works for same-origin or CORS-enabled hosts).
+    try {
+      updateProgress(0, 0, 'downloading', `Fetching ${url}...`, true);
+      kdbData = await fetchBinaryWithProgress(url, (received, total) =>
+        updateProgress(
+          received,
+          total,
+          'downloading',
+          `Downloaded ${(received / 1024 / 1024).toFixed(2)} MB${
+            total ? ` / ${(total / 1024 / 1024).toFixed(2)} MB` : ''
+          }`
+        )
+      );
+    } catch (directErr) {
+      // 2) Fall back to the public CORS proxy if one is configured.
+      if (!corsProxy) throw directErr;
+      console.warn(
+        `[KDBWorker] Direct fetch failed (${directErr instanceof Error ? directErr.message : directErr}); retrying via CORS proxy`
+      );
+      updateProgress(0, 0, 'downloading', `Fetching ${url} via CORS proxy...`, true);
+      kdbData = await fetchBinaryWithProgress(
+        buildProxyUrl(corsProxy, url),
+        (received, total) =>
+          updateProgress(
+            received,
+            total,
+            'downloading',
+            `Downloaded (proxy) ${(received / 1024 / 1024).toFixed(2)} MB${
+              total ? ` / ${(total / 1024 / 1024).toFixed(2)} MB` : ''
+            }`
+          )
+      );
     }
 
-    const kdbData = new Uint8Array(await response.arrayBuffer());
     currentDownload.totalSize = kdbData.length;
-
     await storeKdbBytesInStorage(kdbData, kdbId);
   } catch (error) {
     stopHeartbeat();
@@ -908,12 +995,12 @@ async function storeFromBytesAndStore(
 // ============================================
 
 self.onmessage = async (event: MessageEvent<KDBDownloadMessage>) => {
-  const { type, kdbName, baseUrl, kdbId, url, bytes } = event.data;
+  const { type, kdbName, baseUrl, kdbId, url, bytes, corsProxy } = event.data;
   
   if (type === 'start' && kdbName && baseUrl && kdbId) {
     await downloadAndStoreKDB(kdbName, baseUrl, kdbId);
   } else if (type === 'startUrl' && url && kdbId) {
-    await downloadFromUrlAndStore(url, kdbId);
+    await downloadFromUrlAndStore(url, kdbId, corsProxy);
   } else if (type === 'startBytes' && bytes && kdbId) {
     await storeFromBytesAndStore(bytes, kdbId);
   } else if (type === 'cancel') {

@@ -327,6 +327,12 @@ async function processQueue(): Promise<void> {
 async function handleInitialize(payload: any, id: number): Promise<void> {
   const { config } = payload;
 
+  // Idempotency: if a provider already exists, dispose and free it first.
+  if (wasmProvider) {
+    wasmProvider.clear_cache();
+    wasmProvider = null;
+  }
+
   // 初始化 WASM
   await initializeWasm();
 
@@ -383,6 +389,15 @@ function handleDispose(id: number): void {
   // 清理所有 Canvas
   canvasManager.clear();
   currentRenderTask = null;
+
+  // 清除预取状态，防止 DISPOSE 后 stale 的 prefetchTimer 仍然触发
+  if (prefetchTimer) {
+    clearTimeout(prefetchTimer);
+    prefetchTimer = null;
+  }
+  pendingPrefetchSignals = null;
+  lastRenderSignalNames = [];
+  wasmInitialized = false;
 
   sendSuccess(id, null);
 }
@@ -773,6 +788,9 @@ async function handleRenderWaveform(payload: any, id: number): Promise<void> {
     // Debug: console.log('[WaveformWorker] Fetching segments for signals:', signalNames);
 
     // 6. 获取 segments（内部会自动触发预取）
+    // Check cancellation before the expensive WASM fetch, so superseded
+    // render tasks don't waste bandwidth.
+    if (currentRenderTask?.id !== id) return;
     const segments = await wasmProvider.fetch_and_get_segments(signalNames);
 
     // 检查任务是否已过期（被新任务覆盖）

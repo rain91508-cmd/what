@@ -33,6 +33,8 @@ interface KdbInfoResponse {
 class ApiService {
   private baseUrl: string = '';
   private connected = false;
+  // Default timeout: 30s for normal requests, 5s for health check
+  private requestTimeout = 30000;
 
   configure(config: ServerConfig): void {
     // Auto-use HTTPS for port 443, otherwise respect useHttps flag
@@ -57,10 +59,30 @@ class ApiService {
     return this.baseUrl;
   }
 
+  /**
+   * Create a fetch request with AbortController timeout.
+   * Returns the Response on success, throws on timeout or network error.
+   */
+  private async fetchWithTimeout(
+    url: string,
+    timeoutMs: number,
+    init?: RequestInit
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { ...init, signal: controller.signal });
+      return response;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   // Generic API request
   private async request<T>(
     endpoint: string,
-    options?: RequestInit
+    options?: RequestInit,
+    timeoutMs?: number
   ): Promise<ApiResponse<T>> {
     // Check if configured
     if (!this.baseUrl) {
@@ -72,13 +94,16 @@ class ApiService {
     }
     
     try {
-      const response = await fetch(`${this.baseUrl}${endpoint}`, {
-        ...options,
-        headers: {
-          'Content-Type': 'application/json',
-          ...options?.headers,
-        },
-      });
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}${endpoint}`,
+        timeoutMs ?? this.requestTimeout,
+        {
+          ...options,
+          headers: {
+            ...options?.headers,
+          },
+        }
+      );
 
       if (!response.ok) {
         // Try to get detailed error message from response body
@@ -112,13 +137,25 @@ class ApiService {
         return { status: 'error', data: null, error };
       }
 
-      const data = await response.json();
+      // Wrap success-path JSON parse in its own try/catch so a non-JSON 200
+      // is reported as PARSE_ERROR, not NETWORK_ERROR.
+      let data: any;
+      try {
+        data = await response.json();
+      } catch (parseError) {
+        const apiError: ApiError = {
+          code: 'PARSE_ERROR',
+          message: `Server returned non-JSON response for ${response.status}`,
+        };
+        return { status: 'error', data: null, error: apiError };
+      }
       // Support both { data: ... } wrapper and direct response
       const responseData = data.data !== undefined ? data.data : data;
       return { status: 'success', data: responseData, error: null };
     } catch (error) {
       const apiError: ApiError = {
-        code: 'NETWORK_ERROR',
+        code: (error instanceof DOMException && error.name === 'AbortError')
+          ? 'TIMEOUT' : 'NETWORK_ERROR',
         message: error instanceof Error ? error.message : 'Unknown error',
       };
       return { status: 'error', data: null, error: apiError };
@@ -136,7 +173,11 @@ class ApiService {
         headers['Range'] = `bytes=${range.start}-${range.end}`;
       }
 
-      const response = await fetch(`${this.baseUrl}${endpoint}`, { headers });
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}${endpoint}`,
+        this.requestTimeout,
+        { headers }
+      );
 
       if (!response.ok && response.status !== 206) {
         return null;
@@ -166,7 +207,7 @@ class ApiService {
   }
 
   async getKdbInfo(kdbName: string): Promise<ApiResponse<KdbInfoResponse>> {
-    return this.request(`/api/kdb/${kdbName}`);
+    return this.request(`/api/kdb/${encodeURIComponent(kdbName)}`);
   }
 
   // Note: downloadKdb removed - use kdbDownloadManager with Web Worker instead
@@ -238,7 +279,7 @@ class ApiService {
     if (options?.limit !== undefined) params.set('limit', options.limit.toString());
     if (options?.offset !== undefined) params.set('offset', options.offset.toString());
 
-    return this.request(`/api/wave/${waveformName}/signals?${params}`);
+    return this.request(`/api/wave/${encodeURIComponent(waveformName)}/signals?${params}`);
   }
 
   async getWaveformSignalInfo(
@@ -249,7 +290,7 @@ class ApiService {
     transitionCount: number;
     lodLevels: number[];
   }>> {
-    return this.request(`/api/wave/${waveformName}/info/${signalName}`);
+    return this.request(`/api/wave/${encodeURIComponent(waveformName)}/info/${encodeURIComponent(signalName)}`);
   }
 
   // Get waveform file metadata
@@ -266,7 +307,7 @@ class ApiService {
       date: string;
     }
   }>> {
-    return this.request(`/api/wave/${waveformName}/info`);
+    return this.request(`/api/wave/${encodeURIComponent(waveformName)}/info`);
   }
 
   async downloadWaveformChunk(
@@ -283,7 +324,7 @@ class ApiService {
     params.set('end', timeRange.end.toString());
     if (compress) params.set('compress', compress);
 
-    const endpoint = `/api/wave/${waveformName}/signals/${signalName}/data?${params}`;
+    const endpoint = `/api/wave/${encodeURIComponent(waveformName)}/signals/${encodeURIComponent(signalName)}/data?${params}`;
     const result = await this.binaryRequest(endpoint, range);
     return result?.data || null;
   }
@@ -317,13 +358,25 @@ class ApiService {
     );
   }
 
-  // Connection test
+  // Connection test (short timeout: 5s)
   async testConnection(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/health`);
-      this.connected = response.ok;
-      return this.connected;
-    } catch {
+      const response = await this.fetchWithTimeout(`${this.baseUrl}/health`, 5000);
+      // Validate content-type to avoid false positives from proxy error pages
+      if (!response.ok) {
+        this.connected = false;
+        return false;
+      }
+      const ct = response.headers.get('Content-Type') || '';
+      if (ct.includes('json') || ct.includes('text')) {
+        this.connected = true;
+        return true;
+      }
+      // Non-JSON/text response from health endpoint is suspicious
+      console.warn(`[API] /health returned unexpected Content-Type: ${ct}, accepting anyway`);
+      this.connected = true;
+      return true;
+    } catch (error) {
       this.connected = false;
       return false;
     }

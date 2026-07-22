@@ -1411,7 +1411,15 @@ export function WaveformWindow({
           const signalName = targetNode.signal.fullName || targetNode.signal.name;
           const { prev, next } = mockDataProvider.findTransitionsAround(signalName, clickTime);
 
-          if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
+          if (prev !== null && next !== null) {
+            const distPrev = Math.abs(clickTime - prev);
+            const distNext = Math.abs(next - clickTime);
+            if (distPrev <= snapThreshold && (distPrev <= distNext || distNext > snapThreshold)) {
+              finalTime = prev;
+            } else if (distNext <= snapThreshold) {
+              finalTime = next;
+            }
+          } else if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
             finalTime = prev;
           } else if (next !== null && Math.abs(next - clickTime) <= snapThreshold) {
             finalTime = next;
@@ -1433,15 +1441,19 @@ export function WaveformWindow({
 
             // Debug: console.log(`[WaveformWindow] Cursor snap: prev=${prev}, next=${next}, clickTime=${clickTime}`);
 
-            if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
+            if (prev !== null && next !== null) {
+            const distPrev = Math.abs(clickTime - prev);
+            const distNext = Math.abs(next - clickTime);
+            if (distPrev <= snapThreshold && (distPrev <= distNext || distNext > snapThreshold)) {
               finalTime = prev;
-              // Debug: console.log(`[WaveformWindow] Cursor snap: snapped to prev=${prev}`);
-            } else if (next !== null && Math.abs(next - clickTime) <= snapThreshold) {
+            } else if (distNext <= snapThreshold) {
               finalTime = next;
-              // Debug: console.log(`[WaveformWindow] Cursor snap: snapped to next=${next}`);
-            } else {
-              // Debug: console.log(`[WaveformWindow] Cursor snap: no snap, distances: prev=${prev !== null ? Math.abs(clickTime - prev) : 'null'}, next=${next !== null ? Math.abs(next - clickTime) : 'null'}`);
             }
+          } else if (prev !== null && Math.abs(clickTime - prev) <= snapThreshold) {
+            finalTime = prev;
+          } else if (next !== null && Math.abs(next - clickTime) <= snapThreshold) {
+            finalTime = next;
+          }
           }
         } catch (error) {
           console.error('[WaveformWindow] Failed to find transitions:', error);
