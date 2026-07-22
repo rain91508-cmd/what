@@ -32,19 +32,27 @@ export function SignalList({ moduleIndex, onSignalSelect, onSignalAddToWaveform 
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
+
     if (moduleIndex && kdbManager.isLoaded()) {
       setLoading(true);
       // Get signals from KDB for this module
       kdbManager.getModuleSignals(moduleIndex).then(moduleSignals => {
-        setSignals(moduleSignals);
-        setLoading(false);
+        if (!cancelled) {
+          setSignals(moduleSignals);
+          setLoading(false);
+        }
       }).catch(() => {
-        setSignals([]);
-        setLoading(false);
+        if (!cancelled) {
+          setSignals([]);
+          setLoading(false);
+        }
       });
     } else {
       setSignals([]);
     }
+
+    return () => { cancelled = true; };
   }, [moduleIndex]);
 
   const matchesIOFilter = (signal: Signal): boolean => {

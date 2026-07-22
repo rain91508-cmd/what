@@ -83,13 +83,21 @@ class WaveformRenderer {
       // Find large min/max groups (groupSize > 2) and draw them as single boxes
       const largeGroups = this.findLargeMinMaxGroups(rowSegments, minMaxGroups);
 
+      // Build an index map: segment index → large group, for O(1) lookup
+      const largeGroupIndex = new Map<number, (typeof largeGroups)[number]>();
+      for (const g of largeGroups) {
+        for (let idx = g.startIndex; idx <= g.endIndex; idx++) {
+          largeGroupIndex.set(idx, g);
+        }
+      }
+
       let prevValue: FormattedValue | null = null;
       let i = 0;
       while (i < rowSegments.length) {
         const seg = rowSegments[i];
 
-        // Check if this segment is part of a large min/max group
-        const largeGroup = largeGroups.find(g => i >= g.startIndex && i <= g.endIndex);
+        // Check if this segment is part of a large min/max group (O(1) via index map)
+        const largeGroup = largeGroupIndex.get(i);
         if (largeGroup) {
           // Draw the entire group as a single box
           this.drawMinMaxGroupBox(largeGroup.x0, largeGroup.x1, largeGroup.y, largeGroup.groupSize);

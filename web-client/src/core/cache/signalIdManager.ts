@@ -10,6 +10,8 @@ import { isOpfsAvailable } from '../../utils/opfsUtils';
 // Signal metadata structure (simplified - only ID mapping)
 interface SignalMetadata {
   version: number;
+  epoch: number;        // Incremented on every KDB reload. Render cache keys should
+                        // include this epoch to reject stale entries after reload.
   next_draw_sig_id: number;
   signal_map: Record<string, number>;  // global_id (string) -> draw_sig_id
 }
@@ -36,6 +38,7 @@ export class SignalIdManager {
     this.waveform = waveform;
     this.metadata = {
       version: 1,
+      epoch: 0,
       next_draw_sig_id: 0,
       signal_map: {},
     };
@@ -133,6 +136,14 @@ export class SignalIdManager {
   }
 
   /**
+   * Get the current epoch. Render cache consumers should include this value
+   * in their cache keys to reject stale entries after a KDB reload.
+   */
+  getEpoch(): number {
+    return this.metadata.epoch;
+  }
+
+  /**
    * Get the next available draw_sig_id (for pre-allocation)
    */
   getNextDrawSigId(): number {
@@ -177,6 +188,7 @@ export class SignalIdManager {
       console.log(`[SignalIdManager] No existing metadata, starting fresh`);
       this.metadata = {
         version: 1,
+        epoch: this.metadata?.epoch ?? 0,
         next_draw_sig_id: 0,
         signal_map: {},
       };
@@ -222,6 +234,7 @@ export class SignalIdManager {
   async clear(): Promise<void> {
     this.metadata = {
       version: 1,
+      epoch: this.metadata.epoch + 1,  // Bump epoch to invalidate stale render cache entries
       next_draw_sig_id: 0,
       signal_map: {},
     };

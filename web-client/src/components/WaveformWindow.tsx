@@ -415,7 +415,9 @@ export function WaveformWindow({
   // 用于强制触发 updateSignalValues 的计数器
   const [signalFormatVersion, setSignalFormatVersion] = useState(0);
   
-  // 同步 signalDisplayFormats 到 ref
+  // 同步 signalDisplayFormats 到 ref — update the ref in the state setter itself
+  // so there's no render-cycle gap where the ref is stale (see §6.7).
+  // The useEffect below is kept as a safety net for external mutations.
   useEffect(() => {
     signalDisplayFormatsRef.current = signalDisplayFormats;
   }, [signalDisplayFormats]);
@@ -603,10 +605,13 @@ export function WaveformWindow({
   };
 
   // 设置信号的显示格式
+  // Updates both state and ref synchronously to avoid a render-cycle gap
+  // where the ref is stale relative to the state (§6.7).
   const setSignalDisplayFormat = (uniqueId: number, format: 'hex' | 'bin' | 'oct' | 'dec') => {
     setSignalDisplayFormats(prev => {
       const newMap = new Map(prev);
       newMap.set(uniqueId, format);
+      signalDisplayFormatsRef.current = newMap;  // sync ref immediately
       return newMap;
     });
     setShowFormatDropdown(null);
@@ -622,6 +627,7 @@ export function WaveformWindow({
       uniqueIds.forEach(id => {
         newMap.set(id, format);
       });
+      signalDisplayFormatsRef.current = newMap;  // sync ref immediately
       return newMap;
     });
     setShowFormatDropdown(null);
@@ -675,17 +681,21 @@ export function WaveformWindow({
   const isMultiSelectMode = selectedSignals.size > 0;
 
   // rAF-throttled mouse position update for smooth rendering
+  // Only runs one frame when a pending mouse position exists, instead of looping
+  // permanently at 60fps. Saves CPU/battery when the cursor isn't moving.
   useEffect(() => {
-    const updateRenderMouseX = () => {
+    const scheduleNext = () => {
       if (pendingMouseXRef.current !== null) {
         setRenderMouseX(pendingMouseXRef.current);
         pendingMouseXRef.current = null;
+        rafIdRef.current = requestAnimationFrame(scheduleNext);
+      } else {
+        rafIdRef.current = null;
       }
-      rafIdRef.current = requestAnimationFrame(updateRenderMouseX);
     };
-    
-    rafIdRef.current = requestAnimationFrame(updateRenderMouseX);
-    
+    // Start with one frame to check for pending values
+    rafIdRef.current = requestAnimationFrame(scheduleNext);
+
     return () => {
       if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current);
@@ -816,6 +826,10 @@ export function WaveformWindow({
     canvasWidth: 0,
     canvasHeight: 0,
   });
+
+  // buildWasmSignals 结果缓存，避免重复 hash 查询（§6.9）
+  const _cachedWasmSignalsRef = useRef<any[] | null>(null);
+  const lastWasmSignalsHashRef = useRef<string>('');
 
   // 添加 segments 缓存
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -1065,9 +1079,17 @@ export function WaveformWindow({
       }));
 
       // 构建带 draw_sig_id 的信号
+      // Use cached version to avoid repeated hash lookups on every render cycle (§6.9).
       let wasmSignals: any[] = [];
       try {
-        wasmSignals = await buildWasmSignals(uiSignals, _waveformName || 'unknown');
+        const signalListHash = displaySignals.map(s => s.unique_id).join(',');
+        if (lastWasmSignalsHashRef.current !== signalListHash || !_cachedWasmSignalsRef.current) {
+          wasmSignals = await buildWasmSignals(uiSignals, _waveformName || 'unknown');
+          _cachedWasmSignalsRef.current = wasmSignals;
+          lastWasmSignalsHashRef.current = signalListHash;
+        } else {
+          wasmSignals = _cachedWasmSignalsRef.current;
+        }
       } catch (error) {
         console.error('[WaveformWindow] Failed to build wasm signals:', error);
       }

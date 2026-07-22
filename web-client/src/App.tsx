@@ -287,6 +287,10 @@ function App() {
   // Initialize with empty tabs - no default source or waveform tabs
   const [tabs, setTabs] = useState<Tab[]>([])
   const [activeTab, setActiveTab] = useState<string>('')
+  // Ref that always mirrors activeTab. Used by addNavigationEntry (called from
+  // setTimeout) to avoid stale-closure bugs.
+  const activeTabRef = useRef(activeTab);
+  useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
   // Separate counters for each tab type to ensure correct numbering
   const tabCounters = useRef({
     source: 1,
@@ -698,10 +702,13 @@ function App() {
   // Source Navigation History Management
   // ============================================
   
-  // Add a navigation entry to the active source tab
+  // Add a navigation entry to the active source tab.
+  // Reads activeTab from a ref to avoid stale-closure bugs when called from
+  // setTimeout (the ref always has the latest value).
   const addNavigationEntry = useCallback((fileId: number, line: number, displayModuleIndex?: number) => {
+    const tabId = activeTabRef.current;
     setTabs(prev => prev.map(tab => {
-      if (tab.id !== activeTab || tab.type !== 'source') return tab;
+      if (tab.id !== tabId || tab.type !== 'source') return tab;
       
       const history = tab.navigationHistory || [];
       const pointer = tab.navigationPointer || 0;
@@ -726,7 +733,7 @@ function App() {
         navigationPointer: newHistory.length
       };
     }));
-  }, [activeTab]);
+  }, []);  // Uses activeTabRef.current at call time, so no dependency needed
 
   // ============================================
   // Unified Source Display Function
@@ -825,7 +832,7 @@ function App() {
       
       // Add to history after tab creation if requested
       if (addToHistory && effectiveFileId) {
-        setTimeout(() => addNavigationEntry(effectiveFileId, startFromLine, displayModuleId), 0);
+        addNavigationEntry(effectiveFileId, startFromLine, displayModuleId);
       }
     }
     
@@ -2125,7 +2132,7 @@ function App() {
       setActiveTab(newId)
       
       // Add navigation entry after tab is created with display module
-      setTimeout(() => addNavigationEntry(fileId, line, displayModuleIndex), 0);
+      addNavigationEntry(fileId, line, displayModuleIndex);
       addMessage(`Open source at ${signal.name} declaration (line ${line})`)
     }
   }
@@ -2196,7 +2203,7 @@ function App() {
     setActiveTab(newId);
     
     // Add navigation entry after tab is created
-    setTimeout(() => addNavigationEntry(fileId, line, displayModuleIndex), 0);
+    addNavigationEntry(fileId, line, displayModuleIndex);
     addMessage(`Open source at ${signal.name} declaration (line ${line})`);
   };
 
@@ -2316,7 +2323,7 @@ function App() {
     setTabs(prev => [...prev, newTab]);
     setActiveTab(newId);
 
-    setTimeout(() => addNavigationEntry(driverFileId, firstDriver.line, driverModuleId), 0);
+    addNavigationEntry(driverFileId, firstDriver.line, driverModuleId);
     addMessage(`Jump to driver: ${driverSignal.name} (line ${firstDriver.line})`);
   };
 

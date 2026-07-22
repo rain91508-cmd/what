@@ -763,6 +763,15 @@ export function renderWaveform(
     const minMaxGroups = detectMinMaxGroups(rowSegments);
     const largeGroups = findLargeMinMaxGroups(rowSegments, minMaxGroups);
 
+    // Build an index map: segment index → large group, for O(1) lookup instead of
+    // largeGroups.find() which is O(m) per segment (O(n·m) overall).
+    const largeGroupIndex = new Map<number, typeof largeGroups[number]>();
+    for (const g of largeGroups) {
+      for (let idx = g.startIndex; idx <= g.endIndex; idx++) {
+        largeGroupIndex.set(idx, g);
+      }
+    }
+
     let prevValue: FormattedValue | null = null;
     let i = 0;
     while (i < rowSegments.length) {
@@ -770,8 +779,8 @@ export function renderWaveform(
       // 将 seg.value 转换为 FormattedValue
       const formattedValue = seg.value as unknown as FormattedValue;
 
-      // 检查是否属于大的 min/max 组
-      const largeGroup = largeGroups.find(g => i >= g.startIndex && i <= g.endIndex);
+      // 检查是否属于大的 min/max 组（O(1) 通过 index map 查找）
+      const largeGroup = largeGroupIndex.get(i);
       if (largeGroup) {
         drawMinMaxGroupBox(ctx, largeGroup.x0, largeGroup.x1, largeGroup.y, largeGroup.groupSize, rowHeight);
         i = largeGroup.endIndex + 1;
