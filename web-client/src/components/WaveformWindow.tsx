@@ -681,20 +681,19 @@ export function WaveformWindow({
   const isMultiSelectMode = selectedSignals.size > 0;
 
   // rAF-throttled mouse position update for smooth rendering
-  // Only runs one frame when a pending mouse position exists, instead of looping
-  // permanently at 60fps. Saves CPU/battery when the cursor isn't moving.
+  // Runs continuously at 60fps so the mouse line follows the cursor closely
+  // without lag. This is needed because mousemove events arrive faster than
+  // React re-renders, and the rAF loop smooths them out.
   useEffect(() => {
-    const scheduleNext = () => {
+    const updateRenderMouseX = () => {
       if (pendingMouseXRef.current !== null) {
         setRenderMouseX(pendingMouseXRef.current);
         pendingMouseXRef.current = null;
-        rafIdRef.current = requestAnimationFrame(scheduleNext);
-      } else {
-        rafIdRef.current = null;
       }
+      rafIdRef.current = requestAnimationFrame(updateRenderMouseX);
     };
-    // Start with one frame to check for pending values
-    rafIdRef.current = requestAnimationFrame(scheduleNext);
+
+    rafIdRef.current = requestAnimationFrame(updateRenderMouseX);
 
     return () => {
       if (rafIdRef.current !== null) {
