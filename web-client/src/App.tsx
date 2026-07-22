@@ -2639,18 +2639,12 @@ function App() {
     const module = kdbManager.getModuleById(lookupModuleIndex);
     if (!module) return;
 
-    // Check if line is within module range — but don't block the lookup if
-    // the signal might exist in a different module within the same file.
-    // Instead, widen the search to all accessible modules if the line is
-    // outside the current module's range.
-    let searchModuleId = lookupModuleIndex;
+    // Check if line is within module range. The Monaco editor should already
+    // have blocked clicks outside the range, but double-check here too.
     if (activeTabData.moduleStartLine && activeTabData.moduleEndLine) {
       if (lineNumber < activeTabData.moduleStartLine || lineNumber > activeTabData.moduleEndLine) {
-        console.log('[App] Click outside module range, widening search');
-        // Try the parent module as fallback — the file might span multiple modules
-        // and the signal could belong to a parent scope.
-        // We still attempt the lookup with the current module, but also search
-        // the parent chain if needed (handled by findSignalByNameJS).
+        console.log('[App] Click outside module range, ignoring');
+        return;
       }
     }
 

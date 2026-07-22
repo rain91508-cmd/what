@@ -1012,24 +1012,17 @@ class KdbManager {
 
   /**
    * JS fallback for finding signal by name.
-   * Searches the given module first, then recursively searches child modules,
-   * parent chain, and finally falls back to a global search across ALL modules.
-   * This handles the common case where a source file references signals from
-   * any module in the design hierarchy.
+   * Searches ONLY the given module's signal definitions. Does NOT search
+   * children, parents, or siblings — the caller is responsible for providing
+   * the correct module scope (the currently displayed module in Monaco).
+   * This ensures the signal found is the one visible in the current source
+   * context, not a same-named signal from a different module.
    */
-  private async findSignalByNameJS(
-    moduleId: number,
-    signalName: string,
-    visited: Set<number> = new Set(),
-    globalSearchAttempted: boolean = false,
-  ): Promise<number | null> {
-    if (visited.has(moduleId)) return null;
-    visited.add(moduleId);
-
+  private async findSignalByNameJS(moduleId: number, signalName: string): Promise<number | null> {
     const module = this.getModuleById(moduleId);
     if (!module) return null;
 
-    // Search this module's signal defs
+    // Search this module's signal defs only
     const signalDefs = await this.getSignalDefs(moduleId);
     const BATCH_SIZE = 100;
 
@@ -1051,53 +1044,7 @@ class KdbManager {
       }
     }
 
-    // Not found in this module — search child modules recursively.
-    for (const childId of (module.childModuleIds || [])) {
-      const result = await this.findSignalByNameJS(childId, signalName, visited, globalSearchAttempted);
-      if (result !== null) {
-        return result;
-      }
-    }
-
-    // Not found in children — search parent module chain.
-    if (module.parentModuleId > 0 && !visited.has(module.parentModuleId)) {
-      const result = await this.findSignalByNameJS(module.parentModuleId, signalName, visited, globalSearchAttempted);
-      if (result !== null) {
-        return result;
-      }
-    }
-
-    // Last resort: global search across ALL modules. This handles the case
-    // where the signal is in a sibling or unrelated module that shares the
-    // same source file.
-    if (!globalSearchAttempted) {
-      console.log(`[KdbManager] Signal not found in module tree, trying global search: ${signalName}`);
-      const allModules = this.getAllModuleIds();
-      for (const mid of allModules) {
-        if (visited.has(mid)) continue;
-        const result = await this.findSignalByNameJS(mid, signalName, visited, true);
-        if (result !== null) {
-          console.log(`[KdbManager] Found signal via global search: ${signalName} at globalId=${result} (module ${mid})`);
-          return result;
-        }
-      }
-    }
-
     return null;
-  }
-
-  /**
-   * Get all module IDs in the design.
-   */
-  private getAllModuleIds(): number[] {
-    const ids: number[] = [];
-    // modules is a flat array where index (id-1) = module id; iterate all
-    for (let i = 0; i < this.modules.length; i++) {
-      if (this.modules[i]) {
-        ids.push(i + 1); // +1 because module IDs are 1-based
-      }
-    }
-    return ids;
   }
 
   /**
