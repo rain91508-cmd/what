@@ -8,6 +8,34 @@
 // OPFS root directory handle (cached)
 let opfsRoot: FileSystemDirectoryHandle | null = null;
 
+// §5.10: Periodic GC watchdog — checks storage usage every 60s and triggers
+// GC if usage exceeds 85% of quota. This is a JS-side safety net independent
+// of WASM GC callbacks.
+let gcWatchdogTimer: ReturnType<typeof setInterval> | null = null;
+export function startGcWatchdog(): void {
+  if (gcWatchdogTimer) return;
+  gcWatchdogTimer = setInterval(async () => {
+    try {
+      const { usage, quota } = await getStorageEstimate();
+      if (quota > 0 && usage / quota > 0.85) {
+        console.warn(
+          `[OPFS] GC watchdog: storage ${(usage / 1e6).toFixed(1)}MB / ${(quota / 1e6).toFixed(1)}MB ` +
+          `(${(usage / quota * 100).toFixed(1)}%), triggering GC`
+        );
+        await runOpfsGc();
+      }
+    } catch (e) {
+      // Ignore — watchdog should never crash the app
+    }
+  }, 60000);
+}
+export function stopGcWatchdog(): void {
+  if (gcWatchdogTimer) {
+    clearInterval(gcWatchdogTimer);
+    gcWatchdogTimer = null;
+  }
+}
+
 /// Waveform tile cache lives under this directory inside the OPFS root.
 /// All WASM tile-cache paths (e.g. "<waveform>/lod0/tile_0000/group_0.bin") are
 /// resolved relative to this folder so waveform data does not clutter the OPFS root.

@@ -218,48 +218,50 @@ class ApiService {
     return this.request('/api/wave/list');
   }
 
-  // Check if KDB has changed by comparing checksum
-  async checkKdbChanged(kdbName: string, localChecksum?: string): Promise<{ changed: boolean; serverInfo?: ServerKdbFileInfo }> {
+  // Check if KDB has changed by comparing checksum.
+  // Returns a tri-state: 'changed', 'unchanged', or 'error'.
+  async checkKdbChanged(kdbName: string, localChecksum?: string): Promise<{ status: 'changed' | 'unchanged' | 'error'; serverInfo?: ServerKdbFileInfo }> {
     const response = await this.request<KdbListResponse>('/api/kdb');
     if (response.status !== 'success' || !response.data) {
-      return { changed: false };
+      return { status: 'error' };
     }
 
     const serverKdb = response.data.kdbs.find(k => k.name === kdbName);
     if (!serverKdb) {
-      return { changed: false };
+      return { status: 'error' };
     }
 
     // If no local checksum, consider it as changed (needs download)
     if (!localChecksum) {
-      return { changed: true, serverInfo: serverKdb };
+      return { status: 'changed', serverInfo: serverKdb };
     }
 
     // Compare checksums
     const changed = serverKdb.checksum !== localChecksum;
-    return { changed, serverInfo: serverKdb };
+    return { status: changed ? 'changed' : 'unchanged', serverInfo: serverKdb };
   }
 
-  // Check if Waveform has changed by comparing checksum
-  async checkWaveformChanged(waveName: string, localChecksum?: string): Promise<{ changed: boolean; serverInfo?: ServerWaveFileInfo }> {
+  // Check if Waveform has changed by comparing checksum.
+  // Returns a tri-state: 'changed', 'unchanged', or 'error'.
+  async checkWaveformChanged(waveName: string, localChecksum?: string): Promise<{ status: 'changed' | 'unchanged' | 'error'; serverInfo?: ServerWaveFileInfo }> {
     const response = await this.request<WaveListResponse>('/api/wave/list');
     if (response.status !== 'success' || !response.data) {
-      return { changed: false };
+      return { status: 'error' };
     }
 
     const serverWave = response.data.waves.find(w => w.name === waveName);
     if (!serverWave) {
-      return { changed: false };
+      return { status: 'error' };
     }
 
     // If no local checksum, consider it as changed (needs download)
     if (!localChecksum) {
-      return { changed: true, serverInfo: serverWave };
+      return { status: 'changed', serverInfo: serverWave };
     }
 
     // Compare checksums
     const changed = serverWave.checksum !== localChecksum;
-    return { changed, serverInfo: serverWave };
+    return { status: changed ? 'changed' : 'unchanged', serverInfo: serverWave };
   }
 
   async getWaveformSignals(

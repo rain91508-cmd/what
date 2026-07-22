@@ -354,9 +354,11 @@ async function handleInitialize(payload: any, id: number): Promise<void> {
     g.opfsWriteWrapper = async (path: string, data: Uint8Array): Promise<void> => opfsWrite(path, data);
     g.opfsExistsWrapper = async (path: string): Promise<boolean> => opfsExists(path);
 
-    const readCallback = new Function('path', 'return globalThis.opfsReadWrapper(path);');
-    const writeCallback = new Function('path', 'data', 'return globalThis.opfsWriteWrapper(path, data);');
-    const existsCallback = new Function('path', 'return globalThis.opfsExistsWrapper(path);');
+    // Use direct function references instead of string-based new Function().
+    // This is CSP-compatible and avoids fragile globalThis lookups (§2.10).
+    const readCallback = (path: string) => g.opfsReadWrapper(path);
+    const writeCallback = (path: string, data: Uint8Array) => g.opfsWriteWrapper(path, data);
+    const existsCallback = (path: string) => g.opfsExistsWrapper(path);
 
     wasmProvider.init_with_opfs(
       readCallback as any,

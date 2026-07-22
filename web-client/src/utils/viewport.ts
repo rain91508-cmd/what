@@ -213,61 +213,12 @@ export function timeToPixel(
 }
 
 // ============================================
-// Zoom Operations (all return sanitized viewport)
+// Zoom Operations
 // ============================================
-
-/**
- * Zoom in around cursor position
- * Returns TimeRangeOnly (timeStart/timeEnd only) for compatibility with Tab viewport
- */
-export function zoomIn(
-  viewport: TimeRangeOnly,
-  cursorPosition?: number | null,
-  _zoomFactor: number = 0.8
-): TimeRangeOnly | null {
-  const { timeStart, timeEnd } = getTimeRange(viewport);
-  
-  const cursorPos = cursorPosition ?? Math.floor((timeStart + timeEnd) / 2);
-  
-  // Boundary protection
-  const canZoomStart = Math.abs(cursorPos - timeStart) > 1;
-  const canZoomEnd = Math.abs(cursorPos - timeEnd) > 1;
-  
-  if (!canZoomStart && !canZoomEnd) {
-    return null;
-  }
-  
-  const newStart = canZoomStart 
-    ? Math.floor((cursorPos + timeStart) / 2) 
-    : timeStart;
-  const newEnd = canZoomEnd 
-    ? Math.floor((cursorPos + timeEnd) / 2) 
-    : timeEnd;
-  
-  return { timeStart: newStart, timeEnd: newEnd };
-}
-
-/**
- * Zoom out around cursor position
- * Returns TimeRangeOnly (timeStart/timeEnd only) for compatibility with Tab viewport
- */
-export function zoomOut(
-  viewport: TimeRangeOnly,
-  cursorPosition?: number | null,
-  _zoomFactor: number = 1.25
-): TimeRangeOnly | null {
-  const { timeStart, timeEnd } = getTimeRange(viewport);
-  
-  const cursorPos = cursorPosition ?? Math.floor((timeStart + timeEnd) / 2);
-  
-  const distStart = cursorPos - timeStart;
-  const distEnd = timeEnd - cursorPos;
-  
-  const newStart = Math.floor(cursorPos - distStart * _zoomFactor);
-  const newEnd = Math.floor(cursorPos + distEnd * _zoomFactor);
-  
-  return { timeStart: newStart, timeEnd: newEnd };
-}
+// NOTE: zoomIn/zoomOut are implemented in zoomHelpers.ts (which includes
+// sanitizeTimeRange boundary checking). Import from there instead.
+// The duplicates that were here have been removed to eliminate naming
+// conflicts (§1.9).
 
 /**
  * Pan viewport by delta (in time units)

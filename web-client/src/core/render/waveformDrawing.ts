@@ -199,6 +199,7 @@ export function drawXWaveform(
   y: number,
   rowHeight: number
 ): void {
+  ctx.save();
   const waveHeight = rowHeight * 0.35;
   const yLow = y + waveHeight;
   const yHigh = y - waveHeight;
@@ -213,6 +214,7 @@ export function drawXWaveform(
   ctx.moveTo(x0, yLow);
   ctx.lineTo(x1, yHigh);
   ctx.stroke();
+  ctx.restore();
 }
 
 /**
@@ -224,6 +226,7 @@ export function drawZWaveform(
   x1: number,
   y: number
 ): void {
+  ctx.save();
   ctx.strokeStyle = '#0066ff';
   ctx.lineWidth = 2;
   ctx.setLineDash([2, 2]);
@@ -232,7 +235,7 @@ export function drawZWaveform(
   ctx.moveTo(x0, y);
   ctx.lineTo(x1, y);
   ctx.stroke();
-  ctx.setLineDash([]);
+  ctx.restore();
 }
 
 /**
@@ -246,6 +249,7 @@ export function drawSingleBitWaveform(
   value: FormattedValue,
   rowHeight: number
 ): void {
+  ctx.save();
   const waveHeight = rowHeight * 0.35;
   const yLow = y + waveHeight;
   const yHigh = y - waveHeight;
@@ -317,6 +321,7 @@ export function drawSingleBitWaveform(
       ctx.stroke();
       break;
   }
+  ctx.restore();
 }
 
 /**
@@ -363,6 +368,7 @@ export function drawMultiBitWaveform(
   value: FormattedValue,
   rowHeight: number
 ): void {
+  ctx.save();
   const width = x1 - x0;
   const rectHeight = rowHeight * 0.75;
   const rectY = y - rectHeight / 2;
@@ -429,6 +435,7 @@ export function drawMultiBitWaveform(
     ctx.lineTo(x1, rectY + rectHeight);
     ctx.stroke();
   }
+  ctx.restore();
 }
 
 /**
@@ -443,6 +450,7 @@ export function drawMinMaxWaveform(
   rowHeight: number,
   groupInfo?: { isContinuous: boolean; groupSize: number; groupIndex: number }
 ): void {
+  ctx.save();
   const waveHeight = rowHeight * 0.35;
   const width = x1 - x0;
 
@@ -572,6 +580,7 @@ export function drawSegment(
   } else {
     drawMultiBitWaveform(ctx, x0, x1, y, value, rowHeight);
   }
+  ctx.restore();
 }
 
 /**
@@ -585,6 +594,7 @@ export function drawMinMaxGroupBox(
   _groupSize: number,
   rowHeight: number
 ): void {
+  ctx.save();
   const width = x1 - x0;
   const rectHeight = rowHeight * 0.75;
   const rectY = y - rectHeight / 2;
@@ -607,6 +617,7 @@ export function drawMinMaxGroupBox(
       ctx.fillText(label, textX, textY);
     }
   }
+  ctx.restore();
 }
 
 /**

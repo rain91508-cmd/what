@@ -1361,11 +1361,13 @@ function App() {
     // Check KDB
     if (currentKdbName && currentKdbChecksum) {
       const kdbResult = await apiService.checkKdbChanged(currentKdbName, currentKdbChecksum);
-      if (kdbResult.changed) {
+      if (kdbResult.status === 'changed') {
         addMessage(`⚠️ KDB "${currentKdbName}" has changed on server!`);
         kdbChanged = true;
-      } else {
+      } else if (kdbResult.status === 'unchanged') {
         addMessage(`✓ KDB "${currentKdbName}" is up to date`);
+      } else {
+        addMessage(`⚠️ Could not verify KDB "${currentKdbName}" freshness (server unreachable?)`);
       }
     } else if (currentKdbName) {
       addMessage(`ℹ️ KDB "${currentKdbName}" loaded (no checksum stored)`);
@@ -1374,11 +1376,13 @@ function App() {
     // Check Waveform
     if (currentWaveName && currentWaveChecksum) {
       const waveResult = await apiService.checkWaveformChanged(currentWaveName, currentWaveChecksum);
-      if (waveResult.changed) {
+      if (waveResult.status === 'changed') {
         addMessage(`⚠️ Waveform "${currentWaveName}" has changed on server!`);
         waveChanged = true;
-      } else {
+      } else if (waveResult.status === 'unchanged') {
         addMessage(`✓ Waveform "${currentWaveName}" is up to date`);
+      } else {
+        addMessage(`⚠️ Could not verify waveform "${currentWaveName}" freshness (server unreachable?)`);
       }
     } else if (currentWaveName) {
       addMessage(`ℹ️ Waveform "${currentWaveName}" loaded (no checksum stored)`);

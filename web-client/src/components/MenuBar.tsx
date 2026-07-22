@@ -272,7 +272,7 @@ export function MenuBar({
                       cursor: subItem.disabled ? 'default' : 'pointer',
                       color: subItem.disabled ? '#999' : '#333',
                       whiteSpace: 'nowrap',
-                      backgroundColor: language === (subItem.onClick as unknown as Language) ? '#e3f2fd' : 'transparent',
+                      backgroundColor: language === languages.find(l => l.nativeName === subItem.label)?.code ? '#e3f2fd' : 'transparent',
                     }}
                     onMouseEnter={(e) => {
                       if (!subItem.disabled) {
@@ -280,7 +280,7 @@ export function MenuBar({
                       }
                     }}
                     onMouseLeave={(e) => {
-                      (e.target as HTMLElement).style.backgroundColor = language === (subItem.onClick as unknown as Language) ? '#e3f2fd' : 'transparent';
+                      (e.target as HTMLElement).style.backgroundColor = language === languages.find(l => l.nativeName === subItem.label)?.code ? '#e3f2fd' : 'transparent';
                     }}
                   >
                     {language === languages.find(l => l.nativeName === subItem.label)?.code ? '✓ ' : ''}{subItem.label}

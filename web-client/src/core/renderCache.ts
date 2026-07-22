@@ -200,10 +200,12 @@ export class RenderCache {
       }
 
       // 估算 segments 数据
+      // Use ~96 bytes per segment (real JS object overhead ~80+ bytes plus
+      // x0/x1/y properties, vs the old 8 bytes which was ~10x too low).
       if (entry.result.segments) {
         for (const segments of Object.values(entry.result.segments)) {
           const segs = segments as unknown as { length: number }[];
-          totalBytes += segs.length * 8; // 每个点 8 字节（x, y 各 float）
+          totalBytes += segs.length * 96;
         }
       }
     }
