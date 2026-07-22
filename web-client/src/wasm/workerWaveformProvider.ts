@@ -88,7 +88,7 @@ export class WorkerWaveformProvider implements WaveformProviderInterface {
 
       this._isOpfsEnabled = config.enableOpfs ?? false;
       this._isMemoryCacheEnabled = config.enableMemoryCache ?? true;
-      this._isPrefetchEnabled = config.enablePrefetch ?? true;
+      this._isPrefetchEnabled = config.enablePrefetch ?? false;
 
       // Debug: console.log(`[WorkerWaveformProvider][Inst${this.instanceId}] Initialized: OPFS=${this._isOpfsEnabled}, MemoryCache=${this._isMemoryCacheEnabled}`);
     } catch (error) {
