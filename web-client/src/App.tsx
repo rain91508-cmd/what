@@ -656,25 +656,14 @@ function App() {
         addMessage('⚠️ Server disconnected');
         // Clear API service configuration so requests fail
         apiService.clearConfig();
-        // Clear KDB and waveform lists - content remains in IndexedDB/OPFS
-        // but is no longer accessible in the UI until reconnect
-        setKdbLoaded(false);
-        setWaveforms([]);
-        setCurrentWaveform(null);
-        setCurrentKdbName(null);
-        setCurrentKdbChecksum(null);
-        setCurrentWaveName(null);
-        setCurrentWaveChecksum(null);
-        // Clear kdbManager state so DesignBrowser shows empty
-        kdbManager.clear();
-        // Note: Actual data remains in IndexedDB/OPFS for offline viewing
-        // but UI lists are cleared
+        // Note: the currently loaded KDB and waveform stay in memory and
+        // IndexedDB/OPFS, so the user can keep exploring the design offline.
       } else if (isHealthy && !connected) {
         // Server reconnected
         setConnected(true);
         addMessage('✓ Server reconnected');
       }
-    }, 5000); // Check every 5 seconds
+    }, 20000); // Check every 20 seconds
   }, [connected, addMessage]);
   
   // Stop health check
