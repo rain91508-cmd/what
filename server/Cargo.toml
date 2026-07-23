@@ -65,6 +65,13 @@ chrono = { version = "0.4", features = ["serde"] }
 # Configuration
 clap = { version = "4.4", features = ["derive"] }
 
+# Remote data archive (--data-url): download + extract .tar.xz at startup.
+# Pure-Rust TLS (rustls) so the binary stays self-contained (no OpenSSL),
+# which matters for a static binary uploaded to a bare runtime (e.g. SnapDeploy).
+reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"] }
+tar = "0.4"
+lzma-rs = "0.3"
+
 # Async utilities
 futures = "0.3"
 async-trait = "0.1"
@@ -87,7 +94,7 @@ base64 = "0.22"
 
 [dev-dependencies]
 tokio-test = "0.4"
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "json"] }
 tempfile = "3.8"
 
 [features]

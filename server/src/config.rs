@@ -88,6 +88,17 @@ pub struct ServerConfig {
     /// Enable detailed signal test mode
     #[arg(long, default_value = "false")]
     pub detailed_test: bool,
+
+    /// Optional URL to a .tar.xz archive downloaded and extracted into --data-dir
+    /// at startup. After extraction, --kdb-dir/--wave-dir default to
+    /// <data-dir>/kdb and <data-dir>/waves (so a bare executable upload can be
+    /// run with: --data-url <url> --data-dir <dir>).
+    #[arg(long)]
+    pub data_url: Option<String>,
+
+    /// Directory the --data-url archive is extracted into (default: ./data)
+    #[arg(long, default_value = "./data")]
+    pub data_dir: PathBuf,
 }
 
 impl ServerConfig {
@@ -142,6 +153,48 @@ impl ServerConfig {
         Ok(())
     }
 
+    /// Download and extract the `--data-url` archive (if provided) into
+    /// `--data-dir`, then point `kdb_dir`/`wave_dir` at the extracted
+    /// `kdb`/`waves` subfolders. No-op when `--data-url` is absent.
+    pub async fn prepare_data(&mut self) -> anyhow::Result<()> {
+        let url = match self.data_url.clone() {
+            Some(u) => u,
+            None => return Ok(()),
+        };
+
+        let dir = self.data_dir.clone();
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| anyhow::anyhow!("failed to create data dir {:?}: {}", dir, e))?;
+
+        tracing::info!("Downloading data archive from {} ...", url);
+        let resp = reqwest::get(&url)
+            .await
+            .map_err(|e| anyhow::anyhow!("download request failed: {}", e))?
+            .error_for_status()
+            .map_err(|e| anyhow::anyhow!("download error: {}", e))?;
+
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to read response body: {}", e))?;
+
+        tracing::info!("Downloaded {} bytes, decompressing .xz ...", bytes.len());
+        let mut tar_data = Vec::with_capacity(bytes.len() / 2);
+        let mut cursor = std::io::Cursor::new(&bytes[..]);
+        lzma_rs::xz_decompress(&mut cursor, &mut tar_data)
+            .map_err(|e| anyhow::anyhow!("failed to decompress .xz archive: {:?}", e))?;
+
+        let mut archive = tar::Archive::new(&tar_data[..]);
+        archive
+            .unpack(&dir)
+            .map_err(|e| anyhow::anyhow!("failed to extract tar archive into {:?}: {}", dir, e))?;
+
+        tracing::info!("Extracted data archive into {:?}", dir);
+        self.kdb_dir = dir.join("kdb");
+        self.wave_dir = dir.join("waves");
+        Ok(())
+    }
+
     /// Get the bind address
     pub fn bind_address(&self) -> String {
         format!("{}:{}", self.host, self.port)
@@ -182,6 +235,8 @@ impl Default for ServerConfig {
             compare_test: false,
             lod20_test: false,
             detailed_test: false,
+            data_url: None,
+            data_dir: PathBuf::from("./data"),
         }
     }
 }

@@ -15,7 +15,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Parse command-line arguments
-    let config = ServerConfig::parse();
+    let mut config = ServerConfig::parse();
+
+    // Download + extract remote data archive if --data-url was provided
+    config.prepare_data().await?;
 
     // Validate configuration
     config.validate()?;
