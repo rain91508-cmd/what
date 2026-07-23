@@ -416,7 +416,13 @@ jobs:
           echo "Found server binary: $BIN"
           cp "$BIN" pkg/what-server
           cp -r web-dist/. pkg/web/
-          cp server/examples/kdb/* pkg/kdb/
+          # kdb + waves are optional (they live outside git and are downloaded
+          # separately at runtime via the server's --data-url flag).
+          if compgen -G "server/examples/kdb/*" > /dev/null; then
+            cp server/examples/kdb/* pkg/kdb/
+          else
+            echo "No example KDBs found, packaging without them."
+          fi
           # waves are optional: the example .fst files may have been removed.
           if compgen -G "server/examples/waves/*" > /dev/null; then
             cp server/examples/waves/* pkg/waves/
@@ -477,7 +483,13 @@ jobs:
           echo "Found server binary: $BIN"
           cp "$BIN" pkg/what-server
           cp -r web-dist/. pkg/web/
-          cp server/examples/kdb/* pkg/kdb/
+          # kdb + waves are optional (they live outside git and are downloaded
+          # separately at runtime via the server's --data-url flag).
+          if compgen -G "server/examples/kdb/*" > /dev/null; then
+            cp server/examples/kdb/* pkg/kdb/
+          else
+            echo "No example KDBs found, packaging without them."
+          fi
           # waves are optional: the example .fst files may have been removed.
           if compgen -G "server/examples/waves/*" > /dev/null; then
             cp server/examples/waves/* pkg/waves/
@@ -546,7 +558,13 @@ jobs:
           New-Item -ItemType Directory -Force -Path pkg/web, pkg/kdb, pkg/waves | Out-Null
           Copy-Item $bin pkg/what-server.exe
           Copy-Item -Recurse -Force web-dist/* pkg/web/
-          Copy-Item -Recurse -Force server/examples/kdb/* pkg/kdb/
+          # kdb + waves are optional (they live outside git and are downloaded
+          # separately at runtime via the server's --data-url flag).
+          if (Test-Path server/examples/kdb/*) {
+            Copy-Item -Recurse -Force server/examples/kdb/* pkg/kdb/
+          } else {
+            Write-Host "No example KDBs found, packaging without them."
+          }
           # waves are optional: the example .fst files may have been removed.
           if (Test-Path server/examples/waves/*) {
             Copy-Item -Recurse -Force server/examples/waves/* pkg/waves/

@@ -83,6 +83,8 @@ server/waves/
 server/kdb/
 server/*.txt
 server/examples/web
+server/examples/kdb/
+server/examples/waves/
 
 # Python cache
 __pycache__/
@@ -101,3 +103,5 @@ __pycache__/
 
 # Waveform files
 *.fst
+.vercel
+.env*

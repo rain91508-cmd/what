@@ -1,9 +1,10 @@
 # syntax=docker/dockerfile:1
 #
-# Render Web Service build for the WHAT data server.
-# Builds the existing `what-server` binary and runs it bound to $PORT
-# (Render injects PORT at runtime). The standalone `cargo build` /
-# `cargo run` workflow is untouched.
+# Vercel Container Function build for the WHAT data server.
+# No Rust source is modified: this image simply builds the existing
+# `what-server` binary and runs it bound to $PORT (default 80), the
+# address Vercel Container Functions expect. The standalone
+# `cargo build` / `cargo run` workflow is untouched.
 
 # ---- Builder ----
 FROM rust:1-bookworm AS builder
