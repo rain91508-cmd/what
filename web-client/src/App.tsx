@@ -782,8 +782,12 @@ function App() {
       }
     }
     
-    // Find or create source tab
-    const existingSourceTab = tabs.find(t => t.type === 'source');
+    // Find or create source tab. Prefer the currently active source tab so a
+    // hierarchy double-click lands in the tab the user is looking at, and only
+    // fall back to the first source tab when no source tab is active.
+    const existingSourceTab =
+      tabs.find(t => t.type === 'source' && t.id === activeTab) ||
+      tabs.find(t => t.type === 'source');
     
     if (existingSourceTab) {
       // Update existing tab
