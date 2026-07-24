@@ -682,10 +682,10 @@ impl WaveformDataProvider {
 
         // [DEBUG] Detect requested-vs-server LoD mismatch on the WRITE path.
         // If server returns a different level than requested, cache keys/scales desync.
-        console_log!(
-            "[WASM][DBG-WRITE] process_server_chunk: server_level(lod)={} current_lod={:?} time_start={} tile_span={} tile_id={} signal_count={} version={}",
-            lod, self.current_lod, header.time_start, tile_span, tile_id, header.signal_count, header.version
-        );
+        // console_log!(
+        //     "[WASM][DBG-WRITE] process_server_chunk: server_level(lod)={} current_lod={:?} time_start={} tile_span={} tile_id={} signal_count={} version={}",
+        //     lod, self.current_lod, header.time_start, tile_span, tile_id, header.signal_count, header.version
+        // );
 
         // Group signals by their group_id
         let mut signals_by_group: std::collections::HashMap<u32, Vec<crate::opfs_cache::SignalData>> = 
@@ -1372,10 +1372,10 @@ impl WaveformDataProvider {
         let end_tile = time_end / tile_span;
 
         // [DEBUG] Entry marker: requested LoD + time/tile range for this render.
-        console_log!(
-            "[WASM][DBG-FETCH] fetch_batch requested_lod={} time=[{},{}] tile_span={} tiles=[{}..={}] custom_range={:?}",
-            lod, time_start, time_end, tile_span, start_tile, end_tile, custom_time_range.is_some()
-        );
+        // console_log!(
+        //     "[WASM][DBG-FETCH] fetch_batch requested_lod={} time=[{},{}] tile_span={} tiles=[{}..={}] custom_range={:?}",
+        //     lod, time_start, time_end, tile_span, start_tile, end_tile, custom_time_range.is_some()
+        // );
         
         // console_log!("[WASM] Fetching {} signals in batches (max {} per batch) at LoD {}, time {}-{}",
         //     total_signals, MAX_BATCH_SIZE, lod, time_start, time_end);
@@ -1543,22 +1543,22 @@ impl WaveformDataProvider {
 
                                         // [DEBUG] Cache-hit LoD>0: show scale-critical values so we
                                         // can detect if cached tile belongs to a different LoD scale.
-                                        {
-                                            let mut offs: Vec<u16> = buckets.keys().copied().collect();
-                                            offs.sort_unstable();
-                                            let off_min = offs.first().copied();
-                                            let off_max = offs.last().copied();
-                                            let sample: Vec<(u64, u64)> = transitions.iter()
-                                                .filter(|t| t.time != 0xFFFFFFFFFFFFFFFF)
-                                                .take(4)
-                                                .map(|t| (t.time, t.actual_time))
-                                                .collect();
-                                            console_log!(
-                                                "[WASM][DBG-READ] cache-hit lod={} tile_id={} tile_start={} tile_span={} bucket_size={} n_trans={} n_buckets={} off_min={:?} off_max={:?} (time,actual)[..4]={:?}",
-                                                lod, tile_id, tile_start, tile_span, bucket_size,
-                                                transitions.len(), buckets.len(), off_min, off_max, sample
-                                            );
-                                        }
+                                        // {
+                                        //     let mut offs: Vec<u16> = buckets.keys().copied().collect();
+                                        //     offs.sort_unstable();
+                                        //     let off_min = offs.first().copied();
+                                        //     let off_max = offs.last().copied();
+                                        //     let sample: Vec<(u64, u64)> = transitions.iter()
+                                        //         .filter(|t| t.time != 0xFFFFFFFFFFFFFFFF)
+                                        //         .take(4)
+                                        //         .map(|t| (t.time, t.actual_time))
+                                        //         .collect();
+                                        //     console_log!(
+                                        //         "[WASM][DBG-READ] cache-hit lod={} tile_id={} tile_start={} tile_span={} bucket_size={} n_trans={} n_buckets={} off_min={:?} off_max={:?} (time,actual)[..4]={:?}",
+                                        //         lod, tile_id, tile_start, tile_span, bucket_size,
+                                        //         transitions.len(), buckets.len(), off_min, off_max, sample
+                                        //     );
+                                        // }
 
                                         // Store LoD 1+ signal data (merge buckets if tile exists)
                                         self.store_lod1_signal_data(
@@ -3119,18 +3119,18 @@ if tile_missing_signals.is_empty() {
 
         // [DEBUG] After storing, dump all tile_starts present for this signal so we can
         // detect if buckets from more than one LoD scale coexist (the "ghost" cause).
-        if let Some(sd) = self.signal_data.get(signal_name) {
-            let cur_lod = self.current_lod.unwrap_or(0);
-            let tile_span_now = OpfsCacheManager::get_tile_span(cur_lod);
-            let starts: Vec<(u64, usize, bool)> = sd.bucket_data.iter()
-                .map(|(ts, b)| (*ts, b.len(), tile_span_now != 0 && *ts % tile_span_now == 0))
-                .collect();
-            let misaligned = starts.iter().filter(|(_, _, aligned)| !*aligned).count();
-            console_log!(
-                "[WASM][DBG-STORE] store_lod1 signal='{}' cur_lod={} tile_span={} n_tiles={} misaligned={} (tile_start,n_buckets,aligned)={:?}",
-                signal_name, cur_lod, tile_span_now, starts.len(), misaligned, starts
-            );
-        }
+        // if let Some(sd) = self.signal_data.get(signal_name) {
+        //     let cur_lod = self.current_lod.unwrap_or(0);
+        //     let tile_span_now = OpfsCacheManager::get_tile_span(cur_lod);
+        //     let starts: Vec<(u64, usize, bool)> = sd.bucket_data.iter()
+        //         .map(|(ts, b)| (*ts, b.len(), tile_span_now != 0 && *ts % tile_span_now == 0))
+        //         .collect();
+        //     let misaligned = starts.iter().filter(|(_, _, aligned)| !*aligned).count();
+        //     console_log!(
+        //         "[WASM][DBG-STORE] store_lod1 signal='{}' cur_lod={} tile_span={} n_tiles={} misaligned={} (tile_start,n_buckets,aligned)={:?}",
+        //         signal_name, cur_lod, tile_span_now, starts.len(), misaligned, starts
+        //     );
+        // }
     }
 
     /// Parse chunk binary data for single signal (legacy method)
@@ -4273,16 +4273,16 @@ if tile_missing_signals.is_empty() {
         // [DEBUG] Render-time scale check: this renderer applies the CURRENT lod's
         // bucket_size to EVERY tile in bucket_data. If any tile_start is not aligned to
         // tile_span, it belongs to a different LoD -> renders as a ghost at another scale.
-        {
-            let starts: Vec<(u64, usize, bool)> = bucket_data.iter()
-                .map(|(ts, b)| (*ts, b.len(), tile_span != 0 && *ts % tile_span == 0))
-                .collect();
-            let misaligned = starts.iter().filter(|(_, _, a)| !*a).count();
-            console_log!(
-                "[WASM][DBG-RENDER] gen_segments signal='{}' lod={} bucket_size={} tile_span={} n_tiles={} misaligned={} tiles(start,n,aligned)={:?}",
-                signal_name, lod, bucket_size, tile_span, starts.len(), misaligned, starts
-            );
-        }
+        // {
+        //     let starts: Vec<(u64, usize, bool)> = bucket_data.iter()
+        //         .map(|(ts, b)| (*ts, b.len(), tile_span != 0 && *ts % tile_span == 0))
+        //         .collect();
+        //     let misaligned = starts.iter().filter(|(_, _, a)| !*a).count();
+        //     console_log!(
+        //         "[WASM][DBG-RENDER] gen_segments signal='{}' lod={} bucket_size={} tile_span={} n_tiles={} misaligned={} tiles(start,n,aligned)={:?}",
+        //         signal_name, lod, bucket_size, tile_span, starts.len(), misaligned, starts
+        //     );
+        // }
 
         // Step 1: Ensure tiles are sorted by tile_start (they should already be)
         // bucket_data is already sorted by the caller
