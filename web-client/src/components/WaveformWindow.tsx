@@ -1034,20 +1034,23 @@ export function WaveformWindow({
 
     // 检查参数是否真的有变化，如果没有变化则直接返回，避免重复渲染
     const lastParams = lastRenderParamsRef.current;
-//    const hasParamsChanged =
-//      lastParams.signalPrefix !== _signalPrefix ||
-//      lastParams.spaceBeforeBracket !== _spaceBeforeBracket ||
-//      Math.abs(lastParams.viewportTimeStart - viewport.timeStart) > 0.1 ||
-//      Math.abs(lastParams.viewportTimeEnd - viewport.timeEnd) > 0.1 ||
-//      Math.abs(lastParams.canvasWidth - width) > 0.5 ||
-//      Math.abs(lastParams.canvasHeight - height) > 0.5 ||
-//      lastParams.signalListHash !== signalListHash ||
-//      lastParams.timeConfigHash !== timeConfigHash;
+    const hasParamsChanged =
+      lastParams.signalPrefix !== _signalPrefix ||
+      lastParams.spaceBeforeBracket !== _spaceBeforeBracket ||
+      Math.abs(lastParams.viewportTimeStart - viewport.timeStart) > 0.1 ||
+      Math.abs(lastParams.viewportTimeEnd - viewport.timeEnd) > 0.1 ||
+      Math.abs(lastParams.canvasWidth - width) > 0.5 ||
+      Math.abs(lastParams.canvasHeight - height) > 0.5 ||
+      lastParams.signalListHash !== signalListHash ||
+      lastParams.timeConfigHash !== timeConfigHash;
 
-//    if (!hasParamsChanged) {
-//      // 参数没有变化，直接返回
-//      return;
-//    }
+    if (!hasParamsChanged) {
+      // 参数（信号列表 + 视图窗口 + 画布尺寸）没有任何变化，跳过昂贵的
+      // 重新渲染/重绘，避免点击只移动 cursor 时也触发整屏重绘闪烁。
+      // cursor 由独立的 overlay 图层绘制，不受此跳过影响。
+      // console.log(`[WaveformWindow] renderWaveform skipped: params unchanged (signals+view window stable)`);
+      return;
+    }
 
     // 更新上一次渲染的参数
     lastRenderParamsRef.current = {

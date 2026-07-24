@@ -67,7 +67,10 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Reset when module changes
+  // Reset when module changes: always jump the page position back to the
+  // start. Otherwise the previous module's scroll offset (e.g. 100) is carried
+  // over and can overflow a shorter module. This effect owns the module-change
+  // load (from 0); the pageSize effect below owns position-preserving reloads.
   useEffect(() => {
     setCurrentRangeStart(0);
     setCurrentRangeEnd(-1);
@@ -79,15 +82,21 @@ export function SignalPanel({ selectedModuleIndex, onSignalAddToWaveform, onSign
     setLastSelectedIndex(null);
     if (selectedModuleIndex) {
       kdbManager.getModuleSignalCount(selectedModuleIndex).then(count => setTotalSignalCount(count));
+      loadSignalsForward(0);
     } else {
       setTotalSignalCount(0);
     }
   }, [selectedModuleIndex]);
 
-  // Load signals when module or pageSize changes - from current position
+  // Reload when page size changes, preserving the current scroll position.
+  // Intentionally NOT keyed on selectedModuleIndex (handled above) so the
+  // module-change load always starts from 0 instead of a stale offset.
   useEffect(() => {
-    loadSignalsForward(currentRangeStart);
-  }, [selectedModuleIndex, pageSize]);
+    if (selectedModuleIndex) {
+      loadSignalsForward(currentRangeStart);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageSize]);
 
   // Load signals when filter changes - always start from beginning
   useEffect(() => {

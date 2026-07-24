@@ -680,6 +680,13 @@ impl WaveformDataProvider {
         let tile_span = OpfsCacheManager::get_tile_span(lod);
         let tile_id = header.time_start / tile_span;
 
+        // [DEBUG] Detect requested-vs-server LoD mismatch on the WRITE path.
+        // If server returns a different level than requested, cache keys/scales desync.
+        console_log!(
+            "[WASM][DBG-WRITE] process_server_chunk: server_level(lod)={} current_lod={:?} time_start={} tile_span={} tile_id={} signal_count={} version={}",
+            lod, self.current_lod, header.time_start, tile_span, tile_id, header.signal_count, header.version
+        );
+
         // Group signals by their group_id
         let mut signals_by_group: std::collections::HashMap<u32, Vec<crate::opfs_cache::SignalData>> = 
             std::collections::HashMap::new();
@@ -709,7 +716,8 @@ impl WaveformDataProvider {
                 &block_header,
                 signal_idx as usize,
                 chunk_version,
-                lod
+                lod,
+                header.time_start,
             )?;
 
             // Use pre-computed draw_sig_id directly (no lookup needed)
@@ -841,6 +849,7 @@ impl WaveformDataProvider {
         _signal_index: usize,
         chunk_version: u16,
         lod: u32,
+        chunk_time_start: u64,
     ) -> Result<Vec<Transition>, JsValue> {
         const BOUNDARY_TIME_START: u64 = 0xFFFFFFFFFFFFFFFF;
         let mut transitions = Vec::new();
@@ -988,10 +997,14 @@ impl WaveformDataProvider {
                             data[actual_time_idx + 6], data[actual_time_idx + 7],
                         ]);
                     } else {
-                        actual_time = time; // Fallback to bucket index
+                        // Fallback: calculate absolute time from bucket index (must match
+                        // parse_transitions_from_block so cached data renders at the same scale)
+                        actual_time = chunk_time_start + (time * (1u64 << lod));
                     }
                 } else {
-                    actual_time = time; // Fallback to bucket index
+                    // Fallback: calculate absolute time from bucket index (must match
+                    // parse_transitions_from_block so cached data renders at the same scale)
+                    actual_time = chunk_time_start + (time * (1u64 << lod));
                 }
             } else {
                 // v1 API, LoD > 0: bucket index was stored as u64 (but values are 0-255)
@@ -1004,7 +1017,9 @@ impl WaveformDataProvider {
                     data[time_idx + 4], data[time_idx + 5], data[time_idx + 6], data[time_idx + 7],
                 ]);
                 time = bucket_idx;
-                actual_time = time; // For v1, actual_time is same as bucket index
+                // Calculate absolute time from bucket index (must match
+                // parse_transitions_from_block so cached data renders at the same scale)
+                actual_time = chunk_time_start + (time * (1u64 << lod));
             }
 
             transitions.push(Transition {
@@ -1355,15 +1370,26 @@ impl WaveformDataProvider {
         let tile_span = OpfsCacheManager::get_tile_span(lod);
         let start_tile = time_start / tile_span;
         let end_tile = time_end / tile_span;
+
+        // [DEBUG] Entry marker: requested LoD + time/tile range for this render.
+        console_log!(
+            "[WASM][DBG-FETCH] fetch_batch requested_lod={} time=[{},{}] tile_span={} tiles=[{}..={}] custom_range={:?}",
+            lod, time_start, time_end, tile_span, start_tile, end_tile, custom_time_range.is_some()
+        );
         
         // console_log!("[WASM] Fetching {} signals in batches (max {} per batch) at LoD {}, time {}-{}",
         //     total_signals, MAX_BATCH_SIZE, lod, time_start, time_end);
         // console_log!("[WASM]   Tile info: span={}, start_tile={}, end_tile={}, tiles={}",
         //     tile_span, start_tile, end_tile, end_tile - start_tile + 1);
 
-        // Filter out bit extraction signals - they don't need server data
+        // Filter out bit extraction signals - they don't need server data.
+        // Also deduplicate: the same signal can appear multiple times in the draw
+        // list (e.g. added as two rows). Fetching/storing it twice would append
+        // duplicate transitions into signal_data and render a ghost waveform.
+        let mut seen = std::collections::HashSet::new();
         let signals_to_fetch: Vec<String> = signal_names.iter()
             .filter(|name| !name.contains("@["))
+            .filter(|name| seen.insert(name.as_str().to_string()))
             .cloned()
             .collect();
 
@@ -1514,6 +1540,25 @@ impl WaveformDataProvider {
                                         // Parse into bucket_data directly (like server fetch)
                                         let (start_value, buckets) = self.parse_buckets_from_transitions(&transitions);
                                         let tile_end = tile_start + tile_span;
+
+                                        // [DEBUG] Cache-hit LoD>0: show scale-critical values so we
+                                        // can detect if cached tile belongs to a different LoD scale.
+                                        {
+                                            let mut offs: Vec<u16> = buckets.keys().copied().collect();
+                                            offs.sort_unstable();
+                                            let off_min = offs.first().copied();
+                                            let off_max = offs.last().copied();
+                                            let sample: Vec<(u64, u64)> = transitions.iter()
+                                                .filter(|t| t.time != 0xFFFFFFFFFFFFFFFF)
+                                                .take(4)
+                                                .map(|t| (t.time, t.actual_time))
+                                                .collect();
+                                            console_log!(
+                                                "[WASM][DBG-READ] cache-hit lod={} tile_id={} tile_start={} tile_span={} bucket_size={} n_trans={} n_buckets={} off_min={:?} off_max={:?} (time,actual)[..4]={:?}",
+                                                lod, tile_id, tile_start, tile_span, bucket_size,
+                                                transitions.len(), buckets.len(), off_min, off_max, sample
+                                            );
+                                        }
 
                                         // Store LoD 1+ signal data (merge buckets if tile exists)
                                         self.store_lod1_signal_data(
@@ -2989,12 +3034,22 @@ if tile_missing_signals.is_empty() {
         filtered_transitions: Vec<Transition>,
     ) {
         if let Some(existing_data) = self.signal_data.get_mut(signal_name) {
-            // Append filtered transitions
+            // Append filtered transitions.
+            // Sort by actual_time, NOT time: cached LoD0 data stores time==0 (only
+            // actual_time is persisted), so sorting by time is a no-op and leaves
+            // appended tiles out of chronological order -> ghost rendering.
             existing_data.transitions.extend(filtered_transitions);
-            existing_data.transitions.sort_by_key(|t| t.time);
-            // Store tile info
+            existing_data.transitions.sort_by_key(|t| t.actual_time);
+            // Deduplicate identical timestamps from overlapping stores (same tile
+            // stored twice). Keep the last occurrence (most recent data).
+            existing_data.transitions.dedup_by(|a, b| {
+                a.actual_time == b.actual_time && a.value == b.value
+            });
+            // Store tile info (avoid duplicate entries for the same tile)
             if let Some(sv) = start_value {
-                existing_data.tile_info.push((tile_start, tile_end, sv.time, sv));
+                if !existing_data.tile_info.iter().any(|(start, _, _, _)| *start == tile_start) {
+                    existing_data.tile_info.push((tile_start, tile_end, sv.time, sv));
+                }
             }
         } else {
             let width = width.unwrap_or_else(|| self.get_signal_width(signal_name));
@@ -3060,6 +3115,21 @@ if tile_missing_signals.is_empty() {
                 signal_data.tile_info.push((tile_start, tile_end, BOUNDARY_TIME_START, sv));
             }
             self.signal_data.insert(signal_name.to_string(), signal_data);
+        }
+
+        // [DEBUG] After storing, dump all tile_starts present for this signal so we can
+        // detect if buckets from more than one LoD scale coexist (the "ghost" cause).
+        if let Some(sd) = self.signal_data.get(signal_name) {
+            let cur_lod = self.current_lod.unwrap_or(0);
+            let tile_span_now = OpfsCacheManager::get_tile_span(cur_lod);
+            let starts: Vec<(u64, usize, bool)> = sd.bucket_data.iter()
+                .map(|(ts, b)| (*ts, b.len(), tile_span_now != 0 && *ts % tile_span_now == 0))
+                .collect();
+            let misaligned = starts.iter().filter(|(_, _, aligned)| !*aligned).count();
+            console_log!(
+                "[WASM][DBG-STORE] store_lod1 signal='{}' cur_lod={} tile_span={} n_tiles={} misaligned={} (tile_start,n_buckets,aligned)={:?}",
+                signal_name, cur_lod, tile_span_now, starts.len(), misaligned, starts
+            );
         }
     }
 
@@ -4199,7 +4269,21 @@ if tile_missing_signals.is_empty() {
         let lod = self.current_lod.unwrap_or(25);
         let bucket_size = 1u64 << lod;
         let tile_span = bucket_size * TILE_SPAN_MULTIPLIER as u64;
-        
+
+        // [DEBUG] Render-time scale check: this renderer applies the CURRENT lod's
+        // bucket_size to EVERY tile in bucket_data. If any tile_start is not aligned to
+        // tile_span, it belongs to a different LoD -> renders as a ghost at another scale.
+        {
+            let starts: Vec<(u64, usize, bool)> = bucket_data.iter()
+                .map(|(ts, b)| (*ts, b.len(), tile_span != 0 && *ts % tile_span == 0))
+                .collect();
+            let misaligned = starts.iter().filter(|(_, _, a)| !*a).count();
+            console_log!(
+                "[WASM][DBG-RENDER] gen_segments signal='{}' lod={} bucket_size={} tile_span={} n_tiles={} misaligned={} tiles(start,n,aligned)={:?}",
+                signal_name, lod, bucket_size, tile_span, starts.len(), misaligned, starts
+            );
+        }
+
         // Step 1: Ensure tiles are sorted by tile_start (they should already be)
         // bucket_data is already sorted by the caller
         

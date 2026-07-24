@@ -10,7 +10,7 @@ function getCurrentHost(): string {
   let hostname = window.location.hostname;
 
   if (hostname === 'what.chenp.eu.org') {
-    hostname = 'rain91508-cmd.chenp.eu.org';
+    hostname = 'what-server.chenp.eu.org';
   }
 
   return hostname || 'localhost';
